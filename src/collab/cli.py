@@ -57,7 +57,7 @@ from .config import (
 )
 from .client.context import gather as ctx_gather
 from .protocol import (DEFAULT_ROOM, MAX_FILE_BYTES, Envelope, KIND_CHAT,
-                       KIND_HELLO)
+                       KIND_HELLO, scrub)
 from .server.session import (HubConfig, create_session, hosted_sessions,
                              join_line, resume_session, session_summary,
                              stop_session)
@@ -191,16 +191,23 @@ def _print_snapshot(snapshot: dict[str, Any], me: str) -> None:
     if not others:
         print(dim("  nobody else yet — you'll be notified the moment someone joins"))
     for p in people:
+        # Every field on a participant's row — name, focus, repo, branch — was
+        # chosen by that participant and is about to be printed to this user's
+        # terminal, so an escape sequence in any of them is scrubbed out before
+        # it can rewrite the screen. See collab.protocol.scrub.
+        name = scrub(str(p.get("name") or ""))
         mark = "*" if p["name"] == me else " "
         state = c("online", "32") if p.get("connected") else dim("offline")
         role = " (host)" if p.get("is_host") else ""
-        focus = f" — {p['focus']}" if p.get("focus") else ""
-        repo = f" [{p['repo']}{'/' + p['branch'] if p.get('branch') else ''}]" if p.get("repo") else ""
+        focus = f" — {scrub(p['focus'])}" if p.get("focus") else ""
+        repo = (f" [{scrub(str(p['repo']))}"
+                f"{'/' + scrub(str(p['branch'])) if p.get('branch') else ''}]"
+                if p.get("repo") else "")
         here = ""
         if p["name"] != me and peers.same_machine(p):
             # However they connected, they are on this box with this user.
             here = c(" ⌂ same machine", "36")
-        print(f" {mark} {p['name']}{role}  {state}{repo}{focus}{here}")
+        print(f" {mark} {name}{role}  {state}{repo}{focus}{here}")
         # What they are doing now, under their line: the focus is what they
         # said on arrival, and by lunchtime the two are different questions.
         #
@@ -209,13 +216,15 @@ def _print_snapshot(snapshot: dict[str, Any], me: str) -> None:
         # under an offline name showed a dead agent at work.
         doing = p.get("activity") or {}
         if p.get("connected") and (said := activity.describe(doing)):
+            said = scrub(said)
             print(f"      {c(said, '32' if activity.is_working(doing) else '2')}")
 
     if tasks := snapshot.get("tasks"):
         heading("Open tasks")
         for t in tasks:
-            owner = t.get("owner") or dim("unclaimed")
-            print(f"  {t['id']}  {t['title']}  [{_short_state(t['state'])}]  {owner}")
+            owner = scrub(str(t.get("owner"))) if t.get("owner") else dim("unclaimed")
+            print(f"  {t['id']}  {scrub(str(t['title']))}  "
+                  f"[{_short_state(t['state'])}]  {owner}")
 
     if recent := snapshot.get("recent"):
         heading("Recent")
@@ -1284,12 +1293,15 @@ def cmd_stats(args: argparse.Namespace) -> int:
     for p in people:
         state = c("online", "32") if p.get("connected") else dim("offline")
         here = c(" ⌂", "36") if peers.same_machine(p) else ""
-        print(f"  {c(p['name'], '1')}{' (host)' if p.get('is_host') else ''}"
+        # The name, the machine and the usage strings all came from that
+        # participant over the wire; scrub the control characters before they
+        # reach the terminal. See collab.protocol.scrub.
+        print(f"  {c(scrub(str(p['name'])), '1')}{' (host)' if p.get('is_host') else ''}"
               f"  {state}{here}")
-        details = _stat_bits(p)
+        details = [scrub(bit) for bit in _stat_bits(p)]
         machine = p.get("machine")
         if machine:
-            details.insert(0, str(machine))
+            details.insert(0, scrub(str(machine)))
         print(f"      {dim(' · '.join(details)) if details else dim('nothing shared')}")
     print()
     print(dim(f"  you are {'sharing' if share_stats_enabled() else 'NOT sharing'} yours "
@@ -1619,9 +1631,13 @@ def cmd_file(args: argparse.Namespace) -> int:
                     print(dim("  no files waiting"))
                     return 0
                 for f in files:
-                    who = f"→ {f['recipient']}" if f["recipient"] else f"#{f['room']}"
-                    print(f"  {f['id']}  {f['name']}  "
-                          f"{f['size'] / 1024:.0f} KB  from {f['sender']} {who}")
+                    # The name, sender, recipient and room all come from the
+                    # hub and are printed straight to the terminal, so they are
+                    # scrubbed of control characters first. See protocol.scrub.
+                    who = (f"→ {scrub(str(f['recipient']))}" if f["recipient"]
+                           else f"#{scrub(str(f['room']))}")
+                    print(f"  {f['id']}  {scrub(str(f['name']))}  "
+                          f"{f['size'] / 1024:.0f} KB  from {scrub(str(f['sender']))} {who}")
                 return 0
 
             if args.action == "get":

@@ -9,6 +9,7 @@ emits, one JSON object per event.
 from __future__ import annotations
 
 import time
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
@@ -45,6 +46,30 @@ ALL_KINDS = frozenset({KIND_CHAT, KIND_TASK, KIND_HELLO, KIND_PRESENCE,
 #: build artifacts never have to be squeezed through a chat message.
 MAX_FILE_BYTES = 10 * 1024 * 1024
 FILE_TTL_SECONDS = 24 * 3600
+
+
+def scrub(text: str) -> str:
+    """Strip control characters from a string before it reaches a terminal.
+
+    A display name, a message, a task title and a file name are all chosen by
+    another participant and all end up printed to this machine's terminal —
+    `collab recv`, `collab listen`, `collab who`, `collab file list`, and the
+    one-line Monitor render below. A raw ESC in one of those is not text: it is
+    a command to the terminal. ``\\x1b[2J`` clears the reader's screen,
+    ``\\x1b]0;…\\x07`` rewrites their window title, and a bare carriage return
+    paints a forged line over a real one — so a remote name reading `alice`
+    could carry a cursor-up and overwrite the line above it with anything.
+
+    None of that is anything a name or a sentence needs, so every C0/C1 control
+    byte (Unicode category ``Cc`` — ESC, CR, BEL, backspace, DEL and the rest)
+    is removed, while every printable character is left exactly as it was:
+    letters, spaces, emoji, CJK and combining marks all survive unchanged.
+
+    The curses TUI needs none of this — ncurses renders a control byte as
+    ``^[`` rather than passing it to the terminal — so this is for the
+    plain-print paths, which hand the string straight to a real terminal.
+    """
+    return "".join(ch for ch in text if unicodedata.category(ch) != "Cc")
 
 
 def new_id(prefix: str) -> str:
@@ -157,7 +182,16 @@ class Envelope:
 
         A direct message names its *recipient*, since the sender is already
         printed after the bracket; that reads correctly from both ends.
+
+        Every field woven in here — the text, the sender, a task title, a file
+        name — was chosen by another participant, and the result is printed
+        straight to a terminal. So the whole line is scrubbed of control
+        characters on the way out (see `scrub`): a name carrying an escape
+        sequence must not get to rewrite the reader's screen.
         """
+        return scrub(self._render_line())
+
+    def _render_line(self) -> str:
         if self.kind == KIND_CHAT:
             where = f"dm→{self.to}" if self.is_direct() else f"#{self.room}"
             return f"[{where}] {self.sender}: {self.text}"
