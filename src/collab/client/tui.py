@@ -38,7 +38,7 @@ from ..protocol import (
     KIND_PRESENCE,
     KIND_TASK,
 )
-from .. import peers
+from .. import activity, peers
 from .. import themes
 from .daemon import DaemonPaths, effective_state, is_running, read_status
 from .inbox import Inbox
@@ -1382,8 +1382,17 @@ def roster_rows(model: Model, width: int) -> list[Row]:
     me = model.profile.name
     for person in model.participants():
         online = person.get("connected")
-        glyph = "●" if online else "○"
         name = person.get("name", "?")
+        doing = person.get("activity") or {}
+        # FILLED MEANS AT WORK, HOLLOW MEANS FREE — in the person's own colour
+        # either way, because the dot's job in this pane is to say who, and its
+        # shape is what says what. A second colour on it would compete with
+        # that, and the state word beside it already carries online/offline.
+        #
+        # It is deliberately not animated: the roster is rebuilt only when
+        # something in it changes, and a spinner would mean rebuilding every
+        # frame — which is what a redraw used to cost before it was fixed.
+        glyph = "●" if (online and activity.is_working(doing)) else "○"
 
         tags = []
         if person.get("is_host"):
@@ -1417,7 +1426,12 @@ def roster_rows(model: Model, width: int) -> list[Row]:
         # line up and did not. Measured: 28 / 32 / 31 / 28 for four names.
         pad = max(28 - _w(head), 1)
         head += " " * pad + state
-        if (focus := person.get("focus") or ""):
+        # WHAT THEY ARE DOING NOW BEATS WHAT THEY SAID ON ARRIVAL. The focus is
+        # a sentence from the join, hours old by lunchtime; the activity is the
+        # answer to the question anybody actually has.
+        if online and (doing_line := activity.describe(doing, width=48)):
+            head += f"  {doing_line}"
+        elif (focus := person.get("focus") or ""):
             head += f"  {focus}"
         colour = _speaker_pair(name)
         # And clipped by columns too: `head[:width]` cut by characters, so a row

@@ -234,6 +234,7 @@ class Daemon:
         self.snapshot: dict[str, Any] = {}
         self._http: httpx.AsyncClient | None = None
         self._last_stats: dict[str, Any] = {}
+        self._last_activity: dict[str, Any] = {}
         self._stats_ran_at = 0.0
         self.failures = 0
         self._stop = asyncio.Event()
@@ -382,6 +383,30 @@ class Daemon:
         except httpx.HTTPError:
             pass
 
+    async def _report_activity(self, client: httpx.AsyncClient) -> None:
+        """Re-assert what this agent is doing, after a drop or a hub restart.
+
+        The command that said it posted it once and wrote it down; a hub that
+        was unreachable at that moment, or one that came back up since, would
+        otherwise show the room an agent doing nothing while it works — and the
+        whole point of publishing it is that nobody has to ask.
+        """
+        from ..activity import read_local
+
+        mine = read_local(self.profile)
+        if not mine or mine == self._last_activity:
+            return
+        try:
+            r = await client.post(
+                f"{self.profile.url}{EXT_PREFIX}/activity",
+                headers={"Authorization": f"Bearer {self.profile.token}"},
+                json=mine, timeout=10.0,
+            )
+            if r.status_code == 200:
+                self._last_activity = mine
+        except httpx.HTTPError:
+            pass
+
     async def _heartbeat_loop(self) -> None:
         last_refresh = 0.0
         while not self._stop.is_set():
@@ -392,6 +417,7 @@ class Daemon:
                     await self._refresh_snapshot(self._http)
                     await self._refresh_stats_from_command()
                     await self._report_stats(self._http)
+                    await self._report_activity(self._http)
                 last_refresh = time.time()
             self.write_status()
             with contextlib.suppress(asyncio.TimeoutError):

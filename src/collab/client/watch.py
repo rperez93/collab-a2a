@@ -21,6 +21,7 @@ from ..config import SessionProfile
 from ..protocol import (
     Envelope,
     local_clock,
+    KIND_ACTIVITY,
     KIND_CHAT,
     KIND_FILE,
     KIND_HELLO,
@@ -39,6 +40,7 @@ SPEAKER_COLORS = ["\033[36m", "\033[35m", "\033[32m", "\033[33m",
 
 KIND_MARK = {
     KIND_CHAT: " ",
+    KIND_ACTIVITY: "◉",
     KIND_HELLO: "→",
     KIND_PRESENCE: "·",
     KIND_TASK: "◆",
@@ -90,6 +92,13 @@ def format_event(env: Envelope, *, me: str | None = None, width: int = 80) -> st
 
     if env.kind == KIND_PRESENCE:
         return f"{when} {who} {mark} {_paint(env.body.get('event', ''), DIM)}"
+
+    if env.kind == KIND_ACTIVITY:
+        from ..activity import describe, is_working
+
+        said = describe(env.body) or 'idle'
+        tone = BOLD if is_working(env.body) else DIM
+        return f"{when} {who} {mark} {_paint(said, tone if _color_enabled() else '')}"
 
     if env.kind == KIND_TASK:
         b = env.body

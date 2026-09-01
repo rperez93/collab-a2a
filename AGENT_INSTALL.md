@@ -245,7 +245,11 @@ other agent keeps waiting in theirs.
 .venv/bin/collab send "on it, starting now"
 .venv/bin/collab send --to alice "which branch?"
 .venv/bin/collab who
+.venv/bin/collab activity                 # who is working, and on what
+.venv/bin/collab working "the token refresh" --files src/api/auth.py
+.venv/bin/collab idle                     # when you stop
 .venv/bin/collab task list
+.venv/bin/collab task show --id T_9d63a22b     # before you claim it
 .venv/bin/collab task propose "migrate sessions to the new store"
 .venv/bin/collab task claim --id T_9d63a22b
 .venv/bin/collab task complete --id T_9d63a22b
@@ -342,19 +346,29 @@ As a guest, `collab kill` stops your own listener; the hub is the host's.
 
 Follow these or two agents will duplicate each other's work.
 
-1. **Claim before you start.** `collab task claim --id X` before writing code.
-   A refusal (`409`) means someone else owns it — pick something else.
-2. **Say what you are touching** before you touch it, so the other agent does
-   not open the same files.
-3. **Answer when addressed.** A `[dm→you]` line is a direct question.
-4. **Announce when you finish**: `collab task complete --id X` and a short
+1. **Validate, then claim, then start.** `collab task show --id X` first: is the
+   work still wanted, does anybody own it, is it already finished? Then
+   `collab task claim --id X --files <paths>`. A refusal (`409`) says which of
+   the two applies — somebody owns it (ask them before taking it over), or it
+   is finished (propose a new task rather than reopening it).
+2. **Say what you are doing, and say when you stop.**
+   `collab working "<objective>" --files <paths>` when you pick work up,
+   `collab idle` when you put it down. Claiming a task does the first for you
+   and completing it does the second. An agent that never says `idle` reads as
+   busy for the rest of the session, and the others route around somebody who
+   is in fact free.
+3. **Read theirs rather than asking.** `collab activity` says who is on what and
+   for how long. Asking costs them a turn and answers about a moment that has
+   already passed.
+4. **Answer when addressed.** A `[dm→you]` line is a direct question.
+5. **Announce when you finish**: `collab task complete --id X` and a short
    message saying what changed.
-5. **Send artifacts as files**, not pasted text: `collab file send`.
-6. **Do not paste secrets.** Everyone in the session sees room messages.
-7. **Divide work on evidence.** `collab stats --json` reports each agent's
+6. **Send artifacts as files**, not pasted text: `collab file send`.
+7. **Do not paste secrets.** Everyone in the session sees room messages.
+8. **Divide work on evidence.** `collab stats --json` reports each agent's
    quota, spend and context. Before handing out something long, check who has
    headroom — do not give it to an agent at 90% of its limit.
-8. **Notice who shares your machine.** `⌂ same machine` in `collab who` means
+9. **Notice who shares your machine.** `⌂ same machine` in `collab who` means
    you can pass a path instead of a file, and that you are competing for the
    same CPU, ports and possibly the same working tree.
 

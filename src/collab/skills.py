@@ -40,7 +40,7 @@ from pathlib import Path
 from .config import collab_executable, short_executable
 
 SKILL_NAMES = ("collab-host", "collab-join", "collab-watch",
-               "collab-discover")
+               "collab-discover", "collab-activity")
 
 
 def bundled_skills_dir() -> Path | None:
@@ -153,11 +153,10 @@ def instructions_block(skills_dir: Path, executable: str) -> str:
 ## collab — talking to other coding agents
 
 `collab` connects this agent to other people's coding agents over the A2A
-protocol: real-time messages, a shared task board, file transfer, and usage
-figures so work can be split by who has quota left.
-
-**Only relevant when the user asks to collaborate with another agent or
-person.** Ignore it otherwise.
+protocol: real-time messages, a shared task board, file transfer, who is
+working on what, and usage figures so work can be split by who has quota left.
+**Only when the user asks to collaborate with another agent**; ignore it
+otherwise.
 
 ```bash
 {executable} host                  # start a session; prints a link to share
@@ -166,45 +165,46 @@ person.** Ignore it otherwise.
 {executable} discover              # what is running on this machine
 {executable} listen --follow       # stream incoming messages (watch this)
 {executable} recv --wait 60        # or poll, if you cannot watch a stream
-{executable} send "..."            # post to the room
-{executable} send --to NAME "..."  # direct message
-{executable} who                   # who is here, their focus and machine
-{executable} stats --json          # each agent's quota and spend
-{executable} task propose|claim|complete
+{executable} send "..." [--to X]   # post to the room, or a direct message
+{executable} who | activity        # who is here, and what each is doing NOW
+{executable} working "..." --files # say what you are on; `idle` when you stop
+{executable} task show|propose|claim|complete   |   {executable} stats --json
 {executable} file send|get         # artifacts, not pasted text
-{executable} lock                  # who you are, and who holds this repo
 {executable} kill                  # end the session (data kept)
 ```
 
 `{executable}` alone lists every command.
 
 **Connecting, in order:** a URL with `#` → `join '<url>'`; **no link → bare
-`join`**, which finds the session running on this machine (several → it lists
-them; pick with `join --local <id>`); *stopped, but kept here* → `host` resumes
-it with its history, so do not report it lost; nothing running → nothing is
-hosting here. **Never ask for a link before running bare `join`:** both agents
-on one machine is the ordinary case, and there is nothing to paste.
+`join`**, which finds the session on this machine (several → it lists them; pick
+with `join --local <id>`); *stopped, but kept here* → `host` resumes it with its
+history; nothing running → nothing is hosting here. **Never ask for a link
+before running bare `join`:** both agents on one machine is the ordinary case.
 
 **If another agent is already in this repo** — `{executable} lock` says who — you
-get your own state directory (`.collab-<you>`): same checkout, same files,
-separate bookkeeping. If the lock is held but its session does not answer, **put
-it to the user**; clear it only if they say to.
+get your own state directory (`.collab-<you>`): same checkout, separate
+bookkeeping. If the lock is held but its session does not answer, **put it to
+the user**; clear it only if they say to.
 
 **Never host because a join failed.** `collab host` always succeeds and connects
-you to nobody: it opens a *different* session while the other agent waits in
-theirs. Report what failed; let the user decide.
+you to nobody: a *different* session, while the other agent waits in theirs.
+Report what failed; let the user decide.
 
 **Listening is not optional, not Claude-only, and not done once.** Arm whatever
-this agent calls a background watcher on `{executable} listen --follow` — one
-that does NOT die with the turn or the shell — and keep it armed to the end of
-the session; `{executable} status` says whether anything still is. Cannot? Then
-poll `{executable} recv --wait 60` every turn. **ACT on what arrives, and act
-means execute**: do what is asked and say what you did; claim or decline a task
-out loud; fetch a file shared with you. «Will do», then carrying on with your
-own plan, is the failure — it is indistinguishable from work in progress.
+this agent calls a background watcher on `listen --follow` — one that does NOT
+die with the turn or the shell — and keep it armed all session; `status` says
+whether anything still is. Cannot? Poll `recv --wait 60` every turn. **ACT on
+what arrives, and act means execute**: do what is asked and say what you did.
+«Will do» then carrying on with your own plan is indistinguishable from work in
+progress.
 
-**Working agreement:** claim a task before starting it; say which files you are
-touching; send artifacts as files, not pasted text; never paste secrets.
+**Say what you are doing; read theirs rather than asking.** `working
+"<objective>" --files <paths>` when you start, `idle` when you stop — the second
+is the half that gets forgotten, and an agent that never says it reads as busy
+all session. `activity` says what the others are on. Same for the BOARD:
+`task show` before claiming (wanted? unowned? unfinished?), claim before
+starting — it sets your activity — complete when done. Artifacts go as files,
+never as pasted text; never paste secrets.
 
 Full instructions: `{skills_dir}` ({names}).
 {END}"""

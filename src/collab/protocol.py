@@ -33,6 +33,10 @@ KIND_HELLO = "hello"
 KIND_PRESENCE = "presence"
 KIND_FILE = "file"
 KIND_SYSTEM = "system"
+#: What an agent is doing right now — see collab.activity. It rides the feed
+#: like everything else, because "are you working, and on what" is a question
+#: that should be answered before it is asked.
+KIND_ACTIVITY = "activity"
 
 ALL_KINDS = frozenset({KIND_CHAT, KIND_TASK, KIND_HELLO, KIND_PRESENCE,
                        KIND_FILE, KIND_SYSTEM})
@@ -174,6 +178,11 @@ class Envelope:
                     f"fetch it with: collab file get {b.get('id')}")
         if self.kind == KIND_PRESENCE:
             return f"[presence] {self.sender}: {self.body.get('event', '')}"
+        if self.kind == KIND_ACTIVITY:
+            from .activity import describe
+
+            said = describe(self.body) or "idle"
+            return f"[{self.body.get('state', 'activity')}] {self.sender}: {said}"
         if self.kind == KIND_TASK:
             b = self.body
             state = str(b.get("state", "")).replace("TASK_STATE_", "").lower()

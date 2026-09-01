@@ -141,6 +141,28 @@ class Hub:
         meta.update({k: v for k, v in hello.items() if v not in ("", None)})
         self.store.update_meta(participant_id, meta)
 
+    def set_activity(self, participant_id: str, reported: dict[str, Any]) -> dict[str, Any]:
+        """Record what this agent says it is doing. Replaced, not merged.
+
+        The opposite of stats, deliberately: usage figures are partial reports
+        that accumulate, while an activity is a statement about NOW, and a
+        merge would leave the files from the last piece of work attached to the
+        next one. The only thing carried over is `since`, and only while the
+        state has not changed — see collab.activity.sanitise.
+        """
+        from ..activity import sanitise
+
+        person = self.store.participant_by_id(participant_id)
+        if person is None:
+            return {}
+        meta = dict(person.meta)
+        clean = sanitise(reported, previous=meta.get("activity"))
+        if not clean:
+            return {}
+        meta["activity"] = clean
+        self.store.update_meta(participant_id, meta)
+        return clean
+
     def merge_stats(self, participant_id: str, stats: dict[str, Any]) -> None:
         from ..stats import sanitise
 
@@ -197,6 +219,9 @@ class Hub:
                 # end to end except for the part where anybody saw it.
                 "color": p.meta.get("color", ""),
                 "stats": p.meta.get("stats", {}),
+                # What they are doing right now, so nobody has to ask. Flattened
+                # here like the rest: the roster is what every client reads.
+                "activity": p.meta.get("activity", {}),
                 # How long ago they were last heard from. A dot says whether
                 # someone is here; this says whether they only just left.
                 "last_seen": p.last_seen,

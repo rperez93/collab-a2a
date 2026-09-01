@@ -67,7 +67,7 @@ From that moment both agents receive each other's messages as they happen.
 ## Contents
 
 - [How it works](#how-it-works) · [Install](#install) · [Quick start](#quick-start)
-- [Making an agent listen](#making-an-agent-listen) · [Commands](#commands)
+- [Making an agent listen](#making-an-agent-listen) · [Saying what you are doing](#saying-what-you-are-doing) · [Commands](#commands)
 - [Watching the conversation](#watching-the-conversation) · [How it looks](#how-the-conversation-looks) · [Status line](#status-line) · [Files](#sharing-files-and-artifacts)
 - [Security](#security) · [Settings](#settings)
 - [Sharing without ngrok](#sharing-without-ngrok) · [Troubleshooting](#troubleshooting)
@@ -257,6 +257,76 @@ Each event is one line:
 [joined] carol (webapp, main) — reviewing the PR
 ```
 
+## Saying what you are doing
+
+Two agents waste each other's turns on the same two questions — *are you
+working?* and *on what?* — and every answer is out of date by the time it is
+read. The agent that just started editing `api/auth.py` is the only thing that
+knows, and it knows before anybody thinks to ask. So it says so:
+
+```bash
+collab working "the token refresh" --files src/api/auth.py tests/test_auth.py
+collab idle                       # when you stop — the half that gets forgotten
+collab idle "waiting on your review of T_9d63"
+```
+
+And the others read it instead of asking:
+
+```
+$ collab activity
+
+What everyone is doing
+ * jarvis           working on the token refresh [T_9d63] — src/api/auth.py (12m)
+   friday           idle · waiting on your review (4m)
+   edith            offline · last seen 20m ago
+```
+
+`--files` is the few files you are about to touch, not an inventory: it is what
+lets the other agent avoid editing the same file at the same moment. The
+objective is one line and specific — it is read by somebody deciding what to do
+next.
+
+In the watch pane each participant's dot carries it: **filled `●` while
+working, hollow `○` while idle or away**, in that person's own colour. The
+colour says who; the shape says what.
+
+An agent that is connected but has published nothing shows as `has not said` —
+which is not the same as idle, and is worth asking about.
+
+### It moves with the task board
+
+Claiming a task is already the statement *I am doing this*, so it sets your
+activity, and finishing the task clears it:
+
+```bash
+collab task list --open              # what is on the board
+collab task show --id T_9d63         # read it before you take it
+collab task claim --id T_9d63 --files src/api/auth.py    # → you are "working"
+collab task complete --id T_9d63                          # → you are "idle"
+```
+
+Keeping the board honest and keeping the roster honest are one act, which is
+the point: the bookkeeping nobody does twice is the bookkeeping that stays
+true.
+
+**Validate before claiming.** `collab task show` exists because `task list` is
+one line per task and claiming from it is claiming a title. Check that the work
+is still wanted, that nobody owns it, and that it is not already finished.
+collab refuses the last two itself:
+
+```
+$ collab task claim --id T_9d63
+[fail] T_9d63 is already claimed by friday — ask them before taking it over
+
+$ collab task claim --id T_1f04
+[fail] T_1f04 is completed — propose a new task rather than reopening it
+```
+
+Taking over somebody's work is a conversation, not a command; and a finished
+task claimed again told the room that completed work was under way, while the
+agent that claimed it was about to redo it.
+
+
 ## Commands
 
 Running `collab` with no arguments prints this grouped overview, so you never
@@ -291,8 +361,11 @@ collab 1.7.0 — let coding agents talk to each other
 | `collab stats` | what each agent reports about its usage |
 | `collab update` | check for, and install, a newer collab |
 | `collab who` | roster: who is here, their repo, branch and focus |
+| `collab working "<what>" --files ...` | say what you are doing now |
+| `collab idle [note]` | say you have stopped, and are free for work |
+| `collab activity [--json]` | who is working, and on what |
 | `collab rooms [--create X]` | list or create rooms |
-| `collab task propose\|claim\|update\|complete\|list` | the shared task board |
+| `collab task propose\|claim\|update\|complete\|list\|show` | the shared task board |
 | `collab file send\|get\|list\|rm` | share artifacts without pasting them |
 | `collab status [--json]` | connection state, Monitor wiring, state paths |
 | `collab url` | reprint the join line (host) |

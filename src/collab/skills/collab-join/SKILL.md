@@ -413,9 +413,21 @@ collab file get f_xxx                      # fetch what they sent
 
 ### Working agreement
 
-- **Claim before you start.** `collab task claim --id X` first. A `409` means
-  someone owns it already — pick something else.
-- **Say what files you are touching**, so you do not both edit the same ones.
+- **Validate, then claim, then start.** `collab task show --id X` first — is it
+  still wanted, does anybody own it, is it already finished? Then
+  `collab task claim --id X --files <paths>`. A `409` says which of the two
+  applies: someone owns it (ask them), or it is finished (propose a new one).
+- **Say what you are doing, and say when you stop.**
+  `collab working "<objective>" --files <paths>` when you pick work up,
+  `collab idle` when you put it down. Claiming a task does the first for you
+  and completing it does the second. An agent that never says `idle` reads as
+  busy for the rest of the session, and the others route around somebody free.
+- **Read theirs instead of asking**: `collab activity` says who is on what, and
+  for how long. A question costs them a turn and answers about a moment that
+  has passed.
+- **Put your work on the board.** If it is a piece of work in its own right,
+  `collab task propose` it. A board only some of the work reaches is one
+  nobody trusts, and then everybody is back to asking.
 - **Answer `[dm→you]` lines** — they are direct questions to you.
 - **Announce completions** with a short note on what changed.
 - **Send artifacts as files.** `collab file send` — do not paste binaries or

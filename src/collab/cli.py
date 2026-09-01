@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import __version__, lockfile, peers, update
+from . import __version__, activity, lockfile, peers, update
 from .client import onboard
 from .client.daemon import (DaemonPaths, effective_state as daemon_state,
                             is_running, read_status,
@@ -188,6 +188,11 @@ def _print_snapshot(snapshot: dict[str, Any], me: str) -> None:
             # However they connected, they are on this box with this user.
             here = c(" ⌂ same machine", "36")
         print(f" {mark} {p['name']}{role}  {state}{repo}{focus}{here}")
+        # What they are doing now, under their line: the focus is what they
+        # said on arrival, and by lunchtime the two are different questions.
+        if (doing := activity.describe(p.get('activity') or {})):
+            tone = '32' if activity.is_working(p.get('activity') or {}) else '2'
+            print(f"      {c(doing, tone)}")
 
     if tasks := snapshot.get("tasks"):
         heading("Open tasks")
@@ -909,6 +914,103 @@ def cmd_rooms(args: argparse.Namespace) -> int:
     return 0
 
 
+def _publish_activity(profile: SessionProfile, state: str, *, what: str = "",
+                      files: list[str] | None = None, task: str = "",
+                      quiet: bool = False) -> dict[str, Any]:
+    """Record what this agent is doing, locally and for everyone else.
+
+    Written to disk first and sent second, in that order and for the same
+    reason the usage figures are: the daemon republishes the file after a
+    reconnect, so a hub that was unreachable for a minute does not leave the
+    room believing you are still on the thing you finished.
+    """
+    from . import activity as act
+
+    payload = {"state": state, "what": what, "files": files or [], "task": task}
+    stored = act.sanitise(payload, previous=act.read_local(profile))
+    act.write_local(profile, stored)
+    try:
+        with _client(profile) as client:
+            stored = client.report_activity(stored)
+            act.write_local(profile, stored)
+    except HubError as exc:
+        if not quiet:
+            warn(f"recorded here, but the hub did not take it: {exc}")
+            print(dim("       the listener will carry it up when it reconnects"))
+    return stored
+
+
+def cmd_working(args: argparse.Namespace) -> int:
+    """Say what you are doing, so the others do not have to ask."""
+    from . import activity as act
+
+    profile = _require_profile(args)
+    what = " ".join(args.what).strip()
+    if not what and not args.task:
+        fail("say what you are working on")
+        print(dim('  collab working "the token refresh" --files src/api/auth.py'))
+        return 1
+    stored = _publish_activity(profile, act.WORKING, what=what,
+                               files=args.files or [], task=args.task or "")
+    ok(f"working: {act.describe(stored)}")
+    if not args.task:
+        # The board is the shared memory; the roster line is only the present
+        # tense of it. Work worth an hour is work worth an entry.
+        print(dim("       if this is a piece of work in its own right, put it on"
+                  " the board: `collab task propose \"...\"`"))
+    return 0
+
+
+def cmd_idle(args: argparse.Namespace) -> int:
+    """Say that you have stopped, which is the half that gets forgotten."""
+    from . import activity as act
+
+    profile = _require_profile(args)
+    note = " ".join(args.note).strip() if args.note else ""
+    stored = _publish_activity(profile, act.IDLE, what=note)
+    ok(f"idle{' · ' + note if note else ''}")
+    return 0
+
+
+def cmd_activity(args: argparse.Namespace) -> int:
+    """Who is working, and on what — without asking any of them."""
+    from . import activity as act
+
+    profile = _require_profile(args)
+    try:
+        with _client(profile) as client:
+            people = client.snapshot().get("participants", [])
+    except HubError as exc:
+        fail(str(exc))
+        return 1
+
+    if args.json:
+        print(json.dumps([
+            {"name": p.get("name"), "connected": p.get("connected"),
+             "activity": p.get("activity") or {}}
+            for p in people], indent=2))
+        return 0
+
+    heading("What everyone is doing")
+    for person in people:
+        mark = "*" if person.get("name") == profile.name else " "
+        state = person.get("activity") or {}
+        if not person.get("connected"):
+            seen = activity.elapsed({"since": person.get("last_seen")})
+            said = dim(f"offline · last seen {seen or 'a while ago'}")
+        elif act.is_working(state):
+            said = c(act.describe(state), "32")
+        elif state:
+            said = dim(act.describe(state))
+        else:
+            # Connected but never said. Not the same as idle, and saying so is
+            # what makes the difference visible enough to be worth fixing.
+            said = dim("has not said")
+        print(f" {mark} {person.get('name', '?'):<16} {said}")
+    print()
+    return 0
+
+
 def cmd_task(args: argparse.Namespace) -> int:
     profile = _require_profile(args)
     try:
@@ -924,15 +1026,75 @@ def cmd_task(args: argparse.Namespace) -> int:
                     owner = t.get("owner") or dim("unclaimed")
                     print(f"  {t['id']}  {t['title']}  [{_short_state(t['state'])}]  {owner}")
                 return 0
+            if args.action == "show":
+                if not args.id:
+                    fail("say which task: `collab task show --id T_xxx`")
+                    return 1
+                found = [t for t in client.tasks() if t["id"] == args.id]
+                if not found:
+                    fail(f"no such task {args.id!r}")
+                    return 1
+                return _describe_task(found[0], as_json=args.json)
             task = client.task_action(
                 args.action, task_id=args.id, title=args.title or "",
                 detail=args.detail or "", room=args.room,
             )
     except HubError as exc:
         fail(str(exc))
+        if args.action == "claim":
+            # The two ways a claim is refused are both worth acting on, and
+            # neither is worth improvising past.
+            print(dim("  read it first: `collab task show --id "
+                      f"{args.id or '<id>'}`"))
         return 1
     ok(f"{args.action}: {task['id']}  {task['title']}  "
        f"[{_short_state(task['state'])}]  {task.get('owner') or 'unclaimed'}")
+
+    # THE BOARD AND THE ROSTER MOVE TOGETHER. Claiming a task is already the
+    # statement «I am doing this»; making the agent say it twice is how the two
+    # drift apart, and the one that gets forgotten is always the second.
+    from . import activity as act
+
+    if args.action == "claim":
+        _publish_activity(profile, act.WORKING, what=task["title"],
+                          files=args.files or [], task=task["id"], quiet=True)
+        print(dim(f"       everyone's roster now shows you on {task['id']}"))
+    elif args.action in ("complete", "fail", "cancel"):
+        mine = act.read_local(profile)
+        if mine.get("task") == task["id"]:
+            _publish_activity(profile, act.IDLE, quiet=True)
+            print(dim("       and you are shown as idle again"))
+    return 0
+
+
+def _describe_task(task: dict[str, Any], *, as_json: bool = False) -> int:
+    """The whole of one task — which is what «validate it first» needs.
+
+    `task list` is a board: one line each, and the detail that says what the
+    work actually is does not fit on it. An agent claiming from the list alone
+    is claiming a title.
+    """
+    if as_json:
+        print(json.dumps(task, indent=2))
+        return 0
+    heading(f"{task['id']}  {task['title']}")
+    print(f"  {'state':<12} {_short_state(task['state'])}")
+    print(f"  {'owner':<12} {task.get('owner') or dim('unclaimed')}")
+    print(f"  {'proposed by':<12} {task.get('created_by') or '?'}")
+    if task.get("room"):
+        print(f"  {'room':<12} {task['room']}")
+    #  and not a second copy of the same arithmetic: how long ago a
+    # thing happened is one question, and it already has an answer.
+    if seen := activity.elapsed({"since": task.get("updated_at")}):
+        print(f"  {'last change':<12} {seen}")
+    if task.get("detail"):
+        print(f"\n  {task['detail']}")
+    if task.get("owner"):
+        print(dim(f"\n  {task['owner']} has it — say so before taking it over"))
+    elif _short_state(task["state"]) in ("completed", "canceled"):
+        print(dim("\n  finished work: propose a new task rather than reopening it"))
+    else:
+        print(dim(f"\n  yours to take: collab task claim --id {task['id']}"))
     return 0
 
 
@@ -2448,15 +2610,35 @@ def build_parser() -> argparse.ArgumentParser:
 
     t = sub.add_parser("task", help="the shared task board")
     t.add_argument("action", choices=["propose", "claim", "update", "complete",
-                                      "fail", "cancel", "list"])
+                                      "fail", "cancel", "list", "show"])
     t.add_argument("title", nargs="?", help="title when proposing")
-    t.add_argument("--id", help="task id for claim/update/complete")
+    t.add_argument("--id", help="task id for show/claim/update/complete")
     t.add_argument("--detail", help="longer description")
+    t.add_argument("--files", nargs="*", metavar="PATH",
+                   help="with claim: the files you are about to touch")
     t.add_argument("--room")
     t.add_argument("--open", action="store_true", help="list only open tasks")
     t.add_argument("--json", action="store_true")
     add_session_flag(t)
     t.set_defaults(func=cmd_task)
+
+    wk = sub.add_parser("working", help="say what you are doing, so nobody asks")
+    wk.add_argument("what", nargs="*", help="the objective, in one line")
+    wk.add_argument("--files", nargs="*", metavar="PATH",
+                    help="the files you are touching")
+    wk.add_argument("--task", help="the task id this belongs to, if there is one")
+    add_session_flag(wk)
+    wk.set_defaults(func=cmd_working)
+
+    idl = sub.add_parser("idle", help="say you have stopped, and are free for work")
+    idl.add_argument("note", nargs="*", help="optional: what you are waiting on")
+    add_session_flag(idl)
+    idl.set_defaults(func=cmd_idle)
+
+    ac = sub.add_parser("activity", help="who is working, and on what")
+    ac.add_argument("--json", action="store_true")
+    add_session_flag(ac)
+    ac.set_defaults(func=cmd_activity)
 
     stt = sub.add_parser("stats", help="what each agent reports about its own usage")
     stt.add_argument("--json", action="store_true")

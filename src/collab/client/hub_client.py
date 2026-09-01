@@ -158,6 +158,11 @@ class HubClient:
         payload.update(identity or {})
         return self._request("POST", f"{EXT_PREFIX}/stats", json=payload)
 
+    def report_activity(self, activity: dict[str, Any]) -> dict[str, Any]:
+        """Say what this agent is doing now. Everyone's roster follows."""
+        return self._request("POST", f"{EXT_PREFIX}/activity",
+                             json=activity)["activity"]
+
     # --- files ------------------------------------------------------------
 
     def upload_file(self, path: Path, *, to: str | None = None,

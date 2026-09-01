@@ -35,6 +35,7 @@ from ..protocol import (
     MAX_FILE_BYTES,
     Envelope,
     KIND_FILE,
+    KIND_ACTIVITY,
     KIND_HELLO,
     KIND_PRESENCE,
     KIND_SYSTEM,
@@ -362,6 +363,29 @@ def create_app(
 
     # --- extension: shared task board --------------------------------------------
 
+    @app.post(f"{EXT_PREFIX}/activity", tags=["collab"])
+    async def report_activity(request: Request) -> dict[str, Any]:
+        """Say what you are doing, so nobody has to ask.
+
+        Published to the room as well as stored: the roster answers «what is
+        everyone doing» for whoever looks, and the feed tells the agents who
+        are not looking. Asking costs both sides a turn and the answer is stale
+        by the time it is read.
+        """
+        user = _require(request)
+        body = await request.json()
+        clean = await asyncio.to_thread(hub.set_activity, user.id, body)
+        if not clean:
+            raise HTTPException(
+                status_code=400,
+                detail="an activity needs state 'working' or 'idle'",
+            )
+        await hub.publish(Envelope(
+            kind=KIND_ACTIVITY, sender=user.name, sender_id=user.id,
+            room=DEFAULT_ROOM, text=str(clean.get("what") or ""), body=clean,
+        ))
+        return {"activity": clean}
+
     @app.get(f"{EXT_PREFIX}/tasks", tags=["collab"])
     async def list_tasks(request: Request, open_only: bool = False) -> dict[str, Any]:
         _require(request)
@@ -390,10 +414,29 @@ def create_app(
             title = str(body.get("title") or existing["title"])
             owner = existing["owner"]
             if action == "claim":
+                # A FINISHED TASK IS NOT AVAILABLE WORK, and that is said first:
+                # claiming one put it back into WORKING and told the room
+                # somebody was on it, so a board read a minute later showed
+                # completed work apparently under way again, and the agent that
+                # "claimed" it was about to redo something already done.
+                #
+                # Before the ownership check, because both can be true at once
+                # and only one of them is worth acting on: «ask alice before
+                # taking it over» sends an agent to negotiate over work that is
+                # already done.
+                done = {"TASK_STATE_COMPLETED", "TASK_STATE_CANCELED"}
+                if existing["state"] in done:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(f"{task_id} is "
+                                f"{existing['state'].replace('TASK_STATE_', '').lower()}"
+                                " — propose a new task rather than reopening it"),
+                    )
                 if owner and owner != user.name:
                     raise HTTPException(
                         status_code=409,
-                        detail=f"{task_id} is already claimed by {owner}",
+                        detail=f"{task_id} is already claimed by {owner}"
+                               " — ask them before taking it over",
                     )
                 owner = user.name
 
