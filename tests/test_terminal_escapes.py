@@ -72,6 +72,23 @@ def test_render_line_scrubs_a_hostile_sender_name():
     assert "\x1b" not in env.render_line()
 
 
+def test_status_line_scrubs_a_hostile_host_name(monkeypatch):
+    """The host's name is remote-chosen and renders into the guest's status bar.
+
+    A host called `alice\\x1b]0;x\\x07` would otherwise rewrite the window title
+    of everyone who joined, through their own status line. NO_COLOR removes the
+    segment's own colour codes, which legitimately contain ESC, so what is left
+    is only the text.
+    """
+    monkeypatch.setenv("NO_COLOR", "1")
+    from collab.statusline.render import render
+
+    line = render({"state": "live", "name": "bob",
+                   "host": "alice\x1b]0;pwned\x07", "heartbeat": 9e18,
+                   "others_connected": 1, "version": "1.0"})
+    assert "\x1b" not in line and "\x07" not in line
+
+
 def test_render_line_scrubs_a_task_title_and_a_file_name():
     """Titles and file names are remote strings on the same terminal path."""
     task = Envelope(kind=KIND_TASK, sender="bob",

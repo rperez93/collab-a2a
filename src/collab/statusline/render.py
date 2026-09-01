@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import SessionProfile, claimed_home
+from ..protocol import scrub
 from ..client.daemon import (DEAD_AFTER, STALE_AFTER, effective_state,
                              is_running, read_status)
 
@@ -145,8 +146,11 @@ def render(status: dict[str, Any] | None = None, *, width: int | None = None,
 
     state = _effective_state(status)
     version = str(status.get("version") or "")
-    name = status.get("name") or "?"
-    host = status.get("host") or "?"
+    # The host's name is chosen by whoever hosts the session — a remote party —
+    # and it renders into this machine's status bar, so its control characters
+    # are scrubbed like every other remote string. See collab.protocol.scrub.
+    name = scrub(str(status.get("name") or "?"))
+    host = scrub(str(status.get("host") or "?"))
     others = int(status.get("others_connected") or 0)
     unread = int(status.get("unread") or 0)
 
