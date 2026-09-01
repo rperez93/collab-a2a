@@ -1879,7 +1879,8 @@ def _wake_deliver(args: argparse.Namespace, wk) -> int:
     target = args.target or ""
     if args.to == "tmux":
         where = os.environ.get("COLLAB_WAKE_PROMPT") or "the batch"
-        code, detail = wk.deliver_to_tmux(target, where)
+        code, detail = wk.deliver_to_tmux(target, where,
+                                          expect_pid=args.expect_pid or "")
     elif args.to == "codex":
         code, detail = wk.deliver_to_codex(target, prompt)
     else:
@@ -1941,6 +1942,7 @@ def cmd_wake(args: argparse.Namespace) -> int:
             # every new server, so a stale pane id does not fail — it points at
             # a stranger, and the daemon types a line into whatever is there.
             # Checked now, while the agent is present to be told.
+            pid = ""
             if known.agent == "tmux":
                 holds, what = wk.pane_holds_an_agent(target)
                 if not holds:
@@ -1948,8 +1950,13 @@ def cmd_wake(args: argparse.Namespace) -> int:
                     print(dim("  arm it from inside the pane running your"
                               " agent, so $TMUX_PANE is that pane"))
                     return 1
-                print(dim(f"  pane {target} is running {what}"))
-            args.run = known.command(target=target,
+                # Recorded now and checked at every delivery. A pane id alone
+                # is not an identity: tmux starts again at %0 on a new server,
+                # so the id outlives the terminal it named and then belongs to
+                # somebody else's.
+                pid, what = wk.pane_identity(target)
+                print(dim(f"  pane {target} is process {pid}, running {what}"))
+            args.run = known.command(target=target, pid=pid,
                                      collab=str(Path(sys.argv[0]).resolve()))
             if known.delivers == wk.OPEN_SESSION:
                 ok(f"this reaches your open session ({target})")
@@ -3205,6 +3212,9 @@ def build_parser() -> argparse.ArgumentParser:
     wa.add_argument("--to", metavar="KIND",
                     help="with `deliver`: how to reach the session. Run by the"
                          " daemon, not meant to be typed")
+    wa.add_argument("--expect-pid", dest="expect_pid", metavar="PID",
+                    help="with `deliver`: the process that was in the pane when"
+                         " this was armed; refuse to type into any other")
     # NOT named `command`: the top-level parser stores the chosen subcommand
     # under that name, and a positional of the same name overwrites it — which
     # left `collab wake …` looking to main() like no subcommand at all.

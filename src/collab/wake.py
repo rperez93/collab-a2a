@@ -184,7 +184,7 @@ class Recipe:
         return any("{target}" in part for part in self.argv)
 
     def command(self, cwd: str = "", target: str = "",
-                collab: str = "collab") -> list[str]:
+                collab: str = "collab", pid: str = "") -> list[str]:
         """The argv to run, with everything substituted SAFELY.
 
         Half of these recipes are `sh -c` strings, because the agent behind them
@@ -197,17 +197,18 @@ class Recipe:
         close. `shlex.quote` on a value that is genuinely an id changes nothing.
         """
         here = cwd or str(Path.cwd())
+        whole = {"{cwd}": here, "{target}": target, "{collab}": collab,
+                 "{pid}": pid}
         out = []
         for part in self.argv:
-            if part in ("{cwd}", "{target}", "{collab}"):
+            if part in whole:
                 # A whole argv entry: passed as one argument, never re-parsed,
                 # so it needs no quoting and must not get any.
-                out.append({"{cwd}": here, "{target}": target,
-                            "{collab}": collab}[part])
+                out.append(whole[part])
                 continue
-            out.append(part.replace("{cwd}", shlex.quote(here))
-                           .replace("{target}", shlex.quote(target))
-                           .replace("{collab}", shlex.quote(collab)))
+            for token, value in whole.items():
+                part = part.replace(token, shlex.quote(value))
+            out.append(part)
         return out
 
     def detect_target(self, env: dict[str, str] | None = None) -> str:
@@ -241,7 +242,7 @@ RECIPES: tuple[Recipe, ...] = (
         " or pass --target <thread-id>"),
     Recipe(
         "tmux", ["{collab}", "wake", "deliver", "--to", "tmux",
-                 "--target", "{target}"], False,
+                 "--target", "{target}", "--expect-pid", "{pid}"], False,
         "THE GENERAL ANSWER: types one line into the terminal the agent is"
         " already sitting in, so it reaches ANY interactive agent running in a"
         " tmux pane. It sends a pointer to the batch rather than the batch"
@@ -326,34 +327,64 @@ def _tmux(args: list[str], runner=None) -> tuple[int, str]:
     return int(done.returncode), (done.stdout or done.stderr or "").strip()
 
 
-def pane_holds_an_agent(target: str, runner=None) -> tuple[bool, str]:
-    """Is there still something in this pane worth typing into?
+def pane_identity(target: str, runner=None) -> tuple[str, str]:
+    """What is in this pane: its process id, and the command running in front.
 
-    Two things go wrong and they look identical from outside. The pane can be
-    gone — and tmux hands out `%0` again on a new server, so a stale id does not
-    fail, it points at a stranger. Or the pane can still exist with the agent
-    exited, leaving a shell that will execute the line as a command.
+    Both, because they catch different things. The pid catches a RECYCLED pane
+    id — tmux starts again at `%0` on a new server, so a stale target does not
+    fail, it silently points at a stranger's terminal. The command catches the
+    agent having exited back to the shell that spawned it, where the pane's own
+    pid never changed.
     """
-    code, what = _tmux(["display-message", "-p", "-t", target,
-                        "#{pane_current_command}"], runner)
-    if code != 0 or not what:
-        # An empty answer with a zero exit happens for a pane that has gone;
-        # taking it as «something is running» let the check pass and left the
-        # send-keys below to be the one that noticed.
-        return False, f"no such pane {target!r} — {what or 'no answer from tmux'}"
-    if what in SHELLS:
-        return False, (f"pane {target} is running {what}, not an agent —"
-                       " whatever was there has exited")
+    code, said = _tmux(["display-message", "-p", "-t", target,
+                        "#{pane_pid} #{pane_current_command}"], runner)
+    if code != 0 or not said.strip():
+        # A pane that has gone answers with a blank line AND a zero exit, with
+        # nothing on stderr — so «did the command succeed» is not the question
+        # to ask here, and taking that answer as «something is running» let the
+        # check pass and left send-keys to be the thing that noticed.
+        return "", ""
+    parts = said.split(None, 1)
+    return parts[0], (parts[1].strip() if len(parts) > 1 else "")
+
+
+def pane_holds_an_agent(target: str, runner=None, *,
+                        expect_pid: str = "") -> tuple[bool, str]:
+    """Is there still something in this pane worth typing into?"""
+    pid, what = pane_identity(target, runner)
+    if not pid:
+        return False, f"no such pane {target!r} — nothing answered for it"
+    if expect_pid and pid != expect_pid:
+        return False, (f"pane {target} is process {pid} now, not {expect_pid} —"
+                       " this id belongs to a different terminal")
+    if not what or what in SHELLS:
+        # An unnamed foreground process is not evidence of an agent either.
+        # Both are «cannot tell right now», which is a wait, not a verdict.
+        return False, (f"pane {target} is running {what or 'nothing named'},"
+                       " not an agent — whatever was there has exited")
     return True, what
 
 
-def deliver_to_tmux(target: str, prompt_path: str, *, runner=None) -> tuple[int, str]:
+#: «Could not deliver this time; ask again later, and do not hold it against
+#: the wake.» `pane_current_command` reports the FOREGROUND process, so an
+#: agent that shells out mid-turn reads as a bare shell for as long as that
+#: takes. Counting those toward the give-up threshold would declare a perfectly
+#: healthy wake broken for doing its job. 75 is the conventional EX_TEMPFAIL.
+TRY_AGAIN = 75
+
+
+def deliver_to_tmux(target: str, prompt_path: str, *, runner=None,
+                    expect_pid: str = "") -> tuple[int, str]:
     """Type one line into the pane, having checked there is an agent in it."""
     if not target:
         return 1, "no pane to deliver to"
-    holds, what = pane_holds_an_agent(target, runner)
+    holds, what = pane_holds_an_agent(target, runner, expect_pid=expect_pid)
     if not holds:
-        return 1, what
+        # A shell in the pane may be the agent gone for good, or the agent
+        # shelling out for the next four seconds. They are indistinguishable
+        # from here, so it is retried rather than counted as a fault; the pane
+        # being gone or belonging to somebody else is neither.
+        return (TRY_AGAIN if "not an agent" in what else 1), what
     line = (f"collab: messages arrived — read {prompt_path} and act on it")
     code, said = _tmux(["send-keys", "-t", target, "--", line, "Enter"], runner)
     if code != 0:
@@ -808,6 +839,17 @@ class Waker:
         with contextlib.suppress(OSError):
             os.replace(batch.path, self.done / batch.name)
         self._trim()
+
+    def try_again_later(self, batch: Batch) -> None:
+        """Not delivered, and nobody's fault. Wait, but hold nothing against it.
+
+        The agent shelling out mid-turn looks exactly like the agent having
+        exited, for as long as the shell runs. Counting those would declare a
+        healthy wake broken for doing its job — and the alarm that follows is
+        one the whole room sees.
+        """
+        self.last_wake = self.now()
+        self.failed_at = self.now()
 
     def failed(self, batch: Batch) -> None:
         """Keep the batch, back off, and start counting.

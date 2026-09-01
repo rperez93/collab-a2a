@@ -670,6 +670,14 @@ class Daemon:
             self._wake_note = f"woke the agent with {wake.summarise(batch.events())}"
             if config.notify:
                 await self._notify(config.notify, batch)
+        elif proc.returncode == wake.TRY_AGAIN:
+            # The delivery said «not now», not «broken». The agent shelling out
+            # mid-turn is indistinguishable from the agent having gone, and
+            # only one of those is worth telling the room about.
+            self.waker.try_again_later(batch)
+            self._wake_note = ((out or b"").decode(errors="replace").strip()
+                               [-160:] or "not deliverable just now; will retry")
+            logger.info("wake deferred: %s", self._wake_note)
         else:
             self.waker.failed(batch)
             tail = (out or b"").decode(errors="replace").strip()[-200:]

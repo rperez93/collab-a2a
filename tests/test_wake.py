@@ -612,14 +612,15 @@ class _Answer:
         self.returncode, self.stdout, self.stderr = code, out, ""
 
 
-def _tmux_answering(current_command, sent=None, *, pane_exists=True):
-    """A fake tmux: says what is running in the pane, records what was typed."""
+def _tmux_answering(current_command, sent=None, *, pane_exists=True, pid="900"):
+    """A fake tmux: says what is in the pane, records what was typed."""
     def runner(argv, **_kwargs):
         if sent is not None:
             sent.append(argv)
         if "display-message" in argv:
-            return (_Answer(0, current_command) if pane_exists
-                    else _Answer(1, "can't find pane"))
+            if not pane_exists:
+                return _Answer(0, "")     # observed: blank line, exit 0
+            return _Answer(0, f"{pid} {current_command}".strip())
         return _Answer(0)
     return runner
 
@@ -635,6 +636,32 @@ def test_it_will_not_type_into_a_pane_whose_agent_has_gone():
         "it typed into the shell anyway"
 
 
+def test_a_shell_in_the_pane_is_try_again_not_a_fault():
+    """`pane_current_command` shows the FOREGROUND process, so an agent that
+    shells out mid-turn reads as a bare shell for as long as that takes.
+    Counting those toward the give-up threshold would declare a healthy wake
+    broken — and the alarm that follows is one the whole room sees."""
+    code, _ = wake.deliver_to_tmux("%0", "/tmp/p.txt",
+                                   runner=_tmux_answering("zsh"))
+    assert code == wake.TRY_AGAIN
+
+
+def test_a_recycled_pane_id_is_a_fault_not_a_retry():
+    """tmux starts again at %0 on a new server, so an armed id outlives the
+    terminal it named and then belongs to somebody else's."""
+    code, why = wake.deliver_to_tmux(
+        "%0", "/tmp/p.txt", expect_pid="900",
+        runner=_tmux_answering("codex", pid="4242"))
+    assert code == 1, "a stranger's terminal is not something to retry into"
+    assert "different terminal" in why
+
+
+def test_the_same_pane_and_process_is_delivered_to():
+    code, _ = wake.deliver_to_tmux("%0", "/tmp/p.txt", expect_pid="900",
+                                   runner=_tmux_answering("codex", pid="900"))
+    assert code == 0
+
+
 def test_it_will_not_type_into_a_pane_that_is_gone():
     """tmux reuses `%0` on a new server, so a stale id reaches a stranger."""
     code, why = wake.deliver_to_tmux(
@@ -645,8 +672,8 @@ def test_it_will_not_type_into_a_pane_that_is_gone():
 def test_an_empty_answer_from_tmux_is_not_taken_as_an_agent():
     """Observed against tmux 3.4: a pane that has gone can answer 0 and blank,
     which read as «something is running» and left send-keys to notice."""
-    code, why = wake.deliver_to_tmux("%9", "/tmp/p.txt",
-                                     runner=_tmux_answering(""))
+    code, why = wake.deliver_to_tmux(
+        "%9", "/tmp/p.txt", runner=_tmux_answering("codex", pane_exists=False))
     assert code != 0 and "no such pane" in why
 
 
