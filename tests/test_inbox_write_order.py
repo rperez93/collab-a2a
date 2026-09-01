@@ -208,6 +208,12 @@ def test_the_replacement_connection_is_set_up_like_the_first_one(inbox, tmp_path
     branch, reintroduced on the path nobody would think to look at. Both
     connections come out of `_connect` so that the two cannot drift; this is
     what says they have not.
+
+    THE TIMEOUT IS THE HALF WITH TEETH. `journal_mode` cannot catch a
+    hand-rolled reconnection, because WAL is persistent in the database file
+    and any connection to it reports wal whether or not it asked. Both are
+    asserted as a pair so the intent reads whole — do not let anyone simplify
+    this down to the journal mode, which would leave it asserting nothing.
     """
     was = (inbox._db.execute("PRAGMA journal_mode").fetchone()[0].lower(),
            inbox._db.execute("PRAGMA busy_timeout").fetchone()[0])

@@ -138,7 +138,14 @@ def test_the_header_is_plain_while_the_feed_is_live(profile):
 
 def test_a_stamp_is_written_with_the_snapshot():
     """Without it there is nothing to be careful about: a frozen roster and a
-    fresh one are the same bytes."""
+    fresh one are the same bytes.
+
+    Note that this reads the source off disk while it runs, so anything that
+    writes to the tree mid-run —a commit landing, a rebase, an editor saving—
+    can fail it once and pass on the next attempt. That is the harness and not
+    the code: a failure here that will not reproduce is worth re-running
+    before investigating.
+    """
     import inspect
 
     from collab.client.daemon import Daemon

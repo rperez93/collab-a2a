@@ -156,13 +156,20 @@ class Inbox:
                 # which `_discard` is responsible for even when the rollback
                 # itself is what fails.
                 #
-                # BaseException rather than Exception, and wider than today's
-                # callers need on purpose: `record` is synchronous with no
-                # await and no yield, so CancelledError and GeneratorExit
-                # cannot reach it as things stand. Moving this write off the
-                # event loop is the next change this file is likely to see, and
-                # it opens that path the moment it lands — a handler that holds
-                # only while nobody threads the caller is a trap laid for
+                # BaseException rather than Exception, on purpose, and the
+                # three cases are not equal. CancelledError and GeneratorExit
+                # have no suspension point to arrive at: `record` is
+                # synchronous, with no await and no yield. KeyboardInterrupt is
+                # different — the daemon, its only caller, installs SIGINT as a
+                # handler that sets an event instead of raising, but that
+                # install sits under a suppressed NotImplementedError, so
+                # wherever `add_signal_handler` is unavailable it never
+                # happens and Ctrl-C lands here as an exception after all.
+                #
+                # So this is not purely defensive today. And moving the write
+                # off the event loop, the next change this file is likely to
+                # see, opens the other two the moment it lands: a handler that
+                # holds only while nobody threads the caller is a trap laid for
                 # whoever does.
                 self._discard()
                 raise
@@ -206,9 +213,11 @@ class Inbox:
         WHAT IS NOT KNOWN is how this is reached. The obvious theory —that the
         append and the rollback share a cause— was tested and did not hold: the
         rollback succeeded through a read-only directory, read-only `-wal` and
-        `-shm`, unlinked `-wal` and `-shm`, and a read-only `inbox.db`, because
-        a WAL rollback discards frames rather than writing them. It could only
-        be made to fail by injection. Genuine ENOSPC and a hardware EIO remain
+        `-shm`, unlinked `-wal` and `-shm`, and a read-only `inbox.db` —
+        apparently because a WAL rollback discards frames rather than writing
+        them, though that is the explanation offered for the outcome and not
+        itself something anybody checked. Four clean rollbacks is the measured
+        part. It could only be made to fail by injection. Genuine ENOSPC and a hardware EIO remain
         the candidates and neither is stageable without root, so this is three
         lines against a consequence that is silent, not against a rate anybody
         has measured. Do not quote a likelihood for it; there is not one.
