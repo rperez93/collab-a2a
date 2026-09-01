@@ -347,6 +347,39 @@ class Store:
         return Participant(id=pid, name=final, is_host=is_host, joined_at=now,
                            last_seen=now, revoked=False, meta=dict(meta or {}))
 
+    def rebind_participant(self, participant_id: str, token: str, *,
+                           meta: dict[str, Any] | None = None) -> Participant | None:
+        """Hand an existing participant back to whoever is answering to it now.
+
+        A rejoin, not a new arrival: the row keeps its id, so the history
+        addressed to it, the direct messages, the colour and the usage figures
+        all still belong to the same person. Only the token changes — the old
+        one stops working, which is what makes this a hand-over rather than a
+        second key cut for the same door.
+        """
+        now = time.time()
+        with self._lock:
+            row = self._db.execute(
+                "SELECT 1 FROM participants WHERE id=? AND revoked=0",
+                (participant_id,),
+            ).fetchone()
+            if not row:
+                return None
+            self._db.execute(
+                "UPDATE participants SET token_hash=?, last_seen=? WHERE id=?",
+                (token_hash(token), now, participant_id),
+            )
+            self._db.commit()
+        person = self.participant_by_id(participant_id)
+        if person is not None and meta:
+            # Merged, not replaced: what they say on the way back in is newer,
+            # and what they said before and did not repeat is still true.
+            merged = dict(person.meta)
+            merged.update({k: v for k, v in meta.items() if v not in ("", None)})
+            self.update_meta(participant_id, merged)
+            person = self.participant_by_id(participant_id)
+        return person
+
     def name_taken(self, name: str, *, except_id: str = "") -> bool:
         """Is this name currently held by somebody still in the session?
 

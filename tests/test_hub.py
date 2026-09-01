@@ -135,9 +135,17 @@ def test_join_broadcasts_a_hello(client, session, host_headers):
     assert hello[0]["body"]["repo"] == "collab"
 
 
-def test_a_taken_name_is_refused_with_a_clear_reason(client, session):
+async def _connect(session, participant_id):
+    """Put a participant on the feed, which is what «online» means here."""
+    return await session["app"].state.hub.subscribe(participant_id)
+
+
+async def test_a_name_held_by_someone_online_is_refused_with_a_clear_reason(
+        client, session):
     """Two people answering to one name makes every DM a guess."""
-    assert _join(client, session, name="bob")["name"] == "bob"
+    bob = _join(client, session, name="bob")
+    assert bob["name"] == "bob"
+    await _connect(session, bob["id"])
 
     r = client.post("/ext/collab/v1/join", json={
         "invite": session["invite"], "name": "bob", "hello": {},
@@ -145,7 +153,43 @@ def test_a_taken_name_is_refused_with_a_clear_reason(client, session):
     assert r.status_code == 409
     detail = r.json()["detail"]
     assert "already taken" in detail
+    assert "online" in detail, "which is the reason it is refused"
     assert "--name" in detail, "the message has to say how to fix it"
+
+
+def test_a_name_whose_holder_is_gone_is_a_rejoin_not_a_clash(client, session):
+    """The everyday case: a daemon that died, a laptop that slept, a session
+    picked up after lunch. The agent coming back to its own session was told
+    its own name was taken and to pick another one."""
+    first = _join(client, session, name="bob", focus="the client side")
+
+    again = _join(client, session, name="bob")
+    assert again["name"] == "bob", "no suffix, no refusal"
+    assert again["id"] == first["id"], "and the same person, not a second bob"
+
+
+def test_a_rejoin_keeps_what_was_already_known_about_them(client, session):
+    first = _join(client, session, name="bob", repo="webapp", focus="the client side")
+    _join(client, session, name="bob", focus="the auth refactor")
+
+    people = client.get("/ext/collab/v1/snapshot",
+                        headers={"Authorization": f"Bearer {session['host_token']}"}
+                        ).json()["participants"]
+    bob = [p for p in people if p["name"] == "bob"]
+    assert len(bob) == 1, "one row, not one per rejoin"
+    assert bob[0]["focus"] == "the auth refactor", "what they said on the way back in"
+    assert bob[0]["repo"] == "webapp", "and what they said before and did not repeat"
+    assert bob[0]["id"] == first["id"]
+
+
+def test_the_old_token_stops_working_after_a_rejoin(client, session):
+    """A hand-over, not a second key cut for the same door."""
+    first = _join(client, session, name="bob")
+    old = {"Authorization": f"Bearer {first['token']}"}
+    assert client.get("/ext/collab/v1/snapshot", headers=old).status_code == 200
+
+    _join(client, session, name="bob")
+    assert client.get("/ext/collab/v1/snapshot", headers=old).status_code == 401
 
 
 def test_the_hosts_name_is_protected_too(client, session):

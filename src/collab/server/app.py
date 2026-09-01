@@ -162,19 +162,44 @@ def create_app(
         requested = str(body.get("name") or "agent")
         hello = dict(body.get("hello") or {})
 
-        # Two people answering to one name makes every direct message a guess,
-        # so say so plainly instead of quietly renaming them to "bob-2".
+        # A NAME CLASHES ONLY WITH SOMEBODY WHO IS HERE. Two people answering
+        # to one name makes every direct message a guess, which is why this is
+        # refused rather than quietly renamed to "bob-2" — but that is an
+        # argument about two agents in the room at once, and it was being made
+        # against agents who had left. A daemon that died, a laptop that slept,
+        # a session closed and picked up after lunch: the name sat in the table
+        # marked present, and the agent coming back to its own session was told
+        # its own name was taken and to pick another one.
+        #
+        # So the question is whether the holder is CONNECTED. If they are not,
+        # this is a rejoin: they get their own row back — same id, so the
+        # history addressed to them, their colour and their usage figures are
+        # still theirs — and a fresh token, which retires the old one.
+        holder = None
         if store.name_taken(requested):
+            holder_id = store.resolve_name(requested)
+            holder = store.participant_by_id(holder_id) if holder_id else None
+        # The host row is never handed over: `is_host` carries the power to
+        # remove people and withdraw their files, and an invite is not enough
+        # to inherit that — it would make hosting a thing anyone could take by
+        # waiting for the host to go quiet.
+        if holder is not None and (hub.is_connected(holder.id) or holder.is_host):
+            where = "online right now" if not holder.is_host else "the host"
             raise HTTPException(
                 status_code=409,
                 detail=(f"the name {requested!r} is already taken in this session "
-                        "— join again with a different one (collab join <url> "
-                        "--name <another>)"),
+                        f"({where}) — join again with a different one "
+                        "(collab join <url> --name <another>)"),
             )
         token = new_secret()
-        person = await asyncio.to_thread(
-            store.add_participant, requested, token, is_host=False, meta=hello
-        )
+        if holder is not None:
+            person = await asyncio.to_thread(
+                store.rebind_participant, holder.id, token, meta=hello
+            )
+        if holder is None or person is None:
+            person = await asyncio.to_thread(
+                store.add_participant, requested, token, is_host=False, meta=hello
+            )
 
         await hub.publish(Envelope(
             kind=KIND_HELLO, sender=person.name, sender_id=person.id,
