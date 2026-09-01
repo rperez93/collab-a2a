@@ -342,6 +342,14 @@ def _names_itself_our_daemon(pid: int, profile: SessionProfile) -> bool:
     # Read while it is alive — a dead pid has no environ, and asking after the
     # signal answers nothing about what was signalled.
     home = exclusive.environ(pid).get("COLLAB_HOME", "")
+    # Compared, not resolved. `Path(a) == Path(b)` already settles a trailing
+    # slash, a doubled separator and a dot segment; a parent hop, a symlinked
+    # parent and a bind mount compare unequal, and that daemon is then left
+    # alone rather than reaped. Failing that way round is the point, and it is
+    # why `resolve()` is not used here: it would close those cases and would
+    # also make equal some paths that should stay distinct. A wrong equality
+    # here costs somebody a signal; a wrong inequality costs an orphan nobody
+    # cleared, and only one of those is recoverable.
     return bool(home) and Path(home) == Path(profile.home)
 
 

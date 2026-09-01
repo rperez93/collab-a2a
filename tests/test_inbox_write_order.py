@@ -220,3 +220,54 @@ def test_the_replacement_connection_is_set_up_like_the_first_one(inbox, tmp_path
            inbox._db.execute("PRAGMA busy_timeout").fetchone()[0])
     assert now == was, "the recovery path came back configured differently"
     assert inbox._db.row_factory is sqlite3.Row
+
+
+class _RaceThenRefuseRollback:
+    """Both at once: a rival takes the seq between the look and the leap, and
+    the rollback that answers for it then refuses."""
+
+    def __init__(self, real, rival, env):
+        self._real, self._rival, self._env = real, rival, env
+        self.armed = True
+
+    def execute(self, sql, *args):
+        result = self._real.execute(sql, *args)
+        if sql.startswith("SELECT 1 FROM inbox") and self._rival is not None:
+            rival, self._rival = self._rival, None
+            rival.record(self._env)
+        return result
+
+    def rollback(self):
+        if self.armed:
+            self.armed = False
+            raise sqlite3.OperationalError("rollback refused too")
+        return self._real.rollback()
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def test_a_duplicate_whose_rollback_fails_is_still_not_a_dropped_feed(inbox, tmp_path):
+    """The duplicate path answers False so a local race is not reported as the
+    hub being unreachable.
+
+    Its own rollback failing turned that answer back into a raised exception,
+    which reaches `_connect_forever`, counts as a dropped feed, and after eight
+    of them tells a guest the hub is unreachable and to go and ask a colleague
+    for a fresh link — the exact misdiagnosis this path exists to prevent,
+    undone by its own error handler. Nothing is lost either way, because a
+    constraint-aborted INSERT leaves nothing pending; what was at stake is the
+    false hint and a transaction left open, which pins the WAL against
+    checkpointing and makes every later read answer from a stale snapshot.
+    """
+    rival = Inbox(tmp_path)
+    try:
+        inbox._db = _RaceThenRefuseRollback(inbox._db, rival, _env(7))
+
+        assert inbox.record(_env(7)) is False, "a local race became a dropped feed"
+    finally:
+        rival.close()
+
+    assert inbox._db.in_transaction is False, "it left the transaction open"
+    assert inbox.last_seq() == 7
+    assert len((tmp_path / "inbox.jsonl").read_text().splitlines()) == 1

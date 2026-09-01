@@ -130,7 +130,16 @@ class Inbox:
                 # a failure — and after eight of those the hint tells a guest
                 # the hub is unreachable and to go and ask a human for a fresh
                 # link, over a race that never left this machine.
-                self._db.rollback()
+                #
+                # Through `_discard` for the same reason as the arm below: a
+                # bare rollback that fails leaves the transaction open AND
+                # turns this answer back into a raised exception, which lands
+                # on the very hint this path was written to stop — undone by
+                # its own error handler. A constraint-aborted INSERT leaves
+                # nothing pending, so there is no orphan to commit here and
+                # nothing is lost; what is at stake is the misdiagnosis and a
+                # read transaction left pinning the WAL against checkpointing.
+                self._discard()
                 return False
             except BaseException:
                 # AND THE APPEND CAN FAIL, not merely be interrupted — a
