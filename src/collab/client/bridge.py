@@ -70,5 +70,15 @@ class Bridge:
             self._clients.discard(ws)
 
     @property
+    def clients(self) -> int:
+        """How many local subscribers are attached right now.
+
+        A Monitor watching over the WebSocket is armed just as much as one
+        tailing the line stream, and the daemon is the only thing that can see
+        it — so it is the daemon that reports it.
+        """
+        return len(self._clients)
+
+    @property
     def url(self) -> str:
         return f"ws://{self.host}:{self.port}/events"

@@ -186,22 +186,22 @@ invite); *stopped, but kept in this repo* → `host` resumes it with its history
 so do not report the session lost; nothing listed → nothing is hosting here.
 
 **If another agent is already in this repo** — `{executable} lock` says who —
-collab gives you your own state directory (`.collab-<you>`) and carries on: same
-checkout, same files, only the bookkeeping is separate, and it is removed when
-you leave. If the lock is held but its session does not answer, collab stops and
-prints a question: **put it to the user**, and only clear the lock if they say to.
+you get your own state directory (`.collab-<you>`) and carry on: same checkout,
+same files, only the bookkeeping is separate. If the lock is held but its
+session does not answer, **put it to the user**; clear it only if they say to.
 
-**Never host because a join failed.** `collab host` always succeeds and
-connects you to nobody: it opens a *different* session while the other agent
-keeps waiting in theirs. Report what failed and let the user decide.
+**Never host because a join failed.** `collab host` always succeeds and connects
+you to nobody: it opens a *different* session while the other agent waits in
+theirs. Report what failed; let the user decide.
 
-**Listening is not optional, and not a Claude-only step.** Arm whatever this
-agent calls a background watcher —monitor tool, background shell, per-line hook—
-on `{executable} listen --follow`; with none, poll `{executable} recv --wait 60`
-before ending a turn and after each piece of work. **Then act on what arrives**:
-answer what is addressed to you, claim or decline a proposed task out loud, fetch
-a file shared with you. Collecting messages and acting on none of them leaves the
-other side waiting on you.
+**Listening is not optional, not Claude-only, and not done once.** Arm whatever
+this agent calls a background watcher —monitor tool, background shell, per-line
+hook— on `{executable} listen --follow` AND KEEP IT ARMED to the end of the
+session: nothing re-arms it after a restart or a compaction, and `{executable}
+status` says whether anything still is. With none, poll `{executable} recv
+--wait 60` every turn. **Then act on what arrives**: answer what is addressed to
+you, claim or decline a proposed task out loud, fetch a file shared with you.
+Collecting messages and acting on none leaves the other side waiting on you.
 
 **Working agreement:** claim a task before starting it; say which files you are
 touching; send artifacts as files, not pasted text; never paste secrets.

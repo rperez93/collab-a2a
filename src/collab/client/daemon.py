@@ -75,12 +75,67 @@ def is_running(profile: SessionProfile) -> int | None:
         pid = int(paths.pid.read_text().strip())
     except (OSError, ValueError):
         return None
+    # Stale pid file from a crash; treat as not running.
+    return pid if _alive(pid) else None
+
+
+def _alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
     except (OSError, ProcessLookupError):
-        # Stale pid file from a crash; treat as not running.
-        return None
-    return pid
+        return False
+    return True
+
+
+def watchers_dir(profile: SessionProfile) -> Path:
+    return DaemonPaths(profile.dir).root / "watchers"
+
+
+@contextlib.contextmanager
+def watching(profile: SessionProfile):
+    """Register this process as reading the feed, for as long as it does.
+
+    An armed monitor is the whole difference between a collaborator and a
+    mailbox, and nothing could tell you whether one was still armed: a Monitor
+    dropped by a restart, a compaction or a closed shell looks exactly like a
+    quiet conversation from the inside. A file per reader, named by pid, is
+    enough to answer it — and a reader that dies without cleaning up is found
+    out by the same `kill(pid, 0)` that judges the daemon.
+    """
+    directory = watchers_dir(profile)
+    mine = directory / str(os.getpid())
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        mine.write_text(str(time.time()))
+    except OSError:
+        mine = None                       # unwritable state dir: still stream
+    try:
+        yield
+    finally:
+        if mine is not None:
+            with contextlib.suppress(OSError):
+                mine.unlink()
+
+
+def watchers(profile: SessionProfile) -> list[int]:
+    """The pids currently streaming this session's feed, dead ones pruned."""
+    directory = watchers_dir(profile)
+    live: list[int] = []
+    try:
+        entries = list(directory.iterdir())
+    except OSError:
+        return []
+    for entry in entries:
+        try:
+            pid = int(entry.name)
+        except ValueError:
+            continue
+        if _alive(pid):
+            live.append(pid)
+        else:
+            with contextlib.suppress(OSError):
+                entry.unlink()
+    return sorted(live)
 
 
 def stop(profile: SessionProfile) -> bool:
@@ -203,6 +258,10 @@ class Daemon:
             "others_connected": sum(1 for p in others if p.get("connected")),
             "others_total": len(others),
             "unread": self.inbox.unread_count(exclude_sender=self.profile.name),
+            # Whether anybody is actually reading what we deliver. The bridge
+            # can see its own subscribers; the line stream registers itself.
+            "ws_clients": self.bridge.clients,
+            "watchers": len(watchers(self.profile)) + self.bridge.clients,
             "last_seq": self.inbox.last_seq(),
             "heartbeat": time.time(),
             "connected_since": self.connected_since,

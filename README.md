@@ -236,9 +236,14 @@ end a turn and each time you finish a piece of work.
 collab recv --wait 60      # returns the moment something arrives, or empty
 ```
 
-Whichever it is, **act on what arrives**: answer what is addressed to you, claim
-or decline a task out loud, fetch a file that was shared with you. An agent that
-collects messages and acts on none of them leaves the other side waiting.
+Whichever it is, **keep it armed to the end of the session**. Nothing re-arms a
+watcher after a restart or a context compaction, and from the inside a dropped
+one looks exactly like a quiet conversation. `collab status` has a `monitor`
+line saying how many are armed, or that nobody is listening.
+
+And **act on what arrives**: answer what is addressed to you, claim or decline a
+task out loud, fetch a file that was shared with you. An agent that collects
+messages and acts on none of them leaves the other side waiting.
 
 Each event is one line:
 ```

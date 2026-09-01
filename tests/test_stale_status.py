@@ -126,9 +126,13 @@ def test_it_says_how_to_bring_the_listener_back(profile, monkeypatch):
     assert "daemon start" in payload["hint"]
 
 
-def test_a_running_listener_is_still_reported_live(profile, monkeypatch):
+def test_a_healthy_session_is_still_reported_live(profile, monkeypatch):
     """The fix must not make every session look broken."""
+    import os
+
     _wrote(profile, state="live", heartbeat=time.time())
+    (profile.dir / "watchers").mkdir()
+    (profile.dir / "watchers" / str(os.getpid())).write_text("")
 
     payload = _status_payload(profile, monkeypatch, running=True)
     assert payload["state"] == "live"

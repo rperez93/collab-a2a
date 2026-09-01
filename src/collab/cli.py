@@ -24,7 +24,8 @@ from . import __version__, lockfile, peers, update
 from .client import onboard
 from .client.daemon import (DaemonPaths, effective_state as daemon_state,
                             is_running, read_status,
-                            stop as stop_daemon, stop_orphans)
+                            stop as stop_daemon, stop_orphans,
+                            watchers, watching)
 from .client.hub_client import HubClient, HubError
 from .client.inbox import Inbox
 from .config import (
@@ -138,18 +139,36 @@ def _client(profile: SessionProfile) -> HubClient:
 
 
 def _monitor_hint(profile: SessionProfile, status: dict[str, Any]) -> None:
-    """Tell the agent exactly how to start listening, with the real port filled in."""
+    """Tell the agent to arm a watcher NOW, and to keep it armed.
+
+    Printed by both `host` and `join`, because it is the same obligation either
+    way and this is the moment an agent decides whether to take it on.
+
+    It used to read «to receive messages in real time, arm a Monitor on one of
+    these», which is a Claude Code word for a thing every agent has under some
+    other name, phrased as an option. Both halves cost messages: an agent that
+    has no `Monitor` concluded the step was not for it, and an agent that armed
+    one and then lost it —a restart, a context compaction, a closed shell— had
+    been told nothing about the second half of the job, which lasts as long as
+    the session does.
+    """
     port = status.get("bridge_port") or profile.bridge_port
     exe = sys.argv[0]
     # A session outside the repo's default directory has to say so, or the
     # listener command resolves somewhere else and follows the wrong session.
     where = ("" if Path(profile.home).name == COLLAB_DIRNAME
              else f"COLLAB_HOME={profile.home} ")
-    heading("To receive messages in real time, arm a Monitor on one of these:")
+    heading("Arm your monitor on this NOW, and keep it armed until the session ends")
     print(f"  {c('command', '36')}   {where}{exe} listen --follow")
     if port:
         print(f"  {c('ws', '36')}        ws://127.0.0.1:{port}/events")
-    print(dim("  (either one delivers the same events; the daemon handles reconnects)"))
+    print(f"  {c('no watcher?', '36')} {exe} recv --wait 60  "
+          + dim("— before you end a turn, every turn"))
+    print(dim("  Either stream carries the same events and the daemon handles"
+              " reconnects,"))
+    print(dim("  but nothing re-arms a watcher you lost: if yours stops, arm it"
+              " again."))
+    print(dim(f"  `{exe} status` says whether anything is still listening."))
 
 
 def _print_snapshot(snapshot: dict[str, Any], me: str) -> None:
@@ -816,7 +835,11 @@ def cmd_listen(args: argparse.Namespace) -> int:
         for env in inbox.all_events(limit=args.replay):
             print(_format(env, args.json), flush=True)
 
-    with path.open("r", encoding="utf-8") as fh:
+    # Say that somebody is reading, for as long as they are. A monitor that
+    # dropped —a restart, a compaction, a closed shell— is indistinguishable
+    # from a quiet conversation until something can be asked; `collab status`
+    # asks this.
+    with watching(profile), path.open("r", encoding="utf-8") as fh:
         fh.seek(0, os.SEEK_END)
         while True:
             line = fh.readline()
@@ -1429,6 +1452,16 @@ def cmd_status(args: argparse.Namespace) -> int:
     # with an unread count and a monitor line to go with it, every figure of it
     # history. The status line has judged this properly all along; the command
     # was reading the raw field.
+    # WHETHER ANYTHING IS ACTUALLY READING THE FEED. The daemon delivers into
+    # a file and a socket whether or not a monitor is attached, so an agent
+    # whose watcher was dropped by a restart or a compaction goes on looking
+    # exactly like one in a quiet conversation — to itself, and to the person
+    # waiting for an answer. Counted from both ends: pids tailing the line
+    # stream, and subscribers the daemon can see on its bridge.
+    armed = watchers(profile)
+    ws_clients = int(status.get("ws_clients") or 0)
+    payload["watchers"] = len(armed) + ws_clients
+    payload["watching"] = payload["watchers"] > 0
     payload["state"] = daemon_state(status, running=pid is not None)
     recorded = status.get("state")
     if recorded and recorded != payload["state"]:
@@ -1437,9 +1470,17 @@ def cmd_status(args: argparse.Namespace) -> int:
         payload["recorded_state"] = recorded
     if hint := status.get("hint"):
         payload["hint"] = hint
+    exe = Path(sys.argv[0]).name
+    if not payload["watching"]:
+        # Louder than the daemon's own hint, and after it: a session nobody is
+        # reading is the failure the other agent feels, and the one that looks
+        # like nothing being wrong from in here.
+        payload["hint"] = (f"NOTHING IS READING THIS SESSION — arm your monitor on "
+                           f"`{exe} listen --follow` and keep it armed, or poll "
+                           f"`{exe} recv --wait 60` every turn")
     if pid is None:
         payload["hint"] = (f"the listener is not running — "
-                           f"`{Path(sys.argv[0]).name} daemon start` brings it back")
+                           f"`{exe} daemon start` brings it back")
     if args.json:
         print(json.dumps(payload, indent=2))
         return 0
@@ -1449,6 +1490,9 @@ def cmd_status(args: argparse.Namespace) -> int:
                 "last_seq", "daemon_pid", "monitor_command", "monitor_ws"):
         if payload.get(key) is not None:
             print(f"  {key:<16} {payload[key]}")
+    armed_line = (f"{payload['watchers']} armed" if payload["watching"]
+                  else c("nobody is listening", "31"))
+    print(f"  {'monitor':<16} {armed_line}")
     if payload.get("hint"):
         print(f"\n  {c(payload['hint'], '33')}")
     print(f"  {'state dir':<16} {profile.dir}")

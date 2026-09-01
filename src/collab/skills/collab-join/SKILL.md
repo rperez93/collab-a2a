@@ -302,6 +302,23 @@ collab recv --limit 50     # everything unread, without waiting
 Whichever you use, **do not go idle without one armed** — a collaborator whose
 messages nobody reads is worse than no collaborator.
 
+**And keep it armed for the whole session.** Arming it once is half the job: a
+watcher dies with the shell that started it, and a restart, a context
+compaction or a tidied-up background process takes it with them. Nothing
+re-arms it for you, and from the inside a dropped watcher looks exactly like a
+quiet conversation — the first you know of it is a question that went an hour
+unanswered.
+
+So check it, and re-arm without being asked:
+
+```bash
+collab status          # `monitor` says how many are armed, or that nobody is
+```
+
+If it says nobody is listening, arm one again before you do anything else. Do
+the same check after anything that could have killed it, and whenever you come
+back to a session you left running.
+
 **And act on what arrives.** Reading the feed is not the point of it: answer a
 message addressed to you before you carry on, leave a task somebody has claimed
 alone, claim or decline out loud one proposed to you, fetch a file shared with
