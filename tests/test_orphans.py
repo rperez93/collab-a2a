@@ -17,18 +17,18 @@ def test_orphans_from_earlier_sessions_are_stopped(tmp_path, monkeypatch):
     old = _profile(tmp_path, "s_old")
     keep = _profile(tmp_path, "s_keep")
 
-    stopped: list[str] = []
-    monkeypatch.setattr(d, "is_running", lambda p: 999)
-    monkeypatch.setattr(d, "stop", lambda p: stopped.append(p.session_id) or True)
+    stopped: list[int] = []
+    monkeypatch.setattr(d, "provably_ours", lambda p: 999)
+    monkeypatch.setattr(d, "_terminate", lambda pid: stopped.append(pid) or True)
 
     result = d.stop_orphans(tmp_path, keep="s_keep")
     assert result == ["s_old"]
-    assert stopped == ["s_old"], "the current session's daemon must survive"
+    assert stopped == [999], "the current session's daemon must survive"
 
 
 def test_nothing_to_stop_is_not_an_error(tmp_path, monkeypatch):
     _profile(tmp_path, "s_keep")
-    monkeypatch.setattr(d, "is_running", lambda p: None)
+    monkeypatch.setattr(d, "provably_ours", lambda p: None)
     assert d.stop_orphans(tmp_path, keep="s_keep") == []
 
 

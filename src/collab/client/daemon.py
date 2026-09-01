@@ -267,10 +267,76 @@ def watchers(profile: SessionProfile) -> list[int]:
     return sorted(live)
 
 
+#: How the daemon is launched, and therefore how it can be recognised.
+DAEMON_MODULE = "collab.daemon_main"
+
+
+def provably_ours(profile: SessionProfile) -> int | None:
+    """The pid of a daemon we can PROVE is this session's, or None.
+
+    A different question from `is_running`, and it has to be. `is_running`
+    answers «should I start one», where an unidentifiable record must be
+    believed: a pid file written by a collab from before the lock existed names
+    a daemon that is very probably still going, and calling it an impostor
+    would make an upgrade look like a crash and start a second daemon on top of
+    a working one.
+
+    This answers «may I signal it», and there an unidentifiable record is not
+    permission. `stop_orphans` runs unprompted from `collab host` and `collab
+    join`, escalates to SIGKILL and mentions it afterwards — and the pid file
+    it reads has three shapes, of which only two identify anything. Nor does
+    the weak one age out: a directory that starts a daemon again gains a lock
+    and a two-line pid file and is safe from that moment, but the directories
+    this exists to reap are the ones where a daemon will NEVER start again.
+    That is what makes them orphans. Their bare pid files stay bare for ever.
+
+    So identification is positive and any one of three will do: the lock says
+    held, the recorded start time is present and matches, or the process says
+    in its own argv that it is this session's daemon. Nothing else is touched.
+    The cost is a genuine pre-lock orphan that no longer goes quietly — a leak,
+    which `collab daemon stop` clears, and a leak is the better half of a trade
+    against silently SIGKILLing a process nobody has identified.
+    """
+    paths = DaemonPaths(profile.dir)
+    try:
+        pid, began = exclusive.parse(paths.pid.read_text())
+    except OSError:
+        return None
+    if pid is None or not _alive(pid):
+        return None
+    if exclusive.taken(profile.dir) is True:
+        return pid
+    if began and exclusive.started_at(pid) == began:
+        return pid
+    if _names_itself_our_daemon(pid, profile.session_id):
+        return pid
+    return None
+
+
+def _names_itself_our_daemon(pid: int, session_id: str) -> bool:
+    """Does this process say it is the daemon for this very session?
+
+    The daemon is launched as `python -m collab.daemon_main <session id>`, so
+    both halves are in its argv and a stranger that inherited the number has
+    neither. This is the one identification a pre-lock orphan can still offer,
+    which is what keeps them reapable rather than merely spared.
+    """
+    words = exclusive.argv(pid)
+    return DAEMON_MODULE in words and session_id in words
+
+
 def stop(profile: SessionProfile) -> bool:
+    # Deliberately `is_running` and not `provably_ours`: this is a person
+    # naming a session and asking for its listener to stop, and refusing that
+    # for a daemon started before the lock existed would take away the very
+    # recovery `stop_orphans` now leaves them.
     pid = is_running(profile)
     if pid is None:
         return False
+    return _terminate(pid)
+
+
+def _terminate(pid: int) -> bool:
     with contextlib.suppress(OSError, ProcessLookupError):
         os.kill(pid, signal.SIGTERM)
     # THE PROCESS, NOT THE FILE. Waiting on `is_running` was waiting on
@@ -294,6 +360,10 @@ def stop_orphans(home: Path | str, keep: str | None = None) -> list[str]:
     A repo has one current session, so a daemon for any other one is an orphan
     reconnecting forever to a hub that is not coming back. Without this they
     accumulate across restarts.
+
+    Nothing here was asked for: this runs from `collab host` and `collab join`
+    with no flag and no prompt, and it escalates to SIGKILL. So it signals only
+    what `provably_ours` can identify, and leaves anything else where it is.
     """
     sessions = Path(home) / "sessions"
     if not sessions.is_dir():
@@ -305,7 +375,8 @@ def stop_orphans(home: Path | str, keep: str | None = None) -> list[str]:
         profile = SessionProfile.load_from(child)
         if profile is None:
             continue
-        if is_running(profile) is not None and stop(profile):
+        pid = provably_ours(profile)
+        if pid is not None and _terminate(pid):
             stopped.append(child.name)
     return stopped
 
