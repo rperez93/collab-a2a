@@ -11,9 +11,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
-
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -1786,6 +1786,177 @@ def _my_published_activity(profile: SessionProfile) -> dict[str, Any]:
     return {}
 
 
+def _wake_agents(wk) -> int:
+    """The known invocations, with the reason each is spelled as it is.
+
+    Read off each vendor's own documentation rather than guessed: a wake command
+    that is subtly wrong fails silently — no turn starts, nothing is printed,
+    and the session merely looks quiet.
+    """
+    for group, title in ((wk.OPEN_SESSION,
+                          "into the session you already have open"),
+                         (wk.FRESH_RUN,
+                          "a new run in this checkout — it knows nothing of"
+                          " your open session")):
+        heading(title)
+        for known in wk.RECIPES:
+            if known.delivers != group:
+                continue
+            found = known.detect_target() if known.needs_target else ""
+            mark = (c(" ← ready, this session", "32") if found
+                    else c("  needs --target", "33") if known.needs_target
+                    else "")
+            print(f"  {c(known.agent, '36')}{mark}")
+            print(f"    {shlex.join(known.command(target=found or '<target>'))}")
+            print(dim(f"    {known.note}"))
+            if known.needs_target and not found:
+                print(dim(f"    {known.target_help}"))
+            print(dim(f"    {known.docs}"))
+        print()
+    print(dim("  Not listed? `--agent tmux` reaches ANY interactive agent"
+              " running in a tmux pane."))
+    print(dim("  Otherwise find how yours runs ONE non-interactive turn — its"
+              " docs call that"))
+    print(dim("  «headless», «non-interactive», «print» or «exec» mode; search"
+              " for it if you do"))
+    print(dim("  not know — then: collab wake set '<that command>'. It should"
+              " take the prompt on"))
+    print(dim("  stdin; if it only accepts an argument, wrap it:"
+              " sh -c 'youragent \"$(cat)\"'."))
+    print(dim("  It also needs whatever flag lets it act unattended — nobody"
+              " is there to approve."))
+    print()
+    return 0
+
+
+def cmd_wake(args: argparse.Namespace) -> int:
+    """Arm the daemon to start a turn when messages arrive and nobody reads.
+
+    For agents that cannot hold a watcher across turns. Claude Code can, and
+    arming this there would only wake something already awake.
+    """
+    from . import wake as wk
+
+    # Asked before joining anything, and answerable then: «how would my agent
+    # be woken» is a question about the agent, not about a session.
+    if args.action == "agents":
+        return _wake_agents(wk)
+
+    profile = (SessionProfile.load(args.session) if getattr(args, "session", None)
+               else SessionProfile.current())
+    if profile is None:
+        fail("no active session — `collab join` or `collab host` first")
+        return 1
+    root = DaemonPaths(profile.dir).root
+    config = wk.read_config(root)
+
+    if args.action == "off":
+        wk.write_config(root, wk.WakeConfig())
+        ok("wake disarmed — the daemon will keep the feed but wake nobody")
+        return 0
+
+    if args.action == "set":
+        if args.agent:
+            known = wk.recipe(args.agent)
+            if known is None:
+                fail(f"no known recipe for {args.agent!r}")
+                print(dim(f"  known: {', '.join(wk.known_agents())}"
+                          "   (`collab wake agents` shows each one)"))
+                print(dim("  For anything else, look up how it runs a single"
+                          " non-interactive turn"))
+                print(dim("  and pass that command directly:"
+                          " collab wake set '<command>'"))
+                return 1
+            target = args.target or known.detect_target()
+            if known.needs_target and not target:
+                fail(f"{known.agent} needs to be told which session to reach")
+                print(dim(f"  {known.target_help}"))
+                print(dim("  nothing was armed — a wake pointed at the wrong"
+                          " session is worse than none"))
+                return 1
+            args.run = known.command(target=target)
+            if known.delivers == wk.OPEN_SESSION:
+                ok(f"this reaches your open session ({target})")
+            else:
+                warn("this starts a NEW run, not your open session —"
+                     " it will read the room to catch up")
+            print(dim(f"  {known.note}"))
+            print(dim(f"  {known.docs}"))
+        if not args.run:
+            fail("say what to run: collab wake set '<command>'")
+            print(dim("  the messages arrive on its standard input, so the"
+                      " command must read stdin:"))
+            print(dim("    collab wake set --agent codex"
+                      f"      ({', '.join(wk.known_agents())})"))
+            print(dim(f"    collab wake set 'codex exec --cd {Path.cwd()} -'"))
+            print(dim("  `collab wake agents` shows each known command and why"
+                      " it is spelled that way."))
+            print(dim("  Agent not listed? Look up its «headless» or"
+                      " «non-interactive» mode and pass that."))
+            return 1
+        # A recipe is already argv. Re-splitting it would take `sh -c 'a && b'`
+        # apart at the spaces inside the quotes and run something else entirely.
+        command = (list(args.run) if args.agent
+                   else shlex.split(" ".join(args.run)))
+        config = wk.WakeConfig(
+            command=command,
+            notify=shlex.split(args.notify or ""),
+            settle=args.settle if args.settle is not None else config.settle,
+            min_gap=args.min_gap if args.min_gap is not None else config.min_gap,
+            timeout=args.timeout if args.timeout is not None else config.timeout)
+        if shutil.which(config.command[0]) is None and not Path(config.command[0]).exists():
+            # Saved anyway — a command installed later is a fair thing to
+            # configure now — but said plainly, because the alternative is
+            # discovering it from silence at three in the morning.
+            warn(f"{config.command[0]!r} is not on PATH here")
+        wk.write_config(root, config)
+        ok(f"armed: {shlex.join(config.command)}")
+        print(dim(f"  fires when messages are unread for {int(config.settle)}s"
+                  " and nothing is reading them"))
+        print(dim(f"  at most one turn every {int(config.min_gap)}s,"
+                  f" killed after {int(config.timeout)}s"))
+        print(dim("  the daemon picks this up within seconds; no restart needed"))
+        return 0
+
+    # show
+    status = read_status(profile)
+    live = status.get("wake") or {}
+    reading = bool(watchers(profile)) or (
+        time.time() - last_poll(profile)) < wk.POLL_COUNTS_AS_LISTENING
+    if args.json:
+        print(json.dumps({
+            "armed": config.enabled,
+            "command": config.command,
+            "notify": config.notify,
+            "settle": config.settle,
+            "min_gap": config.min_gap,
+            "timeout": config.timeout,
+            "attended": reading,
+            **{k: live.get(k) for k in ("pending", "batches", "last_wake", "note")},
+        }, indent=2))
+        return 0
+    heading(f"wake · {profile.session_id}")
+    if not config.enabled:
+        print(f"  {c('disarmed', '33')} — nothing starts a turn for you")
+        print(dim("  Claude Code needs none of this; it holds its own monitor."))
+        print(dim("  For agents that cannot: collab wake set '<command>'"))
+        return 0
+    print(f"  command   {shlex.join(config.command)}")
+    if config.notify:
+        print(f"  notify    {shlex.join(config.notify)}")
+    print(f"  waiting   {live.get('pending', 0)} unread,"
+          f" {live.get('batches', 0)} undelivered")
+    last = live.get("last_wake")
+    print(f"  last woke {activity.elapsed(last) if last else 'never'}")
+    print(f"  reading   {'somebody is' if reading else c('nobody is', '33')}")
+    if live.get("note"):
+        print(dim(f"  {live['note']}"))
+    if not status:
+        warn("the daemon is not running, so nothing is watching to wake you")
+    print()
+    return 0
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     """One command an agent can run on a loop to prove it is still collaborating.
 
@@ -2939,6 +3110,34 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--json", action="store_true")
     add_session_flag(t)
     t.set_defaults(func=cmd_task)
+
+    wa = sub.add_parser("wake",
+                        help="let the daemon start a turn for an agent that"
+                             " cannot watch the feed itself")
+    wa.add_argument("action", nargs="?", default="show",
+                    choices=["show", "set", "off", "agents"])
+    # NOT named `command`: the top-level parser stores the chosen subcommand
+    # under that name, and a positional of the same name overwrites it — which
+    # left `collab wake …` looking to main() like no subcommand at all.
+    wa.add_argument("run", nargs="*", metavar="COMMAND",
+                    help="with `set`: the command to run; the messages arrive"
+                         " on its standard input")
+    wa.add_argument("--agent", metavar="NAME",
+                    help="use the known recipe for this agent"
+                         " (`collab wake agents` lists them)")
+    wa.add_argument("--target", metavar="ID",
+                    help="which live session to reach — a Codex thread id, a"
+                         " tmux pane. Taken from your own environment if unset")
+    wa.add_argument("--notify", help="optional command told after each turn")
+    wa.add_argument("--settle", type=float, metavar="SECONDS",
+                    help="how long to let a burst finish before waking")
+    wa.add_argument("--min-gap", dest="min_gap", type=float, metavar="SECONDS",
+                    help="never start two turns closer together than this")
+    wa.add_argument("--timeout", type=float, metavar="SECONDS",
+                    help="kill a woken turn that runs longer than this")
+    wa.add_argument("--json", action="store_true")
+    add_session_flag(wa)
+    wa.set_defaults(func=cmd_wake)
 
     ck = sub.add_parser("check",
                         help="run on a loop: silent when all is well, says what"

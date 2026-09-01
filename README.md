@@ -236,6 +236,66 @@ end a turn and each time you finish a piece of work.
 collab recv --wait 60      # returns the moment something arrives, or empty
 ```
 
+### If your agent cannot hold a watcher at all
+
+Claude Code holds a Monitor across turns and needs none of this — it watches the
+feed from inside its own loop. Codex and most others cannot: whatever they start
+dies when the turn does, so a message that lands while they are idle waits until
+their user next types something. Polling covers the gap only while turns are
+being taken — between them, nothing reads.
+
+One thing already outlives the turn: the daemon. It holds the feed anyway, so it
+can also put what arrived in front of you.
+
+```bash
+collab wake agents          # every known way in, and which reach a live session
+collab wake set --agent codex     # run this INSIDE the session you want woken
+collab wake set --agent tmux      # anything running in a tmux pane
+collab wake show                  # armed? what did it last do, and why not?
+collab wake off
+```
+
+**Into the session you already have open.** This is the one worth having: the
+agent keeps everything it already knows. Two routes reach it —
+
+- `--agent codex` uses `codex queue --thread <id>`, which wakes an idle session
+  and lands as the next user turn on a busy one.
+- `--agent tmux` types one line into the terminal the agent is sitting in, which
+  works for **any** interactive agent in a tmux pane.
+
+Both need to know *which* session, and only your agent knows that — so run
+`collab wake set` from inside it and collab reads `$CODEX_THREAD_ID` or
+`$TMUX_PANE` from your own environment. Pass `--target` if you would rather say
+it outright. It will not arm a wake it cannot aim.
+
+**Otherwise, a fresh run.** `--agent codex-exec`, `claude`, `gemini`,
+`cursor-agent`, `opencode`, `amp`, `copilot`, `goose` and `aider` start a new
+non-interactive run in the same checkout. It has none of your open session's
+context, so it is told to read the room first — and it may be editing files your
+own session is halfway through. `collab wake set '<any command>'` takes anything
+else; the messages arrive on its **standard input**, and `$COLLAB_WAKE_PROMPT`
+names a file holding the same thing for deliveries that cannot carry it.
+
+A wake spends a real turn of your agent's time and money, so the gate is
+deliberately narrow. It fires only when there is unread substance, nothing is
+reading it — no watcher, no recent poll — and it has been quiet long enough that
+a burst of five messages costs one turn rather than five. One turn at a time; a
+turn that fails or hangs is killed, and its messages are kept and delivered
+again rather than dropped.
+
+```
+$ collab wake show
+  wake · s_7f2a
+  command   codex exec --cd /home/you/project -
+  waiting   0 unread, 0 undelivered
+  last woke 4m ago
+  reading   nobody is
+```
+
+`--settle`, `--min-gap` and `--timeout` move those three limits. This is not a
+system service and does not survive a reboot — an agent that is not running has
+nothing to be woken.
+
 ### The loop that keeps it honest
 
 Arming a watcher once is the failure this section exists to prevent, and nothing
@@ -389,6 +449,7 @@ collab 1.7.0 — let coding agents talk to each other
 | `collab task propose\|claim\|update\|complete\|list\|show` | the shared task board |
 | `collab file send\|get\|list\|rm` | share artifacts without pasting them |
 | `collab check [--json]` | run on a loop: silent when all is well, says what to fix when it is not |
+| `collab wake show\|set\|off\|agents` | be woken by the daemon, for agents that cannot hold a watcher |
 | `collab status [--json]` | connection state, Monitor wiring, state paths |
 | `collab url` | reprint the join line (host) |
 | `collab kick <name>` | remove one participant (host) |

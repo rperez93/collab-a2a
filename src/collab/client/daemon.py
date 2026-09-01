@@ -25,7 +25,7 @@ from typing import Any
 import httpx
 from httpx_sse import aconnect_sse
 
-from .. import __version__, lockfile, peers
+from .. import __version__, lockfile, peers, wake
 from ..config import SessionProfile, share_stats_enabled, stats_source
 from ..protocol import EXT_PREFIX, KIND_CHAT, Envelope
 from ..stats import read_stats, write_stats
@@ -338,6 +338,16 @@ class Daemon:
         self._stats_ran_at = 0.0
         self.failures = 0
         self._stop = asyncio.Event()
+        # The daemon is the only thing here that outlives a turn, which makes it
+        # the only thing that can start one. Agents that hold their own watcher
+        # never arm this; for the rest it is the difference between a message
+        # arriving and a message being read.
+        self.waker = wake.Waker(
+            self.paths.root, profile.session_id,
+            attended=lambda: bool(watchers(profile) or self.bridge.clients)
+            or (time.time() - last_poll(profile)) < wake.POLL_COUNTS_AS_LISTENING)
+        self._waking: asyncio.Task | None = None
+        self._wake_note = ""
 
     # --- status ---------------------------------------------------------------
 
@@ -375,6 +385,16 @@ class Daemon:
             "connected_since": self.connected_since,
             "failures": self.failures,
             "hint": self._hint(),
+            # Evidence for `collab wake status`: whether a wake is armed, what
+            # it last did, and what it is waiting for. A feature that fires
+            # invisibly and silently is one nobody can trust.
+            "wake": {
+                "armed": self.waker.config().enabled,
+                "pending": self.waker.waiting(),
+                "batches": len(self.waker.outstanding()),
+                "last_wake": self.waker.last_wake or None,
+                "note": self._wake_note,
+            },
             "version": __version__,
         }
         tmp = self.paths.status.with_suffix(".tmp")
@@ -548,11 +568,94 @@ class Daemon:
         except httpx.HTTPError:
             pass
 
+    # --- waking the agent ------------------------------------------------------
+
+    async def _maybe_wake(self) -> None:
+        """Start a turn in an agent that cannot start one for itself.
+
+        Fires from the heartbeat rather than from the feed: a burst of five
+        messages should cost one turn, and the decision needs to be made once
+        the burst has settled rather than on the first line of it.
+        """
+        if self._waking is not None and not self._waking.done():
+            return                       # a turn is already in flight
+        self._waking = None
+        due, why = self.waker.due()
+        self._wake_note = why
+        if not due:
+            return
+        batch = self.waker.take()
+        if batch is None:
+            return
+        self._waking = asyncio.create_task(self._wake(batch))
+
+    async def _wake(self, batch: wake.Batch) -> None:
+        config = self.waker.config()
+        logger.info("waking the agent with %s", batch.name)
+        # Both are given, because the two ways of delivering want different
+        # things: a fresh run reads the prompt off stdin, while a keystroke into
+        # a live session can only carry a pointer to it.
+        env = {**os.environ,
+               "COLLAB_WAKE_PROMPT": str(self.waker.write_prompt(batch)),
+               "COLLAB_WAKE_BATCH": str(batch.path),
+               "COLLAB_SESSION": self.profile.session_id}
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *config.command,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=env,
+                # Its own process group: a turn that hangs is killed alone, and
+                # a Ctrl-C in the terminal that started the daemon never reaches
+                # somebody's half-finished agent run.
+                start_new_session=True)
+        except (OSError, ValueError) as exc:
+            logger.warning("wake command would not start (%r)", exc)
+            self.waker.failed(batch)
+            self._wake_note = f"wake command would not start: {exc}"
+            return
+        try:
+            out, _ = await asyncio.wait_for(
+                proc.communicate(self.waker.prompt(batch).encode()),
+                timeout=config.timeout)
+        except asyncio.TimeoutError:
+            with contextlib.suppress(ProcessLookupError, OSError):
+                proc.kill()
+            await proc.wait()
+            logger.warning("wake timed out after %ss", config.timeout)
+            self.waker.failed(batch)
+            self._wake_note = f"the woken turn did not finish in {int(config.timeout)}s"
+            return
+        if proc.returncode == 0:
+            self.waker.succeeded(batch)
+            self._wake_note = f"woke the agent with {wake.summarise(batch.events())}"
+            if config.notify:
+                await self._notify(config.notify, batch)
+        else:
+            self.waker.failed(batch)
+            tail = (out or b"").decode(errors="replace").strip()[-200:]
+            logger.warning("wake failed (exit %s) %s", proc.returncode, tail)
+            self._wake_note = f"the wake command exited {proc.returncode}; will retry"
+
+    async def _notify(self, argv: list[str], batch: wake.Batch) -> None:
+        """Optional: tell something else that a turn happened."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *argv, wake.summarise(batch.events()),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                start_new_session=True)
+            await asyncio.wait_for(proc.wait(), timeout=30)
+        except (OSError, ValueError, asyncio.TimeoutError) as exc:
+            logger.debug("notify command failed (%r)", exc)
+
     async def _heartbeat_loop(self) -> None:
         last_refresh = 0.0
         while not self._stop.is_set():
             self._announce_locally()
             self._refresh_lock()
+            await self._maybe_wake()
             if (time.time() - last_refresh) > SNAPSHOT_REFRESH and self.state == "live":
                 if self._http is not None:
                     await self._refresh_snapshot(self._http)
@@ -886,6 +989,7 @@ class Daemon:
                     logger.warning("skipping unparseable event")
                     continue
                 if self.inbox.record(env):
+                    self.waker.note(env, own_name=self.profile.name)
                     await self.bridge.broadcast(env)
                     if env.kind in ("hello", "presence", "system"):
                         # A rename, an arrival or a departure all change the

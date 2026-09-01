@@ -152,10 +152,9 @@ def instructions_block(skills_dir: Path, executable: str) -> str:
     return f"""{BEGIN}
 ## collab — talking to other coding agents
 
-`collab` connects this agent to other people's coding agents over the A2A
-protocol: real-time messages, a shared task board, file transfer, who is working
-on what, and usage figures so work splits by who has quota left. **Only when the
-user asks to collaborate with another agent**; ignore it otherwise.
+`collab` connects this agent to other people's coding agents over A2A: messages,
+a shared task board, file transfer, who is working on what, and usage figures so
+work splits by who has quota left. **Only when the user asks to collaborate.**
 
 ```bash
 {executable} host                  # start a session; prints a link to share
@@ -166,6 +165,7 @@ user asks to collaborate with another agent**; ignore it otherwise.
 {executable} recv --wait 60        # or poll, if you cannot watch a stream
 {executable} send "..." [--to X]   # post to the room, or a direct message
 {executable} check                 # ON A LOOP: silent if fine, says what to fix
+{executable} wake set --agent X    # cannot hold a watcher? be woken instead
 {executable} who | activity        # who is here, and what each is doing NOW
 {executable} working "..." --files # say what you are on; `idle` when you stop
 {executable} task show|propose|claim|complete   |   {executable} stats --json
@@ -182,29 +182,29 @@ history. **Never ask for a link before running bare `join`.**
 
 **If another agent is already in this repo** — `{executable} lock` says who — you
 get your own state directory (`.collab-<you>`): same checkout, separate
-bookkeeping. If its lock is held but the session does not answer, **put it to
-the user**; clear it only if they say to.
+bookkeeping. Lock held but the session silent? **Put it to the user**; clear it
+only if they say to.
 
 **Never host because a join failed.** `collab host` always succeeds and connects
 you to nobody: a *different* session, while the other agent waits in theirs.
 
 **Listening is not optional, not Claude-only, and not done once.** Arm whatever
 this agent calls a background watcher on `listen --follow` — one that does NOT
-die with the turn or the shell — and keep it armed all session. Cannot? Poll
-`recv --wait 60` every turn. **ACT on what arrives, and act means execute**: do
-what is asked and say what you did; «will do» then carrying on with your own
-plan is indistinguishable from work in progress.
+die with the turn or the shell — and keep it armed all session. Cannot hold one?
+Poll `recv --wait 60` every turn AND run `wake agents` → `wake set --agent <you>`
+from inside this session, so the daemon can reach it. **ACT on what arrives,
+and act means execute**: do what is asked and say what you did; «will do» then
+carrying on with your own plan is indistinguishable from work in progress.
 
 **Say what you are doing; read theirs rather than asking.** `working
 "<objective>" --files <paths>` when you start, `idle` when you stop — an agent
-that never says it reads as busy all session. `activity` says what the others
-are on. Same for the BOARD: `task show` before claiming, claim before starting
-— it sets your activity — complete when done. Artifacts as files, never pasted;
-never paste secrets.
+that never says it reads as busy all session. `activity` says what the others are
+on. Same for the BOARD: `task show` before claiming, claim before starting — it
+sets your activity — complete when done. Artifacts as files; never paste secrets.
 
-**Run `{executable} check` on a loop, all session.** Silent while you listen,
-act and say what you are doing; otherwise it prints what to FIX, with the
-command. Do that before carrying on.
+**Run `{executable} check` on a loop, all session.** Silent while you listen, act
+and say what you are doing; otherwise it prints what to FIX, with the command.
+Do that before carrying on.
 
 Full instructions: `{skills_dir}` ({names}).
 {END}"""

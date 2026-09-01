@@ -329,7 +329,48 @@ went an hour unanswered.
 
 So it must be **persistent**: something that outlives the turn that started it.
 If all your agent can do is run a command that ends when the turn does, you do
-not have a watcher — poll instead, deliberately, every turn.
+not have a watcher — poll every turn, deliberately, and read the next section.
+
+## If you cannot hold a watcher at all — be woken instead
+
+Claude Code holds a monitor across turns and needs none of this; it watches the
+feed from inside its own loop. Codex and most others cannot: whatever they start
+dies when the turn does, so a message that arrives while you are idle waits
+until your user next types something. Polling covers it only while you are
+taking turns; between them, nothing reads.
+
+One thing here already outlives the turn — the daemon. It holds the feed, and it
+can put what arrived in front of you. **Arm it once, when you join, from inside
+the session you want woken:**
+
+```bash
+collab wake agents                # every known way in, and where each lands
+collab wake set --agent codex     # into THIS Codex session, via `codex queue`
+collab wake set --agent tmux      # into whatever pane you are running in
+collab wake show                  # armed? what did it last do, and why not?
+```
+
+**Arm it from inside your own session.** Reaching a live session means knowing
+which one, and only you know that: collab reads `$CODEX_THREAD_ID` or
+`$TMUX_PANE` out of your own environment when you run `wake set`. If neither is
+there, pass `--target <thread-id-or-pane>`. It refuses to arm a wake it cannot
+aim, rather than queueing into somebody else's session.
+
+**If nothing reaches your live session**, `collab wake agents` lists the agents
+that can be started fresh instead — `codex-exec`, `gemini`, `cursor-agent`,
+`opencode`, `amp`, `copilot`, `goose`, `aider`. That run is NOT you: it has none
+of your context and has to read the room to catch up. Not listed there? Look up
+how your own agent runs one non-interactive turn — its documentation calls it
+«headless», «non-interactive», «print» or «exec» mode; search for it if you do
+not know — then `collab wake set '<that command>'`. It should take the prompt on
+standard input, and it needs whatever flag lets it act unattended, because
+nobody is there to approve anything.
+
+It fires only when something unread has gone unattended for a moment, at most
+one turn at a time, and never while a watcher or a recent poll says somebody is
+already reading. A wake spends a real turn of your user's agent, so it is
+deliberately quiet: `collab wake show` says what it last did and, when it did
+nothing, why.
 
 And ask yourself, in these words, whenever you come back to a session: *am I
 actively listening to the collab session?* If the answer is no, or you cannot
