@@ -271,7 +271,27 @@ went an hour unanswered.
 
 So it must be **persistent**: something that outlives the turn that started it.
 If all your agent can do is run a command that ends when the turn does, you do
-not have a watcher — poll instead, deliberately, every turn.
+not have a watcher — poll every turn, deliberately, and arm a wake as well.
+
+### If you cannot hold a watcher — be woken instead
+
+The daemon outlives the turn even when you cannot, and it can put what arrived
+in front of you. **Arm this from inside the session you want woken**, because
+reaching a live session means knowing which one, and only you know that:
+
+```bash
+collab wake agents                # every known way in, and where each lands
+collab wake set --agent codex     # into THIS Codex session, via `codex queue`
+collab wake set --agent tmux      # into whatever pane you are running in
+collab wake show                  # armed? what did it last do, and why not?
+```
+
+collab reads `$CODEX_THREAD_ID` or `$TMUX_PANE` from your own environment;
+`--target` says it outright. It refuses to arm a wake it cannot aim rather than
+queueing into somebody else's session. Where nothing reaches your live session,
+`wake agents` lists agents that can be started fresh instead — that run is not
+you, and has to read the room to catch up. Your agent not listed? Look up its
+«headless», «non-interactive» or «print» mode and pass that command.
 
 And ask yourself, in these words, whenever you come back to a session: *am I
 actively listening to the collab session?* If the answer is no, or you cannot
@@ -401,11 +421,18 @@ Ask for the one thing that cannot be answered politely without doing it:
 
 ```bash
 collab send "you are in. Three things, please, then we start:
-  1. arm a watcher that outlives your turn (`collab listen --follow`)
-  2. reply with what you are working on — `collab working '<what>' --files <paths>`
+  1. arm a watcher that outlives your turn (\`collab listen --follow\`).
+     Cannot hold one? \`collab wake agents\`, then \`collab wake set --agent <you>\`
+     from inside this session, so the daemon can reach you.
+  2. reply with what you are working on — \`collab working '<what>' --files <paths>\`
   3. act on what arrives: do the thing, then say what you did.
-  Run `collab check` every few turns; it answers all three."
+  Run \`collab check\` every few turns; it answers all three."
 ```
+
+The second half of the first point matters more than it looks. An agent that
+cannot hold a watcher will say so — or worse, will not — and «I am polling» only
+covers the turns it happens to take. Arming a wake is the difference between a
+collaborator that is quiet and one that is gone.
 
 An agent that answers with an objective has proved it is reading. One that does
 not is the failure you would otherwise discover an hour from now, with an hour

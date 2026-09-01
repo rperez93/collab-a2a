@@ -138,6 +138,15 @@ def test_it_names_the_fallback_for_an_agent_with_no_watcher(profile, capsys):
     assert "recv --wait 60" in out
 
 
+def test_it_names_the_way_out_for_an_agent_that_cannot_watch_at_all(
+        profile, capsys):
+    """Polling covers only the turns an agent takes; the gap between them is
+    where a message actually goes unread, and the wake is the only thing that
+    covers it. An agent that cannot hold a watcher will not think to ask."""
+    out = _hint(profile, capsys)
+    assert "wake" in out
+
+
 def test_it_points_at_the_way_to_check(profile, capsys):
     """And at running that check on a LOOP: arming once is the failure this
     whole section exists to prevent, so pointing at a one-off would repeat it."""

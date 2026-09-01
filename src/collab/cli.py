@@ -164,6 +164,10 @@ def _monitor_hint(profile: SessionProfile, status: dict[str, Any]) -> None:
         print(f"  {c('ws', '36')}        ws://127.0.0.1:{port}/events")
     print(f"  {c('no watcher?', '36')} {exe} recv --wait 60  "
           + dim("— before you end a turn, every turn"))
+    # Polling only covers the turns an agent happens to take. The wake covers
+    # the hours between them, which is where a message actually goes unread.
+    print(f"  {c('cannot hold one?', '36')} {exe} wake agents  "
+          + dim("— then `wake set --agent <you>`, from in here"))
     print(dim("  Either stream carries the same events and the daemon handles"
               " reconnects,"))
     print(dim("  but nothing re-arms a watcher you lost: if yours stops, arm it"
@@ -395,7 +399,12 @@ def _opening_message(profile: SessionProfile) -> None:
     heading("Say this to the room first, before any work")
     print(f'  {exe} send "you are in. Three things, please, then we start:')
     print('    1. arm a watcher that outlives your turn'
-          f' (`{exe} listen --follow`)')
+          f' (`{exe} listen --follow`).')
+    # Asked for in the same breath as the watcher, because the agents that
+    # cannot hold one are exactly the agents that will not think to mention it.
+    print(f'       Cannot hold one? `{exe} wake agents`, then'
+          f' `{exe} wake set --agent <you>`')
+    print('       from inside this session, so the daemon can reach you.')
     print(f'    2. reply with what you are working on — `{exe} working \'<what>\''
           ' --files <paths>`')
     print('    3. act on what arrives: do the thing, then say what you did.')

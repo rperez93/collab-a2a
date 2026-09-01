@@ -272,6 +272,9 @@ def test_the_host_is_offered_an_opening_message(session, capsys):
     assert "listen --follow" in out, "arm a watcher"
     assert "working" in out, "and say what you are on"
     assert "check" in out, "and keep checking"
+    # Asked for in the same breath as the watcher, because the guests that
+    # cannot hold one are precisely the guests who will not raise it themselves.
+    assert "wake" in out, "and be woken if you cannot watch"
 
 
 def test_the_monitor_hint_names_the_loop(session, capsys):
