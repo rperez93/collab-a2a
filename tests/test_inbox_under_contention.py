@@ -58,3 +58,59 @@ def test_a_reader_does_not_stop_the_daemon_writing(inbox, tmp_path):
         assert time.monotonic() - started < 0.5, "the reader held the daemon up"
     finally:
         reader.close()
+
+
+class _RaceOnSelect:
+    """A connection that lets a rival in between the look and the leap.
+
+    `record` asks whether it has the seq and then inserts it; the two are not
+    one step, and two daemons on one directory —which is what a lost start-up
+    race leaves— both answered no.
+    """
+
+    def __init__(self, real, rival, env):
+        self._real, self._rival, self._env = real, rival, env
+
+    def execute(self, sql, *args):
+        result = self._real.execute(sql, *args)
+        if sql.startswith("SELECT 1 FROM inbox") and self._rival is not None:
+            rival, self._rival = self._rival, None
+            rival.record(self._env)
+        return result
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def test_an_event_stored_twice_over_is_not_a_dropped_feed(inbox, tmp_path):
+    """The IntegrityError went uncaught into `_connect_forever`'s general
+    handler, where it was logged as a dropped feed and counted as a failure —
+    and after eight of those the hint tells a guest the hub is unreachable and
+    to go and ask a human for a fresh link, over a race that never left this
+    machine.
+    """
+    rival = Inbox(tmp_path)
+    try:
+        inbox._db = _RaceOnSelect(inbox._db, rival, _env(7))
+
+        assert inbox.record(_env(7)) is False, "we already have this event"
+        assert inbox.last_seq() == 7
+    finally:
+        rival.close()
+
+    lines = (tmp_path / "inbox.jsonl").read_text().splitlines()
+    assert len(lines) == 1, "one event, written once"
+
+
+def test_the_inbox_still_works_after_a_collision(inbox, tmp_path):
+    """The rollback must leave the connection usable: a daemon that survived
+    the race and then could not write again would be no better off."""
+    rival = Inbox(tmp_path)
+    try:
+        inbox._db = _RaceOnSelect(inbox._db, rival, _env(7))
+        inbox.record(_env(7))
+    finally:
+        rival.close()
+
+    assert inbox.record(_env(8)) is True
+    assert [e.seq for e in inbox.all_events()] == [7, 8]

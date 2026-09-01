@@ -80,10 +80,22 @@ class Inbox:
             ).fetchone()
             if existing:
                 return False
-            self._db.execute(
-                "INSERT INTO inbox (seq, ts, kind, sender, payload) VALUES (?,?,?,?,?)",
-                (env.seq, env.ts, env.kind, env.sender, json.dumps(env.to_dict())),
-            )
+            try:
+                self._db.execute(
+                    "INSERT INTO inbox (seq, ts, kind, sender, payload) VALUES (?,?,?,?,?)",
+                    (env.seq, env.ts, env.kind, env.sender, json.dumps(env.to_dict())),
+                )
+            except sqlite3.IntegrityError:
+                # SOMEBODY ELSE GOT THERE BETWEEN THE LOOK AND THE LEAP. The
+                # primary key is doing its job and the answer is the same one
+                # the SELECT above would have given: we already have this
+                # event. Uncaught it reached `_connect_forever`'s general
+                # handler, where it was logged as a dropped feed and counted as
+                # a failure — and after eight of those the hint tells a guest
+                # the hub is unreachable and to go and ask a human for a fresh
+                # link, over a race that never left this machine.
+                self._db.rollback()
+                return False
             self._db.execute(
                 "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_seq', ?)",
                 (str(env.seq),),
