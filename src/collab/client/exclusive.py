@@ -22,8 +22,15 @@ then the loser's teardown deleted the *winner's* pid file on its way out,
 leaving a daemon that was streaming happily and invisible to everything that
 looks for one.
 
-The start time in `started_at` is the weaker, second answer, kept for the
-filesystems that cannot lock and for pid files written by an older collab.
+The two halves of this are not portable in the way the intuition suggests, so
+it is written down here. `flock(2)` is POSIX and holds at full strength on
+macOS and the BSDs — the lock is the MORE portable half. The start time in
+`started_at` is the half that degrades, because it comes from /proc, which
+macOS does not have; there it falls back to `ps` and answers to the second.
+
+So `started_at` is the weaker, second answer throughout: it is what remains
+when a filesystem cannot lock, and what reads a pid file written by an older
+collab. It is not the guarantee. The lock is.
 """
 
 from __future__ import annotations
@@ -194,11 +201,12 @@ def started_at(pid: int) -> str:
     the one property of a pid that a later process reusing the number cannot
     inherit, and precise enough to settle identity on its own.
 
-    Everywhere else it is `ps -o lstart=`, which is a start time to the
-    second — two processes a second apart with the same pid are one process as
-    far as it can tell. That is a filter on obvious staleness and not proof,
-    and it is said here so that nobody reads the Linux guarantee into the
-    macOS one.
+    Without /proc — macOS, the BSDs — it is `ps -o lstart=`, a start time to
+    the second, so two processes a second apart with the same pid are one
+    process as far as it can tell. That is a filter on obvious staleness and a
+    diagnosis aid, not proof, and it is said plainly here so that nobody reads
+    the Linux guarantee into the macOS one. Nothing is lost by it: `flock` is
+    POSIX and holds there in full, so this is the fallback's fallback.
 
     A zombie answers "", and so counts as no process at all.
     """
