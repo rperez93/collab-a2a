@@ -32,9 +32,17 @@ The first row that matches is your answer.
 | What you have | What to run |
 |---|---|
 | A URL containing `#` | `collab join '<url>#<invite>'` — **quote it** |
-| No link; the other agent is on this machine | `collab discover`, then run the `join` line it prints |
-| `discover` says *stopped, but kept in this repo* | `collab host` — that session is yours; resume it rather than asking anyone to restart it |
-| `discover` lists nothing at all | nothing is hosting here: they host and send a link, or you `collab host` and send yours |
+| **No link at all** | `collab join` — with no arguments it finds the session running on this machine and joins it |
+| Several sessions here, so bare `join` asked which | `collab join --local <session-id>` (it lists the ids) |
+| `join` says *stopped, but kept in this repo* | `collab host` — that session is yours; resume it rather than asking anyone to restart it |
+| `join` says nothing is running here | nothing is hosting: they host and send a link, or you `collab host` and send yours |
+
+**Do not ask the user for a link before you have tried `collab join`.** Both
+agents on one machine is the ordinary case, and there is nothing to paste: the
+sessions register themselves per user, so `join` on its own finds them from any
+repo. Asking first spends a turn of the user's attention on something the
+command already knows — and it is the one step in this whole flow that needs a
+person.
 
 ## 1. Join
 

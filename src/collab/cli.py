@@ -1222,6 +1222,12 @@ def cmd_discover(args: argparse.Namespace) -> int:
                       "with `collab join <url>#<invite>`"))
         return 0
 
+    # THE COMMAND THAT ACTUALLY RUNS HERE, not the word "collab". An agent
+    # installed in a venv reaches this as `.venv/bin/collab`, and a line it
+    # cannot paste is a line it has to think about — which is where an agent
+    # goes back to asking the user for a link instead.
+    exe = sys.argv[0]
+    joinable = [p for p in found if p.joinable]
     for peer in found:
         role = c("host", "32") if peer.role == "host" else "guest"
         state = "" if peer.alive else dim(" (stale)")
@@ -1229,10 +1235,17 @@ def cmd_discover(args: argparse.Namespace) -> int:
         print(f"      repo   {peer.repo}")
         print(f"      hub    {peer.url}")
         if peer.joinable:
-            print(f"      join   {dim('collab join --local ' + peer.session_id)}")
+            print(f"      join   {dim(exe + ' join --local ' + peer.session_id)}")
         elif peer.role == "guest":
             print(dim(f"      joined {peer.host_name or 'a remote host'} — "
                       "no invite to pass on"))
+    if len(joinable) == 1:
+        # The one-command form, said where it is needed. `join` has taken no
+        # arguments and found the local session since it was written, and
+        # nothing anywhere said so — so agents asked their user for a link
+        # instead, which is the one thing that needs a person.
+        print(dim(f"\n  or just: {exe} join   "
+                  "(no arguments — there is one session here)"))
     print()
     return 0
 
@@ -2245,11 +2258,12 @@ def cmd_statusline(args: argparse.Namespace) -> int:
 COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ("Start or join a session", [
         ("host", "start a session and print a link to share"),
-        ("join <url>#<invite>", "join someone else's session"),
-        ("join --local", "join a session already running on this machine"),
+        ("join", "join the session running on this machine — no link needed"),
+        ("join <url>#<invite>", "join someone else's session, from their link"),
         ("discover", "collab sessions running on this machine"),
         ("sessions", "sessions this repo has hosted before"),
-        ("kill", "lock", "end a session (its history is kept)"),
+        ("kill", "end a session (its history is kept)"),
+        ("lock", "who you are here, and who holds this repo"),
     ]),
     ("Talk", [
         ("send <text>", "post to the room, or --to NAME for a direct message"),
@@ -2297,7 +2311,14 @@ def print_overview() -> None:
 
     for title, entries in COMMAND_GROUPS:
         print(f"  {c(title, '1')}")
-        for name, blurb in entries:
+        for entry in entries:
+            # A malformed row prints as best it can rather than taking the
+            # whole listing down with it. One of these carried three fields —
+            # `("kill", "lock", "…")`, a missed comma — and `collab` with no
+            # arguments, the thing every agent runs first and every skill
+            # promises «lists every command», ended in a traceback halfway
+            # through. This is a table of blurbs; it has no business raising.
+            name, blurb = entry[0], entry[-1]
             print(f"    {name:<28} {dim(blurb)}")
         print()
 
@@ -2365,7 +2386,8 @@ def build_parser() -> argparse.ArgumentParser:
     lk.add_argument("--json", action="store_true")
     lk.set_defaults(func=cmd_lock)
 
-    j = sub.add_parser("join", help="join a session and start collaborating")
+    j = sub.add_parser("join", help="join a session — with no arguments, the "
+                       "one running on this machine")
     j.add_argument("--agent", default="",
                    help="which of this repo's agents is joining")
     j.add_argument("url", nargs="?", default="",

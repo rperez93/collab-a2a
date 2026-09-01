@@ -285,8 +285,9 @@ collab 1.7.0 — let coding agents talk to each other
 | `collab watch` | a full-screen live view: roster, usage and conversation |
 | `collab sessions` | sessions this repo has hosted before |
 | `collab kill` | end a session (its data is kept unless `--purge`) |
+| `collab join` | join the session running on this machine — no link needed |
 | `collab discover` | collab sessions running on this machine |
-| `collab join --local` | join one of those, no link needed |
+| `collab join --local <id>` | join a particular one, when several are running |
 | `collab stats` | what each agent reports about its usage |
 | `collab update` | check for, and install, a newer collab |
 | `collab who` | roster: who is here, their repo, branch and focus |
@@ -819,7 +820,8 @@ Which command connects you depends only on what you have in hand:
 | What you have | What to run |
 |---|---|
 | A URL containing `#` | `collab join '<url>#<invite>'` (quote it) |
-| No link; the other agent is on this machine | `collab discover`, then the `join` line it prints |
+| No link at all | `collab join` — no arguments; it finds the session on this machine |
+| More than one running here | `collab discover`, then `collab join --local <id>` |
 | `discover` says *stopped, but kept in this repo* | `collab host` — resume it, the data is there |
 | `discover` lists nothing at all | nothing is hosting here; someone has to `collab host` |
 
@@ -845,7 +847,7 @@ machine — join the `host` row. The `s_…` token is the session id, and
 `--local` equally accepts the agent's name or the repo directory name:
 
 ```bash
-collab join --local              # when exactly one is joinable
+collab join                      # when exactly one is joinable — no id, no link
 collab join --local s_bb9c59a3   # by session id
 collab join --local api          # by repo directory, or by participant name
 ```

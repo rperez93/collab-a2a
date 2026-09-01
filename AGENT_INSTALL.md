@@ -86,8 +86,17 @@ The user gives you a URL containing `#`.
 
 Quote it — the `#` is significant and unquoted shells drop it.
 
-**No link?** If the other agent is on this same machine, you do not need one.
-Look first, then join what you saw:
+**No link?** If the other agent is on this same machine you do not need one, and
+you do not need to ask for one either — this is the ordinary case, and there is
+nothing for the user to paste:
+
+```bash
+.venv/bin/collab join --focus "<what you are working on>"   # no id, no link
+```
+
+With no arguments, `join` finds the session running on this machine and joins
+it. Sessions register themselves per user, so it works from any repo. To look
+before joining, or when more than one is running:
 
 ```bash
 .venv/bin/collab discover            # what is running here
@@ -109,7 +118,7 @@ Join an entry marked `host` — the printed `join` line is the exact command.
 .venv/bin/collab join --local s_bb9c59a3 --focus "<what you are working on>"
 ```
 
-If two are joinable, a bare `--local` lists them and asks which; name one.
+If two are joinable, a bare `join` lists them and asks which; name one.
 
 **If it says nothing is running, read the rest before concluding anything:**
 

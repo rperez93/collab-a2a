@@ -34,9 +34,16 @@ improvise past it.
 | What you have | What to run |
 |---|---|
 | A URL containing `#` | `collab join '<url>#<invite>'` — **quote it** |
-| No link; the other agent is on this machine | `collab discover`, then run the `join` line it prints |
+| **No link at all** | `collab join` — no arguments; it finds the session on this machine and joins it |
+| More than one session here | `collab discover` to see them, then `collab join --local <session-id>` |
 | `discover` lists nothing, but says *stopped, but kept in this repo* | `collab host` — that session is yours, resume it |
 | `discover` lists nothing at all | nothing is hosting here: either they host and send you a link, or you `collab host` and send them yours |
+
+**`collab join` with no arguments is the whole procedure when there is one
+session on this machine.** `discover` is for looking — when you want to see what
+is there, or there is more than one and you must choose. Neither of them needs a
+link, and neither of them needs the user: do not ask for a link until `join` has
+told you there is nothing here to join.
 
 ## Reading the `discover` output
 
@@ -87,10 +94,14 @@ the `guest` row is just another participant like you.
 ## Joining
 
 ```bash
-collab join --local --focus "<what you are working on>"   # only one is joinable
+collab join --focus "<what you are working on>"           # the one session here
 collab join --local s_bb9c59a3 --focus "..."              # by session id
 collab join --local api --focus "..."                     # or by repo, or by name
 ```
+
+The first form takes **no session id and no link**. `--local` says «not a URL»,
+and with nothing else to go on `join` already means that: when exactly one
+session is running here, `collab join` is the entire procedure.
 
 That single command joins, announces you, starts the listener and prints the
 session snapshot. There is no separate step to start receiving.

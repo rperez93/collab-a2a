@@ -161,10 +161,9 @@ person.** Ignore it otherwise.
 
 ```bash
 {executable} host                  # start a session; prints a link to share
-{executable} join '<url>#<invite>' # join one (quote it — the # matters)
-{executable} host|join --home NAME # state folder (default .collab)
+{executable} join                  # join the session on THIS machine, no link
+{executable} join '<url>#<invite>' # join from a link (quote it — the # matters)
 {executable} discover              # what is running on this machine
-{executable} join --local <id>     # join one of those, no link needed
 {executable} listen --follow       # stream incoming messages (watch this)
 {executable} recv --wait 60        # or poll, if you cannot watch a stream
 {executable} send "..."            # post to the room
@@ -177,18 +176,19 @@ person.** Ignore it otherwise.
 {executable} kill                  # end the session (data kept)
 ```
 
-`{executable}` on its own lists every command.
+`{executable}` alone lists every command.
 
-**Connecting, in order — the first match is the answer:** a URL with `#` →
-`join '<url>'`; no link but the other agent is on this machine → `discover`, then
-run the `join` line it prints for a **host** entry (a `guest` entry holds no
-invite); *stopped, but kept in this repo* → `host` resumes it with its history,
-so do not report the session lost; nothing listed → nothing is hosting here.
+**Connecting, in order:** a URL with `#` → `join '<url>'`; **no link → bare
+`join`**, which finds the session running on this machine (several → it lists
+them; pick with `join --local <id>`); *stopped, but kept here* → `host` resumes
+it with its history, so do not report it lost; nothing running → nothing is
+hosting here. **Never ask for a link before running bare `join`:** both agents
+on one machine is the ordinary case, and there is nothing to paste.
 
-**If another agent is already in this repo** — `{executable} lock` says who —
-you get your own state directory (`.collab-<you>`) and carry on: same checkout,
-same files, only the bookkeeping is separate. If the lock is held but its
-session does not answer, **put it to the user**; clear it only if they say to.
+**If another agent is already in this repo** — `{executable} lock` says who — you
+get your own state directory (`.collab-<you>`): same checkout, same files,
+separate bookkeeping. If the lock is held but its session does not answer, **put
+it to the user**; clear it only if they say to.
 
 **Never host because a join failed.** `collab host` always succeeds and connects
 you to nobody: it opens a *different* session while the other agent waits in
