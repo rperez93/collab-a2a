@@ -200,13 +200,28 @@ def withdraw(session_id: str, pid: int | None = None) -> None:
 
 
 def load(path: Path) -> Peer | None:
+    """Read one registry record, with its display names already cleaned.
+
+    A peers record is written by whatever else is running on this machine and
+    read by `collab discover` and `collab join`, both of which print the names
+    in it straight to a terminal. Cleaned at this one read rather than at each
+    print, because the reader is the only place that can be sure it happened —
+    and because a name carrying a control character is not a name anybody wants
+    intact. See collab.protocol.scrub.
+    """
+    from .protocol import scrub
+
     try:
         data = json.loads(path.read_text())
     except (OSError, ValueError):
         return None
     known = {f for f in Peer.__dataclass_fields__}
+    fields = {k: v for k, v in data.items() if k in known}
+    for field in ("name", "host_name"):
+        if isinstance(fields.get(field), str):
+            fields[field] = scrub(fields[field])
     try:
-        return Peer(**{k: v for k, v in data.items() if k in known})
+        return Peer(**fields)
     except TypeError:
         return None
 

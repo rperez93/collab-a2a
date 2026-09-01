@@ -58,7 +58,7 @@ from .config import (
 )
 from .client.context import gather as ctx_gather
 from .protocol import (DEFAULT_ROOM, MAX_FILE_BYTES, Envelope, KIND_CHAT,
-                       KIND_HELLO, scrub)
+                       KIND_HELLO, scrub, scrub_block)
 from .server.session import (HubConfig, create_session, hosted_sessions,
                              join_line, resume_session, session_summary,
                              stop_session)
@@ -97,7 +97,7 @@ def ok(msg: str) -> None:
 
 
 def warn(msg: str) -> None:
-    print(f"{c('[warn]', '33')} {said(msg)}")
+    print(f"{c('[warn]', '33')} {scrub_block(msg)}")
 
 
 def fail(msg: str) -> None:
@@ -117,8 +117,13 @@ def fail(msg: str) -> None:
     `ok` cannot do the same — seventeen of its callers pass deliberately
     coloured text, and stripping those escapes would print the codes as
     rubbish — so `ok` is scrubbed at its call sites instead.
+
+    `scrub_block`, not `said`: an error is a message and may legitimately be
+    several lines — `HubError` falls back to the response body, so a dead
+    tunnel's HTML 502 arrives as many — and the field-level scrub flattened it
+    into one run-together string. See collab.protocol.scrub_block.
     """
-    print(f"{c('[fail]', '31')} {said(msg)}", file=sys.stderr)
+    print(f"{c('[fail]', '31')} {scrub_block(msg)}", file=sys.stderr)
 
 
 def plural(count: int, noun: str) -> str:
@@ -1755,7 +1760,7 @@ def cmd_file(args: argparse.Namespace) -> int:
                     return 1
                 record = client.upload_file(path, to=args.to, room=args.room)
                 target = f"@{args.to}" if args.to else f"#{args.room or profile.room}"
-                ok(f"shared {record['name']} ({size / 1024:.0f} KB) with {target}")
+                ok(f"shared {said(record['name'])} ({size / 1024:.0f} KB) with {target}")
                 print(f"       {dim('they fetch it with: collab file get ' + record['id'])}")
                 print(f"       {dim('it is deleted from the host once they confirm receipt')}")
                 return 0
@@ -3141,7 +3146,10 @@ def cmd_name(args: argparse.Namespace) -> int:
             # whatever it actually assigned rather than assuming.
             profile.name = new
             profile.save()
-            ok(f"renamed in the active session to {new}")
+            # The hub's answer, not the name we asked for — it may have
+            # suffixed it — so it is remote text and cleaned like the rest.
+            # Not a profile field, so there is no ingest to clean it at.
+            ok(f"renamed in the active session to {said(new)}")
             if is_running(profile) is not None:
                 print(dim("       the status line follows within a few seconds"))
         except HubError as exc:

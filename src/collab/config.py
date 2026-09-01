@@ -22,6 +22,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+# Module level, unlike most of this file's imports: `__setattr__` below runs on
+# every field assignment, and protocol depends on nothing here, so there is no
+# cycle to dodge.
+from .protocol import scrub
+
 COLLAB_DIRNAME = ".collab"
 
 #: Everything in .collab is either a secret (bearer tokens, invites) or local
@@ -674,6 +679,34 @@ class SessionProfile:
     #: Stable identity on the hub. ``name`` is a label that can change; this
     #: does not, so it is what the daemon uses to recognise itself.
     participant_id: str = ""
+
+    #: Fields the HUB decides and this machine then prints. `host_name` is
+    #: taken from the session snapshot and `name` is whatever the hub finally
+    #: gave us — it may have suffixed the one we asked for — so both are remote
+    #: strings that end up in a terminal.
+    REMOTE_TEXT = ("name", "host_name")
+
+    def __setattr__(self, field: str, value: Any) -> None:
+        """Clean the hub's strings as they arrive, not at each place they print.
+
+        `host_name` is read by ten call sites across the CLI, the watch pane,
+        the TUI title and the daemon's status file, and scrubbing it at each is
+        the arrangement that has now failed three times on this branch: every
+        site was found, every site was wrapped, and the next one written was
+        raw again. There is no reader anywhere that wants a control character
+        in a display name, so the value never needs to hold one.
+
+        It is cleaned on ASSIGNMENT rather than in `__post_init__` because the
+        daemon adopts the hub's answer after construction — `self.profile
+        .host_name = host` on every snapshot refresh — which no constructor
+        hook sees. This catches that, the constructor, and a profile loaded
+        from disk that an older build had already written a hostile name into.
+
+        See collab.protocol.scrub.
+        """
+        if field in SessionProfile.REMOTE_TEXT and isinstance(value, str):
+            value = scrub(value)
+        object.__setattr__(self, field, value)
 
     def __post_init__(self) -> None:
         if not self.home:

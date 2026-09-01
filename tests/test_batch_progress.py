@@ -254,6 +254,91 @@ def test_the_scrub_is_in_the_printer_so_a_new_error_site_is_safe_by_default():
     assert "\x1b[2J" not in cli.said(HOSTILE)
 
 
+def test_the_hosts_name_is_cleaned_where_it_arrives_not_where_it_prints(tmp_path):
+    """Ten readers, across four files, and each one had to remember.
+
+    `host_name` comes from the hub's snapshot and is then persisted, and it is
+    printed by `collab join`, `collab whoami`, `collab status`, the discover
+    listing, the watch pane's title and the TUI header. Scrubbing at each of
+    those is the arrangement that has already failed three times on this
+    branch: every site found, every site wrapped, and the next one written raw
+    again. There is no reader that wants a control character in a display name,
+    so the field never holds one.
+    """
+    from collab.config import SessionProfile
+
+    profile = SessionProfile(session_id="s", url="http://h", name=HOSTILE,
+                             host_name=HOSTILE, token="t", home=str(tmp_path))
+    assert "\x1b" not in profile.host_name and "\r" not in profile.host_name
+    assert "\x1b" not in profile.name
+
+    # The daemon adopts the hub's answer AFTER construction, on every snapshot
+    # refresh — a path no constructor hook sees.
+    profile.host_name = HOSTILE
+    assert "\x1b" not in profile.host_name
+    assert "FAKE" in profile.host_name, "the name survives; the commands do not"
+
+
+def test_a_profile_already_written_with_a_hostile_name_is_cleaned_on_load(tmp_path):
+    """An older build could have persisted one, and it is read back every run."""
+    from collab.config import SessionProfile
+
+    profile = SessionProfile(session_id="s", url="http://h", name="me",
+                             host_name="them", token="t", home=str(tmp_path))
+    profile.save(make_current=False)
+    written = json.loads((profile.dir / "profile.json").read_text())
+    written["host_name"] = HOSTILE
+    (profile.dir / "profile.json").write_text(json.dumps(written))
+
+    back = SessionProfile.load_from(profile.dir)
+    assert back is not None and "\x1b" not in back.host_name
+
+
+def test_a_peer_record_is_cleaned_where_it_is_read(tmp_path):
+    """Written by whatever else runs on this machine, printed by discover."""
+    from collab import peers
+
+    path = tmp_path / "peer.json"
+    path.write_text(json.dumps({
+        "session_id": "s", "name": HOSTILE, "host_name": HOSTILE,
+        "role": "host", "url": "http://h", "repo": "collab", "home": str(tmp_path),
+        "pid": 1, "updated_at": time.time(), "machine_id": "m", "machine": "box",
+        "user": "someone",
+    }))
+    peer = peers.load(path)
+    assert peer is not None
+    assert "\x1b" not in peer.host_name and "\x1b" not in peer.name
+
+
+def test_an_error_that_spans_lines_is_not_flattened_into_one():
+    """`scrub` strips every control character, newlines included, because its
+    callers render one field into one line and a line break there is a forgery.
+
+    An error is not that. `HubError` falls back to the response body, so a dead
+    tunnel's HTML 502 arrives as many lines — and the field-level scrub turned
+    something barely readable into something not readable at all. Carriage
+    return still goes: it is the character that paints a forged line over a
+    real one, and no part of a line break that a newline does not carry.
+    """
+    from collab.protocol import scrub, scrub_block
+
+    assert scrub_block("line one\nline two\ttabbed") == "line one\nline two\ttabbed"
+    assert scrub_block("safe\rFORGED") == "safeFORGED"
+    assert scrub_block(HOSTILE) == scrub(HOSTILE)
+    assert scrub("line one\nline two") == "line oneline two", \
+        "and the field-level scrub still refuses a line break outright"
+
+
+def test_fail_keeps_the_shape_of_a_multi_line_error(capsys):
+    """The reachable case, end to end through the printer."""
+    from collab import cli
+
+    cli.fail("the hub said:\n  <html>\n  502 Bad Gateway")
+    err = capsys.readouterr().err
+    assert err.count("\n") >= 3, "still several lines"
+    assert "502 Bad Gateway" in err
+
+
 def test_the_status_line_never_exceeds_the_width_it_was_given():
     """The fallback was built and returned without being measured again.
 

@@ -68,8 +68,34 @@ def scrub(text: str) -> str:
     The curses TUI needs none of this — ncurses renders a control byte as
     ``^[`` rather than passing it to the terminal — so this is for the
     plain-print paths, which hand the string straight to a real terminal.
+
+    **Newlines and tabs go too, and that is deliberate.** Everything above
+    renders one FIELD into one LINE — a name in a roster row, a title in a
+    board listing, a message in the Monitor's single-line notification. A
+    newline surviving into any of those does not merely spoil the layout: it
+    lets a sender write a second line of their own into a transcript, and a
+    forged ``[dm→you] alice: …`` reads exactly like a real one. A tab does the
+    quieter version of the same thing to a column. For a whole message that is
+    ALLOWED to span lines, use `scrub_block`.
     """
     return "".join(ch for ch in text if unicodedata.category(ch) != "Cc")
+
+
+def scrub_block(text: str) -> str:
+    """The same, for text that is a message rather than a field.
+
+    `scrub` empties a string of every control character because its callers are
+    building one line and a line break in one is a forgery. That is the wrong
+    trade for an error: `HubError` falls back to the response body, so a dead
+    tunnel's HTML 502 arrives as many lines, and flattening it turns something
+    barely readable into something not readable at all.
+
+    So newlines and tabs survive here and nothing else does — carriage return
+    included, because CR is the character that paints a forged line over a real
+    one, and it is no part of a line break that ``\\n`` does not already carry.
+    """
+    return "".join(ch for ch in text
+                   if ch in "\n\t" or unicodedata.category(ch) != "Cc")
 
 
 #: Bounds on the free text a participant declares about itself. Every one of
