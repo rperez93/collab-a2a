@@ -75,8 +75,9 @@ _HAVE_PROC = os.path.isdir("/proc/self")
 #: exclusive one for a lifetime, but EWOULDBLOCK looks the same either way. So
 #: an acquire that met a probe at the wrong instant announced that another
 #: daemon already held the session and exited, leaving nothing running at all:
-#: 1,396 wrongly refused starts in 20,000 against a busy prober, and 55 in 300
-#: with three of them spinning, which is what the test does.
+#: 1,396 wrongly refused starts in 20,000 against a busy prober, measured
+#: across separate PROCESSES, and 55 in 300 against three spinning threads,
+#: which is what the test here does and is the harsher of the two.
 #:
 #: A fifth of a second of retrying survives that — three attempts did not, and
 #: the number is measured rather than chosen. A genuine holder refuses every
@@ -200,8 +201,12 @@ def taken(root: Path | str) -> bool | None:
     SHARED, and that is the whole of it. Probing with an EXCLUSIVE lock made
     every prober exclude every other prober, so two of them asking at once —
     which is a status line and a watch pane, not a rare event — each reported
-    a daemon that was the other one asking: 7,978 phantom answers in 60,000 on
-    a lock file no daemon had ever held. Worse than a wrong answer, because
+    a daemon that was the other one asking: 7,978 phantom answers in 60,000,
+    13.3%, on a lock file no daemon had ever held. That figure is from separate
+    PROCESSES and is the one to quote. The tests here reproduce the same effect
+    with threads, because flock is scoped to the open file description and two
+    threads opening the file separately contend exactly as two processes do —
+    which is convenient, and not the measurement. Worse than a wrong answer, because
     `is_running` returns the recorded pid whenever this says held, so a phantom
     short-circuited the start-time check and brought back a pid that had
     already been ruled out. A shared lock excludes nothing but the exclusive
