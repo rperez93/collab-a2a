@@ -55,8 +55,17 @@ CLOSED = "closed"
 
 #: The figures are the hub's, fetched over the network and then remembered.
 #: Past this, the reader is looking at a memory and has to be told so.
-#: Comfortably above the daemon's snapshot interval, so an ordinary slow poll
-#: is not reported as a fault.
+#:
+#: 30s is derived, not chosen by feel. A healthy client refreshes on the events
+#: that move the figure, which arrive in milliseconds; the floor is set by the
+#: SILENT case, where nothing has happened and the only refresh is the daemon's
+#: timer — `SNAPSHOT_REFRESH` 9.0 tested inside a loop that sleeps
+#: `STATUS_HEARTBEAT` 3.0, so a healthy quiet client refreshes every 9–12s.
+#: Anything at or under that would flap into «unknown» during an ordinary lull,
+#: and a staleness marker that cries wolf is one people stop reading. 30s is
+#: 2.5x the worst healthy interval: room for one missed refresh and a slow
+#: request, and still short enough that a hub which died is called out inside
+#: half a minute. The same reasoning sets activity.STALE_AFTER.
 STALE_AFTER = 30.0
 
 #: How long a change in the denominator is still news. Long enough that the

@@ -28,7 +28,8 @@ from httpx_sse import aconnect_sse
 from .. import __version__, lockfile, peers, wake
 from ..batch import DELTA_SHOWN_FOR
 from ..config import SessionProfile, share_stats_enabled, stats_source
-from ..protocol import EXT_PREFIX, KIND_CHAT, Envelope
+from ..protocol import (EXT_PREFIX, KIND_CHAT, KIND_HELLO, KIND_PRESENCE,
+                        KIND_SYSTEM, KIND_TASK, Envelope)
 from ..stats import read_stats, write_stats
 from .bridge import Bridge
 from .inbox import Inbox
@@ -49,6 +50,27 @@ SNAPSHOT_REFRESH = 9.0
 #: means «still true» rather than «last edited». Well inside activity.STALE_AFTER,
 #: so a missed one costs nothing.
 ACTIVITY_REFRESH = 300.0
+
+#: Event kinds that change what the snapshot says, and so must pull a fresh one
+#: rather than waiting for the timer.
+#:
+#: Written as a named set because it was a bare tuple of three string literals
+#: and `task` was missing from it. A rename or an arrival refreshed the roster
+#: instantly, while completing a task — the ONE event that moves the shared
+#: batch figure — refreshed nothing, so the number crawled up on the 9-second
+#: poll with every client on its own independent phase. Two agents then read
+#: 50% and 0% off the same hub at the same instant, and because that skew is
+#: well inside `batch.STALE_AFTER` neither was marked stale: not late, but
+#: confidently wrong.
+#:
+#: Every task action publishes KIND_TASK — propose grows the denominator,
+#: complete moves the numerator, cancel withdraws from it, claim changes who is
+#: shown holding the rest — and opening or closing a batch publishes
+#: KIND_PRESENCE, as does removing a participant. Between them that is
+#: everything that can change the count or who holds it.
+REFRESHES_THE_SNAPSHOT = frozenset({
+    KIND_HELLO, KIND_PRESENCE, KIND_SYSTEM, KIND_TASK,
+})
 
 
 @dataclass
@@ -1319,9 +1341,7 @@ class Daemon:
                 if self.inbox.record(env):
                     self.waker.note(env, own_name=self.profile.name)
                     await self.bridge.broadcast(env)
-                    if env.kind in ("hello", "presence", "system"):
-                        # A rename, an arrival or a departure all change the
-                        # roster, so re-read it rather than showing stale names.
+                    if env.kind in REFRESHES_THE_SNAPSHOT:
                         await self._refresh_snapshot(client)
                     self.write_status()
 

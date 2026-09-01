@@ -13,10 +13,13 @@ though it were current.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import time
 import types
 
+import httpx
 import pytest
 
 from collab import batch as batch_progress
@@ -93,14 +96,21 @@ def test_the_percentage_is_counted_from_the_board_not_reported_by_an_agent(
         "saying you are on it is not progress"
 
 
-def test_two_clients_read_the_identical_figure_from_the_same_hub_state(
+def test_the_count_is_the_same_whichever_token_asks_for_it(
         client, session, host_headers):
-    """Everyone seeing the same number is the whole feature.
+    """The endpoint is deterministic and does not vary by who is asking.
 
-    It holds because no client does any arithmetic: both ask the hub and both
-    render what comes back. A client that computed its own share — from its own
-    view of the board, a moment apart — would be a second opinion, and two
-    agents with two numbers have no shared picture at all.
+    Narrow on purpose, and named for what it covers. It was once called «two
+    clients read the identical figure», which is the load-bearing claim of the
+    whole feature — and it could not fail: one TestClient, two sequential GETs,
+    and a `fetched_at` the test synthesised for both. It proved the endpoint is
+    token-independent, which was never in doubt, while the only failure mode
+    that exists — two SEPARATE clients, each with its own copy of the figure,
+    drifting apart between refreshes — went untested and was duly shipped
+    broken. A vacuous test on the central claim is worse than none, because it
+    makes the claim look guarded.
+
+    The real one is `test_two_live_daemons_render_the_same_bar_...` below.
     """
     guest = _join(client, session)
     guest_headers = _headers(guest["token"])
@@ -116,7 +126,184 @@ def test_two_clients_read_the_identical_figure_from_the_same_hub_state(
     assert (mine["done"], mine["total"]) == (theirs["done"], theirs["total"])
     assert _batch_segment({"batch": _fresh(mine)}) == \
         _batch_segment({"batch": _fresh(theirs)}), \
-        "and the two status lines render the same characters"
+        "and one payload renders the same characters however it was fetched"
+
+
+# --- two real daemons, which is where the number actually diverged ----------
+
+async def test_two_live_daemons_render_the_same_bar_after_one_completes_a_task(
+        live_server, tmp_path):
+    """The claim the whole feature rests on, tested where it can fail.
+
+    Completing a task is the only event that moves the figure, and it was the
+    only event the SSE loop refreshed nothing for: the loop re-read the
+    snapshot for `hello`, `presence` and `system`, so opening a batch
+    propagated instantly while finishing work in it did not. The number then
+    crawled forward on the 9-second timer, each client on its own phase, and
+    two agents read 50% and 0% off the same hub in the same instant — neither
+    marked stale, because 12 seconds of skew sits well inside the 30-second
+    window. Not late. Confidently wrong.
+
+    Nothing caught it because nothing in the suite had ever built a real
+    daemon: the chain from a hub event through `_refresh_snapshot` to
+    `status.json` to the rendered segment existed only in production.
+
+    Two things keep it from passing for the wrong reason, both learned by
+    watching it pass against the unfixed code:
+
+    * The heartbeat loop is NOT started. With the 9-second timer running this
+      would go green on the timer alone — which is exactly how the defect
+      survived in the first place.
+    * The completion is held back until both daemons have finished connecting.
+      Connecting refreshes the snapshot twice of its own accord — once before
+      the stream opens and once on the `ready` event — so a task completed
+      during that window is picked up by setup rather than by the event, and
+      the test passes with the fix reverted. `_settled` waits out both.
+    """
+    _seed_batch(live_server, tasks=2)
+    alice, bob = [_daemon_for(live_server, tmp_path, name)
+                  for name in ("alice", "bob")]
+    running = [asyncio.create_task(d._connect_forever()) for d in (alice, bob)]
+    try:
+        await _settled(alice, bob)
+        assert "0/2" in _rendered(alice), "the premise: nothing done yet"
+        assert _rendered(alice) == _rendered(bob) != ""
+
+        _complete_one_task(live_server)
+
+        # Well under SNAPSHOT_REFRESH (9.0), and with no heartbeat loop there is
+        # no timer to fall back on: only the event can carry this.
+        await _until(lambda: "1/2" in _rendered(alice) and "1/2" in _rendered(bob),
+                     "the completion to reach both status lines", timeout=4.0)
+        assert _rendered(alice) == _rendered(bob), \
+            "the same characters, not merely the same arithmetic"
+    finally:
+        for daemon, task in zip((alice, bob), running):
+            daemon._stop.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+
+async def test_scope_growth_reaches_both_status_lines_as_fast_as_progress_does(
+        live_server, tmp_path):
+    """The bar falling is the reading most likely to be doubted.
+
+    Which makes it the one that must not arrive late: an agent that sees 50%
+    while its collaborator already sees 33% is being shown the pre-growth
+    figure as though it were current, and «the bar went backwards» is hard
+    enough to trust without it also being out of date. Proposing publishes the
+    same KIND_TASK as completing, so this rides on the same fix — and asserts
+    it, rather than assuming the two directions are symmetric.
+    """
+    _seed_batch(live_server, tasks=2)
+    alice, bob = [_daemon_for(live_server, tmp_path, name)
+                  for name in ("alice", "bob")]
+    running = [asyncio.create_task(d._connect_forever()) for d in (alice, bob)]
+    try:
+        await _settled(alice, bob)
+        _complete_one_task(live_server)
+        await _until(lambda: "1/2" in _rendered(alice) and "1/2" in _rendered(bob),
+                     "50%", timeout=4.0)
+
+        _propose_one_task(live_server)
+
+        await _until(lambda: "1/3" in _rendered(alice) and "1/3" in _rendered(bob),
+                     "the denominator to grow on both status lines", timeout=4.0)
+        assert _rendered(alice) == _rendered(bob)
+        assert "33%" in _rendered(alice), "50% to 33%, because the work grew"
+    finally:
+        for daemon, task in zip((alice, bob), running):
+            daemon._stop.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+
+async def _settled(*daemons):
+    """Wait until connecting has stopped refreshing snapshots by itself.
+
+    `_connect_forever` refreshes once before opening the stream and once more
+    when the hub says `ready`. Both are automatic, and either will absorb a
+    change made while they are still pending — so a test that acts before this
+    returns is measuring connection setup, not event delivery.
+    """
+    await _until(lambda: all(d.snapshot.get("batch") for d in daemons),
+                 "the pre-stream snapshot")
+    connected = {id(d): float(d.snapshot["fetched_at"]) for d in daemons}
+    await _until(
+        lambda: all(d.state == "live"
+                    and float(d.snapshot.get("fetched_at") or 0) > connected[id(d)]
+                    for d in daemons),
+        "the `ready` refresh that follows it")
+
+
+def _seed_batch(live_server, *, tasks):
+    headers = _headers(live_server["host_token"])
+    r = httpx.post(f"{live_server['base']}/ext/collab/v1/batch", headers=headers,
+                   json={"action": "start", "name": "the migration"}, timeout=10.0)
+    assert r.status_code == 200, r.text
+    for i in range(tasks):
+        r = httpx.post(f"{live_server['base']}/ext/collab/v1/tasks", headers=headers,
+                       json={"action": "propose", "title": f"task {i}"}, timeout=10.0)
+        assert r.status_code == 200, r.text
+
+
+def _daemon_for(live_server, tmp_path, name):
+    """A real Daemon, minus the pid file and the signal handlers `run` installs."""
+    from collab.client.daemon import Daemon
+    from collab.config import SessionProfile
+
+    if name == "alice":
+        token = live_server["host_token"]
+    else:
+        joined = httpx.post(f"{live_server['base']}/ext/collab/v1/join", json={
+            "invite": live_server["invite"], "name": name, "hello": {},
+        }, timeout=10.0)
+        assert joined.status_code == 200, joined.text
+        token = joined.json()["token"]
+
+    home = tmp_path / name
+    (home / "sessions" / "s_test").mkdir(parents=True)
+    profile = SessionProfile(session_id="s_test", url=live_server["base"],
+                             name=name, host_name="alice", token=token,
+                             home=str(home), is_host=(name == "alice"))
+    profile.save(make_current=False)
+    return Daemon(profile)
+
+
+def _rendered(daemon):
+    """What this daemon's status line would show, read back off its own file."""
+    from collab.client.daemon import read_status
+
+    daemon.write_status()
+    return _batch_segment(read_status(daemon.profile))
+
+
+def _complete_one_task(live_server):
+    headers = _headers(live_server["host_token"])
+    tasks = httpx.get(f"{live_server['base']}/ext/collab/v1/tasks",
+                      headers=headers, timeout=10.0).json()["tasks"]
+    r = httpx.post(f"{live_server['base']}/ext/collab/v1/tasks", headers=headers,
+                   json={"action": "complete", "id": tasks[0]["id"]}, timeout=10.0)
+    assert r.status_code == 200, r.text
+
+
+def _propose_one_task(live_server):
+    r = httpx.post(f"{live_server['base']}/ext/collab/v1/tasks",
+                   headers=_headers(live_server["host_token"]),
+                   json={"action": "propose", "title": "one more thing"},
+                   timeout=10.0)
+    assert r.status_code == 200, r.text
+
+
+async def _until(condition, what, *, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition():
+            return
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"timed out after {timeout}s waiting for {what}")
 
 
 # --- scope growth moves the bar backwards -----------------------------------
