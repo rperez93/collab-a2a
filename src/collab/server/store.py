@@ -97,9 +97,29 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_by TEXT NOT NULL,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
-    detail     TEXT NOT NULL DEFAULT ''
+    detail     TEXT NOT NULL DEFAULT '',
+    batch      TEXT
 );
+
+CREATE TABLE IF NOT EXISTS batches (
+    id        TEXT PRIMARY KEY,
+    name      TEXT NOT NULL,
+    state     TEXT NOT NULL DEFAULT 'open',
+    opened_by TEXT NOT NULL,
+    opened_at REAL NOT NULL,
+    closed_at REAL
+);
+-- ONE OPEN BATCH, ENFORCED HERE AND NOT ONLY CHECKED ABOVE. Two agents can
+-- open a batch in the same instant, and a read-then-insert would let both
+-- through: from then on each new task joins one denominator or the other,
+-- while both agents believe they are watching one shared figure.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_open_batch
+    ON batches(state) WHERE state = 'open';
 """
+# The index on tasks.batch is NOT here. This script runs before the migration,
+# and on a database written before batches existed the column does not exist
+# yet — `CREATE INDEX` on a missing column raises and takes the whole hub down
+# on start-up. It is created in `_migrate`, once the column is certain.
 
 
 def token_hash(token: str) -> str:
@@ -203,6 +223,23 @@ class Store:
                     "UPDATE events SET recipient_id = (SELECT participant_id FROM"
                     " participant_names WHERE name = events.recipient)"
                     " WHERE recipient_id IS NULL AND recipient IS NOT NULL")
+
+        # A batch is a denominator: which tasks it holds is the whole of what
+        # is being counted. A session recorded before batches existed has a
+        # `tasks` table with no such column, and every task read from it —
+        # `collab task list`, the roster snapshot, the hub's own start-up —
+        # fails on the missing name rather than on anything the user did.
+        #
+        # Left NULL rather than back-filled into some invented batch. Those
+        # tasks predate every batch there is, and putting them in one would
+        # invent a denominator nobody agreed to and report a percentage for
+        # work that was never scoped as a batch.
+        tasks = self._columns("tasks")
+        if tasks and "batch" not in tasks:
+            self._db.execute("ALTER TABLE tasks ADD COLUMN batch TEXT")
+        if self._columns("tasks"):
+            self._db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tasks_batch ON tasks(batch)")
 
     def close(self) -> None:
         with self._lock:
@@ -549,7 +586,8 @@ class Store:
     # --- shared task board ----------------------------------------------------
 
     def upsert_task(self, task_id: str, *, title: str, state: str, owner: str | None,
-                    room: str | None, created_by: str, detail: str = "") -> dict[str, Any]:
+                    room: str | None, created_by: str, detail: str = "",
+                    batch: str | None = None) -> dict[str, Any]:
         now = time.time()
         with self._lock:
             existing = self._db.execute(
@@ -557,11 +595,18 @@ class Store:
             ).fetchone()
             if existing is None:
                 self._db.execute(
-                    "INSERT INTO tasks (id,title,state,owner,room,created_by,created_at,updated_at,detail)"
-                    " VALUES (?,?,?,?,?,?,?,?,?)",
-                    (task_id, title, state, owner, room, created_by, now, now, detail),
+                    "INSERT INTO tasks (id,title,state,owner,room,created_by,"
+                    "created_at,updated_at,detail,batch)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (task_id, title, state, owner, room, created_by, now, now,
+                     detail, batch),
                 )
             else:
+                # `batch` is deliberately absent from this list. Which batch a
+                # task belongs to is settled when it is proposed and never
+                # again: a task that could move between batches would move the
+                # denominator of two of them at once, and the figure everybody
+                # is looking at would change for reasons nobody performed.
                 self._db.execute(
                     "UPDATE tasks SET title=?, state=?, owner=?, updated_at=?, detail=? WHERE id=?",
                     (title or existing["title"], state, owner, now,
@@ -584,6 +629,88 @@ class Store:
         sql += " ORDER BY created_at"
         with self._lock:
             rows = self._db.execute(sql).fetchall()
+        return [dict(r) for r in rows]
+
+    # --- batches of work --------------------------------------------------------
+    #
+    # A batch names a denominator. Nothing here computes a percentage: the
+    # arithmetic lives in `collab.batch` so that the hub, the status line and
+    # every client run the same lines over the same counts. See that module for
+    # why the figure is counted rather than reported.
+
+    def add_batch(self, batch_id: str, *, name: str, opened_by: str) -> dict[str, Any] | None:
+        """Open a batch, or return None because one already is.
+
+        None rather than an exception reaching the request: two agents opening
+        a batch at the same moment is an ordinary race between collaborators,
+        and the loser is told which batch is in the way. A raised
+        IntegrityError would arrive at the agent as a bare HTTP 500 — the same
+        shape of failure a freed display name used to cause on rejoin.
+        """
+        with self._lock:
+            try:
+                self._db.execute(
+                    "INSERT INTO batches (id, name, state, opened_by, opened_at)"
+                    " VALUES (?,?,'open',?,?)",
+                    (batch_id, name, opened_by, time.time()),
+                )
+            except sqlite3.IntegrityError:
+                return None
+            self._db.commit()
+            row = self._db.execute(
+                "SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
+        return dict(row)
+
+    def open_batch(self) -> dict[str, Any] | None:
+        """The batch tasks are currently being proposed into, if any.
+
+        One at a time, by construction: a second open batch would mean a task
+        joining whichever the hub happened to read first, and two agents would
+        be watching two different denominators while believing they shared one.
+        """
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM batches WHERE state='open' ORDER BY opened_at DESC"
+            ).fetchone()
+        return dict(row) if row else None
+
+    def latest_batch(self) -> dict[str, Any] | None:
+        """The open batch, or the last one closed.
+
+        Closing does not delete: the counts of finished work stay readable,
+        because «that batch is done» is an answer somebody wants after the
+        fact and not only during.
+        """
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM batches"
+                " ORDER BY (state='open') DESC, COALESCE(closed_at, opened_at) DESC"
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_batch(self, batch_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
+        return dict(row) if row else None
+
+    def close_batch(self, batch_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            self._db.execute(
+                "UPDATE batches SET state='closed', closed_at=?"
+                " WHERE id=? AND state='open'",
+                (time.time(), batch_id),
+            )
+            self._db.commit()
+            row = self._db.execute(
+                "SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
+        return dict(row) if row else None
+
+    def batch_tasks(self, batch_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM tasks WHERE batch=? ORDER BY created_at", (batch_id,)
+            ).fetchall()
         return [dict(r) for r in rows]
 
     # --- shared files -----------------------------------------------------------

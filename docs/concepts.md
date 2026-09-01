@@ -1,7 +1,7 @@
 # Concepts
 
 This page explains the parts of collab in depth: the hub, the daemon, sessions,
-the roster, activity, the task board, and the wake.
+the roster, activity, the task board, batches of work, and the wake.
 Read the [Overview](overview.md) first for how they fit together.
 
 ## The hub
@@ -129,6 +129,83 @@ second claim and names the current owner.
 A finished task cannot be reclaimed; propose a new one instead.
 List tasks with `collab task list`, and add `--open` for only the unfinished
 ones.
+
+## Batches of work
+
+A batch is a named set of tasks, and the share of it that is finished is the one
+figure every agent in the session sees.
+
+Open a batch with `collab batch start "<name>"`.
+Every task proposed while it is open belongs to it.
+One batch is open at a time, so a task can never land in a denominator the other
+agents are not watching.
+
+The hub counts the batch; nobody reports it:
+
+```text
+percent = tasks completed / tasks in the batch
+```
+
+Agents do not declare how far along they are.
+They claim tasks and complete them, and the number falls out of the board.
+This is what makes the figure shared: the arithmetic happens once, on the hub,
+so there is nothing to agree about and no way for an agent to flatter itself.
+A self-reported percentage cannot survive the agent that reported it — an agent
+that says 90% and then stalls goes on saying 90%.
+
+Read the batch with `collab batch status`, which prints the bar, the
+percentage, the counts, and who holds each outstanding task.
+The status line carries a compact form of the same figures, and `collab status`
+shows it beside the connection.
+
+Close the batch with `collab batch close`.
+Closing stops new tasks joining it; it deletes nothing.
+A closed batch leaves the status line, because the bar is for work under way,
+and stays readable in `collab batch status` and `collab status`, which both mark
+it closed.
+
+### What the number does, and why
+
+The figure is honest rather than reassuring, which means it behaves in four ways
+that are worth knowing in advance.
+
+**Adding a task to an open batch moves the bar backwards.**
+7 of 10 is 70%; propose two more tasks and it becomes 7 of 12, or 58%.
+The work genuinely grew, so the bar falls.
+This is why the counts are always rendered beside the percentage: a percentage
+alone cannot distinguish "we lost ground" from "there is more ground", and the
+pair can.
+When the total moves, the status line says by how much for a short while.
+
+**Cancelling a task moves it forwards.**
+A cancelled task leaves the denominator, because it can never complete and
+counting it would put 100% permanently out of reach.
+`collab batch status` reports how many were withdrawn, so a jump has a stated
+reason in the same way a drop does.
+A *failed* task is different: it is outstanding work that went wrong, and it
+stays in the count.
+
+**An empty batch shows nothing at all.**
+Not 0%, not 100%.
+Both are claims about an empty set that a reader would act on.
+
+**99% is never rounded up to 100%.**
+Everything rounds down, and 100% is reserved for a batch where every task is
+actually done.
+A batch at 100% says so and stays on the status line; "finished" is information,
+and a bar that vanished on the last completion would look like the session
+ending.
+
+### When the hub cannot be reached
+
+Only the hub can count a batch, so a client that cannot reach it holds the
+figures it had last time and nothing newer.
+
+Those figures are never drawn as though they were current.
+The status line replaces the bar with `batch ?` and the age of the count, and
+`collab status` does the same.
+`collab batch status` asks the hub on every call and reports the failure rather
+than answering from anything remembered.
 
 ## Files
 

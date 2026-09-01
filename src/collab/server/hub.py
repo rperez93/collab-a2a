@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..batch import DONE_STATE, WITHDRAWN_STATE, percent, tally
 from ..protocol import (DEFAULT_ROOM, Envelope, KIND_HELLO, KIND_PRESENCE,
                         bounded_meta)
 from .store import Store
@@ -197,6 +198,49 @@ class Hub:
                 meta[key] = stats[key]
         self.store.update_meta(participant_id, meta)
 
+    # --- batches --------------------------------------------------------------
+
+    def batch_figures(self, batch: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        """Count a batch off the board. This is the only place it is counted.
+
+        Every client renders from this one payload rather than doing the
+        arithmetic itself, which is what makes «everyone sees the same number»
+        true by construction instead of by agreement. Nothing an agent says
+        about its own progress reaches this: the figures come from task states
+        the hub wrote down when the tasks were claimed and completed.
+
+        `counted_at` is the HUB's clock and is here to be read, not compared —
+        a client judging freshness against it would be subtracting two
+        machines' clocks and calling the drift staleness. The client stamps its
+        own fetch time; see collab.batch.is_stale.
+        """
+        if batch is None:
+            batch = self.store.latest_batch()
+        if batch is None:
+            return None
+        tasks = self.store.batch_tasks(str(batch["id"]))
+        figures = tally(str(t["state"]) for t in tasks)
+        done_or_gone = {DONE_STATE, WITHDRAWN_STATE}
+        return {
+            "id": batch["id"],
+            "name": batch["name"],
+            "state": batch["state"],
+            "opened_by": batch["opened_by"],
+            "opened_at": batch["opened_at"],
+            "closed_at": batch["closed_at"],
+            **figures,
+            "percent": percent(figures["done"], figures["total"]),
+            "complete": figures["total"] > 0 and figures["done"] >= figures["total"],
+            "counted_at": time.time(),
+            # WHO HOLDS WHAT IS LEFT. A percentage says how much remains; this
+            # says who it is waiting on, which is the part somebody can act on.
+            "holding": [
+                {"id": t["id"], "title": t["title"], "state": t["state"],
+                 "owner": t["owner"] or ""}
+                for t in tasks if t["state"] not in done_or_gone
+            ],
+        }
+
     # --- snapshot -------------------------------------------------------------
 
     def snapshot(self, viewer: str | None = None, *, history: int = 20) -> dict[str, Any]:
@@ -242,6 +286,10 @@ class Hub:
             "rooms": self.store.rooms() or [DEFAULT_ROOM],
             "participants": people,
             "tasks": self.store.tasks(open_only=True),
+            # Counted here rather than fetched separately, so the figure a
+            # client's status line draws and the roster it draws it beside came
+            # out of one read of the board and cannot disagree.
+            "batch": self.batch_figures(),
             "recent": [e.to_dict() for e in self.store.history(viewer=viewer, limit=history)],
             "seq": self.store.max_seq(),
             "server_time": time.time(),

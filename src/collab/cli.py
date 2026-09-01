@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__, activity, lockfile, peers, update
+from . import batch as batch_progress
 from .client import onboard
 from .client.daemon import (DaemonPaths, effective_state as daemon_state,
                             is_running, last_poll, polled, read_status,
@@ -1178,6 +1179,85 @@ def _describe_task(task: dict[str, Any], *, as_json: bool = False) -> int:
     return 0
 
 
+def cmd_batch(args: argparse.Namespace) -> int:
+    """Open, read and close a batch of work.
+
+    Every figure printed here comes off the hub in one request. Nothing is
+    computed from a remembered snapshot, so `collab batch status` on two
+    machines a second apart prints the same numbers or fails saying why.
+    """
+    profile = _require_profile(args)
+    try:
+        with _client(profile) as client:
+            if args.action == "start":
+                if not args.name:
+                    fail('say what the batch is: `collab batch start "<name>"`')
+                    return 1
+                figures = client.batch_action("start", name=args.name)
+            elif args.action == "close":
+                figures = client.batch_action("close")
+            else:
+                figures = client.batch()
+    except HubError as exc:
+        # NO CACHED ANSWER. The counts are the hub's, and this command exists
+        # to report them — printing the last ones we happened to see, with no
+        # way for the reader to tell, is the whole failure this feature was
+        # written to avoid.
+        fail(str(exc))
+        print(dim("  the batch figures are counted by the hub; there is no local copy"))
+        return 1
+
+    if args.json:
+        print(json.dumps(figures, indent=2))
+        return 0
+    return _describe_batch(figures, action=args.action)
+
+
+def _describe_batch(figures: dict[str, Any] | None, *, action: str = "status") -> int:
+    if not figures:
+        print(dim('  no batch — open one with `collab batch start "<name>"`'))
+        return 0
+
+    heading(f"{figures['id']}  {figures['name']}")
+    total = int(figures.get("total") or 0)
+    done = int(figures.get("done") or 0)
+    pct = batch_progress.percent(done, total)
+    if pct is None:
+        # NOT 0%, NOT 100%. A batch with nothing in it has no share done, and
+        # both of the numbers that would fit here are claims about an empty
+        # set that somebody would act on.
+        print(f"  {'progress':<12} {dim('nothing in this batch yet')}")
+    else:
+        # ALWAYS TOGETHER, the picture, the percentage and the counts: a
+        # percentage on its own cannot show that the denominator moved, and
+        # the denominator moving is the normal way this number goes down.
+        line = f"{batch_progress.bar(pct, width=12)} {pct}%  {done}/{total} tasks"
+        if batch_progress.is_complete(figures):
+            line += "  " + c("complete", "32")
+        print(f"  {'progress':<12} {line}")
+    if withdrawn := int(figures.get("withdrawn") or 0):
+        # Said rather than swallowed: a cancelled task leaves the denominator,
+        # which moves the bar FORWARDS, and an unexplained jump is as
+        # confusing as an unexplained drop.
+        print(f"  {'withdrawn':<12} {withdrawn} cancelled, out of the count")
+    print(f"  {'state':<12} {figures.get('state', '?')}")
+    print(f"  {'opened by':<12} {figures.get('opened_by') or '?'}")
+
+    holding = figures.get("holding") or []
+    if holding:
+        print(f"\n  {len(holding)} outstanding:")
+        for task in holding:
+            owner = task.get("owner") or dim("unclaimed")
+            print(f"    {task['id']}  {task['title']}  "
+                  f"[{_short_state(task['state'])}]  {owner}")
+    elif pct is not None:
+        print(dim("\n  nothing outstanding"))
+    if action == "close":
+        print(dim("\n  closed — the tasks and the counts are kept; new tasks "
+                  "belong to no batch until you start another"))
+    return 0
+
+
 def _stat_bits(person: dict[str, Any]) -> list[str]:
     from .stats import quota_summary
 
@@ -2305,6 +2385,14 @@ def cmd_status(args: argparse.Namespace) -> int:
     # that had died an hour ago still reported one other agent present — the
     # same staleness the roster pane had, in a different window.
     payload["figures_current"] = payload["state"] == "live"
+    # THE BATCH IS THE HUB'S ARITHMETIC, and this command reads a file the
+    # daemon wrote. So it travels with the age of the count that produced it
+    # and is withheld rather than printed once that age makes it a memory —
+    # `collab batch status` is the command that goes and asks.
+    if isinstance(status.get("batch"), dict):
+        payload["batch"] = {**status["batch"],
+                            "stale": batch_progress.is_stale(status["batch"]),
+                            "age": batch_progress.age(status["batch"])}
     recorded = status.get("state")
     if recorded and recorded != payload["state"]:
         # Kept, not hidden: it is the last thing the daemon managed to say, and
@@ -2356,6 +2444,9 @@ def cmd_status(args: argparse.Namespace) -> int:
         if payload["polled_seconds_ago"] is not None:
             armed_line += dim(f" · last poll {_ago_seconds(payload['polled_seconds_ago'])}")
     print(f"  {'monitor':<16} {armed_line}")
+    if line := batch_progress.describe(payload.get("batch")):
+        name = str((payload.get("batch") or {}).get("name") or "")
+        print(f"  {'batch':<16} {line}{dim('  ' + name) if name else ''}")
     if payload.get("hint"):
         print(f"\n  {c(payload['hint'], '33')}")
     print(f"  {'state dir':<16} {profile.dir}")
@@ -3332,6 +3423,15 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--json", action="store_true")
     add_session_flag(t)
     t.set_defaults(func=cmd_task)
+
+    b = sub.add_parser("batch",
+                       help="a batch of work, and how much of it is done")
+    b.add_argument("action", nargs="?", default="status",
+                   choices=["start", "status", "close"])
+    b.add_argument("name", nargs="?", help="what the batch is, when starting one")
+    b.add_argument("--json", action="store_true")
+    add_session_flag(b)
+    b.set_defaults(func=cmd_batch)
 
     wa = sub.add_parser("wake",
                         help="let the daemon start a turn for an agent that"

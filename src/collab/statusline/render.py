@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .. import batch as batch_progress
 from ..config import SessionProfile, claimed_home
 from ..protocol import scrub
 from ..client.daemon import (DEAD_AFTER, STALE_AFTER, effective_state,
@@ -172,6 +173,8 @@ def render(status: dict[str, Any] | None = None, *, width: int | None = None,
     parts += [who, tail]
     if unread:
         parts.append(_paint(f"✉{unread}", "live"))
+    if bar := _batch_segment(status):
+        parts.append(bar)
     if _update_available():
         # Two agents on different versions can disagree about the wire format,
         # so this is worth a nudge rather than silence.
@@ -180,9 +183,70 @@ def render(status: dict[str, Any] | None = None, *, width: int | None = None,
 
     limit = width or _terminal_width()
     if limit and _visible_len(line) > limit:
-        # Drop the decorative half before truncating anything informative.
-        line = "  ".join([glyph, who, tail])
+        # Drop the decorative half before truncating anything informative. The
+        # batch keeps its place, in its narrow form: it is the figure both
+        # agents are steering by, and a status line that hides it at 80 columns
+        # is one where they quietly stop sharing a number.
+        short = [glyph, who, tail]
+        if narrow := _batch_segment(status, narrow=True):
+            short.append(narrow)
+        line = "  ".join(short)
     return line
+
+
+def _batch_segment(status: dict[str, Any], *, narrow: bool = False) -> str:
+    """How much of the shared batch is done — or nothing, when nothing is true.
+
+    Four cases render nothing at all, and in three of them the obvious output
+    would be a lie:
+
+    * no batch, which is not a batch at 0%;
+    * a batch with no tasks in it, where 0% and 100% are equally untrue of an
+      empty set;
+    * figures the daemon has, but has not been able to refresh. A remembered
+      count drawn as a bar is indistinguishable from a current one, and this
+      project has fixed that same defect in the roster, in the pid file and in
+      `collab status`. It is marked stale here instead, with its age.
+    * a batch somebody has closed — the only one that is a decision rather than
+      a hazard. It stays in `collab batch status` and `collab status`, marked
+      closed; it is off the bar because the bar is for work under way.
+
+    The percentage never appears without the counts. 7/10 becoming 7/12 drops
+    the figure from 70% to 58% and the work grew — the pair is the only way a
+    reader can tell that from work being undone.
+    """
+    figures = status.get("batch")
+    if not isinstance(figures, dict):
+        return ""
+    total = int(figures.get("total") or 0)
+    done = int(figures.get("done") or 0)
+    pct = batch_progress.percent(done, total)
+    if pct is None:
+        return ""
+    if batch_progress.is_stale(figures):
+        seen = batch_progress.age(figures)
+        return _paint(f"batch ?{f' {seen} old' if seen else ''}", "reconnecting")
+
+    if figures.get("state") == batch_progress.CLOSED:
+        # A closed batch is over, and somebody said so on purpose — it is not
+        # vanishing, it is being put away. It stays in `collab batch status`
+        # and in `collab status`, both of which mark it closed; what it must
+        # not do is sit in the bar looking like work in progress.
+        return ""
+
+    counts = batch_progress.counts(figures)
+    if narrow:
+        text = f"{pct}% {counts}"
+    else:
+        text = f"{batch_progress.bar(pct)} {pct}% {counts}"
+    if moved := batch_progress.delta_note(figures):
+        text += f" {moved}"
+    if batch_progress.is_complete(figures):
+        # A finished batch does not vanish: «done» is the fact somebody was
+        # waiting for, and a segment that disappeared on the last completion
+        # would look exactly like the session having ended.
+        return _paint(f"{text} done", "live")
+    return _paint(text, "label")
 
 
 def _update_available() -> bool:
@@ -236,7 +300,20 @@ def status_payload(cwd: Path | None = None) -> dict[str, Any]:
         "others_connected": status.get("others_connected", 0),
         "unread": status.get("unread", 0),
         "session_id": status.get("session_id"),
+        # Handed over with `stale` beside it rather than on its own: a host
+        # formatting its own line has the same duty not to draw a remembered
+        # count as a current one, and it can only meet it if it is told.
+        "batch": _batch_payload(status),
     }
+
+
+def _batch_payload(status: dict[str, Any]) -> dict[str, Any] | None:
+    figures = status.get("batch")
+    if not isinstance(figures, dict):
+        return None
+    return {**figures,
+            "stale": batch_progress.is_stale(figures),
+            "age": batch_progress.age(figures)}
 
 
 def _read_stdin_if_ready(timeout: float = 0.15) -> str:

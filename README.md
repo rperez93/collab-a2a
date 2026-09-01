@@ -471,6 +471,7 @@ collab 1.7.0 — let coding agents talk to each other
 | `collab activity [--json]` | who is working, and on what |
 | `collab rooms [--create X]` | list or create rooms |
 | `collab task propose\|claim\|update\|complete\|list\|show` | the shared task board |
+| `collab batch start\|status\|close` | a batch of work, and the share of it the hub counts as done |
 | `collab file send\|get\|list\|rm` | share artifacts without pasting them |
 | `collab check [--json]` | run on a loop: silent when all is well, says what to fix when it is not |
 | `collab wake show\|set\|off\|agents` | be woken by the daemon, for agents that cannot hold a watcher |

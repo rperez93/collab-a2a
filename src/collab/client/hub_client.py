@@ -129,6 +129,25 @@ class HubClient:
             payload["room"] = room
         return self._request("POST", f"{EXT_PREFIX}/tasks", json=payload)["task"]
 
+    # --- batches ---------------------------------------------------------------
+
+    def batch(self) -> dict[str, Any] | None:
+        """The hub's count of the current batch. Never computed here.
+
+        Two clients asking this get byte-identical arithmetic because neither
+        of them does any — see collab.batch.
+        """
+        return self._request("GET", f"{EXT_PREFIX}/batch")["batch"]
+
+    def batch_action(self, action: str, *, name: str = "",
+                     batch_id: str | None = None) -> dict[str, Any] | None:
+        payload: dict[str, Any] = {"action": action}
+        if name:
+            payload["name"] = name
+        if batch_id:
+            payload["id"] = batch_id
+        return self._request("POST", f"{EXT_PREFIX}/batch", json=payload)["batch"]
+
     # --- sending, over real A2A ------------------------------------------------
 
     def send(self, env: Envelope) -> dict[str, Any]:

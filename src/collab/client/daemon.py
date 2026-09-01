@@ -26,6 +26,7 @@ import httpx
 from httpx_sse import aconnect_sse
 
 from .. import __version__, lockfile, peers, wake
+from ..batch import DELTA_SHOWN_FOR
 from ..config import SessionProfile, share_stats_enabled, stats_source
 from ..protocol import EXT_PREFIX, KIND_CHAT, Envelope
 from ..stats import read_stats, write_stats
@@ -336,6 +337,11 @@ class Daemon:
         self._last_activity: dict[str, Any] = {}
         self._activity_sent_at = 0.0
         self._stats_ran_at = 0.0
+        #: The batch and the total we last saw for it, and the last move of
+        #: that total. Only a process that watches the figures over time can
+        #: tell «the bar fell» from «the bar fell because the work grew».
+        self._batch_seen: tuple[str, int] = ("", 0)
+        self._batch_delta: tuple[str, int, float] | None = None
         self.failures = 0
         self._stop = asyncio.Event()
         # The daemon is the only thing here that outlives a turn, which makes it
@@ -384,6 +390,9 @@ class Daemon:
             "ws_clients": self.bridge.clients,
             "watchers": len(watchers(self.profile)) + self.bridge.clients,
             "last_seq": self.inbox.last_seq(),
+            # How much of the shared batch is done — the hub's count, with the
+            # age of that count attached. See `_batch_figures`.
+            "batch": self._batch_figures(),
             "heartbeat": time.time(),
             "connected_since": self.connected_since,
             "failures": self.failures,
@@ -409,6 +418,50 @@ class Daemon:
         tmp = self.paths.status.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload))
         tmp.replace(self.paths.status)  # atomic: a reader never sees a half file
+
+    def _batch_figures(self) -> dict[str, Any] | None:
+        """The hub's batch count, stamped with when we last actually had it.
+
+        `write_status` runs every three seconds whether or not the hub answered
+        anything, so a reader taking the file's own timestamp as the age of the
+        figures inside it would call an hour-old count current — the same
+        mistake the roster pane made with a snapshot full of people who had all
+        gone home. The stamp is the time of the last SUCCESSFUL fetch, carried
+        over from the snapshot, and a reader with no stamp treats the figures
+        as unknown rather than as fresh. See collab.batch.is_stale.
+        """
+        figures = self.snapshot.get("batch")
+        if not isinstance(figures, dict):
+            return None
+        out = dict(figures)
+        out["fetched_at"] = self.snapshot.get("fetched_at")
+        out.update(self._note_batch_change(figures))
+        return out
+
+    def _note_batch_change(self, figures: dict[str, Any]) -> dict[str, Any]:
+        """Remember that the denominator moved, so the line can say why.
+
+        Adding a task to an open batch is the one thing that makes the shared
+        bar go backwards, and a percentage that only falls reads as lost work
+        rather than as more of it. This is the only place that sees the before
+        and the after, so the change is recorded here and stamped — a scope
+        change still being announced an hour later is not news any more.
+        """
+        batch_id = str(figures.get("id") or "")
+        total = int(figures.get("total") or 0)
+        now = time.time()
+        seen_id, seen_total = self._batch_seen
+        if batch_id and batch_id == seen_id and total != seen_total:
+            self._batch_delta = (batch_id, total - seen_total, now)
+        self._batch_seen = (batch_id, total)
+
+        if self._batch_delta is None:
+            return {}
+        delta_id, moved, at = self._batch_delta
+        if delta_id != batch_id or (now - at) > DELTA_SHOWN_FOR:
+            self._batch_delta = None
+            return {}
+        return {"total_delta": moved, "delta_at": at}
 
     def _hint(self) -> str:
         """Something actionable once retrying has clearly stopped helping."""

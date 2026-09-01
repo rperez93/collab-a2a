@@ -24,6 +24,7 @@ These are noted per command below.
 | [`who`](#who) | Show who is in the session and what they are doing. |
 | [`rooms`](#rooms) | List or create rooms. |
 | [`task`](#task) | Drive the shared task board. |
+| [`batch`](#batch) | Open a batch of work and show how much of it is done. |
 | [`wake`](#wake) | Let the daemon start a turn for an agent that cannot watch the feed. |
 | [`check`](#check) | Report what to fix when something is wrong. |
 | [`working`](#working) | Say what you are doing. |
@@ -232,6 +233,49 @@ collab task [--id ID] [--detail DETAIL] [--files [PATH ...]] [--room ROOM]
 | `--open` | List only open tasks. |
 | `--json` | Emit raw JSON. |
 | `--session SESSION` | Act on this session id instead of the current one. |
+
+## batch
+
+Open a batch of work, and show how much of it is done.
+See [batches of work](concepts.md#batches-of-work) for the model.
+
+```text
+collab batch [--json] [--session SESSION] [{start,status,close}] [name]
+```
+
+| Argument or flag | Meaning |
+|---|---|
+| `{start,status,close}` | The action. Defaults to `status`. |
+| `name` | What the batch is, when starting one. |
+| `--json` | Emit raw JSON. |
+| `--session SESSION` | Act on this session id instead of the current one. |
+
+Start a batch, and every task proposed while it is open belongs to it:
+
+```bash
+collab batch start "the exporter migration"
+collab task propose "wire the new exporter"
+collab task propose "backfill the old rows"
+collab batch status
+```
+
+`collab batch status` prints the bar, the percentage, the counts, and who holds
+each outstanding task.
+The figures come from the hub on every call, so two agents that run it see the
+same numbers.
+There is no local copy: if the hub cannot be reached, the command says so and
+prints no figure at all.
+
+Close the batch when the work is done or abandoned:
+
+```bash
+collab batch close
+```
+
+Closing deletes nothing.
+The batch and its counts stay readable — `collab batch status` still shows them,
+marked closed — and tasks proposed afterwards belong to no batch until you start
+another.
 
 ## wake
 

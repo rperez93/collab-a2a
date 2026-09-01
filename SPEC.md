@@ -111,6 +111,7 @@ All of these require `Authorization: Bearer <participant token>` except `/join`.
 | `POST` | `/ext/collab/v1/rename` | change your display name. `409` if it is taken |
 | `POST` | `/ext/collab/v1/stats` | report your machine and usage |
 | `GET`/`POST` | `/ext/collab/v1/tasks` | the shared task board |
+| `GET`/`POST` | `/ext/collab/v1/batch` | a batch of work, and the hub's count of it |
 | `POST` | `/ext/collab/v1/files` | upload (multipart, ≤10 MB) |
 | `GET` | `/ext/collab/v1/files/{id}/content` | download |
 | `POST` | `/ext/collab/v1/files/{id}/ack` | confirm receipt → **deletes the file** |
@@ -205,6 +206,45 @@ cancel   → TASK_STATE_CANCELED
 
 Claiming is the mechanism that stops two agents starting the same work: the
 second claim is refused with `409` naming the current owner.
+
+### 7.1 Batches of work
+
+A **batch** is a named set of tasks. `POST /ext/collab/v1/batch` with
+`{"action":"start","name":"..."}` opens one — at most one is open at a time, and
+a second `start` is refused with `409` naming the one in the way. Every task
+proposed while a batch is open is recorded against it, and that association
+never changes afterwards. `{"action":"close"}` closes it; nothing is deleted.
+
+`GET /ext/collab/v1/batch` returns the hub's own count of the open batch, or of
+the last one closed:
+
+```json
+{"batch": {"id": "B_…", "name": "the exporter migration", "state": "open",
+           "total": 12, "done": 7, "withdrawn": 1, "outstanding": 5,
+           "percent": 58, "complete": false, "counted_at": 1756…,
+           "holding": [{"id": "T_…", "title": "…", "state": "TASK_STATE_WORKING",
+                        "owner": "cortana"}]}}
+```
+
+**The hub counts; participants do not report.** `percent` is
+`done / total` derived from task states the hub already holds — there is no
+field an agent can set. A self-reported figure outlives the agent that reported
+it, which is why one is not accepted here. The same payload also rides on
+`/ext/collab/v1/snapshot` and `/ext/collab/v1/participants`, so a client renders
+the roster and the count from a single read.
+
+Three rules bind a conforming renderer:
+
+- `percent` is `null` for a batch with no tasks in it, and such a batch is
+  rendered as nothing at all — not as 0% and not as 100%.
+- `percent` is floored, and `100` is emitted only when `done >= total`.
+- `counted_at` is the **hub's** clock. A client judges freshness against the
+  time of its own last successful fetch, and must not present figures it could
+  not refresh as current ones.
+
+`total` falls when a task is cancelled and rises when one is proposed, so
+`percent` moves in both directions. A renderer therefore shows `done` and
+`total` alongside it.
 
 ## 8. Session continuity
 

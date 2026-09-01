@@ -39,6 +39,22 @@ CREATE TABLE participants (
 );
 """
 
+#: The shape collab wrote before work could be gathered into a batch. The task
+#: board existed; the column saying which batch a task belongs to did not.
+PRE_BATCH_TASKS = """
+CREATE TABLE tasks (
+    id         TEXT PRIMARY KEY,
+    title      TEXT NOT NULL,
+    state      TEXT NOT NULL,
+    owner      TEXT,
+    room       TEXT,
+    created_by TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    detail     TEXT NOT NULL DEFAULT ''
+);
+"""
+
 
 @pytest.fixture()
 def old_db(tmp_path):
@@ -165,6 +181,117 @@ def test_a_current_database_is_untouched(tmp_path):
         assert reopened.participants()[0].id == original
     finally:
         reopened.close()
+
+
+@pytest.fixture()
+def pre_batch_db(tmp_path):
+    """A session with a task board, from before batches existed."""
+    path = tmp_path / "board.db"
+    con = sqlite3.connect(path)
+    con.executescript(PRE_BATCH_TASKS)
+    now = time.time()
+    for task_id, state in (("T_old1", "TASK_STATE_COMPLETED"),
+                           ("T_old2", "TASK_STATE_WORKING")):
+        con.execute(
+            "INSERT INTO tasks (id,title,state,owner,room,created_by,created_at,"
+            "updated_at,detail) VALUES (?,?,?,?,?,?,?,?,?)",
+            (task_id, f"the {task_id}", state, "jarvis", "general", "jarvis",
+             now, now, ""),
+        )
+    con.commit()
+    con.close()
+    return path
+
+
+def test_a_board_from_before_batches_still_reads(pre_batch_db):
+    """`CREATE TABLE IF NOT EXISTS` left the old table exactly as it was.
+
+    Without the migration, every read of `tasks` names a `batch` column that
+    the table does not have — which takes `collab task list`, the roster
+    snapshot and the hub's own start-up down with it, on a session that was
+    working perfectly well until it was upgraded.
+    """
+    store = Store(pre_batch_db)
+    try:
+        assert {t["id"] for t in store.tasks()} == {"T_old1", "T_old2"}
+    finally:
+        store.close()
+
+
+def test_tasks_that_predate_batches_belong_to_no_batch(pre_batch_db):
+    """Back-filling them into some invented batch would report a percentage
+    for a set of work nobody ever scoped as one."""
+    store = Store(pre_batch_db)
+    try:
+        assert all(t["batch"] is None for t in store.tasks())
+        assert store.open_batch() is None
+    finally:
+        store.close()
+
+
+def test_an_upgraded_board_can_hold_a_batch_like_a_fresh_one(pre_batch_db):
+    """The migration has to leave the two databases genuinely equivalent, not
+    merely readable: a session resumed from last month must be able to open a
+    batch and be counted exactly as a new one is."""
+    store = Store(pre_batch_db)
+    try:
+        store.add_batch("B_1", name="the migration", opened_by="jarvis")
+        store.upsert_task("T_new", title="new work", state="TASK_STATE_COMPLETED",
+                          owner="jarvis", room="general", created_by="jarvis",
+                          batch="B_1")
+        assert [t["id"] for t in store.batch_tasks("B_1")] == ["T_new"]
+        assert store.open_batch()["id"] == "B_1"
+    finally:
+        store.close()
+
+
+def test_a_fresh_database_gets_the_batch_column_without_a_migration(tmp_path):
+    """The two paths into the current shape must arrive at the same place.
+
+    A column added only by the migration is a column a brand-new hub does not
+    have, which is the same failure with the databases swapped round.
+    """
+    store = Store(tmp_path / "fresh.db")
+    try:
+        store.add_batch("B_1", name="the migration", opened_by="alice")
+        store.upsert_task("T_1", title="work", state="TASK_STATE_SUBMITTED",
+                          owner=None, room="general", created_by="alice",
+                          batch="B_1")
+        assert store.tasks()[0]["batch"] == "B_1"
+    finally:
+        store.close()
+
+
+def test_migrating_a_board_twice_changes_nothing(pre_batch_db):
+    """The ALTER runs unconditionally on a table that has no column and never
+    again — a second run that tried would raise and refuse to open the hub."""
+    first = Store(pre_batch_db)
+    try:
+        first.add_batch("B_1", name="the migration", opened_by="jarvis")
+    finally:
+        first.close()
+
+    second = Store(pre_batch_db)
+    try:
+        assert second.open_batch()["id"] == "B_1"
+        assert len(second.tasks()) == 2
+    finally:
+        second.close()
+
+
+def test_an_upgraded_board_still_ends_up_in_wal(pre_batch_db):
+    """The batch migration is DDL in the same implicit transaction as the rest.
+
+    `journal_mode` cannot change inside one and fails silently rather than
+    raising, so a new step added carelessly here would quietly leave every
+    upgraded session on the rollback journal.
+    """
+    store = Store(pre_batch_db)
+    try:
+        mode = store._db.execute("PRAGMA journal_mode").fetchone()[0]
+    finally:
+        store.close()
+    assert mode == "wal"
 
 
 def test_an_old_session_still_ends_up_in_wal(old_db):

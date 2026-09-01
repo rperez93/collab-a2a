@@ -412,12 +412,20 @@ def create_app(
             raise HTTPException(status_code=400, detail=f"unknown action {action!r}")
 
         task_id = clip(str(body.get("id") or ""), MAX_NAME)
+        batch = None
         if action == "propose":
             task_id = task_id or new_id("T")
             title = clip(str(body.get("title") or ""), MAX_TITLE)
             if not title:
                 raise HTTPException(status_code=400, detail="a task needs a title")
             owner = None
+            # WHAT IS BEING COUNTED IS DECIDED AT PROPOSE TIME, and not by the
+            # proposer: a task offered while a batch is open is part of that
+            # batch's work whoever offered it. Growing the batch is exactly
+            # what makes the shared bar fall, so the growth has to be recorded
+            # where it happens rather than declared afterwards.
+            if (open_batch := store.open_batch()) is not None:
+                batch = str(open_batch["id"])
         else:
             existing = store.get_task(task_id)
             if existing is None:
@@ -456,6 +464,7 @@ def create_app(
             title=title, state=TASK_STATES[action], owner=owner,
             room=body.get("room") or DEFAULT_ROOM, created_by=user.name,
             detail=clip(str(body.get("detail") or ""), MAX_DETAIL),
+            batch=batch,
         )
         await hub.publish(Envelope(
             kind=KIND_TASK, sender=user.name, sender_id=user.id,
@@ -466,6 +475,65 @@ def create_app(
         ))
         return {"task": record}
 
+    # --- extension: batches of work -----------------------------------------------
+    #
+    # The hub counts; nobody reports. See collab.batch for why a self-reported
+    # percentage was rejected and what the counted one costs in exchange.
+
+    @app.get(f"{EXT_PREFIX}/batch", tags=["collab"])
+    async def batch_status(request: Request) -> dict[str, Any]:
+        """The counted figures for the open batch, or the last one closed."""
+        _require(request)
+        return {"batch": hub.batch_figures()}
+
+    @app.post(f"{EXT_PREFIX}/batch", tags=["collab"])
+    async def batch_action(request: Request) -> dict[str, Any]:
+        """start / close a batch of work."""
+        user = _require(request)
+        body = await request.json()
+        action = str(body.get("action") or "start")
+        if action not in ("start", "close"):
+            raise HTTPException(status_code=400, detail=f"unknown action {action!r}")
+
+        if action == "start":
+            name = clip(str(body.get("name") or ""), MAX_TITLE)
+            if not name:
+                raise HTTPException(status_code=400, detail="a batch needs a name")
+            # ONE DENOMINATOR AT A TIME. A second open batch would take every
+            # task proposed from then on, and the two agents watching the bar
+            # would be watching different sums while each believed the other
+            # saw the same figure — the one thing this feature exists to
+            # prevent. The store refuses the insert as well, so a genuine race
+            # between two agents loses here rather than slipping past a check.
+            record = await asyncio.to_thread(
+                store.add_batch, new_id("B"), name=name, opened_by=user.name)
+            if record is None:
+                already = store.open_batch() or {"id": "?", "name": "?"}
+                raise HTTPException(
+                    status_code=409,
+                    detail=(f"{already['id']} ({already['name']!r}) is already open"
+                            " — close it before starting another"),
+                )
+            event = f"opened the batch {name!r}"
+        else:
+            batch_id = clip(str(body.get("id") or ""), MAX_NAME)
+            current = store.get_batch(batch_id) if batch_id else store.open_batch()
+            if current is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(f"no such batch {batch_id!r}" if batch_id
+                            else "no batch is open"),
+                )
+            record = await asyncio.to_thread(store.close_batch, str(current["id"]))
+            event = f"closed the batch {current['name']!r}"
+
+        figures = hub.batch_figures(record)
+        await hub.publish(Envelope(
+            kind=KIND_PRESENCE, sender=user.name, sender_id=user.id,
+            room=DEFAULT_ROOM,
+            body={"event": event, "batch": record["id"]},
+        ))
+        return {"batch": figures}
 
     # --- extension: file transfer -------------------------------------------------
     #
