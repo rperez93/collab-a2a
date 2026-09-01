@@ -23,7 +23,8 @@ import httpx
 import pytest
 
 from collab import batch as batch_progress
-from collab.statusline.render import _batch_segment, status_payload
+from collab.statusline.render import (_batch_segment, _visible_len, render,
+                                      status_payload)
 
 
 def _join(client, session, name="bob"):
@@ -127,6 +128,102 @@ def test_the_count_is_the_same_whichever_token_asks_for_it(
     assert _batch_segment({"batch": _fresh(mine)}) == \
         _batch_segment({"batch": _fresh(theirs)}), \
         "and one payload renders the same characters however it was fetched"
+
+
+# --- remote text on its way to a terminal -----------------------------------
+
+#: A name that is not text but a sequence of commands to the reader's terminal:
+#: clear the screen, rewrite the window title, then carriage-return so the next
+#: thing printed paints over the line above it.
+HOSTILE = "ok\x1b[2Jx\x1b]0;pwned\x07\rFAKE"
+
+
+def test_a_batch_name_cannot_rewrite_the_readers_terminal(
+        client, session, host_headers, cli_profile, monkeypatch, capsys):
+    """A batch name is free text chosen by another participant.
+
+    `clip()` bounds its length and does nothing else, so `collab batch status`
+    printed it straight to a real terminal — the screen clear, the OSC title
+    rewrite and the forged line all arriving as commands rather than as
+    characters. This is the defect the release immediately before this feature
+    fixed for the host name; the batch commands were four new print sites that
+    did not scrub, added one commit later.
+    """
+    from collab import cli
+
+    hub = _FakeHub({"id": f"B_{HOSTILE}", "name": HOSTILE, "state": "open",
+                    "opened_by": HOSTILE, "total": 2, "done": 1, "withdrawn": 0,
+                    "outstanding": 1, "percent": 50, "complete": False,
+                    "holding": [{"id": "T_1", "title": HOSTILE,
+                                 "state": "TASK_STATE_WORKING", "owner": HOSTILE}]})
+    monkeypatch.setattr(cli, "_client", lambda p: hub)
+
+    cli.cmd_batch(_cli_args(action="status", name=None))
+    out = capsys.readouterr().out
+
+    assert "\x1b[2J" not in out and "\x1b]0;" not in out and "\r" not in out
+    assert "\x07" not in out
+    assert "FAKE" in out, "the text survives; only the control bytes go"
+
+
+def test_collab_status_scrubs_the_batch_name_too(cli_profile, monkeypatch, capsys):
+    """It travelled hub → daemon → status.json, kept raw at every hop."""
+    from collab import cli
+
+    (cli_profile.dir / "status.json").write_text(json.dumps({
+        "session_id": "s", "state": "live", "heartbeat": time.time(),
+        "batch": {"id": "B_1", "name": HOSTILE, "total": 2, "done": 1,
+                  "fetched_at": time.time()},
+    }))
+    monkeypatch.setattr(cli, "is_running", lambda p: None)
+
+    cli.cmd_status(_cli_args())
+    out = capsys.readouterr().out
+    assert "\x1b[2J" not in out and "\x1b]0;" not in out and "\r" not in out
+
+
+def test_the_task_board_scrubs_what_it_prints(client, session, host_headers,
+                                              cli_profile, monkeypatch, capsys):
+    """The same gap, one command over, and older than this feature.
+
+    Left alone it would have survived a fix that walked straight past it.
+    """
+    from collab import cli
+
+    task = {"id": "T_1", "title": HOSTILE, "state": "TASK_STATE_WORKING",
+            "owner": HOSTILE, "created_by": HOSTILE, "room": HOSTILE,
+            "detail": HOSTILE, "updated_at": time.time()}
+
+    class _Board(_FakeHub):
+        def tasks(self, open_only=False):
+            return [task]
+
+    monkeypatch.setattr(cli, "_client", lambda p: _Board())
+    cli.cmd_task(_cli_args(action="list", title=None, id=None, detail=None,
+                           files=None, room=None, open=False))
+    cli._describe_task(task)
+
+    out = capsys.readouterr().out
+    assert "\x1b[2J" not in out and "\x1b]0;" not in out and "\r" not in out
+
+
+def test_the_status_line_never_exceeds_the_width_it_was_given():
+    """The fallback was built and returned without being measured again.
+
+    Dropping the label and the version is not always enough — with a long host
+    name it was already over budget before this feature, and the batch adds ten
+    more columns to a line that is by definition already too long. A width the
+    renderer was handed and then exceeded is not a width.
+    """
+    status = {"name": "a-very-long-agent-name-indeed",
+              "host": "an-even-longer-host-name-for-the-session",
+              "state": "live", "version": "1.17.0", "heartbeat": time.time(),
+              "others_connected": 3, "unread": 9,
+              "batch": {"id": "B_1", "name": "n", "total": 12, "done": 7,
+                        "fetched_at": time.time()}}
+    for limit in (20, 40, 60, 80, 120):
+        assert _visible_len(render(status, width=limit)) <= limit, \
+            f"overflowed at {limit} columns"
 
 
 # --- two real daemons, which is where the number actually diverged ----------
@@ -388,6 +485,64 @@ def test_a_failed_task_is_still_outstanding_work(client, session, host_headers):
     assert [t["id"] for t in figures["holding"]] == [t["id"] for t in tasks]
 
 
+def test_re_proposing_an_existing_task_id_is_refused(client, session, host_headers):
+    """The bar must never move for a reason a reader cannot see.
+
+    `propose` accepted a client-supplied id, and an id that already existed
+    fell through to the UPDATE path: the row was reset to SUBMITTED and its
+    owner wiped. So re-proposing a completed task dropped `done` while `total`
+    stood still — 100% to 50% on a batch nobody had touched, with no scope
+    change to account for it and no delta on screen, because none had happened.
+    An unexplained fall is the one failure this feature exists to prevent.
+    """
+    _start(client, host_headers)
+    tasks = [_propose(client, host_headers, f"task {i}") for i in range(2)]
+    for task in tasks:
+        _act(client, host_headers, "complete", task["id"])
+    assert _figures(client, host_headers)["percent"] == 100
+
+    r = client.post("/ext/collab/v1/tasks", headers=host_headers,
+                    json={"action": "propose", "id": tasks[0]["id"],
+                          "title": "the same id again"})
+    assert r.status_code == 409
+    assert "already exists" in r.json()["detail"]
+    assert _figures(client, host_headers)["percent"] == 100, "and nothing moved"
+
+
+def test_updating_a_finished_task_is_refused_like_claiming_one(
+        client, session, host_headers):
+    """The same rewind, reached by a different verb.
+
+    `update` set WORKING with no check at all, so it took a completed task back
+    out of `done` exactly as a re-proposal did. The guard was written for
+    `claim` and belonged to both.
+    """
+    _start(client, host_headers)
+    tasks = [_propose(client, host_headers, f"task {i}") for i in range(2)]
+    _act(client, host_headers, "complete", tasks[0]["id"])
+
+    r = client.post("/ext/collab/v1/tasks", headers=host_headers,
+                    json={"action": "update", "id": tasks[0]["id"]})
+    assert r.status_code == 409
+    assert "rather than reopening" in r.json()["detail"]
+    assert _figures(client, host_headers)["done"] == 1
+
+
+def test_a_failed_task_can_still_be_picked_back_up(client, session, host_headers):
+    """Failed is not finished, and the guard must not say it is.
+
+    Outstanding work that went wrong is work somebody should retry; refusing
+    that would be a rule about honesty getting in the way of the job.
+    """
+    _start(client, host_headers)
+    task = _propose(client, host_headers, "the flaky one")
+    _act(client, host_headers, "fail", task["id"])
+
+    r = client.post("/ext/collab/v1/tasks", headers=host_headers,
+                    json={"action": "claim", "id": task["id"]})
+    assert r.status_code == 200
+
+
 # --- the empty batch and the finished one -----------------------------------
 
 def test_an_empty_batch_renders_nothing_at_all(client, session, host_headers):
@@ -498,6 +653,79 @@ def test_an_unreachable_hub_does_not_render_a_stale_number_as_current():
     assert "?" in segment and "1h" in segment, "it says unknown, and how old"
 
 
+def test_a_clock_that_steps_backwards_does_not_make_a_memory_look_current():
+    """`(now - fetched) > STALE_AFTER` says no to a negative gap.
+
+    NTP correcting, a VM resuming, a container syncing its clock: the stamp is
+    suddenly in the future, the subtraction goes negative, negative is not
+    greater than 30, and the bar was drawn — with no age beside it — for as
+    long as the step lasted. `age()` had handled this exact input from the
+    beginning, so the two functions disagreed about what a negative gap meant,
+    and the one that drew the picture was the one that got it wrong.
+    """
+    now = time.time()
+    from_the_future = {"total": 10, "done": 1, "fetched_at": now + 3600}
+
+    assert batch_progress.is_stale(from_the_future, now=now)
+    assert "10%" not in batch_progress.describe(from_the_future, now=now)
+    assert batch_progress.FULL not in _batch_segment({"batch": from_the_future})
+
+
+def test_a_delta_stamped_in_the_future_stops_being_announced():
+    """Same hole, same cause: nothing is ever older than the window if the
+    window is measured backwards, so «+2» stuck to the line indefinitely."""
+    now = time.time()
+    assert batch_progress.delta_note(
+        {"total_delta": 2, "delta_at": now + 3600}, now=now) == ""
+
+
+# --- figures the hub sent that are not figures ------------------------------
+
+def test_a_non_numeric_count_does_not_blank_the_whole_status_line():
+    """These numbers come off the hub and a guest copies them verbatim.
+
+    `int("x")` raised ValueError, `main()`'s catch-all swallowed it and
+    returned nothing, and the ENTIRE collab segment vanished from that agent's
+    bar — not the batch figure, the whole thing, with no error anywhere. A
+    remote party should not be able to blank somebody else's status line by
+    sending a string.
+    """
+    figures = {"total": "lots", "done": "x", "fetched_at": time.time()}
+    assert _batch_segment({"batch": figures}) == "", "no batch, not a crash"
+    assert batch_progress.describe(figures) == ""
+
+    line = render({"name": "me", "host": "them", "state": "live",
+                   "heartbeat": time.time(), "batch": figures}, width=200)
+    assert "collab" in line, "and the rest of the segment survives"
+
+
+def test_a_negative_count_cannot_draw_a_bar_wider_than_its_budget():
+    """`done: -5` rendered «-50% -5/10» — nine characters into six columns.
+
+    The status line measures what it builds and truncates on that measurement,
+    so a segment wider than the width it was drawn at is the one thing the
+    arithmetic downstream cannot survive.
+    """
+    figures = {"total": 10, "done": -5, "fetched_at": time.time()}
+    segment = _batch_segment({"batch": figures})
+    assert "-" not in segment
+    assert len(batch_progress.bar(batch_progress.percent(-5, 10) or 0)) \
+        == batch_progress.BAR_WIDTH
+    assert batch_progress.bar(-50) == batch_progress.EMPTY * batch_progress.BAR_WIDTH
+    assert batch_progress.bar(500) == batch_progress.FULL * batch_progress.BAR_WIDTH
+
+
+def test_more_done_than_there_are_tasks_is_not_reported_as_complete():
+    """`done: 50, total: 10` said «50/10 done» for a batch that was not.
+
+    Two figures that disagree are a reason to say nothing, not a reason to
+    believe the larger one.
+    """
+    figures = {"total": 10, "done": 50, "fetched_at": time.time()}
+    assert not batch_progress.is_complete(figures)
+    assert "done" not in _batch_segment({"batch": figures})
+
+
 def test_figures_with_no_fetch_time_behind_them_are_stale_by_default():
     """Fresh-by-default is how the stale roster and the stale pid both happened.
 
@@ -579,6 +807,94 @@ def test_the_database_refuses_a_second_open_batch_too(tmp_path):
         store.close_batch("B_1")
         assert store.add_batch("B_2", name="second", opened_by="bob"), \
             "and once the first is closed the next one opens"
+    finally:
+        store.close()
+
+
+def test_a_refused_open_does_not_leave_a_write_transaction_behind(tmp_path):
+    """sqlite3 opens an implicit transaction for the INSERT.
+
+    The refusal did not end it, so the connection went on holding SQLite's
+    write lock until some later write happened to commit it — indefinitely, on
+    a hub where nothing else was happening.
+    """
+    from collab.server.store import Store
+
+    store = Store(tmp_path / "hub.db")
+    try:
+        store.add_batch("B_1", name="first", opened_by="alice")
+        assert store.add_batch("B_2", name="second", opened_by="bob") is None
+        assert store._db.in_transaction is False
+    finally:
+        store.close()
+
+
+def test_a_refusal_that_is_not_a_second_open_batch_says_so(
+        client, session, host_headers, monkeypatch):
+    """Every constraint on that table raises the same IntegrityError.
+
+    Reading «refused» as «one is already open» answered an unrelated fault with
+    «close it before starting another» — advice that will not help and cannot
+    work, for a batch the reader would then go looking for and not find.
+    """
+    from collab.server import app as app_module
+
+    store = session["store"]
+    monkeypatch.setattr(store, "add_batch", lambda *a, **k: None)
+
+    r = client.post("/ext/collab/v1/batch", headers=host_headers,
+                    json={"action": "start", "name": "the migration"})
+    assert r.status_code == 500
+    assert "nothing to close first" in r.json()["detail"]
+    assert app_module is not None
+
+
+def test_closing_a_batch_twice_does_not_announce_it_twice(
+        client, session, host_headers):
+    """The second close changed nothing and said it had.
+
+    `closed_at` was safe — the `AND state='open'` guard saw to that — but the
+    row came back either way, so the room was told «closed the batch X» for an
+    event that did not happen. A statement about now, assembled out of
+    something that was true before.
+    """
+    batch = _start(client, host_headers)
+    first = client.post("/ext/collab/v1/batch", headers=host_headers,
+                        json={"action": "close"})
+    assert first.status_code == 200
+
+    again = client.post("/ext/collab/v1/batch", headers=host_headers,
+                        json={"action": "close", "id": batch["id"]})
+    assert again.status_code == 409
+    assert "already closed" in again.json()["detail"]
+
+    events = client.get("/ext/collab/v1/history", headers=host_headers,
+                        params={"limit": 50}).json()["events"]
+    closed = [e for e in events if "closed the batch" in str(e.get("body", {}))]
+    assert len(closed) == 1, "announced once, because it happened once"
+
+
+def test_which_batch_a_task_joins_is_decided_where_it_is_written(tmp_path):
+    """The endpoint read the open batch, awaited, and then wrote.
+
+    An `await` is a yield point, so a close landing in that window put the task
+    into a batch that had already closed — or, with the read done first and the
+    batch gone, into none at all. Which tasks a batch holds is the denominator
+    everybody is watching; it cannot depend on how two requests interleaved.
+    The resolution happens inside the same lock as the insert, so there is no
+    window to land in.
+    """
+    from collab.server.store import Store
+
+    store = Store(tmp_path / "hub.db")
+    try:
+        store.add_batch("B_1", name="the migration", opened_by="alice")
+        store.close_batch("B_1")
+        store.upsert_task("T_1", title="after the close", state="TASK_STATE_SUBMITTED",
+                          owner=None, room="general", created_by="alice",
+                          join_open_batch=True)
+        assert store.get_task("T_1")["batch"] is None
+        assert store.batch_tasks("B_1") == [], "the closed batch does not grow"
     finally:
         store.close()
 

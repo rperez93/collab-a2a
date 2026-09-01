@@ -238,7 +238,7 @@ def test_an_upgraded_board_can_hold_a_batch_like_a_fresh_one(pre_batch_db):
         store.add_batch("B_1", name="the migration", opened_by="jarvis")
         store.upsert_task("T_new", title="new work", state="TASK_STATE_COMPLETED",
                           owner="jarvis", room="general", created_by="jarvis",
-                          batch="B_1")
+                          join_open_batch=True)
         assert [t["id"] for t in store.batch_tasks("B_1")] == ["T_new"]
         assert store.open_batch()["id"] == "B_1"
     finally:
@@ -256,7 +256,7 @@ def test_a_fresh_database_gets_the_batch_column_without_a_migration(tmp_path):
         store.add_batch("B_1", name="the migration", opened_by="alice")
         store.upsert_task("T_1", title="work", state="TASK_STATE_SUBMITTED",
                           owner=None, room="general", created_by="alice",
-                          batch="B_1")
+                          join_open_batch=True)
         assert store.tasks()[0]["batch"] == "B_1"
     finally:
         store.close()

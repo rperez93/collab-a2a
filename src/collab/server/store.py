@@ -587,13 +587,30 @@ class Store:
 
     def upsert_task(self, task_id: str, *, title: str, state: str, owner: str | None,
                     room: str | None, created_by: str, detail: str = "",
-                    batch: str | None = None) -> dict[str, Any]:
+                    join_open_batch: bool = False) -> dict[str, Any]:
+        """Create or update one task.
+
+        `join_open_batch` resolves the open batch HERE, inside the same lock as
+        the insert, rather than being handed an id the caller read earlier. The
+        caller read it, awaited, and then wrote — and an `await` is a yield
+        point, so a close landing in that window put a task into a batch that
+        had already closed, or into none at all. Which tasks a batch holds is
+        the denominator everybody is watching; it cannot be decided by whether
+        two requests interleaved.
+        """
         now = time.time()
         with self._lock:
             existing = self._db.execute(
                 "SELECT * FROM tasks WHERE id=?", (task_id,)
             ).fetchone()
             if existing is None:
+                batch = None
+                if join_open_batch:
+                    open_now = self._db.execute(
+                        "SELECT id FROM batches WHERE state='open'"
+                        " ORDER BY opened_at DESC"
+                    ).fetchone()
+                    batch = str(open_now["id"]) if open_now else None
                 self._db.execute(
                     "INSERT INTO tasks (id,title,state,owner,room,created_by,"
                     "created_at,updated_at,detail,batch)"
@@ -646,6 +663,17 @@ class Store:
         and the loser is told which batch is in the way. A raised
         IntegrityError would arrive at the agent as a bare HTTP 500 — the same
         shape of failure a freed display name used to cause on rejoin.
+
+        None says only «the insert was refused», never why. Every constraint on
+        this table raises the same IntegrityError — the id primary key and the
+        NOT NULLs as well as the one-open-batch index — so a caller that read
+        None as «one is already open» would answer a different fault with
+        confident and wrong advice. The caller looks, and says what it finds.
+
+        Rolled back rather than left open. sqlite3 opens an implicit
+        transaction for the INSERT and the refusal does not end it, so the
+        connection went on holding the write lock until some later write
+        happened to commit it — on a quiet hub, indefinitely.
         """
         with self._lock:
             try:
@@ -655,6 +683,7 @@ class Store:
                     (batch_id, name, opened_by, time.time()),
                 )
             except sqlite3.IntegrityError:
+                self._db.rollback()
                 return None
             self._db.commit()
             row = self._db.execute(
@@ -695,13 +724,24 @@ class Store:
         return dict(row) if row else None
 
     def close_batch(self, batch_id: str) -> dict[str, Any] | None:
+        """Close it, or return None because this call closed nothing.
+
+        The `AND state='open'` guard already protected `closed_at` from being
+        overwritten by a second close, but the row came back either way — so
+        closing twice answered 200 and announced «closed the batch X» to the
+        room a second time. Another agent was then told about an event that had
+        not happened, which is the same class of untruth as a stale figure: a
+        statement about now, built out of something that was true before.
+        """
         with self._lock:
-            self._db.execute(
+            cur = self._db.execute(
                 "UPDATE batches SET state='closed', closed_at=?"
                 " WHERE id=? AND state='open'",
                 (time.time(), batch_id),
             )
             self._db.commit()
+            if not cur.rowcount:
+                return None
             row = self._db.execute(
                 "SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
         return dict(row) if row else None

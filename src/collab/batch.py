@@ -73,10 +73,41 @@ STALE_AFTER = 30.0
 #: hour-old change is not still being announced as though it had just happened.
 DELTA_SHOWN_FOR = 90.0
 
-#: Both single-column by `unicodedata.east_asian_width`, like the frame strokes
-#: the TUI draws with, so the bar occupies exactly the columns it is measured at.
+#: `█` is East Asian width A (Ambiguous) and `░` is N (Neutral) — so this is
+#: NOT a guarantee that the bar occupies the columns it is measured at, and an
+#: earlier version of this comment claimed it was. Ambiguous is precisely the
+#: class that has no single answer: in a CJK locale, or under tmux with
+#: `ambiguous-width double`, `█` is drawn two columns wide while `_visible_len`
+#: still counts it as one, and a six-character bar takes twelve columns.
+#:
+#: They are kept because the TUI's frame strokes are Ambiguous too, so this is
+#: the width assumption the whole project already runs on rather than a new one
+#: — but it is an assumption, and a comment asserting it as a measured fact is
+#: worse than no comment.
 FULL, EMPTY = "█", "░"
 BAR_WIDTH = 6
+
+
+def count_of(figures: Any, key: str) -> int:
+    """One of the hub's counts, or 0 when what arrived is not a count.
+
+    These numbers are produced by the HUB and copied into a guest's own status
+    file verbatim, so every reader here is parsing something a remote party
+    chose. `int()` on them was a straight trust: `done: "x"` raised ValueError,
+    the status line's top-level handler swallowed it and returned nothing, and
+    the ENTIRE collab segment vanished from that agent's bar — not the batch
+    figure, the whole thing, silently. A remote party should not be able to
+    blank somebody else's status line by sending a string.
+
+    Negatives are floored rather than rejected: `done: -5` rendered «-50%
+    -5/10» and a nine-character bar into a six-column budget.
+    """
+    if not isinstance(figures, dict):
+        return 0
+    try:
+        return max(0, int(figures.get(key) or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def tally(states: Iterable[str]) -> dict[str, int]:
@@ -122,9 +153,17 @@ def bar(pct: int | None, width: int = BAR_WIDTH) -> str:
     Drawn from the percentage rather than from the counts, so the picture and
     the figure cannot disagree — a bar that looks full beside a 99% is the same
     lie told twice.
+
+    The percentage is clamped here as well as computed correctly in `percent`,
+    because the figures are the HUB's and a guest's daemon copies them into its
+    own status file verbatim. A hostile or broken host sending `done: -5` drew
+    a nine-character bar into a six-column budget — and a bar wider than the
+    width it was measured at is the one thing the status line's own arithmetic
+    cannot survive. Bounds on the way OUT, not only on the way in.
     """
     if pct is None:
         return ""
+    pct = max(0, min(100, pct))
     filled = min(width, (pct * width) // 100)
     if pct and not filled:
         # Some progress must not draw as none: one task into ten rendered an
@@ -134,11 +173,18 @@ def bar(pct: int | None, width: int = BAR_WIDTH) -> str:
 
 
 def is_complete(figures: Any) -> bool:
-    """Every task in the batch is done — and there was at least one."""
+    """Every task in the batch is done — and there was at least one.
+
+    `done > total` is not «more than complete», it is nonsense arriving from a
+    hub a client does not control, and it reported «50/10 done» for a batch
+    that was not. Two disagreeing figures are a reason to say nothing, not a
+    reason to believe the larger one.
+    """
     if not isinstance(figures, dict):
         return False
-    total = int(figures.get("total") or 0)
-    return total > 0 and int(figures.get("done") or 0) >= total
+    total = count_of(figures, "total")
+    done = count_of(figures, "done")
+    return total > 0 and done == total
 
 
 def is_stale(figures: Any, *, now: float | None = None) -> bool:
@@ -159,7 +205,17 @@ def is_stale(figures: Any, *, now: float | None = None) -> bool:
         return True
     if not fetched:
         return True
-    return ((now or time.time()) - fetched) > STALE_AFTER
+    gap = (now or time.time()) - fetched
+    if gap < 0:
+        # A STAMP IN THE FUTURE IS NOT A FRESH ONE. `gap > STALE_AFTER` said
+        # no to a negative gap and drew the bar, so an hour-long backward clock
+        # step — NTP correcting, a VM resuming, a container syncing — rendered
+        # a remembered count as live for the whole hour, with no age beside it.
+        # `age()` twenty lines below had handled exactly this input from the
+        # start, which left the two functions disagreeing about what a negative
+        # gap means. An age we cannot compute is an age we cannot vouch for.
+        return True
+    return gap > STALE_AFTER
 
 
 def age(figures: Any, *, now: float | None = None) -> str:
@@ -198,7 +254,12 @@ def delta_note(figures: Any, *, now: float | None = None) -> str:
         return ""
     if not moved or not at:
         return ""
-    if ((now or time.time()) - at) > DELTA_SHOWN_FOR:
+    since = (now or time.time()) - at
+    # Expired in both directions, for the same reason `is_stale` is. A
+    # `delta_at` in the future is never older than DELTA_SHOWN_FOR, so a
+    # backward clock step pinned «+2» to the line indefinitely — announcing a
+    # scope change that had long since stopped being news.
+    if since < 0 or since > DELTA_SHOWN_FOR:
         return ""
     return f"{moved:+d}"
 
@@ -207,7 +268,7 @@ def counts(figures: Any) -> str:
     """«7/12» — the pair that makes a falling percentage readable."""
     if not isinstance(figures, dict):
         return ""
-    return f"{int(figures.get('done') or 0)}/{int(figures.get('total') or 0)}"
+    return f"{count_of(figures, 'done')}/{count_of(figures, 'total')}"
 
 
 def describe(figures: Any, *, now: float | None = None) -> str:
@@ -218,7 +279,7 @@ def describe(figures: Any, *, now: float | None = None) -> str:
     """
     if not isinstance(figures, dict):
         return ""
-    pct = percent(int(figures.get("done") or 0), int(figures.get("total") or 0))
+    pct = percent(count_of(figures, "done"), count_of(figures, "total"))
     if pct is None:
         return ""
     if is_stale(figures, now=now):

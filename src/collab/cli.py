@@ -98,6 +98,24 @@ def heading(msg: str) -> None:
     print(f"\n{c(msg, '1')}")
 
 
+def said(value: Any) -> str:
+    """One field somebody else chose, on its way to this terminal.
+
+    A batch name, a task title, an owner, a room, a task id a client was
+    allowed to pick: every one of them is free text from another participant,
+    and printing it raw hands them the terminal. `\\x1b[2J` clears the reader's
+    screen, `\\x1b]0;…\\x07` rewrites their window title, and a bare carriage
+    return paints a forged line over a real one. `clip()` bounds the length on
+    the way into the store and does nothing about any of that.
+
+    Named and short because the failure is always the same one: a new print
+    site that nobody remembered to wrap. The batch commands were exactly that
+    — added one commit after the release that scrubbed the host name for this
+    reason, and printing four remote fields raw. See collab.protocol.scrub.
+    """
+    return scrub(str(value if value is not None else ""))
+
+
 def _preflight_update(args: argparse.Namespace) -> None:
     """Offer an update before a session starts.
 
@@ -1112,8 +1130,9 @@ def cmd_task(args: argparse.Namespace) -> int:
                 if not tasks:
                     print(dim("  no tasks yet — propose one with `collab task propose \"...\"`"))
                 for t in tasks:
-                    owner = t.get("owner") or dim("unclaimed")
-                    print(f"  {t['id']}  {t['title']}  [{_short_state(t['state'])}]  {owner}")
+                    owner = said(t.get("owner")) or dim("unclaimed")
+                    print(f"  {said(t['id'])}  {said(t['title'])}  "
+                          f"[{_short_state(t['state'])}]  {owner}")
                 return 0
             if args.action == "show":
                 if not args.id:
@@ -1136,8 +1155,8 @@ def cmd_task(args: argparse.Namespace) -> int:
             print(dim("  read it first: `collab task show --id "
                       f"{args.id or '<id>'}`"))
         return 1
-    ok(f"{args.action}: {task['id']}  {task['title']}  "
-       f"[{_short_state(task['state'])}]  {task.get('owner') or 'unclaimed'}")
+    ok(f"{args.action}: {said(task['id'])}  {said(task['title'])}  "
+       f"[{_short_state(task['state'])}]  {said(task.get('owner')) or 'unclaimed'}")
 
     # THE BOARD AND THE ROSTER MOVE TOGETHER. Claiming a task is already the
     # statement «I am doing this»; making the agent say it twice is how the two
@@ -1166,24 +1185,24 @@ def _describe_task(task: dict[str, Any], *, as_json: bool = False) -> int:
     if as_json:
         print(json.dumps(task, indent=2))
         return 0
-    heading(f"{task['id']}  {task['title']}")
+    heading(f"{said(task['id'])}  {said(task['title'])}")
     print(f"  {'state':<12} {_short_state(task['state'])}")
-    print(f"  {'owner':<12} {task.get('owner') or dim('unclaimed')}")
-    print(f"  {'proposed by':<12} {task.get('created_by') or '?'}")
+    print(f"  {'owner':<12} {said(task.get('owner')) or dim('unclaimed')}")
+    print(f"  {'proposed by':<12} {said(task.get('created_by')) or '?'}")
     if task.get("room"):
-        print(f"  {'room':<12} {task['room']}")
+        print(f"  {'room':<12} {said(task['room'])}")
     #  and not a second copy of the same arithmetic: how long ago a
     # thing happened is one question, and it already has an answer.
     if seen := activity.elapsed({"since": task.get("updated_at")}):
         print(f"  {'last change':<12} {seen}")
     if task.get("detail"):
-        print(f"\n  {task['detail']}")
+        print(f"\n  {said(task['detail'])}")
     if task.get("owner"):
-        print(dim(f"\n  {task['owner']} has it — say so before taking it over"))
+        print(dim(f"\n  {said(task['owner'])} has it — say so before taking it over"))
     elif _short_state(task["state"]) in ("completed", "canceled"):
         print(dim("\n  finished work: propose a new task rather than reopening it"))
     else:
-        print(dim(f"\n  yours to take: collab task claim --id {task['id']}"))
+        print(dim(f"\n  yours to take: collab task claim --id {said(task['id'])}"))
     return 0
 
 
@@ -1233,7 +1252,7 @@ def _describe_batch(figures: dict[str, Any] | None, *, action: str = "status") -
     # as the same thing at a glance, on the one reading somebody stops working
     # on.
     closed = figures.get("state") == batch_progress.CLOSED
-    heading(f"{figures['id']}  {figures['name']}"
+    heading(f"{said(figures['id'])}  {said(figures['name'])}"
             + (c("  · CLOSED", "33") if closed else ""))
     total = int(figures.get("total") or 0)
     done = int(figures.get("done") or 0)
@@ -1263,14 +1282,14 @@ def _describe_batch(figures: dict[str, Any] | None, *, action: str = "status") -
                   " — nothing is open, and nothing new is being counted", "33"))
     else:
         print(f"  {'state':<12} open")
-    print(f"  {'opened by':<12} {figures.get('opened_by') or '?'}")
+    print(f"  {'opened by':<12} {said(figures.get('opened_by')) or '?'}")
 
     holding = figures.get("holding") or []
     if holding:
         print(f"\n  {len(holding)} outstanding:")
         for task in holding:
-            owner = task.get("owner") or dim("unclaimed")
-            print(f"    {task['id']}  {task['title']}  "
+            owner = said(task.get("owner")) or dim("unclaimed")
+            print(f"    {said(task['id'])}  {said(task['title'])}  "
                   f"[{_short_state(task['state'])}]  {owner}")
     elif pct is not None:
         print(dim("\n  nothing outstanding"))
@@ -2467,7 +2486,10 @@ def cmd_status(args: argparse.Namespace) -> int:
             armed_line += dim(f" · last poll {_ago_seconds(payload['polled_seconds_ago'])}")
     print(f"  {'monitor':<16} {armed_line}")
     if line := batch_progress.describe(payload.get("batch")):
-        name = str((payload.get("batch") or {}).get("name") or "")
+        # The name came off the hub, through the daemon, into a file, and is
+        # about to reach a real terminal. Every hop kept it as the remote party
+        # wrote it. See `said`.
+        name = said((payload.get("batch") or {}).get("name"))
         print(f"  {'batch':<16} {line}{dim('  ' + name) if name else ''}")
     if payload.get("hint"):
         print(f"\n  {c(payload['hint'], '33')}")

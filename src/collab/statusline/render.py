@@ -191,7 +191,43 @@ def render(status: dict[str, Any] | None = None, *, width: int | None = None,
         if narrow := _batch_segment(status, narrow=True):
             short.append(narrow)
         line = "  ".join(short)
+        # AND MEASURED AGAIN. The fallback was built and returned unchecked, on
+        # the assumption that dropping the label and the version is always
+        # enough — which it is not with a long host name, and is less so now
+        # that the batch adds ten columns to a line that is already over
+        # budget. Measured at limit 80: 105 columns out. A width the renderer
+        # was given and then exceeded is not a width at all.
+        if _visible_len(line) > limit:
+            line = _clip_visible(line, limit)
     return line
+
+
+def _clip_visible(line: str, limit: int) -> str:
+    """Cut to `limit` visible columns, keeping the colour codes intact.
+
+    Counting bytes would cut inside an escape sequence and leave the rest of
+    the terminal painted in whatever colour was half-applied, so the escapes
+    are copied through and only printable characters are counted against the
+    budget. The last column is an ellipsis, so a truncated line reads as
+    truncated rather than as a shorter fact.
+    """
+    if limit <= 1:
+        return ""
+    out, shown, in_esc = [], 0, False
+    for ch in line:
+        if in_esc:
+            out.append(ch)
+            in_esc = ch != "m"
+            continue
+        if ch == "\033":
+            out.append(ch)
+            in_esc = True
+            continue
+        if shown >= limit - 1:
+            break
+        out.append(ch)
+        shown += 1
+    return "".join(out) + "…" + (RESET if _use_color() else "")
 
 
 def _batch_segment(status: dict[str, Any], *, narrow: bool = False) -> str:
@@ -218,9 +254,12 @@ def _batch_segment(status: dict[str, Any], *, narrow: bool = False) -> str:
     figures = status.get("batch")
     if not isinstance(figures, dict):
         return ""
-    total = int(figures.get("total") or 0)
-    done = int(figures.get("done") or 0)
-    pct = batch_progress.percent(done, total)
+    # Parsed rather than trusted: these came off the hub and through a file.
+    # A bare int() on them let `done: "x"` raise, and `main`'s catch-all then
+    # returned nothing — so the whole collab segment disappeared from the bar
+    # rather than just the batch. See collab.batch.count_of.
+    pct = batch_progress.percent(batch_progress.count_of(figures, "done"),
+                                 batch_progress.count_of(figures, "total"))
     if pct is None:
         return ""
     if batch_progress.is_stale(figures):

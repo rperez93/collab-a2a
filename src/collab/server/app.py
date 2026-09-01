@@ -69,6 +69,12 @@ TASK_STATES = {
     "cancel": "TASK_STATE_CANCELED",
 }
 
+#: Work that is over. Nothing reopens one of these — a new task is proposed
+#: instead — because reopening moves the batch's numerator backwards without
+#: moving its denominator, and a figure that falls with no scope change behind
+#: it is a figure nobody can account for.
+FINISHED_STATES = frozenset({"TASK_STATE_COMPLETED", "TASK_STATE_CANCELED"})
+
 
 def _on_auth_error(conn, exc: Exception) -> JSONResponse:
     return JSONResponse(
@@ -412,8 +418,24 @@ def create_app(
             raise HTTPException(status_code=400, detail=f"unknown action {action!r}")
 
         task_id = clip(str(body.get("id") or ""), MAX_NAME)
-        batch = None
+        joins_a_batch = False
         if action == "propose":
+            # PROPOSE CREATES. IT NEVER OVERWRITES. A client may name the id,
+            # and naming one that already existed fell through to the UPDATE
+            # branch below: the row was reset to SUBMITTED and its owner wiped,
+            # so re-proposing a completed task dropped `done` while `total`
+            # stood still. 100% became 50% on a batch nobody had touched, with
+            # no scope change to explain it and nothing on screen to explain it
+            # either — the shared number moving for a reason no reader could
+            # see, which is the one failure this whole feature exists to
+            # prevent.
+            if task_id and store.get_task(task_id) is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(f"{task_id} already exists — propose without an id to"
+                            " get a fresh one, or act on that task with"
+                            " claim/update/complete"),
+                )
             task_id = task_id or new_id("T")
             title = clip(str(body.get("title") or ""), MAX_TITLE)
             if not title:
@@ -424,33 +446,42 @@ def create_app(
             # batch's work whoever offered it. Growing the batch is exactly
             # what makes the shared bar fall, so the growth has to be recorded
             # where it happens rather than declared afterwards.
-            if (open_batch := store.open_batch()) is not None:
-                batch = str(open_batch["id"])
+            #
+            # The store resolves which batch, inside the same lock as the
+            # insert. Reading it here and passing the id down left an `await`
+            # between the read and the write, and a close landing in that
+            # window put the task into a batch that had already closed.
+            joins_a_batch = True
         else:
             existing = store.get_task(task_id)
             if existing is None:
                 raise HTTPException(status_code=404, detail=f"no such task {task_id!r}")
             title = clip(str(body.get("title") or existing["title"]), MAX_TITLE)
             owner = existing["owner"]
+            # A FINISHED TASK IS NOT AVAILABLE WORK, and that is said first:
+            # claiming one put it back into WORKING and told the room somebody
+            # was on it, so a board read a minute later showed completed work
+            # apparently under way again, and the agent that "claimed" it was
+            # about to redo something already done.
+            #
+            # `update` is guarded by the same rule and was not. It sets WORKING
+            # with no check at all, so `update` on a completed task rewound the
+            # numerator exactly as a re-proposal did — the same invisible move
+            # of the shared figure, reached by a different verb. `failed` is
+            # deliberately not in the set: that is outstanding work that went
+            # wrong, and retrying it is the point.
+            if action in ("claim", "update") and existing["state"] in FINISHED_STATES:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(f"{task_id} is "
+                            f"{existing['state'].replace('TASK_STATE_', '').lower()}"
+                            " — propose a new task rather than reopening it"),
+                )
             if action == "claim":
-                # A FINISHED TASK IS NOT AVAILABLE WORK, and that is said first:
-                # claiming one put it back into WORKING and told the room
-                # somebody was on it, so a board read a minute later showed
-                # completed work apparently under way again, and the agent that
-                # "claimed" it was about to redo something already done.
-                #
-                # Before the ownership check, because both can be true at once
+                # After the finished check, because both can be true at once
                 # and only one of them is worth acting on: «ask alice before
                 # taking it over» sends an agent to negotiate over work that is
                 # already done.
-                done = {"TASK_STATE_COMPLETED", "TASK_STATE_CANCELED"}
-                if existing["state"] in done:
-                    raise HTTPException(
-                        status_code=409,
-                        detail=(f"{task_id} is "
-                                f"{existing['state'].replace('TASK_STATE_', '').lower()}"
-                                " — propose a new task rather than reopening it"),
-                    )
                 if owner and owner != user.name:
                     raise HTTPException(
                         status_code=409,
@@ -464,7 +495,7 @@ def create_app(
             title=title, state=TASK_STATES[action], owner=owner,
             room=body.get("room") or DEFAULT_ROOM, created_by=user.name,
             detail=clip(str(body.get("detail") or ""), MAX_DETAIL),
-            batch=batch,
+            join_open_batch=joins_a_batch,
         )
         await hub.publish(Envelope(
             kind=KIND_TASK, sender=user.name, sender_id=user.id,
@@ -508,7 +539,18 @@ def create_app(
             record = await asyncio.to_thread(
                 store.add_batch, new_id("B"), name=name, opened_by=user.name)
             if record is None:
-                already = store.open_batch() or {"id": "?", "name": "?"}
+                # LOOK, RATHER THAN ASSUME. Every constraint on that table
+                # raises the same IntegrityError, so «refused» is not by itself
+                # «one is already open» — and answering some other fault with
+                # «close it before starting another» sends the agent to do
+                # something that will not help and cannot work.
+                already = store.open_batch()
+                if already is None:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="the hub could not open that batch, and no other"
+                               " batch is open — nothing to close first",
+                    )
                 raise HTTPException(
                     status_code=409,
                     detail=(f"{already['id']} ({already['name']!r}) is already open"
@@ -525,6 +567,16 @@ def create_app(
                             else "no batch is open"),
                 )
             record = await asyncio.to_thread(store.close_batch, str(current["id"]))
+            if record is None:
+                # This call closed nothing — it was already closed, here or by
+                # somebody else a moment ago. Answering 200 published «closed
+                # the batch X» to the room for an event that did not happen,
+                # which is the same untruth as a stale figure: a statement
+                # about now, assembled out of something that was true before.
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"{current['id']} ({current['name']!r}) is already closed",
+                )
             event = f"closed the batch {current['name']!r}"
 
         figures = hub.batch_figures(record)

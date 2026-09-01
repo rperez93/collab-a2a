@@ -158,11 +158,26 @@ percentage, the counts, and who holds each outstanding task.
 The status line carries a compact form of the same figures, and `collab status`
 shows it beside the connection.
 
+The batch is session-wide, not per-participant and not per-room.
+Any participant can open one or close one, including a guest, and
+`collab batch status` shows every outstanding task in it whichever room the task
+belongs to.
+That follows from the trust model: everyone admitted to a session is inside the
+boundary.
+See [Security](security.md).
+
 Close the batch with `collab batch close`.
 Closing stops new tasks joining it; it deletes nothing.
 A closed batch leaves the status line, because the bar is for work under way,
 and stays readable in `collab batch status` and `collab status`, which both mark
 it closed.
+
+Closing fixes which tasks the batch holds — that is the denominator, and it
+stops moving.
+It does not freeze the tasks themselves: completing one that belonged to a
+closed batch still raises that batch's count, because the work really was
+finished and the alternative is a completion nothing records.
+So a closed batch's total is final and its percentage can still rise.
 
 ### What the number does, and why
 
