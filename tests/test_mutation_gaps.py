@@ -194,6 +194,8 @@ def _roster(people, width=100):
         snapshot={"participants": list(people)},
         profile=types.SimpleNamespace(name="me", participant_id="p_me"),
         participants=lambda: list(people),
+        roster_is_current=lambda: True,
+        snapshot_age=lambda: "just now",
     )
     return tui.roster_rows(model, width)
 

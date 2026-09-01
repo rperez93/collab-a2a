@@ -29,6 +29,9 @@ def _model(people):
     return types.SimpleNamespace(
         profile=profile,
         participants=lambda: people,
+        # The roster only reports who is online while we can still ask.
+        roster_is_current=lambda: True,
+        snapshot_age=lambda: "just now",
         snapshot={"participants": people},
     )
 

@@ -476,6 +476,14 @@ class Daemon:
                 self._adopt_identity()
                 # The viewer reads this instead of the network, so it keeps
                 # working while the hub is briefly unreachable.
+                #
+                # STAMPED, because it is only rewritten when a fetch SUCCEEDS.
+                # A hub that dies leaves the last good roster on disk with
+                # everyone marked connected, and nothing in the file says when
+                # that was true — so the pane went on showing a room full of
+                # people long after the session ended. The reader can only be
+                # careful about the age if the age is written down.
+                self.snapshot["fetched_at"] = time.time()
                 try:
                     tmp = self.paths.root / "snapshot.tmp"
                     tmp.write_text(json.dumps(self.snapshot))

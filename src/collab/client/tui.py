@@ -739,6 +739,32 @@ class Model:
             self._older = bool(first) and self.inbox.has_before(first)
         return self._older
 
+    def roster_is_current(self) -> bool:
+        """Can we still check who is here?
+
+        Only while our own feed is live. `snapshot.json` is a cache of what the
+        hub last told us, refreshed only by a fetch that worked — so the moment
+        we stop being connected it stops being an observation and becomes a
+        memory, however recent.
+        """
+        return self.state() == "live"
+
+    def snapshot_age(self) -> str:
+        """How old the roster is, in words. Empty when it does not say."""
+        try:
+            fetched = float(self.snapshot.get("fetched_at") or 0)
+        except (TypeError, ValueError):
+            return ""
+        if not fetched:
+            # Written by a collab that did not stamp it. The file's own mtime
+            # is the next best thing and is never wrong by much: it is rewritten
+            # on every successful fetch.
+            try:
+                fetched = self.paths.snapshot.stat().st_mtime
+            except OSError:
+                return ""
+        return ago(fetched)
+
     def state(self) -> str:
         """What the daemon is doing, judged rather than quoted.
 
@@ -1377,11 +1403,22 @@ def ago(seen: Any) -> str:
 
 
 def roster_rows(model: Model, width: int) -> list[Row]:
-    """One participant per two lines: who and how, then what they are using."""
+    """One participant per two lines: who and how, then what they are using.
+
+    WHO IS ONLINE IS SOMETHING WE LEARN FROM THE HUB, so when we cannot reach
+    the hub we do not know it. `snapshot.json` is only rewritten by a fetch that
+    SUCCEEDS — deliberately, so a two-second blip does not empty the pane — and
+    the consequence was that a session which died left the last good roster on
+    screen for ever, everyone still marked online, while the badge above it said
+    reconnecting. The pane was not failing to update; it was showing figures it
+    could no longer check, which is worse, because it looks like an answer.
+    """
     rows: list[Row] = []
     me = model.profile.name
+    known = model.roster_is_current()
+    stale_for = model.snapshot_age()
     for person in model.participants():
-        online = person.get("connected")
+        online = person.get("connected") and known
         name = person.get("name", "?")
         doing = person.get("activity") or {}
         # FILLED MEANS AT WORK, HOLLOW MEANS FREE — in the person's own colour
@@ -1407,7 +1444,11 @@ def roster_rows(model: Model, width: int) -> list[Row]:
         # has gone, say when — leaving a minute ago and leaving yesterday mean
         # very different things.
         state = "online" if online else "offline"
-        if not online and (seen := ago(person.get("last_seen"))):
+        if not known:
+            # Not «offline», which would be a claim of its own. We are the ones
+            # who are disconnected; what they are doing is not ours to report.
+            state = f"unknown · as of {stale_for}" if stale_for else "unknown"
+        elif not online and (seen := ago(person.get("last_seen"))):
             state = f"offline · last seen {seen}"
 
         # THE PERSON'S COLOUR ON THE DOT AND THE NAME, the neutral one on the
@@ -1694,7 +1735,7 @@ class Tui:
         self.roster.total = len(rows)
         self.roster.settle()
         hidden = max(len(rows) - self.roster.rows - self.roster.offset, 0)
-        label = f"PARTICIPANTS ({len(people)})"
+        label = self._roster_label(people)
         # Rows are not people — two lines each — so a range of row numbers
         # beside a head count reads as a contradiction. Say which way there is
         # more instead, which is the only thing the number was for.
@@ -1768,6 +1809,19 @@ class Tui:
                         max(width - 1, 0), attr)
         except curses.error:
             pass
+
+    def _roster_label(self, people: list) -> str:
+        """Say when this is a memory rather than an observation.
+
+        The count and the names stay — they are still who was here — but a
+        header that reads the same whether the hub answered a second ago or
+        died an hour ago is what let a dead session look like a busy one.
+        """
+        label = f"PARTICIPANTS ({len(people)})"
+        if not self.model.roster_is_current():
+            age = self.model.snapshot_age()
+            label += f" · not connected — as of {age}" if age else " · not connected"
+        return label
 
     def _chat_label(self) -> str:
         """Say when the top of the screen is not the top of the conversation.
@@ -1965,7 +2019,7 @@ class Tui:
         people = m.participants()
         if self.view == "roster":
             rows = self._roster(width - 1)
-            pane, label = self.roster, f"PARTICIPANTS ({len(people)})"
+            pane, label = self.roster, self._roster_label(people)
         else:
             rows = self._conversation(width - 1)
             pane, label = self.chat, self._chat_label()

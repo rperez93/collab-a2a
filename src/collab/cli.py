@@ -1674,6 +1674,11 @@ def cmd_status(args: argparse.Namespace) -> int:
         since_poll <= POLL_COUNTS_AS_LISTENING
     payload["watching"] = payload["watchers"] > 0 or payload["polling"]
     payload["state"] = daemon_state(status, running=pid is not None)
+    # HOW MANY OTHERS ARE HERE IS THE HUB'S ANSWER, and we only have it while
+    # we are connected. Left as a bare number it read as current, so a session
+    # that had died an hour ago still reported one other agent present — the
+    # same staleness the roster pane had, in a different window.
+    payload["figures_current"] = payload["state"] == "live"
     recorded = status.get("state")
     if recorded and recorded != payload["state"]:
         # Kept, not hidden: it is the last thing the daemon managed to say, and
@@ -1705,8 +1710,14 @@ def cmd_status(args: argparse.Namespace) -> int:
     for key in ("name", "host", "url", "state", "recorded_state",
                 "others_connected", "unread",
                 "last_seq", "daemon_pid", "monitor_command", "monitor_ws"):
-        if payload.get(key) is not None:
-            print(f"  {key:<16} {payload[key]}")
+        if payload.get(key) is None:
+            continue
+        value = payload[key]
+        if key == "others_connected" and not payload["figures_current"]:
+            #  and  are counted here and stay true; this one
+            # came from the hub, and we are not talking to the hub.
+            value = f"{value} {dim('· when last connected')}"
+        print(f"  {key:<16} {value}")
     if payload["watchers"]:
         armed_line = f"{payload['watchers']} armed"
         if payload["polled_seconds_ago"] is not None:

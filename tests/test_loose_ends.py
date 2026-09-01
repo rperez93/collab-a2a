@@ -171,7 +171,9 @@ def test_the_roster_dot_goes_hollow_when_the_statement_goes_stale():
         profile=SessionProfile(session_id="s", url="u", name="me",
                                host_name="h", token="t", home="/tmp"),
         participants=lambda: [{"name": "bob", "connected": True,
-                               "activity": ABANDONED}])
+                               "activity": ABANDONED}],
+        roster_is_current=lambda: True,
+        snapshot_age=lambda: "just now")
     assert "●" not in tui.roster_rows(model, 120)[0].text
 
 
