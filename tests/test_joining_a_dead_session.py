@@ -104,3 +104,36 @@ def test_a_join_that_finds_nothing_running_says_so(profile):
     _wrote(profile, state="live", heartbeat=time.time() - 7200)
 
     assert not cli._is_listening(profile, onboard.read_status(profile))
+
+
+def test_daemon_start_does_not_announce_a_listener_that_never_came_up(
+        profile, monkeypatch, capsys):
+    """It printed the raw field, so after `wait_until_live` had spent twenty
+    seconds NOT being satisfied by a stale file, it announced «daemon live»
+    from that same file — the one command a person runs when they suspect the
+    listener is gone, answering with the thing that misled them."""
+    import argparse
+
+    stale = _wrote(profile, state="live", heartbeat=time.time() - 7200)
+    monkeypatch.setattr(cli, "_require_profile", lambda args: profile)
+    monkeypatch.setattr(cli.onboard, "ensure_daemon", lambda p: stale)
+
+    cli.cmd_daemon(argparse.Namespace(action="start"))
+
+    printed = capsys.readouterr().out
+    assert "daemon live" not in printed
+    assert "daemon offline" in printed
+
+
+def test_the_banner_does_not_head_a_dead_session_as_live(
+        profile, monkeypatch, capsys):
+    """Over every bare `collab`, and it read `· live` for a session that had
+    been dead for days."""
+    _wrote(profile, state="live", heartbeat=time.time() - 7200)
+    monkeypatch.setattr(cli.SessionProfile, "current", classmethod(lambda cls: profile))
+
+    cli.print_overview()
+
+    printed = capsys.readouterr().out
+    assert "· live" not in printed
+    assert "· offline" in printed

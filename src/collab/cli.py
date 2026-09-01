@@ -551,15 +551,21 @@ def _take_lock(profile: SessionProfile, *, role: str, hub_pid: int = 0) -> None:
     ), profile.home)
 
 
-def _is_listening(profile: SessionProfile, status: dict[str, Any]) -> bool:
-    """Is a listener actually attached, or does a file merely say one was?
+def _effective(profile: SessionProfile, status: dict[str, Any]) -> str:
+    """What the daemon is ACTUALLY doing, with the pid put to the question.
 
     Same file and same correction as `collab status`: `status.json` is what the
     daemon last wrote about itself, and a killed one never got to take it back.
-    Read raw —which is what this did in three places— a join straight after a
-    SIGKILL printed «listening» with nothing attached at all.
+    Read raw —which is what five places here did— a join straight after a
+    SIGKILL printed «listening», `daemon start` printed «daemon live» after
+    waiting twenty seconds for a daemon that never came up, and the banner over
+    every command read «· live» for a session that had been dead for days.
     """
-    return daemon_state(status, running=is_running(profile) is not None) == "live"
+    return daemon_state(status, running=is_running(profile) is not None)
+
+
+def _is_listening(profile: SessionProfile, status: dict[str, Any]) -> bool:
+    return _effective(profile, status) == "live"
 
 
 def _lock_blocks_us(session_id: str = "") -> "lockfile.Lock | None":
@@ -3182,7 +3188,7 @@ def cmd_daemon(args: argparse.Namespace) -> int:
         print("stopped" if stop_daemon(profile) else "was not running")
         return 0
     status = onboard.ensure_daemon(profile)
-    ok(f"daemon {status.get('state', 'starting')}")
+    ok(f"daemon {_effective(profile, status)}")
     return 0
 
 
@@ -3344,7 +3350,7 @@ def print_overview() -> None:
 
     profile = SessionProfile.current()
     if profile is not None:
-        state = read_status(profile).get("state", "?")
+        state = _effective(profile, read_status(profile))
         where = (f"{profile.name} (host)" if profile.name == profile.host_name
                  else f"{profile.name} → {profile.host_name}")
         print(f"  in session {c(profile.session_id, '36')} as {where} · {state}\n")
