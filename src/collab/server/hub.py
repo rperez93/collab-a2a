@@ -14,7 +14,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..protocol import DEFAULT_ROOM, Envelope, KIND_HELLO, KIND_PRESENCE
+from ..protocol import (DEFAULT_ROOM, Envelope, KIND_HELLO, KIND_PRESENCE,
+                        bounded_meta)
 from .store import Store
 
 QUEUE_MAXSIZE = 1000
@@ -137,6 +138,10 @@ class Hub:
         person = self.store.participant_by_id(participant_id)
         if person is None:
             return
+        # Bounded here too, not only at /join: a KIND_HELLO envelope can be sent
+        # straight over A2A with any body a participant likes, and it lands in
+        # the roster the same way. See collab.protocol.bounded_meta.
+        hello = bounded_meta(hello)
         meta = dict(person.meta)
         meta.update({k: v for k, v in hello.items() if v not in ("", None)})
         self.store.update_meta(participant_id, meta)

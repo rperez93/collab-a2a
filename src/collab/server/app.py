@@ -40,8 +40,14 @@ from ..protocol import (
     KIND_PRESENCE,
     KIND_SYSTEM,
     KIND_TASK,
+    MAX_DETAIL,
+    MAX_NAME,
+    MAX_ROOM,
+    MAX_TITLE,
     REST_PREFIX,
     RPC_PATH,
+    bounded_meta,
+    clip,
     new_id,
 )
 from .auth import BearerBackend, RateLimiter, new_secret
@@ -160,8 +166,13 @@ def create_app(
         if not ok:
             raise HTTPException(status_code=401, detail=reason)
 
-        requested = str(body.get("name") or "agent")
-        hello = dict(body.get("hello") or {})
+        # Both come from an untrusted joiner and both are then replayed to every
+        # roster, so they are bounded before they reach the store rather than
+        # trusted: an unbounded name is a megabyte amplified across the room on a
+        # timer, and hello is capped to scalars so nothing nested slips into meta
+        # unsanitised. See collab.protocol.bounded_meta.
+        requested = clip(str(body.get("name") or "agent"), MAX_NAME) or "agent"
+        hello = bounded_meta(body.get("hello"))
 
         # A NAME CLASHES ONLY WITH SOMEBODY WHO IS HERE. Two people answering
         # to one name makes every direct message a guess, which is why this is
@@ -265,7 +276,7 @@ def create_app(
     async def create_room(request: Request) -> dict[str, Any]:
         user = _require(request)
         body = await request.json()
-        name = str(body.get("name") or "").strip()
+        name = clip(str(body.get("name") or ""), MAX_ROOM)
         if not name:
             raise HTTPException(status_code=400, detail="room name is required")
         await asyncio.to_thread(store.add_room, name, user.name)
@@ -342,7 +353,7 @@ def create_app(
     async def rename(request: Request) -> dict[str, Any]:
         user = _require(request)
         body = await request.json()
-        new_name = str(body.get("name") or "").strip()
+        new_name = clip(str(body.get("name") or ""), MAX_NAME)
         if not new_name:
             raise HTTPException(status_code=400, detail="name is required")
         if store.name_taken(new_name, except_id=user.id):
@@ -400,10 +411,10 @@ def create_app(
         if action not in TASK_STATES:
             raise HTTPException(status_code=400, detail=f"unknown action {action!r}")
 
-        task_id = str(body.get("id") or "")
+        task_id = clip(str(body.get("id") or ""), MAX_NAME)
         if action == "propose":
             task_id = task_id or new_id("T")
-            title = str(body.get("title") or "").strip()
+            title = clip(str(body.get("title") or ""), MAX_TITLE)
             if not title:
                 raise HTTPException(status_code=400, detail="a task needs a title")
             owner = None
@@ -411,7 +422,7 @@ def create_app(
             existing = store.get_task(task_id)
             if existing is None:
                 raise HTTPException(status_code=404, detail=f"no such task {task_id!r}")
-            title = str(body.get("title") or existing["title"])
+            title = clip(str(body.get("title") or existing["title"]), MAX_TITLE)
             owner = existing["owner"]
             if action == "claim":
                 # A FINISHED TASK IS NOT AVAILABLE WORK, and that is said first:
@@ -444,7 +455,7 @@ def create_app(
             store.upsert_task, task_id,
             title=title, state=TASK_STATES[action], owner=owner,
             room=body.get("room") or DEFAULT_ROOM, created_by=user.name,
-            detail=str(body.get("detail") or ""),
+            detail=clip(str(body.get("detail") or ""), MAX_DETAIL),
         )
         await hub.publish(Envelope(
             kind=KIND_TASK, sender=user.name, sender_id=user.id,

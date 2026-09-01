@@ -72,6 +72,51 @@ def scrub(text: str) -> str:
     return "".join(ch for ch in text if unicodedata.category(ch) != "Cc")
 
 
+#: Bounds on the free text a participant declares about itself. Every one of
+#: these arrives from an untrusted joiner and is then stored and replayed to
+#: every roster, so it is capped in length and count rather than trusted.
+MAX_NAME = 64
+MAX_ROOM = 64
+MAX_TITLE = 200
+MAX_DETAIL = 4_000
+MAX_META_VALUE = 500
+MAX_META_KEYS = 24
+
+
+def clip(value: Any, limit: int) -> str:
+    """A single field, trimmed and length-bounded on the way into the store."""
+    return str(value).strip()[:limit]
+
+
+def bounded_meta(raw: Any) -> dict[str, Any]:
+    """A joiner's self-declared identity, capped so it cannot be a weapon.
+
+    The join handshake's `hello` — focus, repo, branch and the like — is chosen
+    by an untrusted joiner and stored straight into that participant's meta,
+    which every roster snapshot then carries to everyone in the room every few
+    seconds. Unbounded, a megabyte of display text is amplified across the whole
+    session on a timer; and a nested `stats` or `activity` object smuggled in
+    here would land in meta without ever passing the sanitiser that field has of
+    its own. So only scalar values survive, each key and string is clipped, and
+    the number of keys is capped. Anything richer belongs on its own endpoint.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key, value in raw.items():
+        if len(out) >= MAX_META_KEYS:
+            break
+        if not isinstance(key, str):
+            continue
+        if isinstance(value, bool) or isinstance(value, (int, float)):
+            out[key[:MAX_META_VALUE]] = value
+        elif isinstance(value, str):
+            out[key[:MAX_META_VALUE]] = value[:MAX_META_VALUE]
+        # A dict or a list is dropped on purpose: stats and activity reach the
+        # roster through their own sanitised endpoints, never through hello.
+    return out
+
+
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
