@@ -67,8 +67,16 @@ MIN_GAP = 90.0
 #: A turn that has not finished in this long is not going to.
 TIMEOUT = 540.0
 
-#: How long to leave a failed batch before trying it again.
+#: How long to leave a failed batch before trying it again. Multiplied by the
+#: number of consecutive failures, up to BACKOFF_STEPS of them.
 RETRY_PAUSE = 120.0
+BACKOFF_STEPS = 15
+
+#: Consecutive failures after which this is no longer a hiccup. A wake aimed at
+#: a session that has since been closed fails identically every time, and from
+#: the inside that is indistinguishable from a quiet room — so past this it is
+#: said out loud rather than retried forever in silence.
+GIVE_UP_AFTER = 3
 
 
 def _wake_home(root: Path) -> Path:
@@ -372,6 +380,7 @@ class Waker:
         self.now = now
         self.last_wake = 0.0
         self.failed_at = 0.0
+        self.failures = self._load_failures()
 
     # --- state on disk ---------------------------------------------------------
 
@@ -469,8 +478,10 @@ class Waker:
         now = self.now()
         if now - self.last_wake < config.min_gap:
             return False, f"woken {int(now - self.last_wake)}s ago"
-        if self.failed_at and now - self.failed_at < RETRY_PAUSE:
-            return False, f"retrying in {int(RETRY_PAUSE - (now - self.failed_at))}s"
+        waited = now - self.failed_at
+        if self.failed_at and waited < self.retry_pause:
+            broken = f" ({self.failures} failures)" if self.broken else ""
+            return False, f"retrying in {int(self.retry_pause - waited)}s{broken}"
         if self.outstanding():
             return True, "a batch is waiting to be delivered"
         if not self.waiting():
@@ -528,19 +539,51 @@ class Waker:
         self.ensure()
         self.last_wake = self.now()
         self.failed_at = 0.0
+        self.failures = 0
+        self._save_failures()
         with contextlib.suppress(OSError):
             os.replace(batch.path, self.done / batch.name)
         self._trim()
 
     def failed(self, batch: Batch) -> None:
-        """Keep the batch and try again later.
+        """Keep the batch, back off, and start counting.
 
         Losing the work of an agent that was briefly broken is worse than
         delivering it twice, and delivering it twice is what the framing prompt
-        is there to make harmless.
+        is there to make harmless. But «keep retrying» on its own is how a wake
+        aimed at a session that has since been closed fails forever in silence:
+        the delivery errors, the batch is kept, nothing is ever read, and from
+        the inside it looks exactly like a quiet room. So the failures are
+        counted, the retries slow down, and past GIVE_UP_AFTER the count is
+        loud enough for `collab check` and the room to be told.
         """
         self.last_wake = self.now()
         self.failed_at = self.now()
+        self.failures += 1
+        self._save_failures()
+
+    @property
+    def retry_pause(self) -> float:
+        """Slower each time, so a dead target costs a probe an hour, not a minute."""
+        return RETRY_PAUSE * min(max(self.failures, 1), BACKOFF_STEPS)
+
+    @property
+    def broken(self) -> bool:
+        """Has this failed often enough to be somebody's problem?"""
+        return self.failures >= GIVE_UP_AFTER
+
+    def _save_failures(self) -> None:
+        # On disk because the daemon restarts, and a counter that resets with it
+        # would keep the alarm permanently one restart away from sounding.
+        with contextlib.suppress(OSError):
+            self.ensure()
+            (self.home / "failures").write_text(str(self.failures))
+
+    def _load_failures(self) -> int:
+        try:
+            return int((self.home / "failures").read_text().strip())
+        except (OSError, ValueError):
+            return 0
 
     def _trim(self, keep: int = 20) -> None:
         try:

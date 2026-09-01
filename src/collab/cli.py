@@ -1728,6 +1728,24 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
             f"arm a watcher on `{exe} listen --follow` that outlives the turn,"
             f" or poll `{exe} recv --wait 60` every turn")
 
+    # 2b. If a wake is standing in for a watcher, is it actually working?
+    #
+    #     This is the one failure the rest of the loop cannot see. A wake aimed
+    #     at a session that has since been closed fails identically every time:
+    #     the batch is kept, the retry comes round, nothing is ever delivered,
+    #     and every other check here is perfectly happy — the daemon is live,
+    #     something is nominally arranged to read, and the agent that would
+    #     notice is precisely the agent not being reached.
+    woken = status.get("wake") or {}
+    if woken.get("broken"):
+        add("wake", CHECK_FAIL,
+            f"the wake has failed {woken.get('failures')} times —"
+            " nothing is reaching you",
+            f"{exe} wake show   (then re-arm from inside the session you want"
+            " woken; its id changes when you restart it)")
+    elif woken.get("armed") and not armed:
+        add("wake", CHECK_OK, "a wake is armed and delivering")
+
     # 3. Has anything been left undrained? ONLY MEANINGFUL WHILE POLLING.
     #
     #    This began as «is anything ACTING on it», and unread was the evidence.
@@ -1955,6 +1973,12 @@ def cmd_wake(args: argparse.Namespace) -> int:
         print(f"  notify    {shlex.join(config.notify)}")
     print(f"  waiting   {live.get('pending', 0)} unread,"
           f" {live.get('batches', 0)} undelivered")
+    if live.get("broken"):
+        fail(f"  failing   {live.get('failures')} times in a row —"
+             " nothing is reaching you")
+        print(dim("  re-arm from inside the session you want woken; a thread id"
+                  " does not survive"))
+        print(dim("  the session it names being closed."))
     last = live.get("last_wake")
     print(f"  last woke {activity.elapsed(last) if last else 'never'}")
     print(f"  reading   {'somebody is' if reading else c('nobody is', '33')}")

@@ -231,6 +231,8 @@ def a_daemon(profile):
                               attended=lambda: False)
     daemon._waking = None
     daemon._wake_note = ""
+    daemon._wake_alarmed = False
+    daemon._http = None
     return daemon
 
 
@@ -349,6 +351,107 @@ def test_set_show_and_off(profile, monkeypatch):
     code, out = _run(profile, monkeypatch, action="off")
     assert code == 0
     assert not wake.read_config(root).enabled
+
+
+# --- a delivery that will never work again -------------------------------------
+#
+# The nastiest shape of this feature's failure, and the one the rest of the
+# checks cannot see. A wake aimed at a session the user has since closed fails
+# identically every time: the batch is kept, the retry comes round, nothing is
+# ever read. The daemon is live, something is nominally arranged to listen, and
+# the only party who could notice is the one not being reached.
+
+def test_repeated_failures_are_counted_and_slowed(tmp_path):
+    w, clock = waker(tmp_path)
+    wake.write_config(tmp_path, wake.WakeConfig(command=["false"], settle=0,
+                                                min_gap=0))
+    w.note(chat())
+    clock[0] += 1
+    batch = w.take()
+    pauses = []
+    for _ in range(4):
+        w.failed(batch)
+        pauses.append(w.retry_pause)
+        clock[0] += w.retry_pause + 1
+    assert w.failures == 4
+    assert pauses == sorted(pauses) and pauses[0] < pauses[-1], "no back-off"
+
+
+def test_it_stops_being_a_hiccup_and_becomes_a_fault(tmp_path):
+    w, clock = waker(tmp_path)
+    wake.write_config(tmp_path, wake.WakeConfig(command=["false"], settle=0))
+    w.note(chat())
+    clock[0] += 1
+    batch = w.take()
+    for i in range(wake.GIVE_UP_AFTER):
+        assert not w.broken, f"called it broken after only {i} failures"
+        w.failed(batch)
+    assert w.broken
+
+
+def test_the_count_survives_the_daemon_restarting(tmp_path):
+    """Otherwise the alarm stays permanently one restart away from sounding."""
+    w, clock = waker(tmp_path)
+    w.note(chat())
+    clock[0] += 1
+    batch = w.take()
+    for _ in range(wake.GIVE_UP_AFTER):
+        w.failed(batch)
+    again, _ = waker(tmp_path)
+    assert again.failures == wake.GIVE_UP_AFTER and again.broken
+
+
+def test_one_delivery_clears_the_fault(tmp_path):
+    w, clock = waker(tmp_path)
+    w.note(chat())
+    clock[0] += 1
+    batch = w.take()
+    for _ in range(wake.GIVE_UP_AFTER + 2):
+        w.failed(batch)
+    w.succeeded(batch)
+    assert w.failures == 0 and not w.broken
+    assert waker(tmp_path)[0].failures == 0
+
+
+def test_the_room_is_told_when_nothing_is_reaching_the_agent(profile):
+    """The agent cannot report this itself — by definition it is not there."""
+    daemon = a_daemon(profile)
+    said = []
+
+    class Http:
+        async def post(self, url, **kwargs):
+            said.append(kwargs.get("json", {}).get("text", ""))
+
+    daemon._http = Http()
+    wake.write_config(daemon.paths.root, wake.WakeConfig(
+        command=[sys.executable, "-c", "import sys; sys.exit(1)"],
+        settle=0, min_gap=0, timeout=10))
+
+    async def keep_failing():
+        for _ in range(wake.GIVE_UP_AFTER):
+            daemon.waker.note(chat())
+            await _wake_once(daemon)
+            daemon.waker.failed_at = 0.0          # skip the back-off wait
+    asyncio.run(keep_failing())
+
+    assert daemon.waker.broken
+    assert len(said) == 1, "an alarm every retry is an alarm nobody reads"
+    assert "not being reached" in said[0]
+    assert "unread" in said[0]
+
+
+def test_the_check_fails_on_a_wake_that_reaches_nobody(profile, monkeypatch):
+    """Every other check is happy in this state, which is the whole problem."""
+    (profile.dir / "status.json").write_text(json.dumps({
+        "state": "live", "heartbeat": time.time(), "unread_messages": 0,
+        "wake": {"armed": True, "broken": True, "failures": 5}}))
+    monkeypatch.setattr(cli, "is_running", lambda p: 4242)
+    monkeypatch.setattr(cli, "watchers", lambda p: [])
+    results = cli._checks(profile)
+    verdicts = {r["check"]: r["verdict"] for r in results}
+    assert verdicts.get("wake") == cli.CHECK_FAIL
+    broken = [r for r in results if r["check"] == "wake"][0]
+    assert broken["fix"], "a failure without its fix is a scolding"
 
 
 # --- reaching the session that is already open ---------------------------------

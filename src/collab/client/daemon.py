@@ -348,6 +348,7 @@ class Daemon:
             or (time.time() - last_poll(profile)) < wake.POLL_COUNTS_AS_LISTENING)
         self._waking: asyncio.Task | None = None
         self._wake_note = ""
+        self._wake_alarmed = False
 
     # --- status ---------------------------------------------------------------
 
@@ -393,6 +394,8 @@ class Daemon:
                 "pending": self.waker.waiting(),
                 "batches": len(self.waker.outstanding()),
                 "last_wake": self.waker.last_wake or None,
+                "failures": self.waker.failures,
+                "broken": self.waker.broken,
                 "note": self._wake_note,
             },
             "version": __version__,
@@ -629,6 +632,7 @@ class Daemon:
             return
         if proc.returncode == 0:
             self.waker.succeeded(batch)
+            self._wake_alarmed = False      # armed again for the next spell
             self._wake_note = f"woke the agent with {wake.summarise(batch.events())}"
             if config.notify:
                 await self._notify(config.notify, batch)
@@ -636,7 +640,39 @@ class Daemon:
             self.waker.failed(batch)
             tail = (out or b"").decode(errors="replace").strip()[-200:]
             logger.warning("wake failed (exit %s) %s", proc.returncode, tail)
-            self._wake_note = f"the wake command exited {proc.returncode}; will retry"
+            self._wake_note = (f"the wake command exited {proc.returncode}"
+                               f" ({self.waker.failures}x); will retry")
+            await self._wake_is_broken(tail)
+
+    async def _wake_is_broken(self, detail: str) -> None:
+        """Say once, in the room, that messages are landing nowhere.
+
+        The failure this exists for: a wake aimed at a session the user has
+        since closed fails identically every time. The batch is kept, the
+        retries continue, nothing is ever read — and to everyone else it looks
+        like an agent that has gone quiet rather than one that has gone deaf.
+        The agent itself cannot notice, by definition. So the room is told.
+
+        Once per spell of breakage, not once per retry: an alarm that repeats
+        every two minutes is an alarm nobody reads.
+        """
+        if not self.waker.broken or self._wake_alarmed:
+            return
+        self._wake_alarmed = True
+        self._wake_note = (f"the wake command has failed {self.waker.failures}"
+                           f" times — nothing is reaching me. {detail[:120]}")
+        logger.error("%s", self._wake_note)
+        try:
+            await self._http.post(          # type: ignore[union-attr]
+                f"{self.profile.url}{EXT_PREFIX}/messages",
+                headers={"Authorization": f"Bearer {self.profile.token}"},
+                json={"kind": KIND_CHAT, "text":
+                      "my agent is not being reached — the wake command has"
+                      f" failed {self.waker.failures} times, so messages are"
+                      " reaching my machine and going unread. Assume I have not"
+                      " seen anything since."})
+        except (httpx.HTTPError, AttributeError, TypeError) as exc:
+            logger.warning("could not report the broken wake (%r)", exc)
 
     async def _notify(self, argv: list[str], batch: wake.Batch) -> None:
         """Optional: tell something else that a turn happened."""
