@@ -288,7 +288,15 @@ When a delivery keeps failing — the commonest cause being a session that has
 since been closed, taking its thread id or its pane with it — the retries slow
 down, `collab check` fails, and after three attempts the room is told that
 messages are arriving and going unread. The agent cannot report that itself: by
-definition it is the one not being reached.
+definition it is the one not being reached. A delivery that keeps politely
+declining, rather than failing — a pane left in tmux's copy mode, a pager
+nobody quit — is timed instead of counted, and an hour of it says the same
+thing.
+
+The tmux route types only into the process it was armed against, checked by
+both the pane's process id and the command running in it. A pane whose agent
+has since exited, or one tmux has handed the same id to on a new server, is
+refused rather than typed into.
 
 **Arming a wake stores a command your daemon will run unattended**, every time
 a message arrives. Treat it accordingly: `wake show` prints the armed command in

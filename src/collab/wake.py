@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import re
 import shlex
@@ -213,7 +214,8 @@ class Recipe:
                  "pid": pid, "command": running}
         out = []
         for part in self.argv:
-            if part[1:-1] in whole and part.startswith("{"):
+            if (part.startswith("{") and part.endswith("}")
+                    and part[1:-1] in whole):
                 # A whole argv entry: passed as one argument, never re-parsed,
                 # so it needs no quoting and must not get any.
                 out.append(whole[part[1:-1]])
@@ -1007,17 +1009,55 @@ class Waker:
     }
 
     def _load_state(self) -> dict[str, float]:
-        stored: dict[str, Any] = {}
-        with contextlib.suppress(OSError, ValueError):
-            stored = json.loads((self.home / "state.json").read_text())
+        """Read the throttle, and fail CLOSED when it cannot be read.
+
+        Every default here is the permissive value — no last attempt, no
+        failure, no backoff — which is right for a first run and exactly wrong
+        for a file that exists and will not parse. Those are different facts and
+        were being answered the same way: a state file half-written by a power
+        loss read as «never woken», so a wake thirty minutes into its backoff
+        fired immediately and re-raised an alarm the room had already heard.
+        The honest reading of «I cannot tell how throttled I am» is to throttle.
+
+        Non-finite numbers are rejected outright. `json.loads` accepts the bare
+        literals NaN and Infinity, so a corrupted file reaches this — not only a
+        hostile one — and both defeat the arithmetic they land in: every
+        comparison against NaN is False, so the backoff simply falls through.
+        """
+        path = self.home / "state.json"
+        defaults = dict(self._STATE_FIELDS)
+        try:
+            raw = path.read_text()
+        except OSError:
+            return defaults                 # never written: a genuine first run
+        try:
+            stored = json.loads(raw)
+        except ValueError:
+            stored = None
         if not isinstance(stored, dict):
-            stored = {}
+            # It exists and says nothing usable. Hold for one cycle rather than
+            # treating damage as permission.
+            now = self.now()
+            return {**defaults, "attempted_at": now, "failed_at": now}
         out = {}
-        for name, default in self._STATE_FIELDS.items():
+        damaged = False
+        for name, default in defaults.items():
             try:
-                out[name] = float(stored.get(name, default))
+                value = float(stored.get(name, default))
             except (TypeError, ValueError):
-                out[name] = default
+                value, damaged = default, True
+            if not math.isfinite(value):
+                # NaN is worse than a wrong number: every comparison against it
+                # is False, so a gate written as «wait until enough time has
+                # passed» simply falls through. Replacing it with the default
+                # is not enough either — the default is «no backoff at all».
+                value, damaged = default, True
+            out[name] = value
+        if out["failures"] < 0:
+            out["failures"], damaged = 0.0, True
+        if damaged:
+            now = self.now()
+            out["attempted_at"] = out["failed_at"] = now
         return out
 
     def _save_state(self) -> None:
@@ -1110,7 +1150,15 @@ def summarise(events: Iterable[dict[str, Any]], limit: int = 3) -> str:
 MAX_NAME = 40
 
 
-def _printable(value: str) -> str:
-    """One line, no control characters, bounded."""
+def printable(value: str) -> str:
+    """One line, no control characters, bounded.
+
+    Used both to clean a name before it reaches a terminal and to judge whether
+    a target the user typed is a plausible session id at all.
+    """
     cleaned = "".join(ch for ch in value if ch.isprintable())[:MAX_NAME]
     return cleaned.strip()
+
+
+#: The old spelling, kept because it reads better at the call sites inside here.
+_printable = printable

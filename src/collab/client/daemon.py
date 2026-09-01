@@ -345,6 +345,7 @@ class Daemon:
         self.waker = wake.Waker(
             self.paths.root, profile.session_id, attended=self._somebody_reads)
         self._waking: asyncio.Task | None = None
+        self._waking_batch: wake.Batch | None = None
         self._wake_note = ""
         #: What we put on the roster on the woken turn's behalf, so that we
         #: retract that and nothing the agent said for itself.
@@ -581,17 +582,29 @@ class Daemon:
         """Do not walk away from a turn that is halfway through.
 
         A wake abandoned by shutdown was neither completed nor failed: its
-        batch stayed outstanding, the next daemon delivered it again, and the
-        child it had started was still running — detached, by design, so it
-        outlived the daemon that spawned it. A duplicate turn on top of a live
-        one, in the same checkout.
+        batch stayed outstanding, and the next daemon delivered it again while
+        the child it had started was still running — detached, by design, so it
+        outlives the daemon that spawned it.
 
-        So it is given a moment to finish properly. If it will not, the batch
-        is explicitly kept for a retry rather than left in an answer nobody
-        wrote down.
+        BE HONEST ABOUT WHAT THIS BUYS. For a delivery into a live session it
+        genuinely prevents that: those finish in under a second and the shield
+        below outlasts them. For the fresh-run recipes a real turn takes
+        minutes, so this will nearly always time out and the duplicate still
+        happens on the next start. What changes there is that it is recorded
+        rather than silent, and not counted against the wake.
+
+        The batch is the one this turn was working on, passed in. Asking
+        `take()` for whatever is lying around was wrong: by the time a
+        successful turn's slow notify command times out here, its batch is
+        already in `done/`, so `take()` cut a NEW batch from the messages that
+        had arrived since and marked them deferred — inventing both a failure
+        and the start of a deferral run, for messages nothing had yet tried to
+        deliver.
         """
         turn = self._waking
+        batch = self._waking_batch
         self._waking = None
+        self._waking_batch = None
         if turn is None or turn.done():
             self._drain_wake_result(turn)
             return
@@ -600,8 +613,7 @@ class Daemon:
         except (asyncio.TimeoutError, asyncio.CancelledError):
             logger.warning("shutting down with a woken turn still running;"
                            " its batch is kept for the next start")
-            batch = self.waker.take()
-            if batch is not None:
+            if batch is not None and batch.path.exists():
                 self.waker.try_again_later(batch)
         except Exception as exc:                        # noqa: BLE001
             logger.warning("the woken turn ended badly (%r)", exc)
@@ -662,6 +674,9 @@ class Daemon:
         batch = self.waker.take()
         if batch is None:
             return
+        # Held alongside the task, so shutdown can defer the batch this turn is
+        # actually working on rather than whatever `take()` would cut next.
+        self._waking_batch = batch
         self._waking = asyncio.create_task(self._wake(batch))
 
     async def _wake(self, batch: wake.Batch) -> None:
@@ -869,19 +884,51 @@ class Daemon:
             logger.debug("notify command failed (%r)", exc)
 
     async def _heartbeat_loop(self) -> None:
+        """The housekeeping: announce, hold the lock, wake, refresh, write status.
+
+        EVERY ITERATION IS GUARDED, because this task dying is invisible. It is
+        created and then not awaited until shutdown, so an exception escaping it
+        stops the loop while `_connect_forever` carries on: messages keep landing
+        in the inbox, and meanwhile status.json goes permanently stale, the lock
+        stops being refreshed and the roster stops updating. Every reader then
+        reports a dead daemon that is in fact alive and recording — the exact
+        «a fact that was true when written, still read as current» this project
+        keeps having to fix.
+
+        One bad float in a state file was enough to do it. That particular route
+        is closed, but the shape of the mistake is not: this loop now runs the
+        wake as well, so anything that ever throws in there would take the
+        daemon's whole housekeeping with it. A logged, skipped iteration is a
+        far better failure than a silent shutdown of everything else.
+        """
         last_refresh = 0.0
         while not self._stop.is_set():
-            self._announce_locally()
-            self._refresh_lock()
-            await self._maybe_wake()
-            if (time.time() - last_refresh) > SNAPSHOT_REFRESH and self.state == "live":
-                if self._http is not None:
-                    await self._refresh_snapshot(self._http)
-                    await self._refresh_stats_from_command()
-                    await self._report_stats(self._http)
-                    await self._report_activity(self._http)
-                last_refresh = time.time()
-            self.write_status()
+            try:
+                self._announce_locally()
+                self._refresh_lock()
+                # GUARDED SEPARATELY, so that a wake which fails every time
+                # cannot keep the status write below it from ever running. An
+                # outer guard alone kept the task alive and still left
+                # status.json stale for as long as the fault lasted.
+                try:
+                    await self._maybe_wake()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:           # noqa: BLE001
+                    logger.exception("the wake failed; the rest carries on")
+                if (time.time() - last_refresh) > SNAPSHOT_REFRESH \
+                        and self.state == "live":
+                    if self._http is not None:
+                        await self._refresh_snapshot(self._http)
+                        await self._refresh_stats_from_command()
+                        await self._report_stats(self._http)
+                        await self._report_activity(self._http)
+                    last_refresh = time.time()
+                self.write_status()
+            except asyncio.CancelledError:
+                raise                       # shutdown, not a fault
+            except Exception:               # noqa: BLE001
+                logger.exception("heartbeat iteration failed; carrying on")
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._stop.wait(), timeout=STATUS_HEARTBEAT)
 

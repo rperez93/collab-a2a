@@ -979,6 +979,60 @@ def test_last_woke_means_delivered_not_attempted(tmp_path):
     assert w.last_delivery > 0
 
 
+# --- state that cannot be read ------------------------------------------------
+#
+# Every default in the throttle is the permissive value, which is right for a
+# first run and exactly wrong for a file that exists and will not parse. Those
+# are different facts and were answered the same way, so damage read as
+# permission: a wake half an hour into its backoff fired immediately.
+
+def test_a_state_file_that_will_not_parse_holds_rather_than_fires(tmp_path):
+    w, clock = waker(tmp_path, command=["true"], settle=0, min_gap=90)
+    w.note(chat())
+    clock[0] += 60
+    assert w.due()[0] is True                # would fire, given readable state
+
+    (w.home / "state.json").write_text('{"failures": 2, "attempted')  # truncated
+    again = wake.Waker(tmp_path, "s_test", now=lambda: clock[0])
+    due, why = again.due()
+    assert not due, "an unreadable throttle was read as no throttle"
+    assert "tried" in why
+
+
+def test_a_state_file_that_was_never_written_is_a_first_run(tmp_path):
+    """Absent and unreadable are different facts and deserve different answers."""
+    w, clock = waker(tmp_path, command=["true"], settle=0, min_gap=90)
+    w.note(chat())
+    clock[0] += 60
+    assert not (w.home / "state.json").exists()
+    assert w.due()[0] is True
+
+
+def test_impossible_numbers_cannot_defeat_the_backoff(tmp_path):
+    """`json.loads` accepts bare NaN and Infinity, so a corrupted file reaches
+    this and not only a hostile one — and every comparison against NaN is
+    False, so the retry gate simply fell through while `broken` was true."""
+    for poison in ("NaN", "-Infinity", "Infinity"):
+        home = tmp_path / poison.strip("-")
+        w, clock = waker(home, command=["true"], settle=0, min_gap=0)
+        w.note(chat())
+        clock[0] += 1
+        w.failed(w.take())
+        (w.home / "state.json").write_text(
+            '{"failures": 9, "failed_at": %s, "attempted_at": %s}'
+            % (poison, poison))
+        again = wake.Waker(home, "s_test", now=lambda: clock[0])
+        due, _why = again.due()             # must not raise, must not fire
+        assert not due, f"{poison} let it fire while broken"
+
+
+def test_a_negative_failure_count_is_not_believed(tmp_path):
+    w, clock = waker(tmp_path, command=["true"])
+    (w.home / "state.json").write_text('{"failures": -5}')
+    again = wake.Waker(tmp_path, "s_test", now=lambda: clock[0])
+    assert again.failures == 0
+
+
 # --- reaching the session that is already open ---------------------------------
 #
 # The point of the whole feature. A fresh run in the same checkout is a
@@ -1132,6 +1186,68 @@ def test_an_armed_watcher_is_always_somebody_reading(profile, monkeypatch):
     daemon.bridge = type("B", (), {"clients": 0})()
     monkeypatch.setattr(d, "last_poll", lambda p: 0.0)
     assert daemon._somebody_reads() is True
+
+
+def test_one_bad_value_does_not_stop_the_daemon_housekeeping(profile, monkeypatch):
+    """The heartbeat task is created and not awaited until shutdown, so an
+    exception escaping it stops the loop while the feed carries on: status.json
+    goes permanently stale and every reader then reports a dead daemon that is
+    alive and recording. The wake runs inside that loop now, so anything that
+    ever throws in it would do exactly this."""
+    daemon = a_daemon(profile)
+    daemon._stop = asyncio.Event()
+    daemon.state = "live"
+    daemon._http = None
+    daemon.bridge = type("B", (), {"clients": 0, "port": 0})()
+    monkeypatch.setattr(daemon, "_announce_locally", lambda: None)
+    monkeypatch.setattr(daemon, "_refresh_lock", lambda: None)
+
+    beats = []
+    monkeypatch.setattr(daemon, "write_status", lambda: beats.append(1))
+
+    async def explode():
+        raise OverflowError("cannot convert float infinity to integer")
+    monkeypatch.setattr(daemon, "_maybe_wake", explode)
+
+    async def run_briefly():
+        task = asyncio.create_task(daemon._heartbeat_loop())
+        await asyncio.sleep(0.05)
+        daemon._stop.set()
+        await asyncio.wait_for(task, timeout=5)
+
+    asyncio.run(run_briefly())
+    assert beats, "one bad value silently stopped the daemon writing status"
+
+
+def test_shutdown_does_not_invent_a_failure_out_of_new_messages(profile):
+    """A slow notify can outlive the shield. By then the delivered batch is in
+    `done/`, so asking `take()` for «whatever is outstanding» cut a NEW batch
+    from what had arrived since and marked it deferred — inventing both a
+    failure and the start of a deferral run for messages nothing had tried."""
+    daemon = a_daemon(profile)
+    wake.write_config(daemon.paths.root, wake.WakeConfig(command=["true"]))
+    daemon.waker.note(chat("delivered fine"))
+    delivered = daemon.waker.take()
+    daemon.waker.succeeded(delivered)
+    daemon.waker.note(chat("arrived while shutting down"))
+
+    async def a_turn_that_will_not_finish():
+        await asyncio.sleep(30)
+
+    async def shut_down():
+        turn = asyncio.create_task(a_turn_that_will_not_finish())
+        daemon._waking = turn
+        daemon._waking_batch = delivered      # already completed
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(daemon._finish_any_wake(), timeout=20)
+        turn.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await turn
+
+    asyncio.run(shut_down())
+    assert daemon.waker.failed_at == 0, "shutdown invented a failure"
+    assert daemon.waker.deferred_for == 0, "and a deferral run"
+    assert daemon.waker.waiting() == 1, "and swallowed the new message"
 
 
 def test_the_turn_is_marked_finished_even_when_it_crashes(profile):

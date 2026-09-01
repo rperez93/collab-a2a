@@ -2013,6 +2013,15 @@ def cmd_wake(args: argparse.Namespace) -> int:
                 print(dim("  nothing was armed — a wake pointed at the wrong"
                           " session is worse than none"))
                 return 1
+            if target and target != wk.printable(target):
+                # A control character survives quoting perfectly well and then
+                # stops the command ever starting — a NUL is rejected by exec,
+                # not by the shell — leaving a wake armed that can only fail.
+                # Better an error now than a permanent silent failure later.
+                fail("that target contains characters a session id cannot have")
+                print(dim("  nothing was armed. Read it from your own"
+                          " environment rather than pasting it"))
+                return 1
             # A NON-EMPTY STRING IS NOT A SESSION. tmux hands out `%0` again on
             # every new server, so a stale pane id does not fail — it points at
             # a stranger, and the daemon types a line into whatever is there.
