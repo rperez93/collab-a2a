@@ -168,7 +168,16 @@ def _monitor_hint(profile: SessionProfile, status: dict[str, Any]) -> None:
               " reconnects,"))
     print(dim("  but nothing re-arms a watcher you lost: if yours stops, arm it"
               " again."))
-    print(dim(f"  `{exe} status` says whether anything is still listening."))
+    print(dim("  Nothing notices for you either — which is what the loop below"
+              " is for."))
+    print()
+    print(f"  {c('then, on a loop', '36')}  {exe} check   "
+          + dim("— every few turns, all session"))
+    print(dim("  SILENT when you are listening, acting and saying what you are"
+              " doing."))
+    print(dim("  When it is not silent, what it prints is what to fix — do that"
+              " before"))
+    print(dim("  carrying on, because it is why the other agent is waiting."))
 
 
 def _print_snapshot(snapshot: dict[str, Any], me: str) -> None:
@@ -364,8 +373,36 @@ def cmd_host(args: argparse.Namespace) -> int:
         print(dim(f"  (local only — LAN address is http://{local_ip()}:{cfg.port})"))
 
     _monitor_hint(profile, status)
+    _opening_message(profile)
     print()
     return 0
+
+
+def _opening_message(profile: SessionProfile) -> None:
+    """What the host should say first, offered because it is always the same.
+
+    A session opens with both agents connected and neither certain the other is
+    listening — which is the moment that decides whether the next hour is
+    collaboration or two monologues. The first message is worth spending on
+    establishing that, and «say hello» does not: it is answered by an agent that
+    read one line and armed nothing.
+
+    So the suggestion asks for the one thing that cannot be faked politely — a
+    reply that names what they are working on — and states the contract that the
+    rest of the session runs on.
+    """
+    exe = Path(sys.argv[0]).name
+    heading("Say this to the room first, before any work")
+    print(f'  {exe} send "you are in. Three things, please, then we start:')
+    print('    1. arm a watcher that outlives your turn'
+          f' (`{exe} listen --follow`)')
+    print(f'    2. reply with what you are working on — `{exe} working \'<what>\''
+          ' --files <paths>`')
+    print('    3. act on what arrives: do the thing, then say what you did.')
+    print(f'    Run `{exe} check` every few turns; it answers all three."')
+    print(dim("  An agent that answers this has proved it is reading; one that"
+              " does not"))
+    print(dim("  is the failure you would otherwise discover an hour from now."))
 
 
 def _hosting_is_not_the_fallback(resumable: bool = False) -> None:
@@ -1620,6 +1657,144 @@ def cmd_update(args: argparse.Namespace) -> int:
     return 0 if update.prompt_and_maybe_update(info, assume_yes=args.yes) else 1
 
 
+#: What `collab check` reports, and what each verdict means for the caller.
+#:
+#: `fail` is «this session is not working»; `warn` is «it is working and you are
+#: not holding up your end». Both are worth acting on and only the first is worth
+#: a non-zero exit, because a loop that treats an unanswered message as a crash
+#: stops being run.
+CHECK_OK, CHECK_WARN, CHECK_FAIL = "ok", "warn", "fail"
+
+
+def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
+    """Is this agent actually collaborating, or only connected?
+
+    Arming a monitor once and forgetting it is the failure this exists to catch,
+    and it cannot be caught by looking at any single thing: the daemon can be
+    live while nothing reads the feed, something can read the feed while nobody
+    acts on it, and an agent can act on everything while never saying what it is
+    doing. So each of those is asked separately, and each answer carries the
+    command that fixes it — an agent that is told what is wrong and not how to
+    fix it will improvise, and improvising here means hosting a second session
+    or asking a human.
+    """
+    from . import activity as act
+
+    status = read_status(profile)
+    pid = is_running(profile)
+    state = daemon_state(status, running=pid is not None)
+    exe = Path(sys.argv[0]).name
+    out: list[dict[str, Any]] = []
+
+    def add(name, verdict, detail, fix=""):
+        out.append({"check": name, "verdict": verdict, "detail": detail, "fix": fix})
+
+    # 1. Is there anything to collaborate with?
+    if pid is None:
+        add("listener", CHECK_FAIL, "the listener is not running",
+            f"{exe} daemon start")
+    elif state != "live":
+        add("listener", CHECK_WARN, f"the daemon is {state}",
+            "it retries on its own; if this persists the hub may be gone")
+    else:
+        add("listener", CHECK_OK, f"connected as {profile.name}")
+
+    # 2. Is anything READING what arrives?
+    armed = len(watchers(profile)) + int(status.get("ws_clients") or 0)
+    since_poll = time.time() - last_poll(profile)
+    if armed:
+        add("watching", CHECK_OK, f"{armed} armed on the feed")
+    elif last_poll(profile) and since_poll <= POLL_COUNTS_AS_LISTENING:
+        add("watching", CHECK_WARN,
+            f"polling — last drained {_ago_seconds(since_poll)}",
+            f"a watcher on `{exe} listen --follow` hears things as they land")
+    else:
+        add("watching", CHECK_FAIL, "nothing is reading this session",
+            f"arm a watcher on `{exe} listen --follow` that outlives the turn,"
+            f" or poll `{exe} recv --wait 60` every turn")
+
+    # 3. Is anything ACTING on it? Unread is the only honest evidence: messages
+    #    arrived, and nobody has taken them.
+    unread = int(status.get("unread") or 0)
+    if unread:
+        add("acting", CHECK_WARN, f"{unread} unread — nobody has acted on them",
+            f"{exe} recv --limit 50, then DO what they ask")
+    else:
+        add("acting", CHECK_OK, "nothing waiting")
+
+    # 4. Does anybody know what this agent is doing?
+    mine = act.read_local(profile)
+    if act.is_working(mine):
+        add("activity", CHECK_OK, act.describe(mine))
+    elif mine.get("state") == act.IDLE:
+        add("activity", CHECK_OK, act.describe(mine))
+    else:
+        add("activity", CHECK_WARN, "you have not said what you are doing",
+            f'{exe} working "<objective>" --files <paths>')
+    return out
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    """One command an agent can run on a loop to prove it is still collaborating.
+
+    Not a status display: a verdict, with an exit code, so it can be armed on a
+    timer or a hook and mean something without being read by a person.
+    """
+    profile = SessionProfile.current()
+    if profile is None:
+        if args.json:
+            print(json.dumps({"ok": False, "checks": [
+                {"check": "session", "verdict": CHECK_FAIL,
+                 "detail": f"no active session in {collab_home()}",
+                 "fix": "collab join"}]}))
+        else:
+            fail(f"no active collab session in {collab_home()}")
+            print(dim("  `collab join` finds one running on this machine"))
+        return 1
+
+    results = _checks(profile)
+    worst = (CHECK_FAIL if any(r["verdict"] == CHECK_FAIL for r in results)
+             else CHECK_WARN if any(r["verdict"] == CHECK_WARN for r in results)
+             else CHECK_OK)
+
+    if args.json:
+        print(json.dumps({"ok": worst != CHECK_FAIL, "verdict": worst,
+                          "session": profile.session_id, "checks": results},
+                         indent=2))
+        return 1 if worst == CHECK_FAIL else 0
+
+    # SILENT WHEN THERE IS NOTHING TO DO. This is built to be run on a loop,
+    # and a loop that reports success every few minutes fills the context it is
+    # supposed to protect — the agent stops reading it, which is the same as not
+    # running it. So: nothing to say, say nothing. What prints is what to fix.
+    if worst == CHECK_OK and not args.verbose:
+        return 0
+
+    mark = {CHECK_OK: c("✓", "32"), CHECK_WARN: c("!", "33"), CHECK_FAIL: c("✗", "31")}
+    if args.verbose:
+        heading(f"collab check · {profile.session_id}")
+        for r in results:
+            print(f"  {mark[r['verdict']]} {r['check']:<10} {r['detail']}")
+            if r["fix"] and r["verdict"] != CHECK_OK:
+                print(f"    {dim('→ ' + r['fix'])}")
+        print()
+        if worst == CHECK_OK:
+            print(dim("  listening, acting, and saying what you are doing"))
+        print()
+        return 1 if worst == CHECK_FAIL else 0
+
+    # Only what is wrong, and only what to do about it.
+    for r in results:
+        if r["verdict"] == CHECK_OK:
+            continue
+        print(f"  {mark[r['verdict']]} {r['check']:<10} {r['detail']}")
+        if r["fix"]:
+            print(f"    {dim('→ ' + r['fix'])}")
+    print(dim("  fix these before you carry on — they are why the other agent"
+              " is waiting"))
+    return 1 if worst == CHECK_FAIL else 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     profile = SessionProfile.current()
     if profile is None:
@@ -2526,6 +2701,7 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ]),
     ("Yourself and this install", [
         ("status", "your connection state and how to watch it"),
+        ("check", "silent when all is well; says what to fix when it is not"),
         ("name [value]", "show or set your display name"),
         ("url", "reprint the join line (host)"),
         ("kick <name>", "remove a participant (host)"),
@@ -2705,6 +2881,15 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--json", action="store_true")
     add_session_flag(t)
     t.set_defaults(func=cmd_task)
+
+    ck = sub.add_parser("check",
+                        help="run on a loop: silent when all is well, says what"
+                             " to fix when it is not")
+    ck.add_argument("--json", action="store_true")
+    ck.add_argument("--verbose", "-v", action="store_true",
+                    help="show every check, including the ones that passed")
+    add_session_flag(ck)
+    ck.set_defaults(func=cmd_check)
 
     wk = sub.add_parser("working", help="say what you are doing, so nobody asks")
     wk.add_argument("what", nargs="*", help="the objective, in one line")

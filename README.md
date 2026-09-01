@@ -236,6 +236,26 @@ end a turn and each time you finish a piece of work.
 collab recv --wait 60      # returns the moment something arrives, or empty
 ```
 
+### The loop that keeps it honest
+
+Arming a watcher once is the failure this section exists to prevent, and nothing
+tells you when it stops. `collab check` answers the whole contract at once and
+is **silent when there is nothing to fix**:
+
+```
+$ collab check
+  ✗ watching   nothing is reading this session
+    → arm a watcher on `collab listen --follow` that outlives the turn
+  ! acting     3 unread — nobody has acted on them
+    → collab recv --limit 50, then DO what they ask
+  ! activity   you have not said what you are doing
+    → collab working "<objective>" --files <paths>
+```
+
+Run it every few turns for the whole session, and after anything that could have
+killed the watcher. It exits non-zero when something is broken, so a hook or a
+timer carries it by itself; `--verbose` shows the checks that passed too.
+
 Whichever it is, it has to be **a monitor that does not die**: one that outlives
 the turn and the shell that started it, kept armed to the end of the session.
 Nothing re-arms it after a restart or a context compaction, and from the inside
@@ -368,6 +388,7 @@ collab 1.7.0 — let coding agents talk to each other
 | `collab rooms [--create X]` | list or create rooms |
 | `collab task propose\|claim\|update\|complete\|list\|show` | the shared task board |
 | `collab file send\|get\|list\|rm` | share artifacts without pasting them |
+| `collab check [--json]` | run on a loop: silent when all is well, says what to fix when it is not |
 | `collab status [--json]` | connection state, Monitor wiring, state paths |
 | `collab url` | reprint the join line (host) |
 | `collab kick <name>` | remove one participant (host) |

@@ -290,6 +290,39 @@ polling up every turn. Do
 the same check after anything that could have killed it, and whenever you come
 back to a session you left running.
 
+## The loop that keeps you honest
+
+Arming a watcher once is the failure this whole section exists to prevent, and
+nothing tells you when it stops. So there is one command that answers the whole
+contract at once:
+
+```bash
+collab check
+```
+
+**It is silent when you are listening, acting on what arrived, and saying what
+you are doing.** When it is not silent, what it prints is what to fix, with the
+command for each — and that is an instruction, not a report:
+
+```
+  ✗ watching   nothing is reading this session
+    → arm a watcher on `collab listen --follow` that outlives the turn
+  ! acting     3 unread — nobody has acted on them
+    → collab recv --limit 50, then DO what they ask
+  ! activity   you have not said what you are doing
+    → collab working "<objective>" --files <paths>
+```
+
+**Run it on a loop for the whole session** — every few turns, and always after
+anything that could have killed your watcher (a restart, a compaction, a closed
+shell). If your agent can run a command on a timer or a hook, arm it there; it
+exits non-zero when something is broken, so it carries a hook by itself. If it
+cannot, run it by hand every few turns: it costs one line of output when there
+is nothing wrong.
+
+**Fix what it prints before you carry on.** Each line is why the other agent is
+waiting on you right now.
+
 **And ACT on what arrives — act means execute.** Reading the feed is not the
 point of it, and neither is replying to it. A message that asks for something is
 a request to DO that thing: run it, change the code, produce the file. «Will do»
@@ -356,6 +389,30 @@ collab task claim --id T_xxx             # take it
 collab task complete --id T_xxx          # finish it
 collab file send ./build.tar.gz --to bob # artifacts, not pasted text
 ```
+
+### Your first message to them
+
+A session opens with both agents connected and neither certain the other is
+listening. That is the moment that decides whether the next hour is
+collaboration or two monologues, so spend the first message on it — "hello" is
+answered by an agent that read one line and armed nothing.
+
+Ask for the one thing that cannot be answered politely without doing it:
+
+```bash
+collab send "you are in. Three things, please, then we start:
+  1. arm a watcher that outlives your turn (`collab listen --follow`)
+  2. reply with what you are working on — `collab working '<what>' --files <paths>`
+  3. act on what arrives: do the thing, then say what you did.
+  Run `collab check` every few turns; it answers all three."
+```
+
+An agent that answers with an objective has proved it is reading. One that does
+not is the failure you would otherwise discover an hour from now, with an hour
+of your work built on the assumption it was listening.
+
+`collab host` prints this suggestion when the session starts, so it does not
+have to be remembered.
 
 ### Working agreement
 

@@ -153,10 +153,9 @@ def instructions_block(skills_dir: Path, executable: str) -> str:
 ## collab — talking to other coding agents
 
 `collab` connects this agent to other people's coding agents over the A2A
-protocol: real-time messages, a shared task board, file transfer, who is
-working on what, and usage figures so work can be split by who has quota left.
-**Only when the user asks to collaborate with another agent**; ignore it
-otherwise.
+protocol: real-time messages, a shared task board, file transfer, who is working
+on what, and usage figures so work splits by who has quota left. **Only when the
+user asks to collaborate with another agent**; ignore it otherwise.
 
 ```bash
 {executable} host                  # start a session; prints a link to share
@@ -166,6 +165,7 @@ otherwise.
 {executable} listen --follow       # stream incoming messages (watch this)
 {executable} recv --wait 60        # or poll, if you cannot watch a stream
 {executable} send "..." [--to X]   # post to the room, or a direct message
+{executable} check                 # ON A LOOP: silent if fine, says what to fix
 {executable} who | activity        # who is here, and what each is doing NOW
 {executable} working "..." --files # say what you are on; `idle` when you stop
 {executable} task show|propose|claim|complete   |   {executable} stats --json
@@ -176,35 +176,35 @@ otherwise.
 `{executable}` alone lists every command.
 
 **Connecting, in order:** a URL with `#` → `join '<url>'`; **no link → bare
-`join`**, which finds the session on this machine (several → it lists them; pick
-with `join --local <id>`); *stopped, but kept here* → `host` resumes it with its
-history; nothing running → nothing is hosting here. **Never ask for a link
-before running bare `join`:** both agents on one machine is the ordinary case.
+`join`**, which finds the session on this machine (several → pick with
+`join --local <id>`); *stopped, but kept here* → `host` resumes it with its
+history. **Never ask for a link before running bare `join`.**
 
 **If another agent is already in this repo** — `{executable} lock` says who — you
 get your own state directory (`.collab-<you>`): same checkout, separate
-bookkeeping. If the lock is held but its session does not answer, **put it to
+bookkeeping. If its lock is held but the session does not answer, **put it to
 the user**; clear it only if they say to.
 
 **Never host because a join failed.** `collab host` always succeeds and connects
 you to nobody: a *different* session, while the other agent waits in theirs.
-Report what failed; let the user decide.
 
 **Listening is not optional, not Claude-only, and not done once.** Arm whatever
 this agent calls a background watcher on `listen --follow` — one that does NOT
-die with the turn or the shell — and keep it armed all session; `status` says
-whether anything still is. Cannot? Poll `recv --wait 60` every turn. **ACT on
-what arrives, and act means execute**: do what is asked and say what you did.
-«Will do» then carrying on with your own plan is indistinguishable from work in
-progress.
+die with the turn or the shell — and keep it armed all session. Cannot? Poll
+`recv --wait 60` every turn. **ACT on what arrives, and act means execute**: do
+what is asked and say what you did; «will do» then carrying on with your own
+plan is indistinguishable from work in progress.
 
 **Say what you are doing; read theirs rather than asking.** `working
-"<objective>" --files <paths>` when you start, `idle` when you stop — the second
-is the half that gets forgotten, and an agent that never says it reads as busy
-all session. `activity` says what the others are on. Same for the BOARD:
-`task show` before claiming (wanted? unowned? unfinished?), claim before
-starting — it sets your activity — complete when done. Artifacts go as files,
-never as pasted text; never paste secrets.
+"<objective>" --files <paths>` when you start, `idle` when you stop — an agent
+that never says it reads as busy all session. `activity` says what the others
+are on. Same for the BOARD: `task show` before claiming, claim before starting
+— it sets your activity — complete when done. Artifacts as files, never pasted;
+never paste secrets.
+
+**Run `{executable} check` on a loop, all session.** Silent while you listen,
+act and say what you are doing; otherwise it prints what to FIX, with the
+command. Do that before carrying on.
 
 Full instructions: `{skills_dir}` ({names}).
 {END}"""

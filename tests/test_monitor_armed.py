@@ -139,8 +139,11 @@ def test_it_names_the_fallback_for_an_agent_with_no_watcher(profile, capsys):
 
 
 def test_it_points_at_the_way_to_check(profile, capsys):
+    """And at running that check on a LOOP: arming once is the failure this
+    whole section exists to prevent, so pointing at a one-off would repeat it."""
     out = _hint(profile, capsys)
-    assert "status" in out
+    assert "check" in out
+    assert "on a loop" in out
 
 
 @pytest.mark.parametrize("command", ["host", "join"])
