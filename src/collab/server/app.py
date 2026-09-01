@@ -464,13 +464,21 @@ def create_app(
             # apparently under way again, and the agent that "claimed" it was
             # about to redo something already done.
             #
-            # `update` is guarded by the same rule and was not. It sets WORKING
-            # with no check at all, so `update` on a completed task rewound the
-            # numerator exactly as a re-proposal did — the same invisible move
-            # of the shared figure, reached by a different verb. `failed` is
-            # deliberately not in the set: that is outstanding work that went
-            # wrong, and retrying it is the point.
-            if action in ("claim", "update") and existing["state"] in FINISHED_STATES:
+            # THE DISCRIMINATOR IS THE STATE, NOT THE VERB. This guard listed
+            # the verbs it had seen misbehave — first `claim`, then `update` —
+            # and every verb left off it was another way back in: `fail` on a
+            # completed task dropped the numerator, and `cancel` dropped the
+            # numerator AND the denominator, both with nothing on the line to
+            # account for the fall. The reasoning that kept them out was about
+            # failing or withdrawing work IN PROGRESS, which nobody wants
+            # blocked; it was never an argument for failing work already
+            # finished, and that is a rewind rather than a retry.
+            #
+            # So the question is asked once, of the task: is this over? `fail`
+            # and `cancel` on SUBMITTED, WORKING or FAILED are untouched, which
+            # is the retry path the exclusion was protecting, intact. `FAILED`
+            # stays out of FINISHED_STATES for exactly that reason.
+            if existing["state"] in FINISHED_STATES:
                 raise HTTPException(
                     status_code=409,
                     detail=(f"{task_id} is "

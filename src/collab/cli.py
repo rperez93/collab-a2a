@@ -74,30 +74,6 @@ def c(text: str, code: str) -> str:
     return f"\033[{code}m{text}\033[0m" if _tty() else text
 
 
-def ok(msg: str) -> None:
-    print(f"{c('[ok]', '32')}   {msg}")
-
-
-def warn(msg: str) -> None:
-    print(f"{c('[warn]', '33')} {msg}")
-
-
-def fail(msg: str) -> None:
-    print(f"{c('[fail]', '31')} {msg}", file=sys.stderr)
-
-
-def plural(count: int, noun: str) -> str:
-    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
-
-
-def dim(msg: str) -> str:
-    return c(msg, "2")
-
-
-def heading(msg: str) -> None:
-    print(f"\n{c(msg, '1')}")
-
-
 def said(value: Any) -> str:
     """One field somebody else chose, on its way to this terminal.
 
@@ -114,6 +90,47 @@ def said(value: Any) -> str:
     reason, and printing four remote fields raw. See collab.protocol.scrub.
     """
     return scrub(str(value if value is not None else ""))
+
+
+def ok(msg: str) -> None:
+    print(f"{c('[ok]', '32')}   {msg}")
+
+
+def warn(msg: str) -> None:
+    print(f"{c('[warn]', '33')} {said(msg)}")
+
+
+def fail(msg: str) -> None:
+    """An error, on its way to a terminal — scrubbed here, not by the caller.
+
+    THE ERROR PATH IS THE PATH NOBODY WRAPS. Every print site that shows remote
+    text was found and scrubbed, and this one was missed by all of them,
+    because a message that says something went wrong does not look like a
+    message that renders somebody else's name. It does: `HubError` carries the
+    hub's `detail` verbatim, and those details embed a display name, a task id
+    a client chose, and a batch name — so a participant who joins under a name
+    made of escape sequences reaches this terminal the moment their collaborator
+    is told «already claimed by <them>». On stderr, which is unbuffered.
+
+    Scrubbed inside the printer rather than at each `except HubError`, so a new
+    call site is safe by having been written rather than by being remembered.
+    `ok` cannot do the same — seventeen of its callers pass deliberately
+    coloured text, and stripping those escapes would print the codes as
+    rubbish — so `ok` is scrubbed at its call sites instead.
+    """
+    print(f"{c('[fail]', '31')} {said(msg)}", file=sys.stderr)
+
+
+def plural(count: int, noun: str) -> str:
+    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
+
+
+def dim(msg: str) -> str:
+    return c(msg, "2")
+
+
+def heading(msg: str) -> None:
+    print(f"\n{c(msg, '1')}")
 
 
 def _preflight_update(args: argparse.Namespace) -> None:

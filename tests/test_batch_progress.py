@@ -207,6 +207,53 @@ def test_the_task_board_scrubs_what_it_prints(client, session, host_headers,
     assert "\x1b[2J" not in out and "\x1b]0;" not in out and "\r" not in out
 
 
+def test_an_error_from_the_hub_cannot_rewrite_the_readers_terminal(
+        cli_profile, monkeypatch, capsys):
+    """The error path was missed by every print site that was swept.
+
+    A message saying something went wrong does not look like a message that
+    renders somebody else's name — but `HubError` carries the hub's `detail`
+    verbatim, and those details embed a display name, a task id a client chose,
+    and a batch name. A participant joins under a hostile name, claims a task,
+    and the escape reaches their collaborator's terminal the moment that
+    collaborator is told «already claimed by <them>». On stderr, unbuffered,
+    with nothing for the victim to copy or click.
+
+    Worse, one of those three details was added by the fix for the silent
+    rewind — so a fix in one commit reintroduced, one layer up, the defect the
+    previous commit had closed.
+    """
+    from collab import cli
+    from collab.client.hub_client import HubError
+
+    class _Angry(_FakeHub):
+        def task_action(self, *a, **kw):
+            raise HubError(f"T_1 is already claimed by {HOSTILE}")
+
+    monkeypatch.setattr(cli, "_client", lambda p: _Angry())
+    cli.cmd_task(_cli_args(action="claim", title=None, id="T_1", detail=None,
+                           files=None, room=None, open=False))
+
+    err = capsys.readouterr().err
+    assert "\x1b[2J" not in err and "\x1b]0;" not in err
+    assert "\r" not in err and "\x07" not in err
+    assert "FAKE" in err, "the text of the error survives; the commands do not"
+
+
+def test_the_scrub_is_in_the_printer_so_a_new_error_site_is_safe_by_default():
+    """Every call site was swept and one was still missed.
+
+    Which is the argument for putting it where writing the call is enough:
+    `fail` and `warn` scrub what they are handed, so an `except` block added
+    next month is protected without anybody remembering. `ok` cannot — seventeen
+    of its callers pass deliberately coloured text and stripping those escapes
+    would print the codes as rubbish — so `ok` stays scrubbed at its call sites.
+    """
+    from collab import cli
+
+    assert "\x1b[2J" not in cli.said(HOSTILE)
+
+
 def test_the_status_line_never_exceeds_the_width_it_was_given():
     """The fallback was built and returned without being measured again.
 
@@ -526,6 +573,62 @@ def test_updating_a_finished_task_is_refused_like_claiming_one(
     assert r.status_code == 409
     assert "rather than reopening" in r.json()["detail"]
     assert _figures(client, host_headers)["done"] == 1
+
+
+@pytest.mark.parametrize("verb", ["claim", "update", "complete", "fail", "cancel"])
+def test_no_verb_can_move_a_finished_task_back_out_of_the_count(
+        verb, client, session, host_headers):
+    """One test per verb, because the defect was a guard that listed verbs.
+
+    It named the ones it had been caught by — `claim`, then `update` — and
+    every verb left off it was another way in. `fail` on a completed task
+    dropped the numerator; `cancel` dropped the numerator and the denominator
+    at once. Both had the signature of the bug this feature exists to prevent:
+    the shared figure falling with nothing on the line to account for it.
+
+    A single test over the guard would pass while four of the five verbs were
+    still open, which is how the guard came to list verbs in the first place.
+    The question belongs to the task — is this over? — so it is asked once, and
+    asked here five times.
+    """
+    _start(client, host_headers)
+    tasks = [_propose(client, host_headers, f"task {i}") for i in range(2)]
+    for task in tasks:
+        _act(client, host_headers, "complete", task["id"])
+    before = _figures(client, host_headers)
+    assert before["percent"] == 100
+
+    r = client.post("/ext/collab/v1/tasks", headers=host_headers,
+                    json={"action": verb, "id": tasks[0]["id"]})
+    assert r.status_code == 409, f"{verb} reopened finished work"
+
+    after = _figures(client, host_headers)
+    assert (after["done"], after["total"]) == (before["done"], before["total"])
+    assert after["percent"] == 100, "and the bar did not move"
+
+
+@pytest.mark.parametrize("state", ["TASK_STATE_SUBMITTED", "TASK_STATE_WORKING",
+                                   "TASK_STATE_FAILED"])
+@pytest.mark.parametrize("verb", ["fail", "cancel"])
+def test_unfinished_work_can_still_be_failed_or_withdrawn(
+        verb, state, client, session, host_headers):
+    """The property the verb list was protecting, kept.
+
+    Failing work that is in progress and withdrawing work that is outstanding
+    are the documented forward moves, and a guard that asked about the verb
+    instead of the state could only protect them by leaving a hole. Asking
+    about the state protects them exactly.
+    """
+    _start(client, host_headers)
+    task = _propose(client, host_headers, "the work")
+    if state == "TASK_STATE_WORKING":
+        _act(client, host_headers, "claim", task["id"])
+    elif state == "TASK_STATE_FAILED":
+        _act(client, host_headers, "fail", task["id"])
+
+    r = client.post("/ext/collab/v1/tasks", headers=host_headers,
+                    json={"action": verb, "id": task["id"]})
+    assert r.status_code == 200, f"{verb} on {state} must still work"
 
 
 def test_a_failed_task_can_still_be_picked_back_up(client, session, host_headers):
