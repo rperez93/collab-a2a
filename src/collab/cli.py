@@ -422,6 +422,14 @@ def _opening_message(profile: SessionProfile) -> None:
     print(dim("  An agent that answers this has proved it is reading; one that"
               " does not"))
     print(dim("  is the failure you would otherwise discover an hour from now."))
+    # SAID HERE, OR THE DENOMINATOR IS WRONG ALL SESSION. A batch counts the
+    # tasks proposed while it is open, so a guest who never learns one exists
+    # keeps proposing work outside it — and the shared figure quietly stops
+    # describing the whole job while both agents go on trusting it.
+    print(dim(f"  Splitting a defined body of work? `{exe} batch start"
+              " \"<name>\"` first, and"))
+    print(dim("  say so in the same message: tasks proposed while it is open"
+              " are counted in it."))
 
 
 def _hosting_is_not_the_fallback(resumable: bool = False) -> None:
@@ -1218,7 +1226,15 @@ def _describe_batch(figures: dict[str, Any] | None, *, action: str = "status") -
         print(dim('  no batch — open one with `collab batch start "<name>"`'))
         return 0
 
-    heading(f"{figures['id']}  {figures['name']}")
+    # CLOSED GOES IN THE HEADING, not only in the `state` row four lines down.
+    # With no batch open this command falls back to the last one closed, and a
+    # closed batch at 100% and a live batch at 100% differed by one word in a
+    # row whose other value is «open» — which is exactly close enough to read
+    # as the same thing at a glance, on the one reading somebody stops working
+    # on.
+    closed = figures.get("state") == batch_progress.CLOSED
+    heading(f"{figures['id']}  {figures['name']}"
+            + (c("  · CLOSED", "33") if closed else ""))
     total = int(figures.get("total") or 0)
     done = int(figures.get("done") or 0)
     pct = batch_progress.percent(done, total)
@@ -1240,7 +1256,13 @@ def _describe_batch(figures: dict[str, Any] | None, *, action: str = "status") -
         # which moves the bar FORWARDS, and an unexplained jump is as
         # confusing as an unexplained drop.
         print(f"  {'withdrawn':<12} {withdrawn} cancelled, out of the count")
-    print(f"  {'state':<12} {figures.get('state', '?')}")
+    if closed:
+        since = activity.elapsed({"since": figures.get("closed_at")})
+        print(f"  {'state':<12} "
+              + c(f"closed{f' {since} ago' if since else ''}"
+                  " — nothing is open, and nothing new is being counted", "33"))
+    else:
+        print(f"  {'state':<12} open")
     print(f"  {'opened by':<12} {figures.get('opened_by') or '?'}")
 
     holding = figures.get("holding") or []

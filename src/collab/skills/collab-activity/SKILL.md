@@ -1,6 +1,6 @@
 ---
 name: collab-activity
-description: Say what you are working on and when you stop, and read what the other agents are doing right now, without asking them. Use when starting or finishing a piece of work in a collab session, when about to claim or propose a task on the shared board, when you need to know whether the other agent is busy or free, before touching files somebody else may be in, or when the user asks "what is the other agent doing".
+description: Say what you are working on and when you stop, and read what the other agents are doing right now, without asking them. Use when starting or finishing a piece of work in a collab session, when about to claim or propose a task on the shared board, when you need to know whether the other agent is busy or free, before touching files somebody else may be in, when saying how far along a shared batch of work is, or when the user asks "what is the other agent doing".
 ---
 
 # Saying what you are doing, and reading what they are
@@ -134,6 +134,31 @@ A board that only some of the work reaches is a board nobody trusts, and then
 everybody is back to asking.
 
 
+## How much of it is done
+
+When the session has a **batch** open, the board is also a denominator. The hub
+counts completed tasks over the tasks in the batch, and everyone reads the one
+figure:
+
+```bash
+collab batch status      # ████░░ 58%  7/12, and who holds the outstanding five
+```
+
+Nobody reports a percentage, which is the point: an agent that says 90% and is
+then killed goes on saying 90%, and its collaborator waits for a tenth that
+nobody is doing. `collab working` is what you are doing **now**; the batch is
+how much is left, and only `task complete` moves it — claiming moves nothing.
+
+A task you propose while a batch is open is counted in it. So the rule above
+has a second edge here: work you keep off the board is work the shared figure
+does not know about, and the bar then describes a smaller job than the real one.
+
+**The bar goes backwards when scope grows** — 7/10 becoming 7/12 takes 70% down
+to 58%. That is the number being honest. The counts are shown beside it so the
+drop reads as more work rather than lost work; report it as "scope grew by
+two", never as a slip and never as something to smooth over.
+
+
 ## What not to do
 
 - **Do not narrate.** One line per piece of work, not per file you open.
@@ -142,3 +167,6 @@ everybody is back to asking.
 - **Do not use it for messages.** It answers *what are you doing*; anything you
   want them to read, act on or reply to is `collab send`.
 - **Do not ask an agent what it is doing** when `collab activity` will say.
+- **Do not state a percentage of your own.** "About 80% there" alongside a
+  batch at 3/12 is two numbers where the session had one, and the other agent
+  plans against whichever it read last. Complete tasks; quote `batch status`.

@@ -667,6 +667,31 @@ def test_batch_status_prints_nothing_numeric_for_an_empty_batch(
     assert "nothing in this batch yet" in out
 
 
+def test_a_closed_batch_at_100_percent_cannot_be_mistaken_for_a_live_one(
+        cli_profile, monkeypatch, capsys):
+    """With nothing open, this command falls back to the last batch closed.
+
+    A finished-and-closed batch and a batch that has just reached 100% differed
+    by one word in a `state` row four lines below the number, whose other value
+    is «open» — close enough to read as the same thing at a glance, on exactly
+    the reading somebody stops working on. So «closed» goes in the heading,
+    where the eye lands first.
+    """
+    from collab import cli
+
+    hub = _FakeHub({"id": "B_1", "name": "the migration", "state": "closed",
+                    "opened_by": "host", "closed_at": time.time() - 1200,
+                    "total": 3, "done": 3, "withdrawn": 0, "outstanding": 0,
+                    "percent": 100, "complete": True, "holding": []})
+    monkeypatch.setattr(cli, "_client", lambda p: hub)
+
+    assert cli.cmd_batch(_cli_args(action="status", name=None)) == 0
+    out = capsys.readouterr().out
+    heading = out.strip().splitlines()[0]
+    assert "CLOSED" in heading, "before the reader reaches the figure"
+    assert "nothing is open" in out and "20m ago" in out
+
+
 def test_collab_status_withholds_a_batch_figure_it_can_no_longer_refresh(
         cli_profile, monkeypatch, capsys):
     """`collab status` reads a file the daemon wrote, and that daemon may have

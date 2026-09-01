@@ -169,21 +169,18 @@ work splits by who has quota left. **Only when the user asks to collaborate.**
 {executable} who | activity        # who is here, and what each is doing NOW
 {executable} working "..." --files # say what you are on; `idle` when you stop
 {executable} task show|propose|claim|complete   |   {executable} stats --json
+{executable} batch start|status    # a batch of work; the HUB counts % done
 {executable} file send|get         # artifacts, not pasted text
 {executable} kill                  # end the session (data kept)
 ```
 
-`{executable}` alone lists every command.
-
 **Connecting, in order:** a URL with `#` → `join '<url>'`; **no link → bare
-`join`**, which finds the session on this machine (several → pick with
-`join --local <id>`); *stopped, but kept here* → `host` resumes it with its
-history. **Never ask for a link before running bare `join`.**
+`join`** (this machine's session; several → `join --local <id>`); *stopped but
+kept here* → `host` resumes it. **Never ask for a link before bare `join`.**
 
-**If another agent is already in this repo** — `{executable} lock` says who — you
-get your own state directory (`.collab-<you>`): same checkout, separate
-bookkeeping. Lock held but the session silent? **Put it to the user**; clear it
-only if they say to.
+**Another agent already in this repo?** — `{executable} lock` says who — you get
+your own state directory (`.collab-<you>`): same checkout, separate bookkeeping.
+Lock held but the session silent? **Put it to the user**; clear it only if told.
 
 **Never host because a join failed.** `collab host` always succeeds and connects
 you to nobody: a *different* session, while the other agent waits in theirs.
@@ -200,13 +197,16 @@ carrying on with your own plan is indistinguishable from work in progress.
 "<objective>" --files <paths>` when you start, `idle` when you stop — an agent
 that never says it reads as busy all session. `activity` says what the others are
 on. Same for the BOARD: `task show` before claiming, claim before starting — it
-sets your activity — complete when done. Artifacts as files; never paste secrets.
+sets your activity — complete when done. A task proposed while a `batch` is open
+joins it, and the hub counts % done from completions alone — so **put your work
+on the board and never claim progress in prose the board contradicts**. It falls
+when scope grows; that is the truth, not a fault. Files, not pasted secrets.
 
 **Run `{executable} check` on a loop, all session.** Silent while you listen, act
 and say what you are doing; otherwise it prints what to FIX, with the command.
 Do that before carrying on.
 
-Full instructions: `{skills_dir}` ({names}).
+Full instructions: `{skills_dir}` ({names}). `{executable}` lists every command.
 {END}"""
 
 

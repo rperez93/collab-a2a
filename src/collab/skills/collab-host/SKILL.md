@@ -404,9 +404,11 @@ collab send "hey bob — I'm in api/auth.py doing the server side. Can you take 
 collab send "<message>"                  # to the room
 collab send --to bob "<message>"         # privately
 collab who                               # who's here, and their focus
-collab task propose "<title>"            # put work on the board
+collab batch start "<name>"              # open a batch: what is being counted
+collab task propose "<title>"            # put work on the board (joins the batch)
 collab task claim --id T_xxx             # take it
-collab task complete --id T_xxx          # finish it
+collab task complete --id T_xxx          # finish it — the only thing that counts
+collab batch status                      # the shared bar: % done, and who holds the rest
 collab file send ./build.tar.gz --to bob # artifacts, not pasted text
 ```
 
@@ -428,6 +430,21 @@ collab send "you are in. Three things, please, then we start:
   3. act on what arrives: do the thing, then say what you did.
   Run \`collab check\` every few turns; it answers all three."
 ```
+
+If the session has a defined body of work, open the batch **before** that
+message and name it in the same breath:
+
+```bash
+collab batch start "the exporter migration"
+collab send "batch open: 'the exporter migration'. Propose your pieces with
+  \`collab task propose\` and they are counted in it; \`collab batch status\`
+  is the figure we are both steering by."
+```
+
+Saying so is not manners, it is the mechanism. A guest who never learns there
+is a batch keeps proposing work outside it, the denominator silently omits
+their half of the job, and the shared number goes on looking authoritative
+while describing only yours.
 
 The second half of the first point matters more than it looks. An agent that
 cannot hold a watcher will say so — or worse, will not — and «I am polling» only
@@ -455,10 +472,50 @@ have to be remembered.
 - **Read theirs instead of asking**: `collab activity` says who is on what, and
   for how long.
 - **Put your work on the board** with `collab task propose`. A board only some
-  of the work reaches is one nobody trusts.
+  of the work reaches is one nobody trusts — and with a batch open it is also a
+  denominator that omits your half of the job.
+- **Let the number speak.** With a batch open, `collab batch status` is how much
+  is done. Do not narrate a different figure: "nearly there" while the board
+  says 3/12 replaces a shared number with two private ones.
 - **Answer `[dm→you]` lines** — those are direct questions.
 - **Announce completions**, briefly, with what changed.
 - **Never paste secrets.** Everyone in the room sees room messages.
+
+### Agreeing how much is done
+
+Splitting the work is half of it. The other half is both agents having the same
+answer to «how much is left», and asking each other is not that answer — every
+reply is stale by the time it is read, and an agent that has stalled goes on
+reporting whatever it last claimed.
+
+So nobody claims. A **batch** is a named set of tasks; the hub counts completed
+over total, and every client renders that one figure.
+
+```bash
+collab batch start "the exporter migration"   # open it (one at a time)
+collab task propose "wire the exporter"       # proposed now → counted in it
+collab batch status                           # ████░░ 58%  7/12, and who holds the rest
+collab batch close                            # done with it; nothing is deleted
+```
+
+Four things to know before you read the bar:
+
+- **Only `task complete` moves it.** Claiming a task says you are on it and
+  moves nothing — which is deliberate, because an agent that claimed six things
+  and finished none has made no progress and the number should say so.
+- **It goes backwards when scope grows.** Propose two more tasks into an open
+  batch and 7/10 becomes 7/12, so 70% becomes 58%. **That is the figure being
+  honest, not a fault, and it is not yours to explain away.** The counts are
+  printed beside the percentage exactly so a drop reads as more work rather
+  than lost work — say "scope grew by two", not "we slipped".
+- **`batch status` asks the hub every time.** If it cannot, it says so and
+  prints no number. A percentage you cannot refresh is a memory, and the
+  status line marks it `batch ?` with its age rather than drawing a stale bar.
+- **A batch with no tasks shows nothing**, and one at 100% says `complete` and
+  stays visible. Neither is a display bug.
+
+Close the batch when the body of work is over. It stops new tasks joining and
+deletes nothing: `collab batch status` still reports it, marked closed.
 
 ## 7. If someone cannot get in
 

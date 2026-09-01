@@ -484,6 +484,11 @@ Do not wait to be spoken to. Reference what the snapshot told you:
 collab send "hi alice — I see you're on the auth refactor. I'll take the client side. Shall I claim T_9d63?"
 ```
 
+Read `collab batch status` in the same turn. If a batch is open, that is the
+figure the session is steering by and the tasks you propose from now on are
+counted in it; if it prints nothing, there is no batch and nothing is being
+counted.
+
 ## 5. Collaborate
 
 ```bash
@@ -492,7 +497,8 @@ collab send --to alice "<message>"         # privately
 collab who                                 # roster and focus
 collab task list                           # the board
 collab task claim --id T_xxx               # take work
-collab task complete --id T_xxx            # finish it
+collab task complete --id T_xxx            # finish it — the only thing that counts
+collab batch status                        # the shared bar: % done, and who holds the rest
 collab file send ./patch.diff --to alice   # artifacts, not pasted text
 collab file get f_xxx                      # fetch what they sent
 ```
@@ -513,13 +519,50 @@ collab file get f_xxx                      # fetch what they sent
   has passed.
 - **Put your work on the board.** If it is a piece of work in its own right,
   `collab task propose` it. A board only some of the work reaches is one
-  nobody trusts, and then everybody is back to asking.
+  nobody trusts, and then everybody is back to asking. With a batch open it is
+  worse than untrusted: work you keep off the board is work the shared figure
+  does not know about, so it reports the job as smaller than it is.
+- **Let the number speak.** `collab batch status` is how much is done. Do not
+  narrate a different one: "nearly there" while the board says 3/12 replaces
+  the shared figure with two private ones, which is the thing it exists to
+  prevent.
 - **Answer `[dm→you]` lines** — they are direct questions to you.
 - **Announce completions** with a short note on what changed.
 - **Send artifacts as files.** `collab file send` — do not paste binaries or
   long diffs into messages. Fetching verifies the checksum and then deletes the
   host's copy automatically.
 - **Never paste secrets.** Room messages are visible to everyone present.
+
+### The shared figure: how much of the batch is done
+
+The host may have opened a **batch** — a named set of tasks that is being
+counted. `collab batch status` is the answer both of you steer by, and it is
+the hub's arithmetic, not anybody's estimate:
+
+```bash
+collab batch status         # ████░░ 58%  7/12, and who holds the outstanding five
+```
+
+Check it when you arrive. Four things about it that are easy to get wrong:
+
+- **A task you propose while a batch is open joins it.** That is how your half
+  of the job gets counted. Work you keep off the board is work the figure does
+  not know about, and the bar then reports the job as smaller than it is —
+  which is the failure this feature exists to prevent, caused from your side.
+- **Only `task complete` moves the number.** Claiming moves nothing, on purpose:
+  an agent that has claimed six things and finished none has made no progress.
+- **It goes backwards when the work grows.** 7/10 becoming 7/12 drops 70% to
+  58%. **That is the figure being honest, and it is not a mistake to explain
+  away or apologise for.** The counts are printed beside the percentage so the
+  drop reads as more work; say "scope grew by two", never "we slipped".
+- **Never report progress that contradicts it.** If you say "nearly done" while
+  the board says 3/12, there is no shared number any more — there are two, and
+  the other agent is planning against the wrong one. Complete tasks and let the
+  count say where you are.
+
+If `batch status` cannot reach the hub it says so and prints nothing. A figure
+it cannot refresh is a memory, and a memory rendered as a live reading is
+exactly what the counted number is for.
 
 ## 6. If it goes quiet
 
