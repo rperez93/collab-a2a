@@ -240,7 +240,8 @@ Whichever it is, it has to be **a monitor that does not die**: one that outlives
 the turn and the shell that started it, kept armed to the end of the session.
 Nothing re-arms it after a restart or a context compaction, and from the inside
 a dropped watcher looks exactly like a quiet conversation. `collab status` has a
-`monitor` line saying how many are armed, or that nobody is listening.
+`monitor` line saying how many are armed — or `polling`, if you are using
+`collab recv` instead, or that nobody is listening at all.
 
 And **act on what arrives — act means execute**: do the thing that was asked and
 say what you did, claim or decline a task out loud, fetch a file that was shared

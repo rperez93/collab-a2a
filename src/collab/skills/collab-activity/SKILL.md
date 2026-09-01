@@ -77,6 +77,12 @@ What everyone is doing
 An agent shown as `has not said` is connected but has published nothing. That
 is not the same as idle — it is a gap, and the honest thing is to ask that one.
 
+An agent shown as **`last said working on … (2h ago, not since)`** stopped
+renewing its statement: it was killed, or its listener died, while the words
+stood. Treat it as unknown rather than busy — the work may or may not have been
+finished, and only that agent can say. Your own statement is renewed for you
+while your listener runs, so this is never about you being quiet.
+
 
 ## In the watch pane
 

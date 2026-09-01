@@ -23,7 +23,7 @@ from typing import Any
 from . import __version__, activity, lockfile, peers, update
 from .client import onboard
 from .client.daemon import (DaemonPaths, effective_state as daemon_state,
-                            is_running, read_status,
+                            is_running, last_poll, polled, read_status,
                             stop as stop_daemon, stop_orphans,
                             watchers, watching)
 from .client.hub_client import HubClient, HubError
@@ -190,9 +190,13 @@ def _print_snapshot(snapshot: dict[str, Any], me: str) -> None:
         print(f" {mark} {p['name']}{role}  {state}{repo}{focus}{here}")
         # What they are doing now, under their line: the focus is what they
         # said on arrival, and by lunchtime the two are different questions.
-        if (doing := activity.describe(p.get('activity') or {})):
-            tone = '32' if activity.is_working(p.get('activity') or {}) else '2'
-            print(f"      {c(doing, tone)}")
+        #
+        # Only for somebody who is here. An agent that said «working» and was
+        # then killed keeps that word — nothing retracts it — so printing it
+        # under an offline name showed a dead agent at work.
+        doing = p.get("activity") or {}
+        if p.get("connected") and (said := activity.describe(doing)):
+            print(f"      {c(said, '32' if activity.is_working(doing) else '2')}")
 
     if tasks := snapshot.get("tasks"):
         heading("Open tasks")
@@ -204,6 +208,23 @@ def _print_snapshot(snapshot: dict[str, Any], me: str) -> None:
         heading("Recent")
         for e in recent[-8:]:
             print("  " + Envelope.from_dict(e).render_line())
+
+
+#: How recently the inbox must have been drained for polling to count as
+#: listening. A poller is told to drain every turn, and a turn is minutes, not
+#: seconds — so this is generous. Past it, nobody is reading.
+POLL_COUNTS_AS_LISTENING = 600.0
+
+
+def _ago_seconds(seconds: float) -> str:
+    """«12s», «4m», «2h» — the same shape the rest of the output uses."""
+    if seconds < 90:
+        return f"{int(seconds)}s ago"
+    if seconds < 3600:
+        return f"{int(seconds // 60)}m ago"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}h ago"
+    return f"{int(seconds // 86400)}d ago"
 
 
 def _short_state(state: str) -> str:
@@ -871,6 +892,10 @@ def cmd_recv(args: argparse.Namespace) -> int:
     """Drain unread messages; optionally wait for one to arrive."""
     profile = _require_profile(args)
     inbox = Inbox(profile.dir)
+    # Say that somebody is reading, even though nothing is holding a stream:
+    # polling is the documented fallback, and it used to leave `collab status`
+    # telling an agent that nobody was listening while it listened.
+    polled(profile)
     deadline = time.time() + args.wait
     while True:
         events = inbox.take_unread(limit=args.limit, mark=not args.peek)
@@ -1636,7 +1661,18 @@ def cmd_status(args: argparse.Namespace) -> int:
     armed = watchers(profile)
     ws_clients = int(status.get("ws_clients") or 0)
     payload["watchers"] = len(armed) + ws_clients
-    payload["watching"] = payload["watchers"] > 0
+    # A POLL IS THE OTHER HONEST ANSWER. `recv --wait` is what an agent with no
+    # background watcher is told to run, and counting only streams meant that
+    # agent was told, in red, that nobody was listening — while it was doing
+    # exactly what the instructions asked. Kept as a separate figure rather
+    # than folded in: an armed watcher hears a message the moment it lands, a
+    # poller hears it on its next turn, and that difference is worth seeing.
+    since_poll = time.time() - last_poll(profile)
+    payload["polled_seconds_ago"] = (round(since_poll, 1)
+                                     if last_poll(profile) else None)
+    payload["polling"] = payload["polled_seconds_ago"] is not None and \
+        since_poll <= POLL_COUNTS_AS_LISTENING
+    payload["watching"] = payload["watchers"] > 0 or payload["polling"]
     payload["state"] = daemon_state(status, running=pid is not None)
     recorded = status.get("state")
     if recorded and recorded != payload["state"]:
@@ -1653,6 +1689,12 @@ def cmd_status(args: argparse.Namespace) -> int:
         payload["hint"] = (f"NOTHING IS READING THIS SESSION — arm your monitor on "
                            f"`{exe} listen --follow` and keep it armed, or poll "
                            f"`{exe} recv --wait 60` every turn")
+    elif payload["polling"] and not payload["watchers"]:
+        # Not a fault. Worth one line, because a poller only hears anything on
+        # its own next turn, and whoever is waiting for an answer feels that.
+        payload["hint"] = (f"polling, not watching — messages wait for your next "
+                           f"`{exe} recv`; a watcher on `{exe} listen --follow` "
+                           "hears them as they land")
     if pid is None:
         payload["hint"] = (f"the listener is not running — "
                            f"`{exe} daemon start` brings it back")
@@ -1665,8 +1707,17 @@ def cmd_status(args: argparse.Namespace) -> int:
                 "last_seq", "daemon_pid", "monitor_command", "monitor_ws"):
         if payload.get(key) is not None:
             print(f"  {key:<16} {payload[key]}")
-    armed_line = (f"{payload['watchers']} armed" if payload["watching"]
-                  else c("nobody is listening", "31"))
+    if payload["watchers"]:
+        armed_line = f"{payload['watchers']} armed"
+        if payload["polled_seconds_ago"] is not None:
+            armed_line += dim(f" · polled {_ago_seconds(payload['polled_seconds_ago'])}")
+    elif payload["polling"]:
+        armed_line = (f"polling · last drained "
+                      f"{_ago_seconds(payload['polled_seconds_ago'])}")
+    else:
+        armed_line = c("nobody is listening", "31")
+        if payload["polled_seconds_ago"] is not None:
+            armed_line += dim(f" · last poll {_ago_seconds(payload['polled_seconds_ago'])}")
     print(f"  {'monitor':<16} {armed_line}")
     if payload.get("hint"):
         print(f"\n  {c(payload['hint'], '33')}")
@@ -2135,8 +2186,20 @@ def cmd_whoami(args: argparse.Namespace) -> int:
 
     home = collab_home()
     mine = ident.describe(home, resolve_name())
+    # THE NAME EVERYONE ELSE SEES IS THE SESSION'S. It is settled when you join
+    # — from `--name`, from COLLAB_NAME, or from whatever the hub had to assign
+    # to keep names unambiguous — and it is what the roster, the messages and
+    # the direct messages carry. This command read the identity file and the
+    # global config instead, so an agent that joined as `alice` through
+    # COLLAB_NAME was told it was `rafael-perez`: true of the machine, and not
+    # the answer to «which of us am I in this session».
+    profile = SessionProfile.current()
+    local = mine["name"] or resolve_name()
     heading("collab whoami")
-    print(f"  name    {c(mine['name'] or resolve_name(), '1')}")
+    if profile is not None:
+        print(f"  name    {c(profile.name, '1')}" + dim("  (in this session)"))
+    else:
+        print(f"  name    {c(local, '1')}")
 
     colour = mine["color"] or default_color()
     if colour in (None, ""):
@@ -2146,6 +2209,16 @@ def cmd_whoami(args: argparse.Namespace) -> int:
         print(f"  colour  {c(str(colour), '1')}"
               + dim("  (this agent)" if own else "  (from the global config)"))
     print(dim(f"  state   {home}"))
+    if profile is not None:
+        where = ("host" if profile.name == profile.host_name
+                 else f"guest of {profile.host_name}")
+        print(dim(f"  session {profile.session_id} · {where}"))
+        if local and local != profile.name:
+            # Two true answers to one question, which is why it confuses. Say
+            # both, and which one the other agents are using.
+            print(dim(f"\n  this machine calls you {local}; this session calls"
+                      f" you {profile.name}, and that is the name everyone"
+                      " else sees"))
 
     # THE ID FOLLOWS THE DIRECTORY, THE NAME FOLLOWS THE FILE. Usually they
     # agree and there is nothing to say. When they do not — `collab name bob`

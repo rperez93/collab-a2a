@@ -117,6 +117,14 @@ def describe(activity: Any, *, width: int = 0) -> str:
         line = f"idle{' · ' + what if what else ''}"
         return f"{line} ({for_})" if for_ else line
 
+    if is_stale(activity):
+        # Said, and not renewed since. Reported as what it is — a last word —
+        # rather than as what it claims, which is a present tense.
+        stamp = elapsed({"since": activity.get("updated_at")})
+        said = f"working on {what}" if state == WORKING and what else state
+        line = f"last said {said}"
+        return f"{line} ({stamp} ago, not since)" if stamp else line
+
     line = f"working on {what}" if what else "working"
     if activity.get("task"):
         line += f" [{activity['task']}]"
@@ -148,8 +156,40 @@ def elapsed(activity: Any) -> str:
     return f"{int(gap // 86400)}d"
 
 
+#: An activity is re-asserted by the daemon on a timer, so `updated_at` is a
+#: heartbeat and not only the time of the last edit. Past this, nothing has
+#: re-asserted it and it is somebody's last word rather than their current one.
+#:
+#: Generously above the daemon's own interval: a missed refresh, a slow hub or a
+#: minute of reconnecting must not turn a working agent stale. What this catches
+#: is the agent that was killed — its statement stops being renewed and stops
+#: being read as present tense.
+STALE_AFTER = 900.0
+
+
+def is_stale(activity: Any, *, now: float | None = None) -> bool:
+    """Has this gone unrenewed long enough to be history rather than news?"""
+    if not isinstance(activity, dict) or not activity.get("state"):
+        return False
+    try:
+        stamped = float(activity.get("updated_at") or 0)
+    except (TypeError, ValueError):
+        return False
+    if not stamped:
+        return False
+    return ((now or time.time()) - stamped) > STALE_AFTER
+
+
 def is_working(activity: Any) -> bool:
-    return isinstance(activity, dict) and activity.get("state") == WORKING
+    """Working, and recently enough to say so.
+
+    An agent that says `working` and is then killed keeps that word: the
+    statement was true when it was made and nothing retracts it. So the roster
+    showed a dead agent at work — and «who is free» is exactly the question
+    this was built to answer, which makes a stale yes the worst answer it has.
+    """
+    return (isinstance(activity, dict) and activity.get("state") == WORKING
+            and not is_stale(activity))
 
 
 # --- the local copy ---------------------------------------------------------

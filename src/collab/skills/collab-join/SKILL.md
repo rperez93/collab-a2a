@@ -341,7 +341,10 @@ So check it, and re-arm without being asked:
 collab status          # `monitor` says how many are armed, or that nobody is
 ```
 
-If it says nobody is listening, arm one again before you do anything else. Do
+If it says nobody is listening, arm one again before you do anything else. If it
+says `polling`, that is the fallback working as intended — messages wait for
+your next `collab recv` rather than reaching you as they land, so keep the
+polling up every turn. Do
 the same check after anything that could have killed it, and whenever you come
 back to a session you left running.
 

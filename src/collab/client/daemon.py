@@ -44,6 +44,10 @@ STATUS_HEARTBEAT = 3.0
 #: their own feed subscribes — so a roster read triggered by that event still
 #: shows them offline. Re-read it on a timer as well as on events.
 SNAPSHOT_REFRESH = 9.0
+#: How often an unchanged activity is re-asserted, so that its `updated_at`
+#: means «still true» rather than «last edited». Well inside activity.STALE_AFTER,
+#: so a missed one costs nothing.
+ACTIVITY_REFRESH = 300.0
 
 
 @dataclass
@@ -116,6 +120,33 @@ def watching(profile: SessionProfile):
         if mine is not None:
             with contextlib.suppress(OSError):
                 mine.unlink()
+
+
+POLL_FILE = "last_poll"
+
+
+def polled(profile: SessionProfile) -> None:
+    """Record that somebody drained the inbox just now.
+
+    Polling is the documented fallback for an agent with no way to hold a
+    background watcher, and it registered nothing — so an agent doing exactly
+    what it was told was reported as «nobody is listening», in red, with the
+    advice it was already following. A poll is not an armed watcher and is not
+    counted as one; it is the other honest answer to «is anybody reading this»,
+    and the difference between them is worth showing rather than flattening.
+    """
+    try:
+        (DaemonPaths(profile.dir).root / POLL_FILE).write_text(str(time.time()))
+    except OSError:
+        pass
+
+
+def last_poll(profile: SessionProfile) -> float:
+    """When the inbox was last drained, or 0.0 if it never was."""
+    try:
+        return float((DaemonPaths(profile.dir).root / POLL_FILE).read_text().strip())
+    except (OSError, ValueError):
+        return 0.0
 
 
 def watchers(profile: SessionProfile) -> list[int]:
@@ -235,6 +266,7 @@ class Daemon:
         self._http: httpx.AsyncClient | None = None
         self._last_stats: dict[str, Any] = {}
         self._last_activity: dict[str, Any] = {}
+        self._activity_sent_at = 0.0
         self._stats_ran_at = 0.0
         self.failures = 0
         self._stop = asyncio.Event()
@@ -394,7 +426,15 @@ class Daemon:
         from ..activity import read_local
 
         mine = read_local(self.profile)
-        if not mine or mine == self._last_activity:
+        if not mine:
+            return
+        # RE-ASSERTED ON A TIMER, not only when it changes. `updated_at` is then
+        # a heartbeat for the statement itself, which is what lets a reader tell
+        # «still working» from «said working, then was killed». Unchanged and
+        # recent enough, it is left alone: this is a POST per agent per five
+        # minutes, not per redraw.
+        renew_due = (time.time() - self._activity_sent_at) > ACTIVITY_REFRESH
+        if mine == self._last_activity and not renew_due:
             return
         try:
             r = await client.post(
@@ -404,6 +444,7 @@ class Daemon:
             )
             if r.status_code == 200:
                 self._last_activity = mine
+                self._activity_sent_at = time.time()
         except httpx.HTTPError:
             pass
 
