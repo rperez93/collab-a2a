@@ -349,6 +349,13 @@ class Daemon:
         if self.state == "unauthorized":
             return "you were removed from the session, or it was recreated — ask for a new link"
         if self.state == "reconnecting" and self.failures >= 8 and not self.profile.is_host:
+            # A LOCAL HOST NEEDS NOBODY INTERRUPTED. If the session is running
+            # on this machine we will follow it to its new address ourselves
+            # within a cycle or two, and telling the agent to go and ask a human
+            # for a link is the one thing here that costs a person's attention.
+            if self._hub_address():
+                return ("the hub moved; this listener has the new address and"
+                        " will reconnect on its own — nothing to ask anyone")
             return ("the hub has been unreachable for a while — if the host is using a free "
                     "tunnel its address may have changed, so ask them for a fresh link "
                     "(`collab url` on their side)")

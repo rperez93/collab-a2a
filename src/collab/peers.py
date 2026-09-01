@@ -155,6 +155,11 @@ def announce(*, session_id: str, name: str, role: str, url: str, repo: str,
     # a directory anyone can write to is a directory that can hand somebody
     # else's agent a destination. Under $HOME the default umask is enough;
     # COLLAB_PEERS_DIR can point anywhere, and that is the case this is for.
+    #
+    # It is not a guarantee: a directory owned by somebody else cannot be
+    # chmod-ed by us and the failure is silent by design — refusing to announce
+    # would break discovery over a permission we never needed. What the loopback
+    # rule in daemon._hub_address protects is not conditional on this.
     with contextlib.suppress(OSError):
         d.chmod(0o700)
     peer = Peer(

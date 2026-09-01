@@ -615,6 +615,30 @@ def session_dir(session_id: str, cwd: Path | None = None) -> Path:
     return sessions_dir(cwd) / session_id
 
 
+def owner_ids(profile: Any) -> tuple[str, ...]:
+    """Every stamp that means «this agent», the preferred one first.
+
+    A file this agent writes for itself — its usage figures, what it is working
+    on — is stamped so that two agents sharing a repo cannot read each other's.
+    The stamp is the participant id, which survives a rename; but the id is not
+    always known when the file is first written. `collab host` looks it up from
+    the hub and carries on when the hub does not answer, so a session started
+    through a hiccup has `participant_id = ""` for its first seconds, and
+    anything stamped in that window is stamped with the directory instead.
+
+    Reading back with only ONE of those is what turns a hiccup into a permanent
+    fault: `_adopt_identity` fills the id in later, the stamp no longer matches,
+    and the file is unreadable for the life of the session — an agent shows as
+    «last said working … not since» while it is working, and nothing short of
+    deleting the file recovers it.
+
+    So both are ours, and either is accepted on the way in.
+    """
+    ident = str(getattr(profile, "participant_id", "") or "")
+    where = str(getattr(profile, "dir", "") or "")
+    return tuple(x for x in (ident, where) if x)
+
+
 def current_pointer(cwd: Path | None = None) -> Path:
     """Names the session this repo is currently working in."""
     return collab_home(cwd) / "current"

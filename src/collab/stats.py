@@ -368,8 +368,15 @@ STATS_FILE = "agent_stats.json"
 
 
 def owner_of(profile: Any) -> str:
-    """The stamp identifying whose figures a file holds."""
-    return str(getattr(profile, "participant_id", "") or getattr(profile, "dir", ""))
+    """The stamp to write on this agent's figures.
+
+    Reading accepts every stamp that means this agent — see config.owner_ids.
+    The same file written before the participant id was known would otherwise
+    become unreadable the moment it arrived.
+    """
+    from .config import owner_ids
+
+    return (owner_ids(profile) or ("",))[0]
 
 
 def write_stats(profile: Any, figures: dict[str, Any]) -> bool:
@@ -395,7 +402,9 @@ def read_stats(profile: Any) -> dict[str, Any]:
         data = json.loads((Path(profile.dir) / STATS_FILE).read_text())
     except (OSError, ValueError):
         return {}
-    if not isinstance(data, dict) or data.get(OWNER_KEY) != owner_of(profile):
+    from .config import owner_ids
+
+    if not isinstance(data, dict) or data.get(OWNER_KEY) not in owner_ids(profile):
         return {}
     return {k: v for k, v in data.items() if k != OWNER_KEY}
 

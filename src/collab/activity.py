@@ -198,7 +198,10 @@ def is_working(activity: Any) -> bool:
 # now rather than leaving everyone with the last thing that got through.
 
 def _owner_of(profile: Any) -> str:
-    return str(getattr(profile, "participant_id", "") or getattr(profile, "dir", ""))
+    """The stamp to write. See config.owner_ids for why reading accepts more."""
+    from .config import owner_ids
+
+    return (owner_ids(profile) or ("",))[0]
 
 
 def write_local(profile: Any, activity: dict[str, Any]) -> bool:
@@ -217,6 +220,8 @@ def read_local(profile: Any) -> dict[str, Any]:
         data = json.loads((Path(profile.dir) / ACTIVITY_FILE).read_text())
     except (OSError, ValueError):
         return {}
-    if not isinstance(data, dict) or data.get(OWNER_KEY) != _owner_of(profile):
+    from .config import owner_ids
+
+    if not isinstance(data, dict) or data.get(OWNER_KEY) not in owner_ids(profile):
         return {}
     return {k: v for k, v in data.items() if k != OWNER_KEY}
