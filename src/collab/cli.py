@@ -416,7 +416,7 @@ def cmd_host(args: argparse.Namespace) -> int:
         warn(f"could not announce yourself: {exc}")
     status = onboard.ensure_daemon(profile) if not args.no_daemon else {}
     _take_lock(profile, role="host", hub_pid=cfg.pid)
-    if status.get("state") == "live":
+    if _is_listening(profile, status):
         ok("listening")
     elif not args.no_daemon:
         warn("the daemon did not report live yet; check `collab status`")
@@ -549,6 +549,17 @@ def _take_lock(profile: SessionProfile, *, role: str, hub_pid: int = 0) -> None:
         owner_pids=lockfile.ancestry(),
         hub_pid=hub_pid, listener_pid=listener,
     ), profile.home)
+
+
+def _is_listening(profile: SessionProfile, status: dict[str, Any]) -> bool:
+    """Is a listener actually attached, or does a file merely say one was?
+
+    Same file and same correction as `collab status`: `status.json` is what the
+    daemon last wrote about itself, and a killed one never got to take it back.
+    Read raw —which is what this did in three places— a join straight after a
+    SIGKILL printed «listening» with nothing attached at all.
+    """
+    return daemon_state(status, running=is_running(profile) is not None) == "live"
 
 
 def _lock_blocks_us(session_id: str = "") -> "lockfile.Lock | None":
@@ -887,7 +898,7 @@ def cmd_join(args: argparse.Namespace) -> int:
     _take_lock(profile, role="host" if profile.is_host else "guest")
     ok(f"joined {c(profile.session_id, '36')} as {c(profile.name, '1')}"
        f" (host: {profile.host_name})")
-    if status.get("state") == "live":
+    if _is_listening(profile, status):
         ok("listening")
     elif not args.no_daemon:
         warn("the daemon did not report live yet; check `collab status`")
@@ -896,7 +907,7 @@ def cmd_join(args: argparse.Namespace) -> int:
 
     # The snapshot in the join response predates our own feed connecting, so it
     # would show us as offline. Re-read it now that we are live.
-    if status.get("state") == "live":
+    if _is_listening(profile, status):
         _publish_global_settings(profile)
         try:
             with _client(profile) as client:

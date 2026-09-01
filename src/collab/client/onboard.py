@@ -19,7 +19,8 @@ from urllib.parse import urlparse, urlunparse
 from ..config import SessionProfile, resolve_name
 from ..protocol import DEFAULT_ROOM
 from . import context as ctx
-from .daemon import DaemonPaths, is_running, read_status
+from .daemon import (DaemonPaths, effective_state, is_running,
+                     read_status)
 from .hub_client import HubClient, HubError
 
 DAEMON_READY_TIMEOUT = 20.0
@@ -60,12 +61,26 @@ def spawn_daemon(profile: SessionProfile) -> int:
 
 
 def wait_until_live(profile: SessionProfile, timeout: float = DAEMON_READY_TIMEOUT) -> dict[str, Any]:
-    """Block until the feed is actually live, not merely until the process exists."""
+    """Block until the feed is actually live, not merely until a file says so.
+
+    This asked `status["state"] == "live"` and nothing else. That file is the
+    daemon's own account of itself, and a daemon that was killed never gets to
+    correct it: the last thing it wrote was `live`, and `live` is what the file
+    says for ever after. So with no daemon running and no pid file at all, this
+    returned live in no time at all off a heartbeat two hours old — every join
+    after a SIGKILL or a reboot came up announcing a listener that was not
+    there, and the timeout below was dead code whenever such a file existed.
+
+    That is also what hid everything else in this area: a session that reports
+    itself listening gives nobody a reason to look. `effective_state` has
+    judged it properly from the heartbeat all along and simply was not asked
+    here; the pid is put to it too, since by this point we have looked.
+    """
     deadline = time.time() + timeout
     last: dict[str, Any] = {}
     while time.time() < deadline:
         last = read_status(profile)
-        if last.get("state") == "live":
+        if effective_state(last, running=is_running(profile) is not None) == "live":
             return last
         if last.get("state") == "unauthorized":
             raise HubError("the hub rejected our token")
