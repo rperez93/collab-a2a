@@ -7,6 +7,7 @@ Two consumers are served from one write: a JSONL file that ``collab listen
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 import threading
@@ -27,6 +28,16 @@ CREATE TABLE IF NOT EXISTS inbox (
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
+#: How long a write here may wait for the database, and no longer.
+#:
+#: `record` is a synchronous sqlite call made from inside the daemon's `async
+#: for` over the feed, so a busy wait does not block one write — it blocks the
+#: heartbeat, the bridge and the feed together, for as long as it lasts.
+#: Python's default is five seconds, which is enough to take a local lock past
+#: READ_TIMEOUT and turn it into a reconnect. Sat well under STATUS_HEARTBEAT,
+#: so a wait that does happen costs at most one beat.
+BUSY_TIMEOUT_MS = 1000
+
 
 class Inbox:
     def __init__(self, directory: Path) -> None:
@@ -37,6 +48,16 @@ class Inbox:
         self._db = sqlite3.connect(self.dir / "inbox.db", check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         with self._lock:
+            # WAL, because the readers are the point: `collab recv`, the
+            # viewer and the status line all read this file while the daemon
+            # writes it, and under the rollback journal a reader holding a
+            # snapshot locks the daemon out of its own inbox. WAL lets them
+            # miss each other entirely. It is set every time rather than once:
+            # the mode lives in the file, and a database restored from a copy
+            # or created by an older collab arrives without it.
+            with contextlib.suppress(sqlite3.DatabaseError):
+                self._db.execute("PRAGMA journal_mode=WAL")
+            self._db.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
             self._db.executescript(SCHEMA)
             self._db.commit()
 
