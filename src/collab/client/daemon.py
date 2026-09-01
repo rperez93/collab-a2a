@@ -292,7 +292,8 @@ def provably_ours(profile: SessionProfile) -> int | None:
 
     So identification is positive and any one of three will do: the lock says
     held, the recorded start time is present and matches, or the process says
-    in its own argv that it is this session's daemon. Nothing else is touched.
+    in its own argv and environment that it is this session's daemon in this
+    home. Nothing else is touched.
     The cost is a genuine pre-lock orphan that no longer goes quietly — a leak,
     which `collab daemon stop` clears, and a leak is the better half of a trade
     against silently SIGKILLing a process nobody has identified.
@@ -308,21 +309,40 @@ def provably_ours(profile: SessionProfile) -> int | None:
         return pid
     if began and exclusive.started_at(pid) == began:
         return pid
-    if _names_itself_our_daemon(pid, profile.session_id):
+    if _names_itself_our_daemon(pid, profile):
         return pid
     return None
 
 
-def _names_itself_our_daemon(pid: int, session_id: str) -> bool:
-    """Does this process say it is the daemon for this very session?
+def _names_itself_our_daemon(pid: int, profile: SessionProfile) -> bool:
+    """Does this process say it is the daemon for this session, in THIS home?
 
-    The daemon is launched as `python -m collab.daemon_main <session id>`, so
-    both halves are in its argv and a stranger that inherited the number has
-    neither. This is the one identification a pre-lock orphan can still offer,
-    which is what keeps them reapable rather than merely spared.
+    `spawn_daemon` launches it as `python -m collab.daemon_main <session id>`
+    with COLLAB_HOME pinned at exec, so the module and the session id are in
+    its argv and the state directory is in its environment. A stranger that
+    inherited the pid has none of the three.
+
+    THE HOME IS NOT OPTIONAL, and it is the whole reason this is safe. Two
+    checkouts may legitimately share one session id — a host and a guest in
+    different working copies is the arrangement `peers` exists to support, and
+    there are two such pairs running on this machine as this is written. On
+    the argv alone, a sibling repo's LIVE daemon matches by construction,
+    every time, and `stop_orphans` here would reap the listener over there:
+    the scan never leaves this home, and the check it trusted did not know
+    which home it was looking at.
+
+    That inverted the point of this arm. Every other victim of a reused pid
+    needs a contrived command line; a sibling collab daemon needed none, which
+    made collab's own daemons the preferred casualty of the test meant to
+    spare everyone else's.
     """
     words = exclusive.argv(pid)
-    return DAEMON_MODULE in words and session_id in words
+    if DAEMON_MODULE not in words or profile.session_id not in words:
+        return False
+    # Read while it is alive — a dead pid has no environ, and asking after the
+    # signal answers nothing about what was signalled.
+    home = exclusive.environ(pid).get("COLLAB_HOME", "")
+    return bool(home) and Path(home) == Path(profile.home)
 
 
 def stop(profile: SessionProfile) -> bool:

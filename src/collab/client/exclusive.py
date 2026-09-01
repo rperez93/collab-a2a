@@ -255,6 +255,34 @@ def argv(pid: int) -> list[str]:
         return []
 
 
+def environ(pid: int) -> dict[str, str]:
+    """The environment a process was STARTED with, as the kernel kept it.
+
+    /proc/<pid>/environ, and the same rules as `argv`: Linux only, readable
+    only for our own processes, empty everywhere else. It records the exec, so
+    a later `os.environ` change inside that process is not reflected here —
+    which is what makes it evidence rather than a report.
+
+    Must be read while the process is alive; a dead pid has no environ, and
+    reading it after signalling something answers nothing about what was
+    signalled.
+    """
+    if not _HAVE_PROC:
+        return {}
+    try:
+        with open(f"/proc/{pid}/environ", "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return {}
+    out: dict[str, str] = {}
+    for entry in raw.split(b"\0"):
+        if not entry or b"=" not in entry:
+            continue
+        key, _, value = entry.partition(b"=")
+        out[key.decode("utf-8", "replace")] = value.decode("utf-8", "replace")
+    return out
+
+
 def is_zombie(pid: int) -> bool:
     """Has this process exited without being reaped yet?
 

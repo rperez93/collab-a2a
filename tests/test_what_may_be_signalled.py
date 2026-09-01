@@ -92,23 +92,65 @@ def test_a_start_time_that_does_not_match_is_not(profile):
     assert d.provably_ours(profile) is None
 
 
+def _stands_in_for_a_daemon(session_id, home):
+    """A process presenting what `spawn_daemon` presents: the module and the
+    session id in its argv, COLLAB_HOME pinned in its environment."""
+    return subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)",
+         "collab.daemon_main", session_id],
+        env={**os.environ, "COLLAB_HOME": str(home)})
+
+
 @pytest.mark.skipif(not HAVE_PROC, reason="needs /proc/<pid>/cmdline")
 def test_a_process_that_names_itself_our_daemon_may_still_be_reaped(profile):
     """So a genuine pre-lock orphan is not merely spared — it is still cleared.
 
-    The daemon is launched as `python -m collab.daemon_main <session id>`, and
-    the stand-in below carries the same two words in its own argv, which is the
-    whole of what is being read. A stranger that inherited the number has
-    neither of them.
+    All three of the things `spawn_daemon` sets have to be there, which is what
+    the stand-in presents. A stranger that inherited the number has none.
     """
-    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)",
-                              "collab.daemon_main", profile.session_id])
+    child = _stands_in_for_a_daemon(profile.session_id, profile.home)
     try:
         (profile.dir / "daemon.pid").write_text(f"{child.pid}\n")
 
         assert d.provably_ours(profile) == child.pid
         assert d.stop_orphans(profile.home, keep="other") == ["s"]
         assert not d._alive(child.pid)
+    finally:
+        child.kill()
+        child.wait()
+
+
+@pytest.mark.skipif(not HAVE_PROC, reason="needs /proc/<pid>/environ")
+def test_another_checkouts_daemon_for_the_same_session_is_not_ours(
+        tmp_path, monkeypatch):
+    """Two homes may legitimately share a session id, and two do here today.
+
+    A host and a guest in different working copies is the arrangement `peers`
+    exists to support. On the argv alone the sibling's LIVE daemon matched by
+    construction, every time — not by unlucky reuse — so `stop_orphans` in one
+    checkout reaped the listener in the other. The scan never leaves this home;
+    the check it trusted did not know which home it was looking at.
+
+    Sharpest form of it: without this arm that daemon is unidentifiable and
+    nothing is signalled. The arm was the only thing granting permission, so
+    it made collab's own daemons the preferred casualty of a test meant to
+    spare everyone else's.
+    """
+    monkeypatch.setenv("COLLAB_PEERS_DIR", str(tmp_path / "peers"))
+    theirs = tmp_path / "their-checkout" / ".collab"
+    ours = tmp_path / "our-checkout" / ".collab"
+    (ours / "sessions" / "s_shared").mkdir(parents=True)
+    mine = SessionProfile(session_id="s_shared", url="http://h/", name="us",
+                          host_name="them", token="t", home=str(ours))
+    mine.save()
+
+    child = _stands_in_for_a_daemon("s_shared", theirs)
+    try:
+        (mine.dir / "daemon.pid").write_text(f"{child.pid}\n")
+
+        assert d.provably_ours(mine) is None
+        assert d.stop_orphans(mine.home, keep="other") == []
+        assert d._alive(child.pid), "another checkout's listener was killed"
     finally:
         child.kill()
         child.wait()
