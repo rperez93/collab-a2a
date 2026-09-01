@@ -39,6 +39,7 @@ import contextlib
 import errno
 import os
 import subprocess
+import time
 from pathlib import Path
 
 try:                                        # not on Windows
@@ -56,6 +57,20 @@ _BUSY = {errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK}
 #: a subprocess for every dead pid in a directory scan, and `watchers()` scans
 #: on every heartbeat.
 _HAVE_PROC = os.path.isdir("/proc/self")
+
+#: A probe holds its shared lock for microseconds and a daemon holds its
+#: exclusive one for a lifetime, but EWOULDBLOCK looks the same either way. So
+#: an acquire that met a probe at the wrong instant announced that another
+#: daemon already held the session and exited, leaving nothing running at all:
+#: 1,396 wrongly refused starts in 20,000 against a busy prober, and 55 in 300
+#: with three of them spinning, which is what the test does.
+#:
+#: A fifth of a second of retrying survives that — three attempts did not, and
+#: the number is measured rather than chosen. A genuine holder refuses every
+#: attempt in it and costs a start-up that has already spent longer than this
+#: importing itself one more fifth of a second, once.
+ACQUIRE_ATTEMPTS = 40
+ACQUIRE_PAUSE = 0.005
 
 
 def lock_path(root: Path | str) -> Path:
@@ -100,18 +115,31 @@ class DaemonLock:
             self._fd, self.enforced = fd, False
             self._write_pid()
             return True
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as exc:
-            if exc.errno in _BUSY:
-                os.close(fd)
-                return False
-            self._fd, self.enforced = fd, False
-            self._write_pid()
-            return True
-        self._fd, self.enforced = fd, True
+        got = self._flock(fd)
+        if got is False:
+            os.close(fd)
+            return False
+        self._fd, self.enforced = fd, got is True
         self._write_pid()
         return True
+
+    def _flock(self, fd: int) -> bool | None:
+        """True if we took it, False if it is somebody's, None if we cannot ask.
+
+        Retried a few times because `taken` holds a shared lock for the
+        instant it takes to ask its question, and a daemon starting into that
+        instant would otherwise stand down for a session nobody holds.
+        """
+        for attempt in range(ACQUIRE_ATTEMPTS):
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return True
+            except OSError as exc:
+                if exc.errno not in _BUSY:
+                    return None             # a filesystem that cannot lock
+            if attempt + 1 < ACQUIRE_ATTEMPTS:
+                time.sleep(ACQUIRE_PAUSE)
+        return False
 
     def release(self) -> None:
         """Give the slot up. The file stays; only the lock on it was ours.
@@ -152,6 +180,16 @@ def taken(root: Path | str) -> bool | None:
     a file is wrong about — the holder was killed outright, or the machine
     rebooted underneath it.
 
+    SHARED, and that is the whole of it. Probing with an EXCLUSIVE lock made
+    every prober exclude every other prober, so two of them asking at once —
+    which is a status line and a watch pane, not a rare event — each reported
+    a daemon that was the other one asking: 7,978 phantom answers in 60,000 on
+    a lock file no daemon had ever held. Worse than a wrong answer, because
+    `is_running` returns the recorded pid whenever this says held, so a phantom
+    short-circuited the start-time check and brought back a pid that had
+    already been ruled out. A shared lock excludes nothing but the exclusive
+    one a daemon holds, which is the only thing being asked about.
+
     None means the question cannot be answered here: no lock file at all, so no
     daemon of this generation has run in this directory, or a filesystem with
     no locking. The caller falls back to the pid then, rather than concluding
@@ -165,7 +203,7 @@ def taken(root: Path | str) -> bool | None:
         return None
     try:
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
         except OSError as exc:
             return True if exc.errno in _BUSY else None
         with contextlib.suppress(OSError):
@@ -174,6 +212,25 @@ def taken(root: Path | str) -> bool | None:
     finally:
         with contextlib.suppress(OSError):
             os.close(fd)
+
+
+def argv(pid: int) -> list[str]:
+    """How a process describes ITSELF, rather than how a file describes it.
+
+    Linux only, from /proc/<pid>/cmdline, and empty everywhere else. That is
+    safe wherever it is used as an extra condition on a signal: it can withhold
+    permission but never grant it, so where it cannot be read nothing is
+    signalled that would not have been signalled anyway. It does not carry the
+    weight `started_at` does and must not be given it.
+    """
+    if not _HAVE_PROC:
+        return []
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            return [part.decode("utf-8", "replace")
+                    for part in fh.read().split(b"\0") if part]
+    except OSError:
+        return []
 
 
 def is_zombie(pid: int) -> bool:
