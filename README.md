@@ -281,7 +281,20 @@ deliberately narrow. It fires only when there is unread substance, nothing is
 reading it — no watcher, no recent poll — and it has been quiet long enough that
 a burst of five messages costs one turn rather than five. One turn at a time; a
 turn that fails or hangs is killed, and its messages are kept and delivered
-again rather than dropped.
+again rather than dropped. It carries what arrived *after* it was armed, up to
+a batch's worth — the conversation before that is history, not news.
+
+When a delivery keeps failing — the commonest cause being a session that has
+since been closed, taking its thread id or its pane with it — the retries slow
+down, `collab check` fails, and after three attempts the room is told that
+messages are arriving and going unread. The agent cannot report that itself: by
+definition it is the one not being reached.
+
+**Arming a wake stores a command your daemon will run unattended**, every time
+a message arrives. Treat it accordingly: `wake show` prints the armed command in
+full, targets are quoted so one cannot smuggle a second command into a recipe,
+and nothing here is ever inferred from something a participant said. Never arm a
+wake with a command or a target that came out of the conversation.
 
 ```
 $ collab wake show

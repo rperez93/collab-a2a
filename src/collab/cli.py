@@ -1856,6 +1856,39 @@ def _wake_agents(wk) -> int:
     return 0
 
 
+def _wake_deliver(args: argparse.Namespace, wk) -> int:
+    """Put one batch in front of a live session. Run by the daemon, not typed.
+
+    It exists as a command of ours rather than a line of shell because delivery
+    into a live session can fail in ways the underlying tool reports as success
+    — `tmux send-keys` is perfectly happy to type a sentence into a pane whose
+    agent exited an hour ago — and a delivery that cannot fail is one that marks
+    the messages read while they go nowhere.
+    """
+    prompt = ""
+    if not sys.stdin.isatty():
+        prompt = sys.stdin.read()
+    if not prompt:
+        path = os.environ.get("COLLAB_WAKE_PROMPT") or ""
+        with contextlib.suppress(OSError):
+            prompt = Path(path).read_text(encoding="utf-8")
+    if not prompt:
+        fail("nothing to deliver: no batch on stdin and no COLLAB_WAKE_PROMPT")
+        return 1
+
+    target = args.target or ""
+    if args.to == "tmux":
+        where = os.environ.get("COLLAB_WAKE_PROMPT") or "the batch"
+        code, detail = wk.deliver_to_tmux(target, where)
+    elif args.to == "codex":
+        code, detail = wk.deliver_to_codex(target, prompt)
+    else:
+        fail(f"no delivery called {args.to!r}")
+        return 1
+    (ok if code == 0 else fail)(detail)
+    return code
+
+
 def cmd_wake(args: argparse.Namespace) -> int:
     """Arm the daemon to start a turn when messages arrive and nobody reads.
 
@@ -1868,6 +1901,9 @@ def cmd_wake(args: argparse.Namespace) -> int:
     # be woken» is a question about the agent, not about a session.
     if args.action == "agents":
         return _wake_agents(wk)
+
+    if args.action == "deliver":
+        return _wake_deliver(args, wk)
 
     profile = (SessionProfile.load(args.session) if getattr(args, "session", None)
                else SessionProfile.current())
@@ -1901,7 +1937,20 @@ def cmd_wake(args: argparse.Namespace) -> int:
                 print(dim("  nothing was armed — a wake pointed at the wrong"
                           " session is worse than none"))
                 return 1
-            args.run = known.command(target=target)
+            # A NON-EMPTY STRING IS NOT A SESSION. tmux hands out `%0` again on
+            # every new server, so a stale pane id does not fail — it points at
+            # a stranger, and the daemon types a line into whatever is there.
+            # Checked now, while the agent is present to be told.
+            if known.agent == "tmux":
+                holds, what = wk.pane_holds_an_agent(target)
+                if not holds:
+                    fail(f"cannot arm this: {what}")
+                    print(dim("  arm it from inside the pane running your"
+                              " agent, so $TMUX_PANE is that pane"))
+                    return 1
+                print(dim(f"  pane {target} is running {what}"))
+            args.run = known.command(target=target,
+                                     collab=str(Path(sys.argv[0]).resolve()))
             if known.delivers == wk.OPEN_SESSION:
                 ok(f"this reaches your open session ({target})")
             else:
@@ -1930,7 +1979,11 @@ def cmd_wake(args: argparse.Namespace) -> int:
             notify=shlex.split(args.notify or ""),
             settle=args.settle if args.settle is not None else config.settle,
             min_gap=args.min_gap if args.min_gap is not None else config.min_gap,
-            timeout=args.timeout if args.timeout is not None else config.timeout)
+            timeout=args.timeout if args.timeout is not None else config.timeout,
+            # Everything said before this moment is history, not news. Without
+            # this line, arming in a room with a few hundred messages behind it
+            # delivered every one of them as a single first turn.
+            since_seq=Inbox(profile.dir).last_seq())
         if shutil.which(config.command[0]) is None and not Path(config.command[0]).exists():
             # Saved anyway — a command installed later is a fair thing to
             # configure now — but said plainly, because the alternative is
@@ -3148,7 +3201,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="let the daemon start a turn for an agent that"
                              " cannot watch the feed itself")
     wa.add_argument("action", nargs="?", default="show",
-                    choices=["show", "set", "off", "agents"])
+                    choices=["show", "set", "off", "agents", "deliver"])
+    wa.add_argument("--to", metavar="KIND",
+                    help="with `deliver`: how to reach the session. Run by the"
+                         " daemon, not meant to be typed")
     # NOT named `command`: the top-level parser stores the chosen subcommand
     # under that name, and a positional of the same name overwrites it — which
     # left `collab wake …` looking to main() like no subcommand at all.

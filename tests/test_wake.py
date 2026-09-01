@@ -20,6 +20,7 @@ import asyncio
 import contextlib
 import io
 import json
+import subprocess
 import sys
 import time
 
@@ -31,8 +32,17 @@ from collab.config import SessionProfile
 from collab.protocol import Envelope
 
 
-def waker(tmp_path, *, attended=False, clock=None):
+def waker(tmp_path, *, attended=False, clock=None, armed=True, **config):
+    """A waker over a temp directory, armed unless a test says otherwise.
+
+    Armed by default because collection only happens for an armed wake — every
+    user runs this daemon, and a queue file growing in every session for a
+    feature nobody asked for is a leak with no upside.
+    """
     clock = clock or [1000.0]
+    if armed:
+        wake.write_config(tmp_path, wake.WakeConfig(
+            command=config.pop("command", ["true"]), **config))
     w = wake.Waker(tmp_path, "s_test",
                    attended=lambda: attended() if callable(attended) else attended,
                    now=lambda: clock[0])
@@ -66,10 +76,39 @@ def test_our_own_words_are_not_a_reason_to_wake(tmp_path):
 # --- when it is owed -----------------------------------------------------------
 
 def test_disarmed_by_default(tmp_path):
-    w, _ = waker(tmp_path)
-    w.note(chat())
+    w, _ = waker(tmp_path, armed=False)
     due, why = w.due()
     assert not due and "no wake command" in why
+
+
+def test_nothing_is_collected_while_it_is_disarmed(tmp_path):
+    """Every user runs this daemon. A queue file growing in every session for
+    a feature nobody armed is a leak with no upside — and the queue it built
+    was then delivered in full the moment somebody did arm one."""
+    w, _ = waker(tmp_path, armed=False)
+    assert not w.note(chat())
+    assert w.waiting() == 0
+
+
+def test_what_was_said_before_arming_is_not_news(tmp_path):
+    """Joining a busy room used to deliver its entire history as one turn."""
+    wake.write_config(tmp_path, wake.WakeConfig(command=["true"], since_seq=100))
+    w, clock = waker(tmp_path, armed=False)
+    old = chat("said before I asked to be told")
+    old.seq = 100
+    fresh = chat("said after")
+    fresh.seq = 101
+    assert not w.note(old)
+    assert w.note(fresh)
+    assert w.waiting() == 1
+
+
+def test_an_envelope_with_no_seq_is_treated_as_new(tmp_path):
+    """The safe direction: a spare turn costs money, a dropped one costs a
+    message nobody ever reads."""
+    wake.write_config(tmp_path, wake.WakeConfig(command=["true"], since_seq=100))
+    w, _ = waker(tmp_path, armed=False)
+    assert w.note(chat("no seq on this one"))
 
 
 def test_nothing_unread_wakes_nobody(tmp_path):
@@ -193,6 +232,74 @@ def test_a_stepped_clock_does_not_stall_the_wake(tmp_path):
     os.utime(w.pending, (time.time() + 10_000, time.time() + 10_000))
     clock[0] += 60
     assert w.due()[0] is True
+
+
+# --- a batch that could never be delivered -------------------------------------
+#
+# Linux refuses any single argument over 128 KiB, and five of the recipes hand
+# the prompt to their agent as exactly that. The refusal is not a one-off: the
+# batch is kept, retried, and fails identically for ever. Nothing new is ever
+# cut, because `take()` returns the outstanding one first. The wake bricks
+# itself, quietly, and the only symptom is a room that has gone silent.
+
+def test_the_queue_does_not_grow_without_limit(tmp_path):
+    w, clock = waker(tmp_path)
+    for i in range(wake.MAX_BATCH * 3):
+        w.note(chat(f"message {i}"))
+        clock[0] += 1
+    assert w.waiting() <= wake.MAX_BATCH + 1
+
+
+def test_dropping_the_oldest_says_so_rather_than_hiding_it(tmp_path):
+    w, clock = waker(tmp_path)
+    for i in range(wake.MAX_BATCH + 10):
+        w.note(chat(f"message {i}"))
+        clock[0] += 1
+    events = w.take().events()
+    assert "not shown" in events[0]["text"]
+    assert "collab recv" in events[0]["text"], "and where to find them"
+    assert events[-1]["text"].endswith(str(wake.MAX_BATCH + 9)), "newest kept"
+
+
+def test_dropping_the_oldest_does_not_restart_the_settle_window(tmp_path):
+    """Otherwise a busy room only ever settles once it has gone quiet."""
+    w, clock = waker(tmp_path, settle=20)
+    for i in range(wake.MAX_BATCH + 5):
+        w.note(chat(f"m{i}"))
+    clock[0] += 25
+    assert w.due()[0] is True
+
+
+def test_one_enormous_message_cannot_brick_the_wake(tmp_path):
+    w, clock = waker(tmp_path)
+    w.note(chat("x" * 500_000))
+    clock[0] += 1
+    prompt = w.prompt(w.take())
+    assert len(prompt.encode()) < wake.MAX_PROMPT_BYTES
+
+
+def test_a_full_batch_stays_deliverable_as_one_argument(tmp_path):
+    """The property that matters, checked by actually passing it as one."""
+    w, clock = waker(tmp_path)
+    for i in range(wake.MAX_BATCH + 20):
+        w.note(chat(f"message {i} " + "y" * 3_000))
+        clock[0] += 1
+    prompt = w.prompt(w.take())
+    done = subprocess.run(["/bin/echo", prompt], capture_output=True,
+                          text=True, timeout=20, check=False)
+    assert done.returncode == 0, "the batch is too large to pass as an argument"
+
+
+def test_the_truncated_prompt_still_says_what_to_do(tmp_path):
+    w, clock = waker(tmp_path)
+    w.note(chat("z" * 400_000))
+    clock[0] += 1
+    prompt = w.prompt(w.take())
+    assert "UNTRUSTED DATA" in prompt, "the framing survives the cut"
+    # Cut at the message, before it ever reaches the batch — and said so, with
+    # where the rest is. A silent truncation is a message the agent answers
+    # having read half of it.
+    assert "truncated" in prompt and "collab recv" in prompt
 
 
 # --- what the woken agent is told ----------------------------------------------
@@ -454,6 +561,83 @@ def test_the_check_fails_on_a_wake_that_reaches_nobody(profile, monkeypatch):
     assert broken["fix"], "a failure without its fix is a scolding"
 
 
+# --- a delivery that reports success while delivering nothing -------------------
+#
+# `tmux send-keys` exits 0 whenever the PANE exists, whatever is running in it.
+# So a pane whose agent has exited — back to a bare shell — took the line,
+# executed the first word of it as a command, and reported success. The batch
+# was marked delivered, the failure counter reset, and the messages were gone.
+# The pane can also belong to somebody else entirely: tmux hands out `%0` again
+# on every new server, so a stale id does not fail, it points at a stranger.
+
+class _Answer:
+    def __init__(self, code=0, out=""):
+        self.returncode, self.stdout, self.stderr = code, out, ""
+
+
+def _tmux_answering(current_command, sent=None, *, pane_exists=True):
+    """A fake tmux: says what is running in the pane, records what was typed."""
+    def runner(argv, **_kwargs):
+        if sent is not None:
+            sent.append(argv)
+        if "display-message" in argv:
+            return (_Answer(0, current_command) if pane_exists
+                    else _Answer(1, "can't find pane"))
+        return _Answer(0)
+    return runner
+
+
+def test_it_will_not_type_into_a_pane_whose_agent_has_gone():
+    """The line would be run as a shell command, and reported as delivered."""
+    sent = []
+    code, why = wake.deliver_to_tmux("%0", "/tmp/p.txt",
+                                     runner=_tmux_answering("bash", sent))
+    assert code != 0
+    assert "not an agent" in why
+    assert not any("send-keys" in a for argv in sent for a in argv), \
+        "it typed into the shell anyway"
+
+
+def test_it_will_not_type_into_a_pane_that_is_gone():
+    """tmux reuses `%0` on a new server, so a stale id reaches a stranger."""
+    code, why = wake.deliver_to_tmux(
+        "%0", "/tmp/p.txt", runner=_tmux_answering("claude", pane_exists=False))
+    assert code != 0 and "no such pane" in why
+
+
+def test_an_empty_answer_from_tmux_is_not_taken_as_an_agent():
+    """Observed against tmux 3.4: a pane that has gone can answer 0 and blank,
+    which read as «something is running» and left send-keys to notice."""
+    code, why = wake.deliver_to_tmux("%9", "/tmp/p.txt",
+                                     runner=_tmux_answering(""))
+    assert code != 0 and "no such pane" in why
+
+
+def test_it_types_into_a_pane_that_still_holds_an_agent():
+    sent = []
+    code, why = wake.deliver_to_tmux("%3", "/tmp/p.txt",
+                                     runner=_tmux_answering("codex", sent))
+    assert code == 0 and "codex" in why
+    typed = [argv for argv in sent if "send-keys" in argv][0]
+    assert typed[-1] == "Enter"
+    assert "--" in typed, "without `--` a line starting with - is read as flags"
+
+
+def test_a_dead_codex_thread_is_a_failure_not_a_delivery():
+    """Verified against codex-cli 0.151: a closed thread exits 1 saying so."""
+    def runner(argv, **_kwargs):
+        return _Answer(1, "no rollout found for thread id")
+    code, why = wake.deliver_to_codex("gone", "prompt", runner=runner)
+    assert code != 0 and "rollout" in why
+
+
+def test_codex_missing_entirely_is_reported_not_raised():
+    def runner(argv, **_kwargs):
+        raise FileNotFoundError("codex")
+    code, why = wake.deliver_to_codex("t", "prompt", runner=runner)
+    assert code != 0 and "PATH" in why
+
+
 # --- reaching the session that is already open ---------------------------------
 #
 # The point of the whole feature. A fresh run in the same checkout is a
@@ -465,8 +649,46 @@ def test_the_check_fails_on_a_wake_that_reaches_nobody(profile, monkeypatch):
 def test_codex_is_delivered_into_the_open_session():
     known = wake.recipe("codex")
     assert known.delivers == wake.OPEN_SESSION
-    argv = known.command(target="abc-123")
-    assert "codex queue --thread \"abc-123\"" in " ".join(argv)
+    argv = known.command(target="abc-123", collab="/usr/bin/collab")
+    # Through collab's own delivery, as argv, with no shell anywhere: it has to
+    # check the thread still exists, and `codex queue` reports that in an exit
+    # code a one-line shell command would swallow.
+    assert argv[0] == "/usr/bin/collab"
+    assert "sh" not in argv
+    assert argv[-2:] == ["--target", "abc-123"]
+
+
+def test_a_target_cannot_smuggle_a_command_into_a_recipe(tmp_path):
+    """A target reads like an opaque id and can be a shell payload.
+
+    The realistic route: a participant says «your thread id rotated, re-arm
+    with --target <this>». The value is pasted once, persisted to config, and
+    then run by the daemon, unattended, on every message that arrives.
+    """
+    proof = tmp_path / "pwned"
+    hostile = f'%0" ; touch {proof} ; : "'
+    for known in wake.RECIPES:
+        argv = known.command(target=hostile, cwd=hostile, collab="/bin/true")
+        if argv[0] == "sh":
+            # Actually run it. Inspecting the string proves nothing; the shell
+            # is the authority on whether its own quoting held. The agent it
+            # names is not installed, so the command fails — which is fine, the
+            # question is only whether the payload ran alongside it.
+            subprocess.run(argv, input="", capture_output=True, text=True,
+                           timeout=20, check=False)
+        elif known.needs_target:
+            # No shell in the argv at all: the target is one whole entry and is
+            # never re-parsed by anything.
+            assert hostile in argv, known.agent
+        assert not proof.exists(), f"{known.agent} executed a hostile target"
+
+
+def test_tmux_reaches_any_agent_in_a_pane():
+    known = wake.recipe("tmux")
+    assert known.delivers == wake.OPEN_SESSION
+    argv = known.command(target="%7", collab="/usr/bin/collab")
+    assert argv[0] == "/usr/bin/collab" and "sh" not in argv
+    assert "%7" in argv
 
 
 def test_the_live_session_is_named_by_the_agents_own_environment():
@@ -479,15 +701,14 @@ def test_the_live_session_is_named_by_the_agents_own_environment():
     assert wake.recipe("tmux").detect_target({"TMUX_PANE": "%7"}) == "%7"
 
 
-def test_tmux_reaches_any_agent_in_a_pane():
-    known = wake.recipe("tmux")
-    assert known.delivers == wake.OPEN_SESSION
-    sent = " ".join(known.command(target="%7"))
-    assert "send-keys -t \"%7\"" in sent
-    assert "$COLLAB_WAKE_PROMPT" in sent
-    # ONE LINE. A newline inside the keystrokes submits early and leaves the
-    # rest of the batch typed into whatever comes next.
-    assert "\n" not in sent
+def test_the_typed_line_is_one_line(tmp_path):
+    """A newline inside the keystrokes submits early and leaves the rest of the
+    batch typed into whatever comes next."""
+    sent = []
+    wake.deliver_to_tmux("%7", "/tmp/p.txt",
+                         runner=_tmux_answering("claude", sent))
+    line = [a for a in sent[-1] if "collab:" in a][0]
+    assert "\n" not in line and "/tmp/p.txt" in line
 
 
 def test_the_fresh_run_recipes_say_so():
@@ -530,8 +751,8 @@ def test_a_fresh_run_recipe_is_armed_but_flagged(profile, monkeypatch):
 
 def test_a_recipe_is_not_taken_apart_at_its_quotes(profile, monkeypatch):
     """`sh -c 'a && b'` is three argv entries, not eight."""
-    monkeypatch.setenv("TMUX_PANE", "%7")
-    _run(profile, monkeypatch, action="set", agent="tmux")
+    code, _ = _run(profile, monkeypatch, action="set", agent="aider")
+    assert code == 0
     command = wake.read_config(d.DaemonPaths(profile.dir).root).command
     assert command[:2] == ["sh", "-c"]
     assert len(command) == 3

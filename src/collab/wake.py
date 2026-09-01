@@ -40,6 +40,7 @@ import contextlib
 import json
 import os
 import shlex
+import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -72,6 +73,21 @@ TIMEOUT = 540.0
 RETRY_PAUSE = 120.0
 BACKOFF_STEPS = 15
 
+#: The most arrivals one batch will carry. A batch is a turn's worth of «what
+#: did I miss», not an archive: the conversation is still in the inbox, and the
+#: prompt tells the agent to go and read it.
+MAX_BATCH = 40
+
+#: A hard ceiling on the prompt, well under Linux's 128 KiB limit for a single
+#: argument. Five of the recipes pass the prompt as one argument, and a batch
+#: over that limit does not fail loudly — it fails with `Argument list too
+#: long` on every retry, for ever, which is how a wake bricks itself.
+MAX_PROMPT_BYTES = 60_000
+
+#: How much of one message's text is worth carrying. The point of the batch is
+#: to say who wants what; the full text is a `collab recv` away.
+MAX_TEXT = 2_000
+
 #: Consecutive failures after which this is no longer a hiccup. A wake aimed at
 #: a session that has since been closed fails identically every time, and from
 #: the inside that is indistinguishable from a quiet room — so past this it is
@@ -81,6 +97,24 @@ GIVE_UP_AFTER = 3
 
 def _wake_home(root: Path) -> Path:
     return root / "wake"
+
+
+def _is_history(env: Envelope, since_seq: int) -> bool:
+    """Was this said before anybody asked to be told about it?
+
+    By `seq`, which the hub assigns in order — never by timestamps. The first
+    attempt compared the envelope's `ts` against when the wake was armed, and
+    it was wrong twice over: `ts` has one-second resolution, so a message sent
+    in the same second as arming looked older than it, and the two values come
+    from different machines' clocks, so a hub running a minute slow would have
+    silently dropped a minute of real messages. `seq` is one authority counting
+    in one direction and needs no clock at all.
+
+    An envelope without a seq is treated as new — the safe direction: a
+    spurious wake costs a turn, a swallowed one costs a message nobody reads.
+    """
+    seq = getattr(env, "seq", None)
+    return since_seq > 0 and isinstance(seq, int) and seq <= since_seq
 
 
 # --- how to start a turn in each agent ----------------------------------------
@@ -96,8 +130,15 @@ def _wake_home(root: Path) -> Path:
 #
 # **Permission to act.** A woken turn has no human at the keyboard to approve
 # anything, so each carries the flag its vendor documents for unattended runs.
-# That flag is the whole security question here — it is why this is configured
-# once, deliberately, by the user, and never inferred.
+#
+# WHAT ARMING A WAKE ACTUALLY IS: a command stored on disk that the daemon will
+# run, unattended, whenever a message arrives — which means whenever a remote
+# participant decides one should. Every part of it deserves the suspicion that
+# deserves: the command is quoted so a target cannot smuggle a second one into
+# it, `wake show` prints it in full so a person can see what was armed, and it
+# is never inferred from anything a participant said. An agent asked to arm a
+# wake with a command or a target it did not work out for itself is being asked
+# to run somebody else's code on its user's machine.
 #
 # An agent that is not in this table is not a problem: run `collab wake set`
 # with whatever your own documentation gives for a single non-interactive run.
@@ -142,10 +183,32 @@ class Recipe:
     def needs_target(self) -> bool:
         return any("{target}" in part for part in self.argv)
 
-    def command(self, cwd: str = "", target: str = "") -> list[str]:
-        return [part.replace("{cwd}", cwd or str(Path.cwd()))
-                    .replace("{target}", target)
-                for part in self.argv]
+    def command(self, cwd: str = "", target: str = "",
+                collab: str = "collab") -> list[str]:
+        """The argv to run, with everything substituted SAFELY.
+
+        Half of these recipes are `sh -c` strings, because the agent behind them
+        takes a prompt only as an argument. Substituting a value into a shell
+        string is how command injection happens, and the values here are not
+        trustworthy: a target arrives from an environment variable or a flag a
+        participant may have talked somebody into pasting, and reads like an
+        opaque id while being a command. So every substitution is quoted for the
+        shell, and the templates hold no quotes of their own for a payload to
+        close. `shlex.quote` on a value that is genuinely an id changes nothing.
+        """
+        here = cwd or str(Path.cwd())
+        out = []
+        for part in self.argv:
+            if part in ("{cwd}", "{target}", "{collab}"):
+                # A whole argv entry: passed as one argument, never re-parsed,
+                # so it needs no quoting and must not get any.
+                out.append({"{cwd}": here, "{target}": target,
+                            "{collab}": collab}[part])
+                continue
+            out.append(part.replace("{cwd}", shlex.quote(here))
+                           .replace("{target}", shlex.quote(target))
+                           .replace("{collab}", shlex.quote(collab)))
+        return out
 
     def detect_target(self, env: dict[str, str] | None = None) -> str:
         """The live session's id, if the agent's own environment names it."""
@@ -159,9 +222,15 @@ class Recipe:
 
 RECIPES: tuple[Recipe, ...] = (
     # --- into the session the user has open -----------------------------------
+    # These two go through collab's own delivery rather than a shell string.
+    # Not merely to keep a target out of `sh -c` — though it does — but because
+    # both need to CHECK something before and after they act, and a one-line
+    # shell command cannot: whether the pane still holds an agent, whether the
+    # thread still exists. A delivery that cannot fail is a delivery that
+    # reports success while the messages go nowhere.
     Recipe(
-        "codex", ["sh", "-c",
-                  'codex queue --thread "{target}" --message "$(cat)"'], True,
+        "codex", ["{collab}", "wake", "deliver", "--to", "codex",
+                  "--target", "{target}"], True,
         "Delivers into the OPEN session: it wakes an idle one and lands as the"
         " next user turn on a busy one. Needs the thread id, which Codex puts"
         " in $CODEX_THREAD_ID for the commands it runs — so arm this from"
@@ -171,14 +240,13 @@ RECIPES: tuple[Recipe, ...] = (
         "run `collab wake set --agent codex` from inside the Codex session,"
         " or pass --target <thread-id>"),
     Recipe(
-        "tmux", ["sh", "-c",
-                 'tmux send-keys -t "{target}"'
-                 ' "collab: messages arrived — read $COLLAB_WAKE_PROMPT and act'
-                 ' on it" Enter'], False,
+        "tmux", ["{collab}", "wake", "deliver", "--to", "tmux",
+                 "--target", "{target}"], False,
         "THE GENERAL ANSWER: types one line into the terminal the agent is"
         " already sitting in, so it reaches ANY interactive agent running in a"
         " tmux pane. It sends a pointer to the batch rather than the batch"
-        " itself — pasting many lines into a TUI submits at the first newline.",
+        " itself — pasting many lines into a TUI submits at the first newline —"
+        " and refuses to type into a pane whose agent has exited.",
         "https://man.openbsd.org/tmux#send-keys", OPEN_SESSION,
         ("TMUX_PANE",),
         "run `collab wake set --agent tmux` from inside the pane, or pass"
@@ -202,36 +270,119 @@ RECIPES: tuple[Recipe, ...] = (
         " calls a woken turn cannot stop to ask about.",
         "https://google-gemini.github.io/gemini-cli/docs/cli/headless.html"),
     Recipe(
-        "cursor-agent", ["sh", "-c", 'cd "{cwd}" && cursor-agent -p --force "$(cat)"'],
+        "cursor-agent", ["sh", "-c", 'cd {cwd} && cursor-agent -p --force "$(cat)"'],
         False,
         "`-p` prints instead of opening a session; without `--force` it only"
         " proposes edits, so a woken turn would change nothing.",
         "https://cursor.com/docs/cli/headless"),
     Recipe(
-        "opencode", ["sh", "-c", 'cd "{cwd}" && opencode run "$(cat)"'], False,
+        "opencode", ["sh", "-c", 'cd {cwd} && opencode run "$(cat)"'], False,
         "`opencode run` takes the prompt as an argument only — it does not read"
         " stdin — so the batch is passed through the shell.",
         "https://opencode.ai/docs/cli/"),
     Recipe(
-        "amp", ["sh", "-c", 'cd "{cwd}" && amp -x "$(cat)"'], False,
+        "amp", ["sh", "-c", 'cd {cwd} && amp -x "$(cat)"'], False,
         "`-x` is Amp's execute mode: one turn, then exit.",
         "https://ampcode.com/manual"),
     Recipe(
-        "copilot", ["sh", "-c", 'cd "{cwd}" && copilot --allow-all-tools'], True,
+        "copilot", ["sh", "-c", 'cd {cwd} && copilot --allow-all-tools'], True,
         "Piped input is READ ONLY WHEN `-p` IS ABSENT — Copilot ignores stdin"
         " if a prompt is also given as an argument.",
         "https://docs.github.com/en/copilot/reference/copilot-cli-reference/"
         "cli-programmatic-reference"),
     Recipe(
-        "goose", ["sh", "-c", 'cd "{cwd}" && goose run -i -'], True,
+        "goose", ["sh", "-c", 'cd {cwd} && goose run -i -'], True,
         "`-i -` takes the instructions from stdin.",
         "https://goose-docs.ai/docs/guides/goose-cli-commands/"),
     Recipe(
-        "aider", ["sh", "-c", 'cd "{cwd}" && aider --yes -m "$(cat)"'], False,
+        "aider", ["sh", "-c", 'cd {cwd} && aider --yes -m "$(cat)"'], False,
         "`-m` is a single message then exit; `--yes` answers the confirmations"
         " nobody is there to answer.",
         "https://aider.chat/docs/scripting.html"),
 )
+
+
+# --- delivering into a session that is open -----------------------------------
+#
+# Both of these are run BY the daemon, as the command a recipe names. They exist
+# because delivery into a live session can fail in ways an exit code from the
+# underlying tool does not report, and a delivery that cannot fail is one that
+# marks the messages read while they go nowhere.
+
+#: Programs that mean «the agent is gone and this is a bare shell». Typing a
+#: sentence into one of these does not wake anybody: it runs the first word as
+#: a command, which at best fails and at worst is a command.
+SHELLS = frozenset({"sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh",
+                    "ash", "busybox", "nu", "elvish", "xonsh", "screen", "tmux"})
+
+
+def _tmux(args: list[str], runner=None) -> tuple[int, str]:
+    runner = runner or subprocess.run
+    try:
+        done = runner(["tmux", *args], capture_output=True, text=True,
+                      timeout=15, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 1, f"tmux would not run ({exc})"
+    return int(done.returncode), (done.stdout or done.stderr or "").strip()
+
+
+def pane_holds_an_agent(target: str, runner=None) -> tuple[bool, str]:
+    """Is there still something in this pane worth typing into?
+
+    Two things go wrong and they look identical from outside. The pane can be
+    gone — and tmux hands out `%0` again on a new server, so a stale id does not
+    fail, it points at a stranger. Or the pane can still exist with the agent
+    exited, leaving a shell that will execute the line as a command.
+    """
+    code, what = _tmux(["display-message", "-p", "-t", target,
+                        "#{pane_current_command}"], runner)
+    if code != 0 or not what:
+        # An empty answer with a zero exit happens for a pane that has gone;
+        # taking it as «something is running» let the check pass and left the
+        # send-keys below to be the one that noticed.
+        return False, f"no such pane {target!r} — {what or 'no answer from tmux'}"
+    if what in SHELLS:
+        return False, (f"pane {target} is running {what}, not an agent —"
+                       " whatever was there has exited")
+    return True, what
+
+
+def deliver_to_tmux(target: str, prompt_path: str, *, runner=None) -> tuple[int, str]:
+    """Type one line into the pane, having checked there is an agent in it."""
+    if not target:
+        return 1, "no pane to deliver to"
+    holds, what = pane_holds_an_agent(target, runner)
+    if not holds:
+        return 1, what
+    line = (f"collab: messages arrived — read {prompt_path} and act on it")
+    code, said = _tmux(["send-keys", "-t", target, "--", line, "Enter"], runner)
+    if code != 0:
+        return 1, f"send-keys failed — {said}"
+    return 0, f"typed into {target} (running {what})"
+
+
+def deliver_to_codex(target: str, prompt: str, *, runner=None) -> tuple[int, str]:
+    """Queue the batch into a live Codex thread.
+
+    `codex queue` exits non-zero and says so when the thread is gone, which is
+    the common case after the user closes that session — so its exit code is
+    passed through rather than smoothed over.
+    """
+    if not target:
+        return 1, "no thread to deliver to"
+    runner = runner or subprocess.run
+    try:
+        done = runner(["codex", "queue", "--thread", target,
+                       "--message", prompt],
+                      capture_output=True, text=True, timeout=120, check=False)
+    except FileNotFoundError:
+        return 1, "codex is not on PATH"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 1, f"codex would not run ({exc})"
+    said = ((done.stderr or "") + (done.stdout or "")).strip()
+    if done.returncode != 0:
+        return int(done.returncode), said[:300] or "codex queue failed"
+    return 0, f"queued into thread {target}"
 
 
 def recipe(agent: str) -> Recipe | None:
@@ -256,6 +407,11 @@ class WakeConfig:
     settle: float = SETTLE
     min_gap: float = MIN_GAP
     timeout: float = TIMEOUT
+    #: The last thing said before this wake was armed. Arming an agent that
+    #: joins a busy room otherwise delivered the entire replayed history as one
+    #: enormous first turn — every message of it new to a fresh inbox, none of
+    #: it anything the agent was asked to be told about.
+    since_seq: int = 0
 
     @property
     def enabled(self) -> bool:
@@ -268,6 +424,7 @@ class WakeConfig:
             "settle": self.settle,
             "min_gap": self.min_gap,
             "timeout": self.timeout,
+            "since_seq": self.since_seq,
         }
 
     @classmethod
@@ -289,6 +446,7 @@ class WakeConfig:
             settle=number(data.get("settle"), SETTLE),
             min_gap=number(data.get("min_gap"), MIN_GAP),
             timeout=number(data.get("timeout"), TIMEOUT),
+            since_seq=int(number(data.get("since_seq"), 0)),
         )
 
 
@@ -406,25 +564,81 @@ class Waker:
     # --- collecting ------------------------------------------------------------
 
     def note(self, env: Envelope, *, own_name: str = "") -> bool:
-        """Record an arrival worth waking for. Says whether it was kept."""
+        """Record an arrival worth waking for. Says whether it was kept.
+
+        Called from the feed for every event, INCLUDING the backfill the hub
+        replays on connect. Two guards, both learned the hard way:
+
+        Nothing is collected while the wake is disarmed. Every user runs this
+        daemon; a queue file growing in every session for a feature nobody
+        armed is a leak with no upside. And because arming is the moment the
+        agent asks to be told about things, an arrival from before it is not
+        news — without that floor, arming in a busy session immediately
+        delivered the entire replayed history as one enormous first turn.
+        """
         if env.kind not in WAKE_KINDS:
             return False
         if own_name and env.sender == own_name:
             return False            # our own words, echoed back off the feed
+        config = self.config()
+        if not config.enabled:
+            return False
+        if _is_history(env, config.since_seq):
+            return False            # said before anybody asked to be told
+        when = self.now()
         self.ensure()
+        text = str(env.text or "")
         line = json.dumps({
             "seq": getattr(env, "seq", None),
-            "at": self.now(),
+            "at": when,
             "kind": env.kind,
             "from": env.sender,
-            "text": env.text,
+            "text": (text[:MAX_TEXT] + " …[truncated; `collab recv` has it all]"
+                     if len(text) > MAX_TEXT else text),
         }, ensure_ascii=False)
         try:
             with self.pending.open("a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
         except OSError:
             return False
+        self._cap_pending()
         return True
+
+    def _cap_pending(self, keep: int = MAX_BATCH) -> None:
+        """Keep the newest arrivals and say how many were dropped.
+
+        A queue that grows without bound turns into a batch that cannot be
+        delivered — over Linux's per-argument limit, failing identically on
+        every retry. Dropping the oldest is the honest trade: the agent is told
+        the count, and the conversation itself is still in the inbox.
+        """
+        try:
+            with self.pending.open(encoding="utf-8") as fh:
+                lines = [line for line in fh if line.strip()]
+        except OSError:
+            return
+        if len(lines) <= keep:
+            return
+        dropped = len(lines) - keep
+        # STAMPED WITH THE OLDEST KEPT ARRIVAL, not with now: the settle window
+        # is measured from the first line of the file, and a marker dated now
+        # would restart that window every time a message came in — a busy room
+        # would settle only once it fell quiet, which is the opposite of what
+        # the window is for.
+        try:
+            oldest = float(json.loads(lines[-keep]).get("at") or self.now())
+        except (ValueError, TypeError, IndexError):
+            oldest = self.now()
+        earlier = json.dumps({"at": oldest, "kind": "system",
+                              "from": "collab",
+                              "text": f"[{dropped} earlier message(s) not shown"
+                                      " — `collab recv --limit 50` has them]"},
+                             ensure_ascii=False)
+        tmp = self.pending.with_suffix(".tmp")
+        with contextlib.suppress(OSError):
+            tmp.write_text(earlier + "\n" + "".join(lines[-keep:]),
+                           encoding="utf-8")
+            os.replace(tmp, self.pending)
 
     def waiting(self) -> int:
         """How many arrivals are queued but not yet cut into a batch."""
@@ -517,8 +731,26 @@ class Waker:
         return Batch(target)
 
     def prompt(self, batch: Batch) -> str:
-        return WAKE_PROMPT.format(session=self.session_id,
-                                  file=batch.name) + batch.read()
+        """The framing, then the batch, then a hard ceiling on the whole thing.
+
+        Five of the recipes hand the prompt to their agent as a single command
+        argument, and Linux refuses any argument over 128 KiB. That refusal is
+        not a one-off: the same batch is kept and retried, fails identically
+        every time, and the wake never delivers anything again. So the prompt is
+        cut to fit here, where it can say that it was cut, rather than being
+        rejected there, where nobody finds out.
+        """
+        head = WAKE_PROMPT.format(session=self.session_id, file=batch.name)
+        body = batch.read()
+        room = MAX_PROMPT_BYTES - len(head.encode()) - 200
+        if len(body.encode()) > room:
+            kept = body.encode()[-room:].decode("utf-8", "ignore")
+            # Start at a line boundary: half a JSON object reads as corruption.
+            if "\n" in kept:
+                kept = kept[kept.index("\n") + 1:]
+            body = ("[earlier messages in this batch were too large to carry —"
+                    " `collab recv --limit 50` has them all]\n" + kept)
+        return head + body
 
     def write_prompt(self, batch: Batch) -> Path:
         """The same prompt, on disk, for deliveries that cannot carry it.
