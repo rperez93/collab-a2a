@@ -27,7 +27,7 @@ from httpx_sse import aconnect_sse
 
 from .. import __version__, lockfile, peers
 from ..config import SessionProfile, share_stats_enabled, stats_source
-from ..protocol import EXT_PREFIX, Envelope
+from ..protocol import EXT_PREFIX, KIND_CHAT, Envelope
 from ..stats import read_stats, write_stats
 from .bridge import Bridge
 from .inbox import Inbox
@@ -148,7 +148,13 @@ def watching(profile: SessionProfile):
     mine = directory / str(os.getpid())
     try:
         directory.mkdir(parents=True, exist_ok=True)
-        mine.write_text(str(time.time()))
+        # THE PROCESS'S OWN START TIME, not the wall clock. A watcher killed
+        # with SIGKILL never runs its `finally`, so the file outlives it — and
+        # once the kernel reuses that pid for anything at all, `kill(pid, 0)`
+        # says yes and a session with nothing reading it looks perfectly
+        # healthy. The start time makes the record answer «this exact process»
+        # rather than «some process with this number».
+        mine.write_text(_started_at(os.getpid()))
     except OSError:
         mine = None                       # unwritable state dir: still stream
     try:
@@ -186,6 +192,23 @@ def last_poll(profile: SessionProfile) -> float:
         return 0.0
 
 
+def _started_at(pid: int) -> str:
+    """When this process began, as the kernel records it.
+
+    Linux keeps it in field 22 of /proc/<pid>/stat, in clock ticks since boot,
+    and it is the one thing about a pid that a later process reusing the number
+    cannot inherit. Where it cannot be read the answer is empty, and a record
+    written then is trusted on liveness alone — the behaviour before this
+    existed, rather than a session that refuses to work.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as fh:
+            data = fh.read()
+        return data[data.rindex(")") + 2:].split()[19]
+    except (OSError, ValueError, IndexError):
+        return ""
+
+
 def watchers(profile: SessionProfile) -> list[int]:
     """The pids currently streaming this session's feed, dead ones pruned."""
     directory = watchers_dir(profile)
@@ -199,7 +222,15 @@ def watchers(profile: SessionProfile) -> list[int]:
             pid = int(entry.name)
         except ValueError:
             continue
-        if _alive(pid):
+        try:
+            stamp = entry.read_text().strip()
+        except OSError:
+            stamp = ""
+        # Alive AND the same process: a stale file whose pid has been reused is
+        # the one way this whole check can pass while nothing is listening.
+        began = _started_at(pid)
+        same = (not stamp or not began or stamp == began)
+        if _alive(pid) and same:
             live.append(pid)
         else:
             with contextlib.suppress(OSError):
@@ -329,6 +360,12 @@ class Daemon:
             "others_connected": sum(1 for p in others if p.get("connected")),
             "others_total": len(others),
             "unread": self.inbox.unread_count(exclude_sender=self.profile.name),
+            # The same count, narrowed to things somebody said. `unread` above
+            # includes arrivals and file notices, which are events rather than
+            # anything to answer — fine for a badge, misleading as evidence
+            # that nobody is acting.
+            "unread_messages": self.inbox.unread_count(
+                exclude_sender=self.profile.name, kinds=(KIND_CHAT,)),
             # Whether anybody is actually reading what we deliver. The bridge
             # can see its own subscribers; the line stream registers itself.
             "ws_clients": self.bridge.clients,

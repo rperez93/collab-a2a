@@ -57,10 +57,19 @@ def _run(**flags):
     return code, out.getvalue()
 
 
+def _published(profile, doing):
+    """What the roster says about us — the daemon's snapshot on disk."""
+    (profile.dir / "snapshot.json").write_text(json.dumps({"participants": [
+        {"id": profile.participant_id, "name": profile.name,
+         "connected": True, "activity": doing}]}))
+
+
 def _healthy(profile):
-    """Listening, nothing waiting, and having said what it is doing."""
-    activity.write_local(profile, activity.sanitise(
-        {"state": "working", "what": "the client side"}))
+    """Listening, nothing waiting, and having said what it is doing — where
+    «said» means the roster knows, not merely that we wrote it down."""
+    doing = activity.sanitise({"state": "working", "what": "the client side"})
+    activity.write_local(profile, doing)
+    _published(profile, doing)
     return d.watching(profile)
 
 
@@ -94,15 +103,46 @@ def test_nothing_reading_is_a_failure_with_an_exit_code(session):
     assert "listen --follow" in out, "and what to do about it"
 
 
-def test_unread_is_reported_as_not_acting(session):
-    """Messages arrived and nobody took them — the only honest evidence that an
-    agent is listening without acting."""
-    _status(session, unread=3)
+def test_undrained_messages_are_reported_when_nothing_is_streaming(session):
+    """Only then does unread mean «arrived, and you have not taken it»."""
+    _status(session, unread_messages=3)
+    activity.write_local(session, activity.sanitise({"state": "idle"}))
+    _published(session, activity.sanitise({"state": "idle"}))
+    d.polled(session)
+
+    code, out = _run()
+
+    assert "3 undrained" in out
+    assert "recv" in out and "DO what they ask" in out
+
+
+def test_an_armed_watcher_is_never_nagged_about_unread(session):
+    """THE BUG THIS FEATURE SHIPPED WITH. Nothing but `recv` marks a row read —
+    `listen --follow` streams the log and never touches the table — so an agent
+    doing exactly what the skills prescribe accumulated unread for ever, was
+    scolded on every iteration of the loop, and was told to run `recv`, which
+    would have made it act twice on messages it had already handled."""
+    _status(session, unread=12, unread_messages=12)
+
     with _healthy(session):
         code, out = _run()
 
-    assert "3 unread" in out
-    assert "recv" in out and "DO what they ask" in out
+    assert (code, out) == (0, ""), "the prescribed setup must be silent"
+
+
+def test_somebody_arriving_is_not_a_message_you_ignored(session):
+    """`unread` counts every kind — joins, renames, file notices. One agent
+    walking in produced «1 unread — nobody has acted on them», with nothing
+    whatever to act on."""
+    _status(session, unread=1, unread_messages=0)
+    activity.write_local(session, activity.sanitise({"state": "idle"}))
+    _published(session, activity.sanitise({"state": "idle"}))
+    d.polled(session)
+
+    code, out = _run()
+
+    assert code == 0
+    assert "undrained" not in out, "an arrival is not something to answer"
 
 
 def test_saying_nothing_about_your_work_is_worth_a_line(session):
@@ -113,16 +153,62 @@ def test_saying_nothing_about_your_work_is_worth_a_line(session):
     assert "working" in out
 
 
+def test_an_activity_that_never_reached_the_roster_is_not_a_pass(session):
+    """The local file is what we MEANT to publish; the question is what the
+    others can see. They differ exactly when publishing failed."""
+    activity.write_local(session, activity.sanitise(
+        {"state": "working", "what": "the client side"}))
+
+    with d.watching(session):
+        code, out = _run()
+
+    assert "not on the roster" in out
+    assert code == 0, "it is a warning: the listener republishes on reconnect"
+
+
+def test_a_wedged_listener_fails_rather_than_warns(session):
+    """Its pid is alive and its heartbeat is a day old: a hung process, which
+    does not retry itself out of it. As a warning this exited 0, so a hook
+    keyed on failure never fired for the one state that needs a human."""
+    _status(session, heartbeat=time.time() - 86400)
+
+    with _healthy(session):
+        code, out = _run()
+
+    assert code == 1
+    assert "not beating" in out
+    assert "daemon stop" in out
+
+
+def test_the_session_flag_is_obeyed(session, monkeypatch, tmp_path):
+    """It is offered on this command, so reading the current session while
+    being told to read another checks the wrong one and says nothing of it."""
+    import argparse
+    import contextlib as ctx
+    import io as _io
+
+    out = _io.StringIO()
+    with ctx.redirect_stdout(out):
+        code = cli.cmd_check(argparse.Namespace(json=True, verbose=False,
+                                                session="s_somebody_else"))
+
+    assert code == 1
+    assert "s_somebody_else" in out.getvalue()
+
+
 def test_a_warning_alone_is_not_a_failure(session):
     """`fail` is «this session is not working»; `warn` is «you are not holding
     up your end». A loop that treats an unanswered message as a crash stops
     being run."""
-    _status(session, unread=2)
-    with _healthy(session):
-        code, out = _run()
+    _status(session, unread_messages=2)
+    activity.write_local(session, activity.sanitise({"state": "idle"}))
+    _published(session, activity.sanitise({"state": "idle"}))
+    d.polled(session)
+
+    code, out = _run()
 
     assert code == 0
-    assert out, "it still says so"
+    assert "2 undrained" in out, "it still says so"
 
 
 def test_a_dead_listener_is_a_failure(session, monkeypatch):
@@ -194,3 +280,36 @@ def test_the_monitor_hint_names_the_loop(session, capsys):
     out = capsys.readouterr().out
     assert "on a loop" in out
     assert "SILENT" in out, "so an agent knows silence is the good case"
+
+
+# --- the one way it could be silent while nothing was listening -------------
+
+def test_a_reused_pid_does_not_resurrect_a_dead_watcher(session):
+    """A watcher killed with SIGKILL never runs its `finally`, so its file
+    outlives it — and once the kernel reuses that pid for anything at all,
+    `kill(pid, 0)` says yes and a session with nothing reading it looks
+    perfectly healthy. The worst failure this feature could have."""
+    import os
+
+    directory = d.watchers_dir(session)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / str(os.getpid())).write_text("123456789")   # not our start time
+
+    assert d.watchers(session) == []
+    assert not (directory / str(os.getpid())).exists(), "and it is swept up"
+
+    activity.write_local(session, activity.sanitise({"state": "idle"}))
+    _published(session, activity.sanitise({"state": "idle"}))
+    code, out = _run()
+
+    assert code == 1, "nothing is reading, and it says so"
+    assert "nothing is reading this session" in out
+
+
+def test_a_watcher_records_which_process_it_is(session):
+    import os
+
+    with d.watching(session):
+        stamp = (d.watchers_dir(session) / str(os.getpid())).read_text().strip()
+
+    assert stamp == d._started_at(os.getpid()) != ""

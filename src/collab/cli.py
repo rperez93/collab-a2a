@@ -1693,6 +1693,12 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
     if pid is None:
         add("listener", CHECK_FAIL, "the listener is not running",
             f"{exe} daemon start")
+    elif state == "offline":
+        # Its pid is alive and its heartbeat is not: a wedged process, which
+        # will not retry itself out of it. A warning here exits 0, so a hook
+        # keyed on failure never fired for the one state that needs a human.
+        add("listener", CHECK_FAIL, "the listener is running but not beating",
+            f"{exe} daemon stop && {exe} daemon start")
     elif state != "live":
         add("listener", CHECK_WARN, f"the daemon is {state}",
             "it retries on its own; if this persists the hub may be gone")
@@ -1713,25 +1719,71 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
             f"arm a watcher on `{exe} listen --follow` that outlives the turn,"
             f" or poll `{exe} recv --wait 60` every turn")
 
-    # 3. Is anything ACTING on it? Unread is the only honest evidence: messages
-    #    arrived, and nobody has taken them.
-    unread = int(status.get("unread") or 0)
-    if unread:
-        add("acting", CHECK_WARN, f"{unread} unread — nobody has acted on them",
+    # 3. Has anything been left undrained? ONLY MEANINGFUL WHILE POLLING.
+    #
+    #    This began as «is anything ACTING on it», and unread was the evidence.
+    #    It is not. Nothing but `recv` ever marks a row read — `listen --follow`
+    #    streams the log and never touches the table — so an agent doing exactly
+    #    what the skills prescribe, an armed watcher it never polls behind,
+    #    accumulates unread for ever and was scolded on every single iteration
+    #    of the loop, told to run `recv`, and thereby invited to act twice on
+    #    messages it had already handled. The instruction and the check
+    #    contradicted each other.
+    #
+    #    So it is asked only of an agent that has no watcher, where unread does
+    #    mean «arrived, and you have not taken it». And it counts only what
+    #    somebody SAID: joins, presence and file notices are events, not things
+    #    anybody has to act on, and one agent arriving used to produce «1 unread
+    #    — nobody has acted on them» with nothing whatever to act on.
+    #
+    #    What this cannot see: an agent with a watcher armed that ignores every
+    #    notification. Nothing in the inbox distinguishes that from one acting
+    #    promptly, so it is not claimed — a check that pretends to measure
+    #    acting, and cannot, is worse than one that says what it measures.
+    waiting = int(status.get("unread_messages") or 0)
+    if armed:
+        add("acting", CHECK_OK, "a watcher is delivering what arrives")
+    elif waiting:
+        add("acting", CHECK_WARN, f"{waiting} undrained — nobody has taken them",
             f"{exe} recv --limit 50, then DO what they ask")
     else:
         add("acting", CHECK_OK, "nothing waiting")
 
     # 4. Does anybody know what this agent is doing?
-    mine = act.read_local(profile)
-    if act.is_working(mine):
-        add("activity", CHECK_OK, act.describe(mine))
-    elif mine.get("state") == act.IDLE:
-        add("activity", CHECK_OK, act.describe(mine))
+    #    Asked of the ROSTER, not of the local file: the local copy is what we
+    #    intended to publish, and the question is what everybody else can
+    #    actually see. The two differ exactly when publishing failed, which is
+    #    the case worth catching.
+    published = _my_published_activity(profile)
+    mine = published if published else act.read_local(profile)
+    if mine.get("state") in (act.WORKING, act.IDLE):
+        detail = act.describe(mine)
+        if not published:
+            add("activity", CHECK_WARN, f"{detail} — but only here, not on the"
+                " roster", "the listener republishes it once it reconnects")
+        else:
+            add("activity", CHECK_OK, detail)
     else:
         add("activity", CHECK_WARN, "you have not said what you are doing",
             f'{exe} working "<objective>" --files <paths>')
     return out
+
+
+def _my_published_activity(profile: SessionProfile) -> dict[str, Any]:
+    """What the roster says THIS agent is doing, from the daemon's snapshot.
+
+    By participant id where there is one: a display name can be one rename
+    behind, and matching on it would answer about somebody else.
+    """
+    try:
+        snapshot = json.loads((DaemonPaths(profile.dir).snapshot).read_text())
+    except (OSError, ValueError):
+        return {}
+    for person in snapshot.get("participants") or []:
+        if (person.get("id") == profile.participant_id if profile.participant_id
+                else person.get("name") == profile.name):
+            return person.get("activity") or {}
+    return {}
 
 
 def cmd_check(args: argparse.Namespace) -> int:
@@ -1740,15 +1792,21 @@ def cmd_check(args: argparse.Namespace) -> int:
     Not a status display: a verdict, with an exit code, so it can be armed on a
     timer or a hook and mean something without being read by a person.
     """
-    profile = SessionProfile.current()
+    # `--session` is offered on this command, so it has to be obeyed: reading
+    # the current one while being told to read another checks the wrong session
+    # and says nothing about having done so.
+    profile = (SessionProfile.load(args.session) if getattr(args, "session", None)
+               else SessionProfile.current())
     if profile is None:
+        where = (f"no session {args.session!r} here"
+                 if getattr(args, "session", None)
+                 else f"no active session in {collab_home()}")
         if args.json:
             print(json.dumps({"ok": False, "checks": [
-                {"check": "session", "verdict": CHECK_FAIL,
-                 "detail": f"no active session in {collab_home()}",
+                {"check": "session", "verdict": CHECK_FAIL, "detail": where,
                  "fix": "collab join"}]}))
         else:
-            fail(f"no active collab session in {collab_home()}")
+            fail(where)
             print(dim("  `collab join` finds one running on this machine"))
         return 1
 

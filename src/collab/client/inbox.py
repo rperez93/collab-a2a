@@ -79,20 +79,29 @@ class Inbox:
             row = self._db.execute("SELECT value FROM meta WHERE key='last_seq'").fetchone()
         return int(row["value"]) if row else 0
 
-    def unread_count(self, *, exclude_sender: str | None = None) -> int:
+    def unread_count(self, *, exclude_sender: str | None = None,
+                     kinds: tuple[str, ...] = ()) -> int:
         """How many messages are waiting for you.
 
         Your own messages come back down the feed (that is what keeps every
         participant's log identical), but counting them as unread would show a
         badge for talking to yourself.
+
+        ``kinds`` narrows it to what somebody actually SAID. An arrival, a
+        rename or a file notice is an event, not something anybody has to act
+        on, and counting them told an agent it had «1 unread — nobody has acted
+        on them» because a colleague had walked in.
         """
         sql = "SELECT COUNT(*) AS c FROM inbox WHERE read=0"
-        args: tuple[Any, ...] = ()
+        args: list[Any] = []
         if exclude_sender:
             sql += " AND sender <> ?"
-            args = (exclude_sender,)
+            args.append(exclude_sender)
+        if kinds:
+            sql += f" AND kind IN ({','.join('?' * len(kinds))})"
+            args.extend(kinds)
         with self._lock:
-            row = self._db.execute(sql, args).fetchone()
+            row = self._db.execute(sql, tuple(args)).fetchone()
         return int(row["c"])
 
     def take_unread(self, limit: int = 100, *, mark: bool = True) -> list[Envelope]:
