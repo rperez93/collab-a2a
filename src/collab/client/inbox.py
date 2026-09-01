@@ -146,6 +146,15 @@ class Inbox:
                 # step along. Anything that leaves this block leaves it clean,
                 # which `_discard` is responsible for even when the rollback
                 # itself is what fails.
+                #
+                # BaseException rather than Exception, and wider than today's
+                # callers need on purpose: `record` is synchronous with no
+                # await and no yield, so CancelledError and GeneratorExit
+                # cannot reach it as things stand. Moving this write off the
+                # event loop is the next change this file is likely to see, and
+                # it opens that path the moment it lands — a handler that holds
+                # only while nobody threads the caller is a trap laid for
+                # whoever does.
                 self._discard()
                 raise
         return True
@@ -184,6 +193,16 @@ class Inbox:
         ORIGINAL one, and that is the useful one: a full disk or a read-only
         directory is what a person can act on. Neither the rollback's
         complaint nor the reopen's may take its place.
+
+        WHAT IS NOT KNOWN is how this is reached. The obvious theory —that the
+        append and the rollback share a cause— was tested and did not hold: the
+        rollback succeeded through a read-only directory, read-only `-wal` and
+        `-shm`, unlinked `-wal` and `-shm`, and a read-only `inbox.db`, because
+        a WAL rollback discards frames rather than writing them. It could only
+        be made to fail by injection. Genuine ENOSPC and a hardware EIO remain
+        the candidates and neither is stageable without root, so this is three
+        lines against a consequence that is silent, not against a rate anybody
+        has measured. Do not quote a likelihood for it; there is not one.
         """
         try:
             self._db.rollback()

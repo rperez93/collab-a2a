@@ -20,7 +20,7 @@ import sqlite3
 
 import pytest
 
-from collab.client.inbox import Inbox
+from collab.client.inbox import BUSY_TIMEOUT_MS, Inbox
 from collab.protocol import KIND_CHAT, Envelope, now_iso
 
 
@@ -152,6 +152,18 @@ class _RollbackAlsoFails:
         return getattr(self._real, name)
 
 
+def _both_fail(inbox, log, seq):
+    """Break the log AND the rollback, and let `record` run into both."""
+    log.chmod(0o400)
+    inbox._db = _RollbackAlsoFails(inbox._db)
+    try:
+        with pytest.raises(OSError) as caught:
+            inbox.record(_env(seq))
+    finally:
+        log.chmod(0o600)
+    return caught
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="root writes a read-only file anyway")
 def test_a_rollback_that_fails_too_does_not_leave_the_row_behind(inbox, tmp_path):
     """Both at once, which the first guard did not survive.
@@ -165,14 +177,7 @@ def test_a_rollback_that_fails_too_does_not_leave_the_row_behind(inbox, tmp_path
     the handler written for it.
     """
     inbox.record(_env(1))
-    log = tmp_path / "inbox.jsonl"
-    log.chmod(0o400)
-    inbox._db = _RollbackAlsoFails(inbox._db)
-    try:
-        with pytest.raises(OSError) as caught:
-            inbox.record(_env(50))
-    finally:
-        log.chmod(0o600)
+    caught = _both_fail(inbox, tmp_path / "inbox.jsonl", 50)
 
     assert not isinstance(caught.value, sqlite3.Error), \
         "the rollback's complaint replaced the failure a person can act on"
@@ -187,14 +192,31 @@ def test_a_moment_of_bad_luck_does_not_deafen_the_daemon_for_good(inbox, tmp_pat
     one bad moment. A fault that persists is loud through the append anyway."""
     inbox.record(_env(1))
     log = tmp_path / "inbox.jsonl"
-    log.chmod(0o400)
-    inbox._db = _RollbackAlsoFails(inbox._db)
-    try:
-        with pytest.raises(OSError):
-            inbox.record(_env(50))
-    finally:
-        log.chmod(0o600)
+    _both_fail(inbox, log, 50)
 
     assert inbox.record(_env(50)) is True, "it never recorded again"
     assert [e.seq for e in inbox.all_events()] == [1, 50]
     assert [json.loads(x)["seq"] for x in log.read_text().splitlines()] == [1, 50]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes a read-only file anyway")
+def test_the_replacement_connection_is_set_up_like_the_first_one(inbox, tmp_path):
+    """The one way to get the recovery wrong.
+
+    A hand-rolled reconnection comes back without `journal_mode=WAL` and
+    without the busy timeout — which is the contention fix from earlier on this
+    branch, reintroduced on the path nobody would think to look at. Both
+    connections come out of `_connect` so that the two cannot drift; this is
+    what says they have not.
+    """
+    was = (inbox._db.execute("PRAGMA journal_mode").fetchone()[0].lower(),
+           inbox._db.execute("PRAGMA busy_timeout").fetchone()[0])
+    assert was == ("wal", BUSY_TIMEOUT_MS)
+
+    inbox.record(_env(1))
+    _both_fail(inbox, tmp_path / "inbox.jsonl", 50)
+
+    now = (inbox._db.execute("PRAGMA journal_mode").fetchone()[0].lower(),
+           inbox._db.execute("PRAGMA busy_timeout").fetchone()[0])
+    assert now == was, "the recovery path came back configured differently"
+    assert inbox._db.row_factory is sqlite3.Row
