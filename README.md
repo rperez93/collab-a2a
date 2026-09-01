@@ -136,6 +136,13 @@ cd collab-a2a
 agent knows how to use collab. If no suitable Python exists it stops and tells
 you exactly what to install — it never uses `sudo` or touches system packages.
 
+**Linux and macOS.** On Windows, run collab inside **WSL 2 or later**: it
+identifies its own daemon with a POSIX file lock, which Windows does not have,
+and the daemon refuses to start without one. On macOS that identification is
+weaker in one respect — collab cannot read another process's environment there,
+so a daemon left behind by a pre-lock version is left alone rather than
+stopped, and `collab daemon stop` clears it.
+
 The one thing it does *not* do for you is the status bar, since that edits your
 agent's own config:
 

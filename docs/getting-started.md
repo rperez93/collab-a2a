@@ -14,6 +14,23 @@ You need the following:
   with someone on another network.
   Without it, a session is reachable on your machine and local network only.
 
+### Supported platforms
+
+collab runs on Linux and macOS.
+On Windows, run it inside WSL 2 or later.
+
+collab decides which process is a session's listener by holding a POSIX file
+lock for that process's lifetime.
+Windows does not provide one, so the daemon refuses to start there rather than
+run without knowing whether a second one is already running.
+
+On macOS, one part of that identification is weaker than on Linux, and in one
+direction only.
+collab cannot read another process's environment there, so it will not signal a
+listener left behind by a version of collab from before the lock existed.
+That listener is left running instead of being stopped for you, and
+`collab daemon stop` clears it.
+
 ## Install collab
 
 collab lives entirely in a virtual environment.

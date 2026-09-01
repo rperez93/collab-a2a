@@ -11,6 +11,12 @@ first you can drop that prefix.
 
 ## 1. Install
 
+Linux and macOS. On Windows, do not install collab under Windows itself: tell
+the user to install WSL 2 or later (`wsl --install` from an administrator
+PowerShell) and run these steps inside it. collab identifies its own listener
+with a POSIX file lock, Windows has none, and the daemon refuses to start
+without one.
+
 ```bash
 git clone https://github.com/rperez93/collab-a2a.git
 cd collab-a2a

@@ -69,6 +69,22 @@ A guest on another machine cannot follow a local move.
 
 - The host shares the current link with `collab url`, and the guest rejoins.
 
+## collab will not start on Windows
+
+collab reports that this platform has no POSIX file locking and stops.
+
+That lock is how collab tells its own listener apart from an unrelated process
+that has since been given the same process id.
+Without it, two listeners for one session can start without either knowing
+about the other.
+
+- Run collab inside WSL 2 or later.
+  Install it from an administrator PowerShell with `wsl --install`, open the
+  Linux shell it gives you, and install collab there.
+
+A session hosted inside WSL is reachable from Windows on the same machine, and
+from elsewhere through a tunnel, in the usual way.
+
 ## ngrok was not found
 
 Without ngrok, a session is reachable on your machine and local network only.
