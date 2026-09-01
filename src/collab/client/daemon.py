@@ -350,6 +350,9 @@ class Daemon:
         #: When the last woken turn finished. Polls up to here were made by that
         #: turn, doing what it was woken to do, and are not evidence of a reader.
         self._wake_turn_ended = 0.0
+        #: What we put on the roster on the woken turn's behalf, so that we
+        #: retract that and nothing the agent said for itself.
+        self._wake_activity: dict[str, Any] | None = None
 
     # --- status ---------------------------------------------------------------
 
@@ -620,11 +623,91 @@ class Daemon:
 
     async def _wake(self, batch: wake.Batch) -> None:
         try:
+            await self._say_it_is_working(batch)
             await self._wake_once(batch)
         finally:
+            with contextlib.suppress(Exception):
+                await self._say_the_turn_is_over()
+            # A woken turn is the one moment this agent's usage certainly
+            # changed, and the figures are what the room splits work by. The
+            # timer would get there eventually; sampling now means the next
+            # person deciding who has quota left is not reading what was true
+            # before the turn ran.
+            with contextlib.suppress(Exception):
+                self._stats_ran_at = 0.0
+                await self._refresh_stats_from_command()
+                if self._http is not None:
+                    await self._report_stats(self._http)
             # Set however the turn ended, including a crash: every poll up to
             # this instant may have been the woken turn reading its own batch.
             self._wake_turn_ended = time.time()
+
+    async def _say_it_is_working(self, batch: wake.Batch) -> None:
+        """Put the woken turn on the roster, because nobody else will.
+
+        An agent reached by a wake is the one agent that cannot announce itself:
+        it is not running when the decision to wake it is made, and by the time
+        it could speak it has already been silent for however long the turn
+        takes to start. So the room saw «idle» through eight minutes of work,
+        and `collab who` answered the question it exists to answer wrongly.
+
+        The daemon is entitled to say this because it observed it — it started
+        the turn. What it will NOT do is talk over the agent: a fresh statement
+        of its own is better evidence than anything inferred here, and only an
+        absent, idle or stale one is replaced.
+        """
+        from .. import activity as act
+
+        mine = act.read_local(self.profile)
+        if mine and mine.get("state") == act.WORKING and not act.is_stale(mine):
+            self._wake_activity = None      # it speaks for itself; leave it be
+            return
+        said = act.sanitise({"state": act.WORKING,
+                             "what": f"woken by collab — {wake.summarise(batch.events())}"},
+                            previous=mine)
+        self._wake_activity = said
+        await self._publish_activity(said)
+
+    async def _say_the_turn_is_over(self) -> None:
+        """Take it back down again — but only what we put up.
+
+        The half that gets forgotten. A woken turn ends with its process gone,
+        and nothing retracts what was said on its behalf; `is_stale` would
+        eventually bury it, a quarter of an hour later, during which the roster
+        says an agent is working whose turn ended long ago. The daemon watched
+        it exit, so it can say so now.
+
+        If the agent replaced our line with one of its own during the turn, that
+        line is its business and stays.
+        """
+        from .. import activity as act
+
+        if not self._wake_activity:
+            return
+        current = act.read_local(self.profile)
+        ours = (current.get("what") or "") == (self._wake_activity.get("what") or "")
+        self._wake_activity = None
+        if not ours:
+            return                          # it said something better; keep it
+        await self._publish_activity(
+            act.sanitise({"state": act.IDLE, "what": "waiting to be woken"},
+                         previous=current))
+
+    async def _publish_activity(self, said: dict[str, Any]) -> None:
+        from .. import activity as act
+
+        act.write_local(self.profile, said)
+        if self._http is None:
+            return                          # the heartbeat carries it up later
+        try:
+            await self._http.post(
+                f"{self.profile.url}{EXT_PREFIX}/activity",
+                headers={"Authorization": f"Bearer {self.profile.token}"},
+                json=said, timeout=10.0)
+            self._last_activity = said
+            self._activity_sent_at = time.time()
+        except (httpx.HTTPError, AttributeError, TypeError) as exc:
+            logger.debug("could not publish the woken turn's activity (%r)", exc)
 
     async def _wake_once(self, batch: wake.Batch) -> None:
         config = self.waker.config()

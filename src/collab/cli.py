@@ -1793,7 +1793,57 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
     else:
         add("activity", CHECK_WARN, "you have not said what you are doing",
             f'{exe} working "<objective>" --files <paths>')
+
+    # 5. And does anybody know what this agent has LEFT?
+    #
+    #    Splitting work by who has quota is the reason the figures are here at
+    #    all, and every route that produces them is silent when it fails: the
+    #    status line is only installed if somebody installed it, the pull
+    #    command is only run if somebody configured one, and an agent that
+    #    reports by hand only does it while it remembers. So the roster fills
+    #    with agents whose usage is blank, the feature quietly stops working,
+    #    and nothing anywhere says a word — including this loop, which asked
+    #    about everything else and never about this.
+    #    ASKED ONLY OF A ROUTE THAT ONCE WORKED. An agent that has never
+    #    reported a figure has no reporting set up, which is a decision
+    #    somebody did or did not make at install time — not a fault, and
+    #    warning about it every few turns is precisely the noise that gets this
+    #    loop ignored. Figures that existed and then stopped are the opposite:
+    #    something that was working has quietly stopped, which is the whole
+    #    family of bug this command exists for.
+    age = _stats_age(profile)
+    if share_stats_enabled() and age is not None:
+        from .stats import read_stats
+
+        source, _interval = stats_source()
+        how = (f"{exe} stats --report '<json>'" if not source
+               else f"check that `{source}` still runs and prints usage JSON")
+        if not read_stats(profile):
+            add("stats", CHECK_WARN, "your usage figures are not readable"
+                " — the file is there but not yours", how)
+        elif age > STATS_ARE_HISTORY:
+            add("stats", CHECK_WARN,
+                f"your usage was last reported {_ago_seconds(age)},"
+                " so the room is splitting work on a stale figure", how)
+        else:
+            add("stats", CHECK_OK, "your usage is current")
     return out
+
+
+#: Past this, a usage figure is history rather than news. Generous: the pull
+#: runs every two minutes by default and a status line pushes far more often,
+#: so anything approaching this means the route that produced it has stopped.
+STATS_ARE_HISTORY = 1800.0
+
+
+def _stats_age(profile: SessionProfile) -> float | None:
+    """How long since the figures were last written, by the file's own clock."""
+    from .stats import STATS_FILE
+
+    try:
+        return time.time() - (Path(profile.dir) / STATS_FILE).stat().st_mtime
+    except OSError:
+        return None
 
 
 def _my_published_activity(profile: SessionProfile) -> dict[str, Any]:

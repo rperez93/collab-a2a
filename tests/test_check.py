@@ -18,6 +18,7 @@ import argparse
 import contextlib
 import io
 import json
+import os
 import time
 
 import pytest
@@ -259,6 +260,54 @@ def test_json_says_which_one_failed(session):
     broken = [c for c in payload["checks"] if c["verdict"] == "fail"]
     assert [c["check"] for c in broken] == ["watching"]
     assert broken[0]["fix"], "every failure carries its own fix"
+
+
+# --- the figures the room splits work by ------------------------------------
+#
+# Every route that produces usage figures is silent when it fails: the status
+# line only exists if somebody installed it, the pull command only runs if
+# somebody configured one, and reporting by hand only happens while an agent
+# remembers. So a roster fills with agents whose usage is blank, the feature
+# quietly stops working, and this loop — which asks about everything else —
+# never asked about this at all. It applies to Claude Code exactly as much as
+# to anything else: it is not woken, but it is not exempt from being seen.
+
+def test_an_agent_that_never_reported_is_not_nagged(session, monkeypatch):
+    """No figures ever means no reporting was set up — a decision somebody
+    made or did not make at install time, not a fault. Warning about it every
+    few turns is exactly the noise that gets this loop ignored."""
+    monkeypatch.setattr(cli, "share_stats_enabled", lambda: True)
+    results = {r["check"]: r for r in cli._checks(session)}
+    assert "stats" not in results
+
+
+def test_figures_from_hours_ago_are_not_current(session, monkeypatch):
+    from collab import stats as st
+
+    monkeypatch.setattr(cli, "share_stats_enabled", lambda: True)
+    monkeypatch.setattr(cli, "stats_source", lambda: ("mycmd", 120))
+    st.write_stats(session, {"quota_used_pct": 40})
+    old = time.time() - cli.STATS_ARE_HISTORY - 60
+    os.utime(session.dir / st.STATS_FILE, (old, old))
+    results = {r["check"]: r for r in cli._checks(session)}
+    assert results["stats"]["verdict"] == cli.CHECK_WARN
+    assert "stale" in results["stats"]["detail"]
+
+
+def test_fresh_figures_pass_quietly(session, monkeypatch):
+    from collab import stats as st
+
+    monkeypatch.setattr(cli, "share_stats_enabled", lambda: True)
+    st.write_stats(session, {"quota_used_pct": 40})
+    results = {r["check"]: r for r in cli._checks(session)}
+    assert results["stats"]["verdict"] == cli.CHECK_OK
+
+
+def test_it_says_nothing_when_sharing_is_off(session, monkeypatch):
+    """Off is a decision somebody made, not a fault to report every few turns."""
+    monkeypatch.setattr(cli, "share_stats_enabled", lambda: False)
+    results = {r["check"]: r for r in cli._checks(session)}
+    assert "stats" not in results
 
 
 # --- what the host is told to say -------------------------------------------

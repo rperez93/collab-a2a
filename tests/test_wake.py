@@ -353,6 +353,106 @@ def test_the_batch_is_framed_as_data(tmp_path):
     assert "do nothing and say nothing" in prompt      # silence is allowed
 
 
+# --- being seen to work --------------------------------------------------------
+#
+# A woken agent is the one participant that cannot announce itself: it is not
+# running when the decision to wake it is made. So the roster showed «idle»
+# through however long the turn took, and then — because nothing retracts a
+# statement made by a process that has since exited — «working» for the quarter
+# of an hour it takes staleness to bury it. Both wrong, in opposite directions,
+# and `collab who` exists to answer exactly this question.
+
+def test_the_woken_turn_is_put_on_the_roster(profile):
+    from collab import activity as act
+
+    daemon = a_daemon(profile)
+    wake.write_config(daemon.paths.root, wake.WakeConfig(
+        command=[sys.executable, "-c", "pass"], settle=0, min_gap=0))
+    daemon.waker.note(chat("please look at the build", sender="ana"))
+
+    async def watch():
+        batch = daemon.waker.take()
+        await daemon._say_it_is_working(batch)
+        during = act.read_local(profile)
+        await daemon._say_the_turn_is_over()
+        return during, act.read_local(profile)
+
+    during, after = asyncio.run(watch())
+    assert during["state"] == act.WORKING
+    assert "ana" in during["what"], "and who it is for"
+    assert after["state"] == act.IDLE, "nothing retracted the woken turn"
+
+
+def test_it_does_not_talk_over_an_agent_that_speaks_for_itself(profile):
+    """A fresh statement of its own is better evidence than anything inferred."""
+    from collab import activity as act
+
+    daemon = a_daemon(profile)
+    wake.write_config(daemon.paths.root, wake.WakeConfig(command=["true"]))
+    act.write_local(profile, act.sanitise(
+        {"state": act.WORKING, "what": "refactoring the auth module"}))
+    daemon.waker.note(chat())
+
+    async def go():
+        await daemon._say_it_is_working(daemon.waker.take())
+        return act.read_local(profile)
+
+    assert asyncio.run(go())["what"] == "refactoring the auth module"
+
+
+def test_it_retracts_only_what_it_said_itself(profile):
+    """If the agent replaced our placeholder mid-turn, that line is its own."""
+    from collab import activity as act
+
+    daemon = a_daemon(profile)
+    daemon._wake_activity = act.sanitise(
+        {"state": act.WORKING, "what": "woken by collab — 1 message from ana"})
+    act.write_local(profile, act.sanitise(
+        {"state": act.WORKING, "what": "chasing the flaky test"}))
+    asyncio.run(daemon._say_the_turn_is_over())
+    assert act.read_local(profile)["what"] == "chasing the flaky test"
+
+
+def test_a_stale_claim_of_working_is_replaced(profile):
+    """«Working» from a turn that ended an hour ago is not a reason to stay off
+    the roster — it is the exact thing this is here to correct."""
+    from collab import activity as act
+
+    daemon = a_daemon(profile)
+    wake.write_config(daemon.paths.root, wake.WakeConfig(command=["true"]))
+    old = act.sanitise({"state": act.WORKING, "what": "something from before"})
+    old["updated_at"] = time.time() - act.STALE_AFTER - 60
+    act.write_local(profile, old)
+    daemon.waker.note(chat(sender="bo"))
+
+    async def go():
+        await daemon._say_it_is_working(daemon.waker.take())
+        return act.read_local(profile)
+
+    assert "bo" in asyncio.run(go())["what"]
+
+
+def test_the_turn_is_taken_off_the_roster_even_if_it_crashed(profile):
+    from collab import activity as act
+
+    daemon = a_daemon(profile)
+    wake.write_config(daemon.paths.root, wake.WakeConfig(
+        command=["/nonexistent/agent"], settle=0, min_gap=0))
+    daemon.waker.note(chat())
+    asyncio.run(_wake_once(daemon))
+    assert act.read_local(profile).get("state") == act.IDLE
+
+
+def test_the_prompt_asks_for_it_too(tmp_path):
+    """Because the agent's own words beat anything the daemon can infer."""
+    w, clock = waker(tmp_path)
+    w.note(chat())
+    clock[0] += 1
+    prompt = w.prompt(w.take())
+    assert "collab working" in prompt
+    assert "collab idle" in prompt
+
+
 # --- the daemon actually running it --------------------------------------------
 
 @pytest.fixture()
@@ -564,7 +664,10 @@ def test_the_room_is_told_when_nothing_is_reaching_the_agent(profile):
 
     class Http:
         async def post(self, url, **kwargs):
-            said.append(kwargs.get("json", {}).get("text", ""))
+            # Only what was said IN THE ROOM. The same client also carries the
+            # roster updates for the woken turn, which are not announcements.
+            if url.endswith("/messages"):
+                said.append(kwargs.get("json", {}).get("text", ""))
 
     daemon._http = Http()
     wake.write_config(daemon.paths.root, wake.WakeConfig(
