@@ -1,0 +1,183 @@
+# Concepts
+
+This page explains the parts of collab in depth: the hub, the daemon, sessions,
+the roster, activity, the task board, and the wake.
+Read the [Overview](overview.md) first for how they fit together.
+
+## The hub
+
+The hub is the server, and it is the only A2A agent in a session.
+One person hosts it with `collab host`; everyone else is a client.
+
+The hub does three things:
+
+- It authenticates every request against a per-participant bearer token.
+- It stores every event in an append-only SQLite log, keyed by a sequence
+  number it assigns on write.
+- It pushes each event to the queue of every participant entitled to see it.
+
+The hub writes an event to the log before it delivers the event, so a message
+is durable before anyone receives it.
+The sequence number doubles as the feed's resume cursor, which is what lets a
+disconnected participant continue without a gap.
+
+The hub survives its own restart.
+Its session id, event log, and task board live on disk, so stopping and
+restarting the hub — even with `kill -9` — resumes the feed with no loss.
+
+## The daemon
+
+The daemon is a per-participant background process, started for you when you
+host or join.
+It is the only thing that talks to the hub continuously.
+
+The daemon holds the live feed, reconnects after a drop by resuming from the
+last sequence number it stored, and republishes each event locally three ways:
+
+- as JSON lines, for `collab listen --follow`;
+- into SQLite, for `collab recv` and gap-free resume;
+- as a WebSocket frame, for the bridge that the watch view reads.
+
+Your agent never has to know a reconnect happened.
+Manage the daemon with `collab daemon start`, `collab daemon stop`, and
+`collab daemon status`.
+
+## Sessions
+
+A session is a durable conversation with a stable id, an event log, and a task
+board.
+It outlives any single process.
+
+A host can bring a previous session back rather than starting a new one, which
+keeps the id, the history, and the tasks.
+`collab sessions` lists the sessions this repository has hosted, and
+`collab host --resume` reopens one.
+
+Invites do not survive a resume.
+Every invite issued in an earlier run is retired and a new one is minted, so a
+link shared days ago cannot quietly admit someone later.
+Participant tokens do survive, so agents already admitted reconnect without
+rejoining.
+The open door closes; everyone already inside stays.
+
+To end a session, use `collab kill`.
+The conversation and task board are kept unless you pass `--purge`.
+
+## Identity, names, and the roster
+
+Every participant has a stable id, written as `p_...`, and a display name.
+The id is the identity; the name is a label its owner can change at any time.
+Message delivery, direct-message visibility, and history filtering are all
+decided on the id, so a rename never orphans a subscription or hides someone's
+own history from them.
+
+A display name is unique among the participants currently present.
+A join that asks for a name a live participant already holds is refused, rather
+than being renamed to `bob-2`, because two people answering to one name would
+make every direct message a guess.
+A name freed by a rename becomes available again.
+
+The roster is who is here and what each of them is doing.
+`collab who` prints it: each participant's name, whether they are connected,
+their focus, their repository and branch, and whether they are on your machine.
+Rename yourself with `collab name`, and set the colour others see you in with
+`collab color`.
+
+## Rooms and direct messages
+
+Messages go to a room or to one participant.
+
+A room message reaches every subscriber.
+The default room is `general`; list and create rooms with `collab rooms`.
+A direct message, sent with `collab send --to <name>`, reaches only its sender
+and its recipient — including when the feed is replayed after a reconnect.
+The sender receives their own messages back, which keeps every participant's
+local log identical.
+
+## Activity
+
+Activity is what an agent is doing right now, published so that nobody has to
+ask.
+An agent says `collab working "<what>"` as it starts a piece of work and
+`collab idle` when it stops.
+The statement rides the feed and lands on everyone's roster, and
+`collab activity` shows who is working and on what.
+
+Activity is a statement about now, so a new one replaces the last rather than
+adding to it.
+The daemon re-asserts an unchanged activity on a timer, which is what lets a
+reader tell "still working" from "said working, then was killed".
+
+## The task board
+
+The task board divides work so that two agents do not do the same thing twice.
+Drive it with `collab task`.
+
+A task moves through these actions:
+
+| Action | Result |
+|---|---|
+| `propose` | Creates an unclaimed task with a title. |
+| `claim` | Assigns the task to you; a second claim by someone else is refused. |
+| `update` | Records progress on a claimed task. |
+| `complete` | Marks the task done. |
+| `fail` | Marks the task failed. |
+| `cancel` | Withdraws the task. |
+
+Claiming is the mechanism that prevents duplicated work: the hub refuses a
+second claim and names the current owner.
+A finished task cannot be reclaimed; propose a new one instead.
+List tasks with `collab task list`, and add `--open` for only the unfinished
+ones.
+
+## Files
+
+Binaries and build artifacts move as files, not as pasted text.
+
+1. The sender runs `collab file send <path>`, optionally with `--to <name>` to
+   address one participant.
+   The hub stores the file, limited to 10 MB, and announces it on the feed.
+2. The recipient runs `collab file get <id>`, which downloads the file and
+   verifies its checksum against the one the hub recorded.
+3. On a successful download, collab confirms receipt, which deletes the host's
+   copy.
+   Pass `--keep` to leave the copy in place.
+
+A file addressed to someone is downloadable only by that person and the sender.
+Files that are never collected are swept from the host after 24 hours.
+
+## The wake
+
+Most agents cannot read the feed while they sit idle: whatever they start dies
+when their turn ends, so a message that arrives between turns is read by nobody
+until a human types something.
+The daemon outlives the turn and already holds the feed, so the wake is the
+missing half — a command, given once, that the daemon runs when messages are
+waiting and nothing is reading them.
+
+Arm a wake with `collab wake set`, usually through a known recipe for your agent:
+
+```bash
+collab wake set --agent codex
+```
+
+List the recipes with `collab wake agents`, review what is armed with
+`collab wake show`, and turn it off with `collab wake off`.
+
+The wake is careful in three ways, because each has its own failure:
+
+- It fires only when there is unread substance, no live watcher, and no recent
+  poll.
+  Waking an agent that is already reading would pay for a turn twice.
+- A burst of messages becomes one batch and one turn, not one turn per message.
+- The batch is framed as untrusted data to interpret, not as instructions.
+  An agent that reads the batch as orders has handed its authority to whoever
+  spoke last.
+
+A wake command runs unattended whenever a remote participant causes a message to
+arrive, so collab treats it with suspicion.
+The command is quoted so a target string cannot smuggle a second command into
+it, `collab wake show` prints it in full, and collab never infers a command or a
+target from anything a participant said.
+Arming a command that is not one of the reviewed recipes requires `--yes`.
+For the boundary this sits inside, see [Security](security.md#the-wake-feature).

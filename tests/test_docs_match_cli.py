@@ -16,7 +16,11 @@ from collab.cli import build_parser
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ([ROOT / "README.md", ROOT / "AGENT_INSTALL.md"]
-        + sorted((ROOT / "src" / "collab" / "skills").glob("*/SKILL.md")))
+        + sorted((ROOT / "src" / "collab" / "skills").glob("*/SKILL.md"))
+        # The docs/ guide follows collab literally too, so it is held to the
+        # same standard: a flag written here that the parser does not accept is
+        # a promise an agent would try to keep and the user would watch fail.
+        + sorted((ROOT / "docs").glob("*.md")))
 
 #: `collab foo --bar`, however collab is spelled at the front of the line.
 USAGE = re.compile(

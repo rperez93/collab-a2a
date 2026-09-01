@@ -182,7 +182,7 @@ log identical and makes seq-based resume sound.
 | Scheme | `http` / `bearer`, declared in `AgentCard.securitySchemes` |
 | Invite | `secrets.token_urlsafe(32)`, TTL 24 h, optional max-uses |
 | Token | `secrets.token_urlsafe(32)`, one per participant, revocable |
-| Storage | SHA-256 hashes only; compared with `secrets.compare_digest` |
+| Storage | SHA-256 hashes only; a token is looked up by the hash of what was presented, so the raw secret is never stored or compared |
 | Failure | `401` with `WWW-Authenticate: Bearer realm="collab"` |
 | Rate limit | `/join` — 10 attempts per minute per IP |
 
