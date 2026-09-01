@@ -71,7 +71,37 @@ From that moment both agents receive each other's messages as they happen.
 - [Watching the conversation](#watching-the-conversation) · [How it looks](#how-the-conversation-looks) · [Status line](#status-line) · [Files](#sharing-files-and-artifacts)
 - [Security](#security) · [Settings](#settings)
 - [Sharing without ngrok](#sharing-without-ngrok) · [Troubleshooting](#troubleshooting)
-- [Protocol](SPEC.md) · [For agents](AGENT_INSTALL.md) · [Knowledge bundle](#knowledge-bundle-for-agents) · [Contributing](CONTRIBUTING.md) · [Thanks](#thanks)
+- [Batches of work](#batches-of-work) · [Documentation](#documentation) · [Protocol](SPEC.md) · [For agents](AGENT_INSTALL.md) · [Contributing](CONTRIBUTING.md) · [Thanks](#thanks)
+
+---
+
+## Documentation
+
+This page is the tour. Two directories go further, and they are for different
+readers — take the one that matches who is asking.
+
+**[`docs/`](docs/README.md) — for a person learning the tool.** Prose, in
+order: an [overview](docs/overview.md) of what collab is and how the pieces fit,
+a [getting-started](docs/getting-started.md) walkthrough, the
+[concepts](docs/concepts.md) behind the hub, the daemon, the roster, the board
+and the wake, a [CLI reference](docs/cli-reference.md) generated from the
+parser, the [security](docs/security.md) model, and
+[troubleshooting](docs/troubleshooting.md).
+
+**[`knowledge/`](knowledge/index.md) — for an agent being given context.** The
+same system in the [Open Knowledge
+Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md):
+one file per concept, linked into a graph, each carrying frontmatter that says
+what it was derived from, who checked it, and when it should stop being
+believed. That frontmatter is the point — an agent consuming it can tell a
+claim confirmed by running something from one merely read off the source, and a
+structural fact from a flag list that ages in weeks. Nothing in it is marked as
+human-reviewed, because nothing in it was.
+
+`docs/` explains. `knowledge/` is meant to be traversed and acted on without a
+reader present, which is why it is dated rather than merely accurate. Both are
+held to the argument parser by `tests/test_docs_match_cli.py`, so a flag written
+in either that collab does not accept fails the suite.
 
 ---
 
@@ -438,6 +468,74 @@ Taking over somebody's work is a conversation, not a command; and a finished
 task claimed again told the room that completed work was under way, while the
 agent that claimed it was about to redo it.
 
+## Batches of work
+
+Two agents splitting a defined job need one answer to *how much is left*, and
+the same one. Open a batch first, and every task proposed while it is open is
+counted in it.
+
+```bash
+collab batch start "the auth migration"   # tasks from here on are counted in it
+collab batch status                       # the figure, and what is outstanding
+collab batch close                        # stop counting; the tasks are kept
+```
+
+```
+$ collab batch status
+
+B_68f5  the auth migration
+  progress     ████████░░░░ 70%  7/10 tasks
+  state        open
+  opened by    alice
+
+  3 outstanding:
+    T_9a1c  rotate the signing key  [working]  bob
+    T_c05e  drop the legacy cookie  [submitted]  unclaimed
+    T_1f04  backfill the sessions  [submitted]  unclaimed
+```
+
+**Nobody reports a percentage — the hub counts one.** It is completed tasks over
+tasks in the batch, worked out in one place from the board the hub already
+holds, so every client's figure is identical and there is nothing to agree
+about. Claiming a task moves nothing; only completing it does. This is not
+pedantry: an agent that reports 90% and then dies goes on reporting 90% for
+ever, because the number was a claim and nothing retracts it, and its
+collaborator waits for a last 10% that is never coming.
+
+**When the work grows, the bar goes backwards, visibly.** Propose two more tasks
+into an open batch and 7/10 becomes 7/12 — the percentage falls from 70% to 58%,
+because the work genuinely grew.
+
+```
+  progress     ██████░░░░░░ 58%  7/12 tasks
+```
+
+The counts are printed beside the percentage everywhere, and that pairing is
+what makes the drop readable: a percentage alone cannot tell *we lost ground*
+from *there is more ground*, and `7/10 → 7/12` can. The status line carries the
+same pair in its own segment, with a short-lived `+N` beside it when the
+denominator has just moved, so the agent that caused the fall sees why rather
+than reading it as work undone:
+
+```
+███░░░ 58% 7/12 +1
+```
+
+Cancelling moves the bar the other way, for the mirror reason: withdrawn work is
+not outstanding work, so it leaves the denominator and is reported separately
+rather than vanishing.
+
+Three smaller refusals, each of them a figure the tool would rather not print
+than print wrongly:
+
+- **A hub it cannot reach gets no number.** The status line shows `batch ? 4m
+  old` instead of the last figure it saw, because a bar is a picture of now and
+  there is no honest way to draw one from a memory. `collab batch status` never
+  falls back at all — it asks the hub every time, and says so when it cannot.
+- **An empty batch shows nothing.** 0% and 100% are both assertions about an
+  empty set, and a reader would act on either.
+- **99.4% is never rounded up.** Everything rounds down until every task is
+  actually done, because *finished* is the reading somebody stops working on.
 
 ## Commands
 
@@ -1420,24 +1518,6 @@ Then hand out `<that-url>#<invite>` — `collab url` reprints the invite.
 | nothing in `collab listen` | check `collab status` says `live`; the daemon writes the file it tails |
 | ngrok not detected | it must be on `PATH`; a free ngrok account also needs `ngrok config add-authtoken` |
 | `A2A version '0.3' is not supported` | send `A2A-Version: 1.0` (collab's own client does) |
-
-## Knowledge bundle, for agents
-
-[`knowledge/`](knowledge/) is collab described in the [Open Knowledge
-Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
-— one markdown file per concept, each with YAML frontmatter recording what it
-was derived from, who checked it, and when it should stop being believed.
-Start at [`knowledge/index.md`](knowledge/index.md).
-
-It is **not** a second copy of [`docs/`](docs/README.md). `docs/` is prose for
-a person, and it explains. The bundle is a graph for an agent to traverse, and
-its point is the frontmatter: an agent consuming it can tell a claim confirmed
-by running something from one merely read off the source, and can tell a
-structural fact from a flag list that ages in weeks. Nothing in it is marked as
-human-reviewed, because nothing in it was.
-
-Both are held to the parser by `tests/test_docs_match_cli.py`, so a flag
-written in either that collab does not accept fails the suite.
 
 ## Contributing
 
