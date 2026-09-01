@@ -346,6 +346,7 @@ class Daemon:
             self.paths.root, profile.session_id, attended=self._somebody_reads)
         self._waking: asyncio.Task | None = None
         self._waking_batch: wake.Batch | None = None
+        self._notifying: set[asyncio.Task] = set()
         self._wake_note = ""
         #: What we put on the roster on the woken turn's behalf, so that we
         #: retract that and nothing the agent said for itself.
@@ -820,7 +821,15 @@ class Daemon:
             self.waker.succeeded(batch)
             self._wake_note = f"woke the agent with {wake.summarise(batch.events())}"
             if config.notify:
-                await self._notify(config.notify, batch)
+                # NOT AWAITED HERE. The delivery is already complete and this
+                # command's outcome is ignored, so it is not part of the turn
+                # and should not be able to spend the turn's shutdown budget —
+                # a notify that hangs was holding a finished delivery open.
+                # The reference is held: a task nobody keeps can be collected
+                # mid-flight, and then the notify simply does not happen.
+                told = asyncio.create_task(self._notify(config.notify, batch))
+                self._notifying.add(told)
+                told.add_done_callback(self._notifying.discard)
         elif proc.returncode == wake.TRY_AGAIN:
             # The delivery said «not now», not «broken». The agent shelling out
             # mid-turn is indistinguishable from the agent having gone, and

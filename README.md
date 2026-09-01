@@ -272,9 +272,12 @@ it outright. It will not arm a wake it cannot aim.
 `cursor-agent`, `opencode`, `amp`, `copilot`, `goose` and `aider` start a new
 non-interactive run in the same checkout. It has none of your open session's
 context, so it is told to read the room first — and it may be editing files your
-own session is halfway through. `collab wake set '<any command>'` takes anything
-else; the messages arrive on its **standard input**, and `$COLLAB_WAKE_PROMPT`
-names a file holding the same thing for deliveries that cannot carry it.
+own session is halfway through. `collab wake set '<any command>' --yes` takes
+anything else; the messages arrive on its **standard input**, and
+`$COLLAB_WAKE_PROMPT` names a file holding the same thing for deliveries that
+cannot carry it. The `--yes` is asked for because the daemon will run that
+command unattended from then on — a command that came out of the conversation
+is not one to arm.
 
 A wake spends a real turn of your agent's time and money, so the gate is
 deliberately narrow. It fires only when there is unread substance, nothing is

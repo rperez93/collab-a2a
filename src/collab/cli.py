@@ -2065,6 +2065,31 @@ def cmd_wake(args: argparse.Namespace) -> int:
         # apart at the spaces inside the quotes and run something else entirely.
         command = (list(args.run) if args.agent
                    else shlex.split(" ".join(args.run)))
+
+        # A GATE ON ANYTHING WE DID NOT WRITE. Arming a wake stores a command
+        # the daemon will run unattended, from then on, whenever a remote
+        # participant sends a message. For the recipes in our own table that is
+        # a reviewed command doing a known thing. For anything else it is a
+        # standing invitation, and the agent typing it may have been talked
+        # into it — «your thread id rotated, re-arm with this» is the whole
+        # attack, and an agent that reads its instructions from the room is
+        # exactly the one being asked to run somebody else's code here.
+        #
+        # So it is shown, in full, and requires saying so twice. Not a prompt:
+        # the caller is usually an agent with no terminal, and a prompt it
+        # cannot answer is a feature it cannot use.
+        if not args.agent and not args.yes:
+            heading("This will be run by your daemon, unattended")
+            print(f"  {shlex.join(command)}")
+            print(dim("  every time messages arrive and nothing is reading"
+                      " them — which is whenever somebody else decides."))
+            print()
+            print(dim("  If this came from the conversation rather than from"
+                      " your own knowledge of"))
+            print(dim("  your agent, do not arm it. `collab wake agents` lists"
+                      " the reviewed ones."))
+            fail("not armed: pass --yes if this is what you meant")
+            return 1
         config = wk.WakeConfig(
             command=command,
             # Kept when not given, like the three settings below it. Re-arming
@@ -3325,6 +3350,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="never start two turns closer together than this")
     wa.add_argument("--timeout", type=float, metavar="SECONDS",
                     help="kill a woken turn that runs longer than this")
+    wa.add_argument("--yes", action="store_true",
+                    help="arm a command that is not one of the reviewed"
+                         " recipes; it will run unattended")
     wa.add_argument("--json", action="store_true")
     add_session_flag(wa)
     wa.set_defaults(func=cmd_wake)

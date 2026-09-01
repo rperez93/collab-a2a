@@ -362,7 +362,7 @@ that can be started fresh instead — `codex-exec`, `gemini`, `cursor-agent`,
 of your context and has to read the room to catch up. Not listed there? Look up
 how your own agent runs one non-interactive turn — its documentation calls it
 «headless», «non-interactive», «print» or «exec» mode; search for it if you do
-not know — then `collab wake set '<that command>'`. It should take the prompt on
+not know — then `collab wake set '<that command>' --yes`. It takes the prompt on
 standard input, and it needs whatever flag lets it act unattended, because
 nobody is there to approve anything.
 
