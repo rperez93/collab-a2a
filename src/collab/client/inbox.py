@@ -71,6 +71,20 @@ class Inbox:
         Replay after a reconnect can legitimately resend an event we already
         have; the primary key makes that a no-op rather than a duplicate
         notification.
+
+        THE JSONL IS WRITTEN BEFORE THE DATABASE COMMITS, and the order is not
+        an accident — do not tidy it back. Resume asks the database for
+        `last_seq`, so an event committed there is an event that will never be
+        fetched again; if the process died between the commit and the append,
+        the line stream that `collab listen --follow` tails —which is the
+        arrangement every skill here prescribes— lost that message silently and
+        for good, while `collab recv` still had it and the two views disagreed
+        with nothing to say so.
+
+        Written this way round the same crash costs a duplicate line instead,
+        because resume re-delivers an event the log already has. That is the
+        direction this codebase already argues for out loud in `wake`: an agent
+        that was briefly broken should be told twice rather than not at all.
         """
         if env.seq is None:
             return False
@@ -100,11 +114,15 @@ class Inbox:
                 "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_seq', ?)",
                 (str(env.seq),),
             )
+            # The append goes here, inside the lock and BEFORE the commit: the
+            # commit is the moment the event becomes one we will never ask for
+            # again, so nothing may become unfetchable while the log a Monitor
+            # tails does not have it yet. Inside the lock because two writers
+            # appending at once interleave their lines.
+            with self.jsonl.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(env.to_dict(), ensure_ascii=False) + "\n")
+                fh.flush()
             self._db.commit()
-        # The JSONL append is what a `collab listen --follow` tail sees.
-        with self.jsonl.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(env.to_dict(), ensure_ascii=False) + "\n")
-            fh.flush()
         return True
 
     def last_seq(self) -> int:
