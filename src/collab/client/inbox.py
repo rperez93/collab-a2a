@@ -160,17 +160,25 @@ class Inbox:
                 # three cases are not equal. CancelledError and GeneratorExit
                 # have no suspension point to arrive at: `record` is
                 # synchronous, with no await and no yield. KeyboardInterrupt is
-                # different — the daemon, its only caller, installs SIGINT as a
-                # handler that sets an event instead of raising, but that
-                # install sits under a suppressed NotImplementedError, so
-                # wherever `add_signal_handler` is unavailable it never
-                # happens and Ctrl-C lands here as an exception after all.
+                # only mostly disarmed — the daemon, its one caller, installs
+                # SIGINT as a handler that sets an event instead of raising,
+                # but that install sits under a suppressed
+                # NotImplementedError, so wherever `add_signal_handler` is
+                # unavailable it never happens and the interrupt is not
+                # disarmed here.
                 #
-                # So this is not purely defensive today. And moving the write
-                # off the event loop, the next change this file is likely to
-                # see, opens the other two the moment it lands: a handler that
-                # holds only while nobody threads the caller is a trap laid for
-                # whoever does.
+                # Whether one then ARRIVES is a further question and nobody has
+                # answered it: `spawn_daemon` passes `start_new_session=True`,
+                # so on POSIX the daemon is in its own session and never sees
+                # the terminal's Ctrl-C at all. What can be said is that
+                # `daemon_main` wraps the whole run in `except
+                # KeyboardInterrupt`, which is not what anybody writes for a
+                # path they believe unreachable.
+                #
+                # Keep it either way. Moving this write off the event loop, the
+                # next change this file is likely to see, opens the other two
+                # the moment it lands, and a handler that holds only while
+                # nobody threads the caller is a trap laid for whoever does.
                 self._discard()
                 raise
         return True
@@ -217,10 +225,11 @@ class Inbox:
         apparently because a WAL rollback discards frames rather than writing
         them, though that is the explanation offered for the outcome and not
         itself something anybody checked. Four clean rollbacks is the measured
-        part. It could only be made to fail by injection. Genuine ENOSPC and a hardware EIO remain
-        the candidates and neither is stageable without root, so this is three
-        lines against a consequence that is silent, not against a rate anybody
-        has measured. Do not quote a likelihood for it; there is not one.
+        part. It could only be made to fail by injection. Genuine ENOSPC and a
+        hardware EIO remain the candidates and neither is stageable without
+        root, so this is three lines against a consequence that is silent, not
+        against a rate anybody has measured. Do not quote a likelihood for it;
+        there is not one.
         """
         try:
             self._db.rollback()
