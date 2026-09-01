@@ -432,7 +432,11 @@ class Daemon:
         self.profile = profile
         self.paths = DaemonPaths(profile.dir)
         self._lock = exclusive.DaemonLock(profile.dir)
-        self.inbox = Inbox(profile.dir)
+        # NOT HERE. Opening it runs the schema and leaves `inbox.db-wal` and
+        # `-shm` beside it, which a daemon that turns out not to hold this
+        # session has no business creating. It is opened in `_serve`, once the
+        # lock says we are the daemon.
+        self.inbox: Inbox | None = None
         self.bridge = Bridge(port=bridge_port)
         self.state = "starting"
         self.last_event_at = time.time()
@@ -1337,6 +1341,7 @@ class Daemon:
         # that is what the rest of the tree reads out of this file — and the
         # start time goes underneath it.
         self.paths.pid.write_text(exclusive.stamp())
+        self.inbox = Inbox(self.profile.dir)
         await self.bridge.start()
         self.profile.bridge_port = self.bridge.port
         # This one DOES claim the pointer: a daemon starting up for a session is

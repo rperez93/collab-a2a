@@ -164,29 +164,30 @@ def test_a_second_daemon_for_one_session_refuses_to_start(profile):
     file until the daemon reaches `run`. Both used to win."""
     first = exclusive.DaemonLock(profile.dir)
     assert first.acquire()
-    second = d.Daemon(profile)
     try:
-        asyncio.run(second.run())
+        asyncio.run(d.Daemon(profile).run())
         assert not (profile.dir / "daemon.pid").exists()
         assert not (profile.dir / "status.json").exists(), \
             "the loser wrote its own account of a session it does not hold"
     finally:
-        second.inbox.close()
         first.release()
 
 
 def test_a_second_daemon_touches_nothing_before_it_gives_up(profile):
-    """It must not so much as write its own pid: the previous version's second
-    daemon left state behind that outlived it and misdirected everything."""
+    """Not one file, and «not one» has to be literal or the sentence does no
+    work: opening the inbox runs the schema and leaves `inbox.db-wal` and
+    `-shm` beside it, which is a trace of a daemon that never ran."""
     _record(profile, 4242, "1")
     first = exclusive.DaemonLock(profile.dir)
     assert first.acquire()
-    second = d.Daemon(profile)
     try:
-        asyncio.run(second.run())
+        before = sorted(p.name for p in profile.dir.iterdir())
+
+        asyncio.run(d.Daemon(profile).run())
+
         assert (profile.dir / "daemon.pid").read_text() == "4242\n1\n"
+        assert sorted(p.name for p in profile.dir.iterdir()) == before
     finally:
-        second.inbox.close()
         first.release()
 
 

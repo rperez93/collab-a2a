@@ -23,14 +23,27 @@ leaving a daemon that was streaming happily and invisible to everything that
 looks for one.
 
 The two halves of this are not portable in the way the intuition suggests, so
-it is written down here. `flock(2)` is POSIX and holds at full strength on
-macOS and the BSDs — the lock is the MORE portable half. The start time in
-`started_at` is the half that degrades, because it comes from /proc, which
-macOS does not have; there it falls back to `ps` and answers to the second.
+it is written down here. `flock(2)` is POSIX, so the lock is the MORE portable
+half and is expected to hold at full strength on macOS and the BSDs — expected,
+not measured: what has been measured is ext4 and WSL2's 9p mount over /mnt/c,
+where exclusion held and the lock was free the instant its holder was
+SIGKILLed. Nobody has run this on macOS or on NFS. The start time in
+`started_at` is the half that certainly degrades, because it comes from /proc,
+which macOS does not have; there it falls back to `ps` and answers only to the
+second.
 
 So `started_at` is the weaker, second answer throughout: it is what remains
 when a filesystem cannot lock, and what reads a pid file written by an older
 collab. It is not the guarantee. The lock is.
+
+AND THE LOCK IS TRUSTED ABSOLUTELY WHEN IT SAYS FREE. `taken()` returning
+False is taken as proof that no daemon is running, and everything above rests
+on that one assumption. A filesystem that REPORTS a successful flock without
+enforcing it — the classic NFS-without-a-lock-daemon and SMB failure — breaks
+it silently and in the worst direction: a live daemon reads as dead, and a
+second one starts on top of it. There is no way to detect that from here, and
+`enforced` does not catch it either, because such a filesystem says yes. It is
+written down so that whoever meets it recognises it rather than debugging it.
 """
 
 from __future__ import annotations
@@ -88,7 +101,11 @@ class DaemonLock:
     def __init__(self, root: Path | str) -> None:
         self.path = lock_path(root)
         self._fd: int | None = None
-        #: Whether the kernel is actually enforcing this, or we merely asked.
+        #: Whether the kernel took the lock, or we merely asked and carried
+        #: on. It does NOT mean the lock is being enforced: a filesystem
+        #: that reports a successful flock without enforcing one — NFS with
+        #: no lock daemon, SMB — sets this True while excluding nobody.
+        #: There is no way to tell from in here; see the module docstring.
         self.enforced = False
 
     @property
@@ -262,8 +279,10 @@ def started_at(pid: int) -> str:
     the second, so two processes a second apart with the same pid are one
     process as far as it can tell. That is a filter on obvious staleness and a
     diagnosis aid, not proof, and it is said plainly here so that nobody reads
-    the Linux guarantee into the macOS one. Nothing is lost by it: `flock` is
-    POSIX and holds there in full, so this is the fallback's fallback.
+    the Linux guarantee into the macOS one. Little is lost by it: `flock` is
+    POSIX and is expected to hold there in full, which makes this the
+    fallback's fallback. Expected rather than measured — see the module
+    docstring for what has actually been run and where.
 
     A zombie answers "", and so counts as no process at all.
     """
