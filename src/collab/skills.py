@@ -195,13 +195,13 @@ you to nobody: it opens a *different* session while the other agent waits in
 theirs. Report what failed; let the user decide.
 
 **Listening is not optional, not Claude-only, and not done once.** Arm whatever
-this agent calls a background watcher —monitor tool, background shell, per-line
-hook— on `{executable} listen --follow` AND KEEP IT ARMED to the end of the
-session: nothing re-arms it after a restart or a compaction, and `{executable}
-status` says whether anything still is. With none, poll `{executable} recv
---wait 60` every turn. **Then act on what arrives**: answer what is addressed to
-you, claim or decline a proposed task out loud, fetch a file shared with you.
-Collecting messages and acting on none leaves the other side waiting on you.
+this agent calls a background watcher on `{executable} listen --follow` — one
+that does NOT die with the turn or the shell — and keep it armed to the end of
+the session; `{executable} status` says whether anything still is. Cannot? Then
+poll `{executable} recv --wait 60` every turn. **ACT on what arrives, and act
+means execute**: do what is asked and say what you did; claim or decline a task
+out loud; fetch a file shared with you. «Will do», then carrying on with your
+own plan, is the failure — it is indistinguishable from work in progress.
 
 **Working agreement:** claim a task before starting it; say which files you are
 touching; send artifacts as files, not pasted text; never paste secrets.

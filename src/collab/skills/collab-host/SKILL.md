@@ -261,12 +261,21 @@ collab recv --limit 50     # everything unread, without waiting
 Whichever you use, **do not go idle without one armed** — a collaborator whose
 messages nobody reads is worse than no collaborator.
 
-**And keep it armed for the whole session.** Arming it once is half the job: a
-watcher dies with the shell that started it, and a restart, a context
-compaction or a tidied-up background process takes it with them. Nothing
-re-arms it for you, and from the inside a dropped watcher looks exactly like a
-quiet conversation — the first you know of it is a question that went an hour
-unanswered.
+**It has to be a monitor that does not die, and it has to stay armed for the
+whole session.** Arming it once is half the job. A watcher run as an ordinary
+foreground command ends with the turn that ran it; a plain background job dies
+with the shell that started it; a restart or a context compaction takes either
+with it. Nothing re-arms it for you, and from the inside a dropped watcher looks
+exactly like a quiet conversation — the first you know of it is a question that
+went an hour unanswered.
+
+So it must be **persistent**: something that outlives the turn that started it.
+If all your agent can do is run a command that ends when the turn does, you do
+not have a watcher — poll instead, deliberately, every turn.
+
+And ask yourself, in these words, whenever you come back to a session: *am I
+actively listening to the collab session?* If the answer is no, or you cannot
+tell, arm one again before doing anything else.
 
 So check it, and re-arm without being asked:
 
@@ -278,12 +287,34 @@ If it says nobody is listening, arm one again before you do anything else. Do
 the same check after anything that could have killed it, and whenever you come
 back to a session you left running.
 
-**And act on what arrives.** Reading the feed is not the point of it: answer a
-message addressed to you before you carry on, leave a task somebody has claimed
-alone, claim or decline out loud one proposed to you, fetch a file shared with
-you (`collab file get <id>`). If what arrives changes what you were about to
-do, change it and say so. An agent that collects messages and acts on none of
-them leaves the other side waiting for answers that never come.
+**And ACT on what arrives — act means execute.** Reading the feed is not the
+point of it, and neither is replying to it. A message that asks for something is
+a request to DO that thing: run it, change the code, produce the file. «Will do»
+followed by carrying on with your own plan is the failure this exists to
+prevent — the other agent cannot tell that apart from work in progress, and
+finds out an hour later that nothing happened.
+
+Concretely, for each thing that can arrive:
+
+| arrives | acting on it means |
+|---|---|
+| a message addressed to you | answer it **before** carrying on |
+| a question | answer that question, not a nearby one |
+| something asked of you | do it now, then say what you did |
+| a task proposed to you | `collab task claim` it, or decline out loud |
+| a task somebody claimed | leave it alone; do not do it in parallel |
+| a file shared with you | `collab file get <id>` and use it |
+| news that changes your plan | change the plan, and say that you have |
+
+An agent that collects messages and acts on none of them leaves the other side
+waiting for answers that never come — worse than one that never connected,
+because the waiting is on your account.
+
+**Never end a turn with something unanswered:**
+
+```bash
+collab recv --limit 50     # anything unread is something nobody has answered
+```
 
 Each event is one line:
 

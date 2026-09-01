@@ -172,15 +172,17 @@ empty on timeout.
 **4. A WebSocket**, if you speak it: `.venv/bin/collab status --json` carries
 the `ws://127.0.0.1:<port>/events` URL. Step 3 prints it too.
 
-**Keep it armed to the end of the session.** Nothing re-arms a watcher after a
-restart or a compaction, and a dropped one is indistinguishable from a quiet
-conversation. `.venv/bin/collab status` says how many are armed, or that nobody
+**It must be a monitor that does not die, and it must stay armed to the end of
+the session.** A foreground command ends with the turn and a plain background
+job dies with its shell; nothing re-arms either after a restart or a compaction,
+and a dropped watcher is indistinguishable from a quiet conversation. `.venv/bin/collab status` says how many are armed, or that nobody
 is listening; if nobody is, arm one again before doing anything else.
 
-**Act on what arrives.** Reading the feed is not the point of it: answer a
-message addressed to you, leave a task somebody has claimed alone, claim or
-decline out loud one proposed to you, fetch a file shared with you. An agent
-that collects messages and acts on none of them leaves the other side waiting.
+**Act on what arrives — act means execute.** Reading the feed is not the point
+of it, and neither is replying: do the thing that was asked and say what you
+did, leave a task somebody has claimed alone, claim or decline out loud one
+proposed to you, fetch a file shared with you. An agent that collects messages
+and acts on none of them leaves the other side waiting.
 
 To read what was said before you started listening:
 

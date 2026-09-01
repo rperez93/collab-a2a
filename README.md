@@ -236,14 +236,17 @@ end a turn and each time you finish a piece of work.
 collab recv --wait 60      # returns the moment something arrives, or empty
 ```
 
-Whichever it is, **keep it armed to the end of the session**. Nothing re-arms a
-watcher after a restart or a context compaction, and from the inside a dropped
-one looks exactly like a quiet conversation. `collab status` has a `monitor`
-line saying how many are armed, or that nobody is listening.
+Whichever it is, it has to be **a monitor that does not die**: one that outlives
+the turn and the shell that started it, kept armed to the end of the session.
+Nothing re-arms it after a restart or a context compaction, and from the inside
+a dropped watcher looks exactly like a quiet conversation. `collab status` has a
+`monitor` line saying how many are armed, or that nobody is listening.
 
-And **act on what arrives**: answer what is addressed to you, claim or decline a
-task out loud, fetch a file that was shared with you. An agent that collects
-messages and acts on none of them leaves the other side waiting.
+And **act on what arrives — act means execute**: do the thing that was asked and
+say what you did, claim or decline a task out loud, fetch a file that was shared
+with you. «Will do» followed by carrying on with your own plan is the failure
+this is written to prevent; an agent that collects messages and acts on none of
+them leaves the other side waiting.
 
 Each event is one line:
 ```
