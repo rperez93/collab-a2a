@@ -16,6 +16,7 @@ directory. That registry answers two different questions:
 
 from __future__ import annotations
 
+import contextlib
 import getpass
 import hashlib
 import json
@@ -99,6 +100,14 @@ class Peer:
     participant_id: str = ""
     invite: str = ""     # hosts only, so a local agent can join without a link
     host_name: str = ""
+    #: Where the hub answers ON THIS MACHINE, when the record is a host's.
+    #:
+    #: `url` is the address to SHARE — a tunnel when there is one — and it is
+    #: no use to an agent trying to reach a hub that has moved: following a
+    #: public address learnt from a file would send this agent's bearer token
+    #: wherever that file said. The loopback address cannot leave the machine,
+    #: which is what makes it safe to follow.
+    local_url: str = ""
 
     @property
     def alive(self) -> bool:
@@ -130,7 +139,8 @@ def _record_path(session_id: str, pid: int | None = None) -> Path:
 
 def announce(*, session_id: str, name: str, role: str, url: str, repo: str,
              home: str, participant_id: str = "", invite: str = "",
-             host_name: str = "", pid: int | None = None) -> Path:
+             host_name: str = "", local_url: str = "",
+             pid: int | None = None) -> Path:
     """Publish (or refresh) this session's presence on the machine.
 
     ``pid`` is whose liveness decides whether the record still counts. A host
@@ -140,11 +150,18 @@ def announce(*, session_id: str, name: str, role: str, url: str, repo: str,
     """
     d = peers_dir()
     d.mkdir(parents=True, exist_ok=True)
+    # OURS TO READ AND NOBODY ELSE'S TO WRITE. The records carry an invite, and
+    # an agent that has lost its hub will follow an address it finds here — so
+    # a directory anyone can write to is a directory that can hand somebody
+    # else's agent a destination. Under $HOME the default umask is enough;
+    # COLLAB_PEERS_DIR can point anywhere, and that is the case this is for.
+    with contextlib.suppress(OSError):
+        d.chmod(0o700)
     peer = Peer(
         session_id=session_id, name=name, role=role, url=url, repo=repo,
         home=home, pid=pid or os.getpid(), updated_at=time.time(),
         participant_id=participant_id, invite=invite, host_name=host_name,
-        **identity(),
+        local_url=local_url, **identity(),
     )
     path = _record_path(session_id, peer.pid)
     tmp = path.with_suffix(".tmp")
@@ -245,6 +262,29 @@ def _better(candidate: Peer, current: Peer) -> bool:
     if candidate.joinable != current.joinable:
         return candidate.joinable
     return candidate.updated_at > current.updated_at
+
+
+def live_records(session_id: str = "") -> list[Peer]:
+    """Every live record, UNFOLDED — one per announcing process.
+
+    `discover` folds by session and role, which is what a listing wants: two
+    records for one session are usually the same session announced twice. But a
+    caller asking «where is this hub» needs to know when there are TWO answers,
+    and folding hands it one of them with no sign that it chose. Ambiguity has
+    to survive as far as whoever can act on it.
+    """
+    directory = peers_dir()
+    if not directory.is_dir():
+        return []
+    out = []
+    for child in sorted(directory.glob("*.json")):
+        peer = load(child)
+        if peer is None or not peer.alive:
+            continue
+        if session_id and peer.session_id != session_id:
+            continue
+        out.append(peer)
+    return out
 
 
 def candidates() -> list[Peer]:

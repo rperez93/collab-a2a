@@ -55,14 +55,32 @@ class HubConfig:
 
     @property
     def local_url(self) -> str:
-        host = "127.0.0.1" if self.bind in ("127.0.0.1", "localhost") else self.bind
+        """Where this hub answers ON THIS MACHINE.
+
+        A hub bound to every interface answers on loopback too, and saying so
+        is what lets a neighbouring agent follow it there — the alternative is
+        handing out a LAN address that only works from somewhere else, or
+        `0.0.0.0`, which is not somewhere at all.
+        """
+        local = ("127.0.0.1", "localhost", "0.0.0.0", "::", "*")
+        host = "127.0.0.1" if self.bind in local else self.bind
         return f"http://{host}:{self.port}"
 
     def save(self) -> None:
+        """Write it whole, or not at all.
+
+        A bare `write_text` is empty for an instant, and this file is rewritten
+        while a tunnel comes back on a new address — exactly when everything
+        else is reading it. A reader that caught that instant got `None` and
+        acted as though the session had no hub, which is a large conclusion to
+        draw from a scheduling accident.
+        """
         self.dir.mkdir(parents=True, exist_ok=True)
         p = self.dir / "hub.json"
-        p.write_text(json.dumps(asdict(self), indent=2) + "\n")
-        os.chmod(p, 0o600)  # holds the invite and the host token
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(asdict(self), indent=2) + "\n")
+        os.chmod(tmp, 0o600)  # holds the invite and the host token
+        tmp.replace(p)
 
     @classmethod
     def load(cls, session_id: str, home: Path | str | None = None) -> HubConfig | None:

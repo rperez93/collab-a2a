@@ -1300,6 +1300,7 @@ Then hand out `<that-url>#<invite>` — `collab url` reprints the invite.
 | the public link stopped working | a free tunnel expired and came back on a **new address**. The hub notices and relaunches it, keeping the same session and tokens — run `collab url` for the current link and re-share it. `collab host --domain <reserved>.ngrok-free.app` pins an address that survives restarts |
 | `no active collab session` | you are in a different repo — state is per-repo; `collab status` shows where it looked |
 | status line shows `reconnecting…` | the daemon lost the hub; it retries with backoff. `collab daemon status` |
+| one agent reconnects after a hub restart and another does not | a revived hub comes back on a **new port**. Agents on the same machine find it themselves through the local registry; an agent connected over a tunnel cannot, and needs the new link (`collab url` on the host) or a fresh `collab join` |
 | status line shows `offline` | the daemon is not running (`collab daemon start`) or you were removed |
 | `the hub rejected this token` | you were `kick`ed, or the session was recreated — re-join |
 | nothing in `collab listen` | check `collab status` says `live`; the daemon writes the file it tails |

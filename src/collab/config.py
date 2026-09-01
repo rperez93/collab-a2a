@@ -645,7 +645,14 @@ class SessionProfile:
     def dir(self) -> Path:
         return Path(self.home) / "sessions" / self.session_id
 
-    def save(self) -> None:
+    def save(self, *, make_current: bool = True) -> None:
+        """Write the profile, and by default point this home at this session.
+
+        `make_current=False` is for a background write — a daemon following the
+        hub to a new address, say. Saving is bookkeeping there, and moving the
+        pointer is not: it would silently switch which session the CLI answers
+        about while somebody is working in another one.
+        """
         ensure_home(Path(self.home).parent if self.home else None)
         Path(self.home).mkdir(parents=True, exist_ok=True)
         gitignore = Path(self.home) / ".gitignore"
@@ -656,8 +663,9 @@ class SessionProfile:
         p = d / "profile.json"
         p.write_text(json.dumps(asdict(self), indent=2) + "\n")
         os.chmod(p, 0o600)  # contains the bearer token
-        pointer = Path(self.home) / "current"
-        pointer.write_text(self.session_id + "\n")
+        if make_current:
+            pointer = Path(self.home) / "current"
+            pointer.write_text(self.session_id + "\n")
 
     @classmethod
     def load(cls, session_id: str, cwd: Path | None = None) -> SessionProfile | None:

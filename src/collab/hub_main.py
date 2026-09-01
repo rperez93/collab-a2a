@@ -52,6 +52,7 @@ class RegistryHeartbeat:
             peers.announce(
                 session_id=latest.session_id, name=latest.host_name, role="host",
                 url=latest.public_url or latest.local_url,
+                local_url=latest.local_url,
                 repo=str(Path(latest.home).parent), home=latest.home,
                 invite=latest.invite, host_name=latest.host_name,
                 pid=os.getpid(),

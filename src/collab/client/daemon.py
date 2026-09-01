@@ -92,6 +92,43 @@ def _alive(pid: int) -> bool:
     return True
 
 
+def _has_host(url: str) -> bool:
+    """Does this URL name somewhere to go?"""
+    from urllib.parse import urlsplit
+
+    try:
+        return bool(urlsplit(url).hostname)
+    except ValueError:
+        return False
+
+
+def _is_loopback(url: str) -> bool:
+    """Is this an address that cannot leave this machine?
+
+    The test is on the HOST as the URL parser sees it, not on the string:
+    `http://127.0.0.1.evil.example/` and `http://user@127.0.0.1@evil/` both
+    contain «127.0.0.1» and neither is loopback. Anything that does not parse
+    into a host we recognise is not one.
+    """
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").strip("[]").lower()
+    except ValueError:
+        return False
+    if parts.scheme not in ("http", "https"):
+        return False
+    if host in ("localhost", "::1"):
+        return True
+    try:
+        import ipaddress
+
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def watchers_dir(profile: SessionProfile) -> Path:
     return DaemonPaths(profile.dir).root / "watchers"
 
@@ -335,19 +372,35 @@ class Daemon:
         This is what lets an agent in another checkout on this machine find and
         join the session without anyone pasting a link around.
         """
-        invite, hub_pid = "", 0
+        invite, hub_pid, local_url = "", 0, ""
+        url = self.profile.url
         if self.profile.is_host:
             from ..server.session import HubConfig
 
             cfg = HubConfig.load(self.profile.session_id, self.profile.home)
-            if cfg is not None:
-                invite, hub_pid = cfg.invite, cfg.pid
+            if cfg is None or not cfg.pid:
+                # NOTHING RATHER THAN SOMETHING WRONG. Without hub.json — or
+                # before the hub has recorded its pid — we do not know whose
+                # liveness this record should follow, and announcing under our
+                # own writes a SECOND host record for the session, which reads
+                # as two hubs and disables recovery for as long as this listener
+                # runs. The hub announces itself anyway; a missed beat is free.
+                return
+            invite, hub_pid, local_url = cfg.invite, cfg.pid, cfg.local_url
+            # THE HUB'S OWN FILE, not our copy of it. The hub writes this
+            # record too — same path, keyed on its pid — and it publishes the
+            # address from hub.json every 30s while this runs every 3s with
+            # whatever `profile.url` last said. Ours won by sheer frequency, so
+            # a hub revived on a new port was advertised at its old one, and a
+            # guest that had already found the live port was dragged back.
+            url = cfg.public_url or cfg.local_url or url
         try:
             peers.announce(
                 session_id=self.profile.session_id,
                 name=self.profile.name,
                 role="host" if self.profile.is_host else "guest",
-                url=self.profile.url,
+                url=url,
+                local_url=local_url,
                 repo=str(Path(self.profile.home).parent),
                 home=self.profile.home,
                 participant_id=self.profile.participant_id,
@@ -355,7 +408,10 @@ class Daemon:
                 host_name=self.profile.host_name,
                 # A host registers its hub: the hub is what makes the session
                 # joinable, and it outlives this listener.
-                pid=hub_pid or None,
+                # Never `or None`: that falls back to OUR pid, which is the
+                # mechanism behind the phantom record above. By here a host has
+                # a real hub pid or has already returned.
+                pid=hub_pid if self.profile.is_host else None,
             )
         except OSError:
             pass
@@ -512,25 +568,138 @@ class Daemon:
             self.profile.host_name = host
             changed = True
         if changed:
-            self.profile.save()
+            # Not `make_current`: this runs on every snapshot refresh — every
+            # nine seconds and on every roster event — and moving the pointer
+            # from there would switch which session the CLI answers about while
+            # somebody is working in a different one. A hotter path than the
+            # reconnect one, and the same mistake.
+            self.profile.save(make_current=False)
 
     def _follow_url_change(self) -> None:
-        """Pick up a new public address the hub recorded while we were away.
+        """Pick up a new address for the hub we were talking to.
 
-        A restarted free tunnel comes back on a different URL. The host writes
-        the new one to hub.json, so the host's own listener can follow it
-        without anybody re-sharing a link.
+        A restarted free tunnel comes back on a different URL, and a hub the
+        host had to revive comes back on a different port. Either way the
+        session is the same session — same store, same tokens, same history —
+        and only the address moved.
+        """
+        wanted = self._hub_address()
+        if wanted and wanted != self.profile.url:
+            logger.warning("hub address changed to %s", wanted)
+            self.profile.url = wanted
+            # WITHOUT MOVING THE POINTER. `save()` also writes `home/current`,
+            # so a background daemon quietly made ITS session the one the CLI
+            # answers about — while somebody was working in another one.
+            self.profile.save(make_current=False)
+
+    def _hub_address(self) -> str:
+        """Where this session's hub answers now, as best this machine knows.
+
+        THE HOST reads its own hub.json: it owns the hub, so it is the one that
+        wrote the new address down.
+
+        A GUEST has no hub.json — it does not own the hub — so this used to
+        return nothing and the guest went on dialling a dead address for ever.
+        That is not a rare case: reviving a hub gives it a NEW PORT, because the
+        old one may not be free, and the host follows that move while every
+        guest is left behind. Killing one hub cost two agents their session and
+        a manual rejoin each.
+
+        The answer was already on the machine. Every daemon announces itself
+        into the peers registry on each heartbeat, and the host's record carries
+        this session's id and its current URL. So a guest asks the registry —
+        the same place `collab join` looks, and the same one the host is
+        writing to seconds after the move.
+
+        FOUR THINGS ARE REQUIRED OF A RECORD BEFORE IT IS FOLLOWED, and each is
+        here because the obvious version of this is unsafe:
+
+        · the same SESSION, or this joins a different conversation;
+        · a HOST record — a guest's only repeats the address it holds, which in
+          this situation is the same dead one;
+        · this MACHINE and this USER, checked rather than assumed. «The registry
+          is per user» is a fact about a directory, and the directory is not
+          always where you think: a synced or NFS home, a devcontainer or WSL
+          bind-mount, or COLLAB_PEERS_DIR pointed at shared storage all put
+          another machine's records under our nose. `alive` does not save us
+          there — `kill(pid, 0)` against a foreign pid namespace finds some
+          unrelated live process and says yes;
+        · a LOOPBACK address, never the public one. This is the part that
+          matters: following an address out of a file means sending our bearer
+          token to it, and the token is not a defence against a URL somebody
+          else chose — it is the thing they wanted. An address that cannot
+          leave this machine cannot carry the token off it either.
+
+        The last of those is why a host publishes `local_url` separately from
+        the address it advertises for sharing.
+
+        AND WHAT THIS IS NOT: the machine check is a correctness control, not a
+        security one — `machine_id` is a hash of world-readable inputs, so any
+        local user can compute ours. What actually holds is that the registry is
+        the user's own private directory (`announce` keeps it 0700) and that
+        nothing but a loopback address is ever adopted from it. On a shared
+        COLLAB_PEERS_DIR the first of those is gone, and the second is all that
+        stands between a planted record and this agent's token.
+
+        AND IT ONLY RUNS AFTER A RECONNECT HAS FAILED. A feed that is up is
+        never interrupted to go reading files, so a remote guest talking happily
+        to a tunnel is never re-pointed at a loopback address it cannot reach.
         """
         from ..server.session import HubConfig
 
         cfg = HubConfig.load(self.profile.session_id, self.profile.home)
-        if cfg is None:
-            return
-        wanted = cfg.public_url or cfg.local_url
-        if wanted and wanted != self.profile.url:
-            logger.warning("hub address changed to %s", wanted)
-            self.profile.url = wanted
-            self.profile.save()
+        if cfg is not None:
+            # A hub.json with no port yet — written but not started — composes
+            # to `http://:0`, which is truthy and would be saved over a working
+            # address. An address with no host in it is not an address.
+            mine = cfg.public_url or cfg.local_url
+            return mine if _has_host(mine) else ""
+
+        here, user = peers.machine_id(), peers.current_user()
+        found: list[peers.Peer] = []
+        # UNFOLDED, and read without deleting anything. `discover` folds by
+        # session and role — it would hand us one of two competing hosts with
+        # no sign that it had chosen — and it prunes dead records as a side
+        # effect, which is not a thing to do from inside a reconnect loop while
+        # everybody else's daemon is reconnecting too.
+        for peer in peers.live_records(self.profile.session_id):
+            if (peer.role != "host"
+                    or peer.machine_id != here or peer.user != user):
+                continue
+            # Liveness is not checked here: `discover` already drops records
+            # whose process is gone, and for a HOST record that process is the
+            # hub itself — a host announces its hub's pid, not its own. A second
+            # check here would read as the guard and never fire.
+            found.append(peer)
+
+        # AMBIGUITY IS NOT AN ANSWER. A session directory copied into another
+        # checkout and hosted there —worktrees make that cheap— gives two live
+        # hosts for one session id, sharing a store and therefore tokens. The
+        # guest would attach to whichever record won, get a clean `ready`, and
+        # sit in silence while the real conversation carried on somewhere else.
+        # Refusing leaves it failing loudly, which is the honest outcome.
+        addresses = {p.local_url or p.url for p in found}
+        if len(addresses) > 1:
+            logger.warning("%s is hosted twice on this machine (%s) — not"
+                           " following either", self.profile.session_id,
+                           ", ".join(sorted(addresses)))
+            return ""
+        for peer in found:
+            candidate = peer.local_url or peer.url
+            if _is_loopback(candidate):
+                return candidate
+        if found:
+            # Something is hosting this session here and we still cannot use it.
+            # Either the hub was bound to a real interface rather than loopback,
+            # or it is an older collab that announces no local address — and
+            # both used to fail in complete silence, which is the worst way for
+            # a recovery path to fail.
+            logger.warning(
+                "found a local host for %s but no address that is safe to"
+                " follow (%s) — a guest can only adopt a loopback address",
+                self.profile.session_id,
+                ", ".join(sorted(p.local_url or p.url for p in found)) or "none")
+        return ""
 
     def _revive_hub_if_host(self) -> None:
         """Restart our own hub if it died — same session, same tokens.
@@ -568,6 +737,8 @@ class Daemon:
         self.paths.pid.write_text(str(os.getpid()))
         await self.bridge.start()
         self.profile.bridge_port = self.bridge.port
+        # This one DOES claim the pointer: a daemon starting up for a session is
+        # that session beginning, which is exactly when `current` should move.
         self.profile.save()
         self.write_status()
 
@@ -612,8 +783,13 @@ class Daemon:
                     self.state = "reconnecting"
                     self.connected_since = None
                     self.failures += 1
-                    self._follow_url_change()
+                    # REVIVE FIRST, THEN FOLLOW. Reviving writes the new
+                    # address into hub.json; reading it beforehand meant the
+                    # host published the pre-move address on the very cycle
+                    # that moved it, and needed another failed cycle — up to
+                    # BACKOFF_CAP plus jitter — to catch up with itself.
                     self._revive_hub_if_host()
+                    self._follow_url_change()
                     self.write_status()
                     logger.warning("feed dropped (%s); retrying in %.1fs", exc, backoff)
                     # Jitter keeps several agents from stampeding a restarted hub.
