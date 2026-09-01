@@ -31,6 +31,7 @@ from ..config import SessionProfile, share_stats_enabled, stats_source
 from ..protocol import (EXT_PREFIX, KIND_CHAT, KIND_HELLO, KIND_PRESENCE,
                         KIND_SYSTEM, KIND_TASK, Envelope)
 from ..stats import read_stats, write_stats
+from . import exclusive
 from .bridge import Bridge
 from .inbox import Inbox
 
@@ -95,16 +96,29 @@ class DaemonPaths:
 
 
 def is_running(profile: SessionProfile) -> int | None:
-    """Return the pid of a live daemon for this session, if there is one."""
+    """Return the pid of a live daemon for this session, if there is one.
+
+    The pid is for saying; the answer comes from the lock the daemon holds for
+    as long as it runs. A pid file outlives its process — SIGKILL, an OOM kill
+    and a reboot all leave it behind — and the kernel reuses the number, so
+    `kill(pid, 0)` on its own has reported a stranger as this session's
+    listener, and then handed that stranger to `stop_orphans` to be signalled.
+
+    Where there is no lock to ask —an older collab wrote the file, or the
+    filesystem cannot lock— the pid is weighed against the start time recorded
+    beside it, which catches a reused number without needing the kernel.
+    """
     paths = DaemonPaths(profile.dir)
-    if not paths.pid.exists():
-        return None
     try:
-        pid = int(paths.pid.read_text().strip())
-    except (OSError, ValueError):
+        pid, began = exclusive.parse(paths.pid.read_text())
+    except OSError:
         return None
-    # Stale pid file from a crash; treat as not running.
-    return pid if _alive(pid) else None
+    if pid is None:
+        return None
+    locked = exclusive.taken(profile.dir)
+    if locked is not None:
+        return pid if locked else None
+    return pid if _alive(pid) and exclusive.same_process(began, pid) else None
 
 
 def _alive(pid: int) -> bool:
@@ -112,7 +126,10 @@ def _alive(pid: int) -> bool:
         os.kill(pid, 0)
     except (OSError, ProcessLookupError):
         return False
-    return True
+    # A zombie keeps its /proc entry and still answers `kill(pid, 0)`, so a
+    # daemon that had already exited went on counting as a live one until
+    # whoever started it got round to reaping it.
+    return not exclusive.is_zombie(pid)
 
 
 def _has_host(url: str) -> bool:
@@ -215,21 +232,10 @@ def last_poll(profile: SessionProfile) -> float:
         return 0.0
 
 
-def _started_at(pid: int) -> str:
-    """When this process began, as the kernel records it.
-
-    Linux keeps it in field 22 of /proc/<pid>/stat, in clock ticks since boot,
-    and it is the one thing about a pid that a later process reusing the number
-    cannot inherit. Where it cannot be read the answer is empty, and a record
-    written then is trusted on liveness alone — the behaviour before this
-    existed, rather than a session that refuses to work.
-    """
-    try:
-        with open(f"/proc/{pid}/stat", encoding="utf-8") as fh:
-            data = fh.read()
-        return data[data.rindex(")") + 2:].split()[19]
-    except (OSError, ValueError, IndexError):
-        return ""
+#: Kept under the old name. The watchers were the first thing here to learn
+#: that a pid needs a start time beside it to mean anything; the daemon now
+#: judges itself by the same answer, so there is one of it.
+_started_at = exclusive.started_at
 
 
 def watchers(profile: SessionProfile) -> list[int]:
@@ -267,8 +273,14 @@ def stop(profile: SessionProfile) -> bool:
         return False
     with contextlib.suppress(OSError, ProcessLookupError):
         os.kill(pid, signal.SIGTERM)
+    # THE PROCESS, NOT THE FILE. Waiting on `is_running` was waiting on
+    # `daemon.pid`, which the daemon unlinks on its way out: the file went at
+    # about 5ms and the process at about 47ms, so this returned True on a
+    # daemon still holding the feed and the SIGKILL below was unreachable by
+    # every path. `daemon stop && daemon start` — which the tool prints as
+    # advice — started the replacement on top of the one still connected.
     for _ in range(50):
-        if is_running(profile) is None:
+        if not _alive(pid):
             return True
         time.sleep(0.1)
     with contextlib.suppress(OSError, ProcessLookupError):
@@ -348,6 +360,7 @@ class Daemon:
     def __init__(self, profile: SessionProfile, *, bridge_port: int = 0) -> None:
         self.profile = profile
         self.paths = DaemonPaths(profile.dir)
+        self._lock = exclusive.DaemonLock(profile.dir)
         self.inbox = Inbox(profile.dir)
         self.bridge = Bridge(port=bridge_port)
         self.state = "starting"
@@ -1230,7 +1243,29 @@ class Daemon:
 
     async def run(self) -> None:
         self.paths.root.mkdir(parents=True, exist_ok=True)
-        self.paths.pid.write_text(str(os.getpid()))
+        # BEFORE ANY SHARED STATE, because a daemon that is not the daemon must
+        # leave no trace. Two of them for one session both used to come up:
+        # `ensure_daemon` checks and then spawns with nothing in between, and
+        # the window is the whole of a Python start-up because nothing is
+        # written until this point. The second overwrote the first's pid file,
+        # and then whichever died first deleted the *survivor's* — leaving a
+        # daemon that was streaming the feed, invisible to `is_running`,
+        # unreachable by `stop`, and replaced by a third on the next join.
+        if not self._lock.acquire():
+            logger.warning("another daemon already holds %s — leaving it alone",
+                           self.profile.session_id)
+            return
+        try:
+            await self._serve()
+        finally:
+            self._lock.release()
+
+    async def _serve(self) -> None:
+        # Written before the first await, so the pid is on disk by the time
+        # whoever spawned us goes looking. The number keeps the first line —
+        # that is what the rest of the tree reads out of this file — and the
+        # start time goes underneath it.
+        self.paths.pid.write_text(exclusive.stamp())
         await self.bridge.start()
         self.profile.bridge_port = self.bridge.port
         # This one DOES claim the pointer: a daemon starting up for a session is
@@ -1257,13 +1292,29 @@ class Daemon:
             self.write_status()
             peers.withdraw(self.profile.session_id)
             # A listener stopping is a guest leaving; for a host the hub is
-            # still there, so only give up the lock when it is ours to give.
+            # still there, so only give up the lock when it is ours to give —
+            # and only while it still names this process. It records a listener
+            # pid and nothing here read it, so a daemon shutting down released
+            # a claim that another one was standing behind.
             held = lockfile.read(self.profile.home)
             if held is not None and held.session_id == self.profile.session_id \
+                    and held.listener_pid == os.getpid() \
                     and not self.profile.is_host:
                 lockfile.release(self.profile.home)
-            with contextlib.suppress(OSError):
-                self.paths.pid.unlink()
+            # ONLY IF IT IS STILL OURS. Unconditional, this is what turned a
+            # lost race into a permanent fault: the losing daemon removed the
+            # winner's pid file, and nothing could find the winner again.
+            if self._owns_pid_file():
+                with contextlib.suppress(OSError):
+                    self.paths.pid.unlink()
+
+    def _owns_pid_file(self) -> bool:
+        """Does `daemon.pid` still name this process, and not merely this pid?"""
+        try:
+            pid, began = exclusive.parse(self.paths.pid.read_text())
+        except OSError:
+            return False
+        return pid == os.getpid() and exclusive.same_process(began, os.getpid())
 
     async def _connect_forever(self) -> None:
         backoff = BACKOFF_START

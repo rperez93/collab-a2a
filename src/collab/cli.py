@@ -529,13 +529,11 @@ def _take_lock(profile: SessionProfile, *, role: str, hub_pid: int = 0) -> None:
     why joining here behaves oddly — rather than left to be inferred from a
     scan of pid files.
     """
-    from .client.daemon import DaemonPaths
-
-    listener = 0
-    try:
-        listener = int(DaemonPaths(profile.dir).pid.read_text().strip())
-    except (OSError, ValueError):
-        pass
+    # Not the number in the file. `Lock.held` is `any(_alive(pid))` over
+    # exactly this field, so a pid file left behind by a killed daemon — with
+    # its number since reused — made a free repo read as occupied by a live
+    # agent, and the next agent here was sent away.
+    listener = is_running(profile) or 0
     home = Path(profile.home)
     lockfile.acquire(lockfile.Lock(
         name=profile.name, session_id=profile.session_id, role=role,

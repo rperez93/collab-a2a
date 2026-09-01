@@ -245,10 +245,13 @@ def stop_session(cfg: HubConfig, *, purge: bool = False) -> dict[str, Any]:
 
 
 def _daemon_pid(cfg: HubConfig) -> int:
+    from ..client.exclusive import parse
+
     try:
-        return int((cfg.dir / "daemon.pid").read_text().strip())
-    except (OSError, ValueError):
+        pid, _ = parse((cfg.dir / "daemon.pid").read_text())
+    except OSError:
         return 0
+    return pid or 0
 
 
 def join_line(cfg: HubConfig) -> str:
