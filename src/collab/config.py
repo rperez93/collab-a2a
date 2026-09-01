@@ -11,6 +11,7 @@ of the project.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -218,9 +219,22 @@ def collab_home(cwd: Path | None = None, name: str = "") -> Path:
 
 
 def ensure_home(cwd: Path | None = None, name: str = "") -> Path:
-    """Create the state directory on first use, with its own .gitignore."""
+    """Create the state directory on first use, with its own .gitignore.
+
+    Made private to this user (0700), and re-asserted on every call rather than
+    only at creation. The individual secrets underneath are each written 0600 —
+    the bearer token, the invite, the host token — but the message log is not: a
+    hub's `hub.db` and a client's inbox are SQLite files that sqlite3 creates at
+    the default umask, so on a shared machine the whole conversation, the roster
+    and everyone's usage figures were readable by any other local user. One
+    private directory over all of it is the same guard the peers registry
+    already keeps for itself, and closing the traversal is what actually
+    protects the files whose own mode was left open.
+    """
     home = collab_home(cwd, name)
     home.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        home.chmod(0o700)
     gitignore = home / ".gitignore"
     if not gitignore.exists():
         gitignore.write_text(GITIGNORE_BODY)
@@ -679,6 +693,12 @@ class SessionProfile:
         """
         ensure_home(Path(self.home).parent if self.home else None)
         Path(self.home).mkdir(parents=True, exist_ok=True)
+        # This home may be a custom --home or a COLLAB_HOME the resolver above
+        # did not land on, so its privacy is asserted here too rather than left
+        # to chance: the profile beside it holds the bearer token, and the
+        # session's message log holds the conversation.
+        with contextlib.suppress(OSError):
+            Path(self.home).chmod(0o700)
         gitignore = Path(self.home) / ".gitignore"
         if not gitignore.exists():
             gitignore.write_text(GITIGNORE_BODY)
