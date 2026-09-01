@@ -257,9 +257,18 @@ def watchers(profile: SessionProfile) -> list[int]:
             stamp = ""
         # Alive AND the same process: a stale file whose pid has been reused is
         # the one way this whole check can pass while nothing is listening.
-        began = _started_at(pid)
-        same = (not stamp or not began or stamp == began)
-        if _alive(pid) and same:
+        #
+        # Liveness first, and only then the start time. They commute on Linux,
+        # where both are a file read, and they do not on a machine with no
+        # /proc: there the start time is a `ps`, and asking it about a dead pid
+        # spent a subprocess, every three seconds, on every watcher file left
+        # behind by a process that had gone.
+        if not _alive(pid):
+            with contextlib.suppress(OSError):
+                entry.unlink()
+            continue
+        began = _started_at(pid) if stamp else ""
+        if not began or stamp == began:
             live.append(pid)
         else:
             with contextlib.suppress(OSError):
@@ -335,6 +344,15 @@ def _names_itself_our_daemon(pid: int, profile: SessionProfile) -> bool:
     needs a contrived command line; a sibling collab daemon needed none, which
     made collab's own daemons the preferred casualty of the test meant to
     spare everyone else's.
+
+    Which is why this can only ever answer False without /proc. The argv half
+    survives there, through `ps`, but no portable way exists to read another
+    process's environment and none is invented here — so on macOS the home is
+    unknown, the home is not optional, and this declines. `provably_ours` then
+    declines with it and `stop_orphans` leaves a pre-lock orphan where it is,
+    for `collab daemon stop` to clear by hand. A stated property, not an
+    accident: it withholds a signal, which is the direction this whole
+    function exists to fail in.
     """
     words = exclusive.argv(pid)
     if DAEMON_MODULE not in words or profile.session_id not in words:
@@ -1367,6 +1385,17 @@ class Daemon:
     # --- the feed --------------------------------------------------------------
 
     async def run(self) -> None:
+        # BEFORE THE STATE DIRECTORY, for the same reason the lock is taken
+        # before anything else: a daemon that is not going to run must leave
+        # nothing behind that says it did. A platform with no locking
+        # primitive cannot be made safe by any amount of care further down, so
+        # this stops rather than coming up as the second daemon nobody can
+        # see. The CLI refuses first and in front of the person who typed the
+        # command; this is the backstop for a daemon started by hand, and it
+        # says the same thing into daemon.log.
+        if not exclusive.locking_available():
+            logger.error("%s", exclusive.UNSUPPORTED_PLATFORM)
+            return
         self.paths.root.mkdir(parents=True, exist_ok=True)
         # BEFORE ANY SHARED STATE, because a daemon that is not the daemon must
         # leave no trace. Two of them for one session both used to come up:

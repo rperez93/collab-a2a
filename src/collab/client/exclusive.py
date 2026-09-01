@@ -32,6 +32,26 @@ SIGKILLed. Nobody has run this on macOS or on NFS. The start time in
 which macOS does not have; there it falls back to `ps` and answers only to the
 second.
 
+Which leaves three platforms and three different answers. Linux has both
+halves. macOS has the lock and loses everything that reads /proc: `started_at`
+drops to `ps` and one-second precision, `is_zombie` can no longer tell a
+process that has exited from one still running, and `environ` cannot be read
+at all — so `provably_ours` never reaches its third arm there, and an orphan
+from before the lock existed leaks instead of being signalled. That is the
+direction to fail in, and `collab daemon stop` clears it. Windows has neither
+half: no `fcntl`, so two daemons for one session both used to acquire, both
+with `enforced` False, and nothing said so. `acquire` refuses there rather
+than limping on, and the refusal says to run under WSL 2 instead.
+
+That refusal is NOT the filesystem that will not lock, which still starts and
+still records `enforced` False. An unusual mount is not a reason to refuse
+somebody a session; a platform with no locking primitive at all is, because
+there is then nothing left to be right or wrong about.
+
+What happens without /proc is pinned by tests that patch `_HAVE_PROC` to
+False on Linux. That is SIMULATED, not measured: it walks the branches macOS
+would walk, on a kernel that is not macOS. Nobody has run this on a Mac.
+
 So `started_at` is the weaker, second answer throughout: it is what remains
 when a filesystem cannot lock, and what reads a pid file written by an older
 collab. It is not the guarantee. The lock is.
@@ -69,6 +89,12 @@ _BUSY = {errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK}
 #: Decided once. Falling back to `ps` whenever a /proc read failed would spawn
 #: a subprocess for every dead pid in a directory scan, and `watchers()` scans
 #: on every heartbeat.
+#:
+#: On a machine that has no /proc at all the fallback is not avoided but
+#: permanent, so the cost is worth stating rather than discovering: one `ps`
+#: per LIVE watcher every STATUS_HEARTBEAT seconds. `watchers()` asks whether
+#: the pid is alive first, so a dead one costs nothing, which is the case that
+#: comment was written about.
 _HAVE_PROC = os.path.isdir("/proc/self")
 
 #: A probe holds its shared lock for microseconds and a daemon holds its
@@ -85,6 +111,39 @@ _HAVE_PROC = os.path.isdir("/proc/self")
 #: importing itself one more fifth of a second, once.
 ACQUIRE_ATTEMPTS = 40
 ACQUIRE_PAUSE = 0.005
+
+
+class UnsupportedPlatform(RuntimeError):
+    """No locking primitive here at all, so there is nothing to exclude with.
+
+    A different fault from a filesystem that will not lock, and the two are
+    kept apart deliberately: that one is met with `enforced` False and a
+    session that runs anyway, because an unusual mount should not cost
+    somebody their session. This one is met with a refusal, because with no
+    `flock` two daemons for one session both come up, both stream the feed,
+    and the pid file names whichever of them wrote it last.
+    """
+
+
+#: Said wherever that refusal surfaces. The version is part of the
+#: instruction rather than decoration: WSL 2 runs a real Linux kernel, so the
+#: `flock` and the /proc this module reasons about are the genuine ones. WSL 1
+#: translates syscalls instead, and nobody here has measured what it does with
+#: either.
+UNSUPPORTED_PLATFORM = (
+    "collab needs POSIX file locking to keep two daemons off one session, "
+    "and this platform has none. Run collab under WSL 2 or later."
+)
+
+
+def locking_available() -> bool:
+    """Is there a locking primitive on this platform at all?
+
+    A function rather than a constant read at import, so that the Windows
+    shape can be reached by patching `fcntl` away — which is the only way this
+    branch is exercised on the machines collab is developed on.
+    """
+    return fcntl is not None
 
 
 def lock_path(root: Path | str) -> Path:
@@ -121,18 +180,26 @@ class DaemonLock:
         state directory lives on a share is worse. Callers that need to know
         whether the answer is trustworthy read `enforced`; the daemon does not
         need to, because either way it is the one running.
+
+        A platform with no locking primitive at all raises
+        `UnsupportedPlatform` instead, which is the other half of that same
+        judgement rather than a contradiction of it.
         """
         if self._fd is not None:
             return True
+        # Windows, where there is no lock to take and no second opinion to
+        # fall back on. This used to return True with `enforced` False and say
+        # nothing, so both daemons for a session came up and whichever wrote
+        # the pid file last owned it. Refusing is the only honest answer left;
+        # the filesystem that merely will not lock is the branch below, and it
+        # still runs.
+        if fcntl is None:
+            raise UnsupportedPlatform(UNSUPPORTED_PLATFORM)
         try:
             fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
         except OSError:
             self.enforced = False
             return True                     # unwritable state dir: still serve
-        if fcntl is None:
-            self._fd, self.enforced = fd, False
-            self._write_pid()
-            return True
         got = self._flock(fd)
         if got is False:
             os.close(fd)
@@ -239,14 +306,20 @@ def taken(root: Path | str) -> bool | None:
 def argv(pid: int) -> list[str]:
     """How a process describes ITSELF, rather than how a file describes it.
 
-    Linux only, from /proc/<pid>/cmdline, and empty everywhere else. That is
-    safe wherever it is used as an extra condition on a signal: it can withhold
+    /proc/<pid>/cmdline where there is a /proc, and `ps -o command=` where
+    there is not — macOS, the BSDs — which hands the words back joined by
+    spaces and so has to be split on them again. That is approximate in one
+    direction only: an argument containing a space comes back as two words,
+    and a long command line may have been truncated before we ever see it.
+    Both lose a match rather than inventing one.
+
+    Safe wherever it is used as an extra condition on a signal: it can withhold
     permission but never grant it, so where it cannot be read nothing is
     signalled that would not have been signalled anyway. It does not carry the
     weight `started_at` does and must not be given it.
     """
     if not _HAVE_PROC:
-        return []
+        return _ps_argv(pid)
     try:
         with open(f"/proc/{pid}/cmdline", "rb") as fh:
             return [part.decode("utf-8", "replace")
@@ -255,13 +328,27 @@ def argv(pid: int) -> list[str]:
         return []
 
 
+def _ps_argv(pid: int) -> list[str]:
+    try:
+        out = subprocess.run(["ps", "-p", str(pid), "-o", "command="],
+                             capture_output=True, text=True, timeout=2, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return out.stdout.split()
+
+
 def environ(pid: int) -> dict[str, str]:
     """The environment a process was STARTED with, as the kernel kept it.
 
-    /proc/<pid>/environ, and the same rules as `argv`: Linux only, readable
-    only for our own processes, empty everywhere else. It records the exec, so
-    a later `os.environ` change inside that process is not reflected here —
-    which is what makes it evidence rather than a report.
+    /proc/<pid>/environ, Linux only, and readable only for our own processes.
+    It records the exec, so a later `os.environ` change inside that process is
+    not reflected here — which is what makes it evidence rather than a report.
+
+    Empty everywhere else, and unlike `argv` there is no second route to it:
+    no portable way exists to read another process's environment, `ps` does
+    not offer one, and this does not invent one. On macOS it therefore always
+    answers {}, which is what makes `provably_ours` decline its third arm
+    there. See `_names_itself_our_daemon` for what that costs.
 
     Must be read while the process is alive; a dead pid has no environ, and
     reading it after signalling something answers nothing about what was
@@ -290,6 +377,11 @@ def is_zombie(pid: int) -> bool:
     liveness test here would say yes to a daemon that had already stopped. It
     bites only when the parent is long-lived enough not to reap promptly,
     which is exactly what an agent's shell is.
+
+    Answers False without /proc, which is the pre-existing behaviour restored
+    rather than a new one: an unreaped daemon on macOS counts as running until
+    somebody reaps it. The lock is what saves that case there — the kernel
+    took it back when the process exited, whatever its /proc entry says.
     """
     if not _HAVE_PROC:
         return False
@@ -355,13 +447,30 @@ def stamp(pid: int | None = None) -> str:
 
 
 def parse(text: str) -> tuple[int | None, str]:
-    """Read `daemon.pid` in either form: bare pid, or pid and start time."""
+    """Read `daemon.pid` in either form: bare pid, or pid and start time.
+
+    Zero and below are read as no pid at all, because every reader of this
+    file eventually hands the number to `os.kill`, and there those two do not
+    mean what they look like: `kill(0, sig)` signals the caller's ENTIRE
+    PROCESS GROUP and `kill(-1, sig)` signals every process the user can
+    reach. A truncated write is all it takes to get there, and `collab daemon
+    stop` would then take down the terminal it was typed in — which is what a
+    pid file of 0 did to a test run here, killing the runner that read it.
+
+    Refused in the parser rather than at each `os.kill`, because everything
+    that ends up signalling a daemon — `is_running` and `provably_ours`, and
+    `_terminate` through whichever of them handed it the number — reads the
+    file through here first, and a new reader is then safe by having been
+    written.
+    """
     lines = text.splitlines()
     if not lines:
         return None, ""
     try:
         pid = int(lines[0].strip())
     except ValueError:
+        return None, ""
+    if pid <= 0:
         return None, ""
     return pid, (lines[1].strip() if len(lines) > 1 else "")
 

@@ -22,7 +22,7 @@ from typing import Any
 
 from . import __version__, activity, lockfile, peers, update
 from . import batch as batch_progress
-from .client import onboard
+from .client import exclusive, onboard
 from .client.daemon import (DaemonPaths, effective_state as daemon_state,
                             is_running, last_poll, polled, read_status,
                             stop as stop_daemon, stop_orphans,
@@ -3746,6 +3746,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     try:
         return int(args.func(args) or 0)
+    except exclusive.UnsupportedPlatform as exc:
+        # Once, here, and only for the commands that actually needed a daemon.
+        # Refusing every command on such a platform would be a wall in front
+        # of `collab --help` and `collab update`; refusing silently was the
+        # old behaviour, and it ran two daemons.
+        fail(str(exc))
+        return 1
     except KeyboardInterrupt:
         return 130
     except BrokenPipeError:

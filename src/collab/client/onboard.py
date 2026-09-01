@@ -19,6 +19,7 @@ from urllib.parse import urlparse, urlunparse
 from ..config import SessionProfile, resolve_name
 from ..protocol import DEFAULT_ROOM
 from . import context as ctx
+from . import exclusive
 from .daemon import (DaemonPaths, effective_state, is_running,
                      read_status)
 from .hub_client import HubClient, HubError
@@ -45,7 +46,16 @@ def split_join_url(raw: str) -> tuple[str, str]:
 
 
 def spawn_daemon(profile: SessionProfile) -> int:
-    """Start the daemon detached, so it outlives the command that started it."""
+    """Start the daemon detached, so it outlives the command that started it.
+
+    Refuses where the platform has no file locking, because the daemon refuses
+    on arrival for the same reason and would do it into `daemon.log`, which is
+    not a file anybody opens unprompted. Raised rather than printed so that
+    the one place that knows it is talking to a person — `cli.main` — is the
+    one place that says it.
+    """
+    if not exclusive.locking_available():
+        raise exclusive.UnsupportedPlatform(exclusive.UNSUPPORTED_PLATFORM)
     paths = DaemonPaths(profile.dir)
     paths.root.mkdir(parents=True, exist_ok=True)
     log = paths.log.open("a")
