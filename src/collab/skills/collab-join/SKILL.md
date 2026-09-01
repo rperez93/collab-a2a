@@ -44,6 +44,15 @@ repo. Asking first spends a turn of the user's attention on something the
 command already knows — and it is the one step in this whole flow that needs a
 person.
 
+The bare form is a **full** join: it reads this repo's lock, takes `--name` for
+who is arriving, and hands you your own `.collab-<you>` when another agent
+already holds the default — everything the link form does, since the only thing
+missing is the link.
+
+```bash
+collab join --name bob --focus "the client side"
+```
+
 ## 1. Join
 
 ```bash

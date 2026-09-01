@@ -95,6 +95,7 @@ the `guest` row is just another participant like you.
 
 ```bash
 collab join --focus "<what you are working on>"           # the one session here
+collab join --name bob --focus "..."                      # ...arriving as bob
 collab join --local s_bb9c59a3 --focus "..."              # by session id
 collab join --local api --focus "..."                     # or by repo, or by name
 ```
@@ -102,6 +103,12 @@ collab join --local api --focus "..."                     # or by repo, or by na
 The first form takes **no session id and no link**. `--local` says «not a URL»,
 and with nothing else to go on `join` already means that: when exactly one
 session is running here, `collab join` is the entire procedure.
+
+**It is a full join, so it does everything the link form does first.** It reads
+this repo's lock, takes `--name` for who is arriving, and when another agent
+already holds `.collab` it puts you in your own `.collab-<you>` and says so —
+same checkout, same files, separate state. `--home` and `--agent` work exactly
+as they do with a URL. Nothing about having no link makes it a lesser join.
 
 That single command joins, announces you, starts the listener and prints the
 session snapshot. There is no separate step to start receiving.
