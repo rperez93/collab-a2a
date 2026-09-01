@@ -61,9 +61,18 @@ class HubConfig:
         is what lets a neighbouring agent follow it there — the alternative is
         handing out a LAN address that only works from somewhere else, or
         `0.0.0.0`, which is not somewhere at all.
+
+        AND AN IPv6 LITERAL IS BRACKETED, because a URL without the brackets is
+        not the address somebody typed. `--bind ::1` composed to
+        `http://::1:9000`, which no client can parse — the loopback case this
+        whole policy exists to serve. Worse, `fe80::1` composed to
+        `http://fe80::1:9000`, which parses cleanly as the host `fe80`: not an
+        error, just somewhere else.
         """
         local = ("127.0.0.1", "localhost", "0.0.0.0", "::", "*")
         host = "127.0.0.1" if self.bind in local else self.bind
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
         return f"http://{host}:{self.port}"
 
     def save(self) -> None:

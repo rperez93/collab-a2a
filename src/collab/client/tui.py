@@ -1716,8 +1716,15 @@ class Tui:
         win.addnstr(1, 0, badge, max(width - 1, 0),
                     curses.color_pair(state_pair) | curses.A_BOLD)
         people = m.participants()
-        online = sum(1 for p in people if p.get("connected"))
-        summary = f"{online}/{len(people)} online"
+        # THE COUNT IS A CLAIM TOO. The rows below it stopped saying «online»
+        # once we lost the feed, and this line went on saying «2/3 online» one
+        # column from a badge reading «offline» — the same staleness, in the
+        # place the eye lands first.
+        if m.roster_is_current():
+            online = sum(1 for p in people if p.get("connected"))
+            summary = f"{online}/{len(people)} online"
+        else:
+            summary = f"{len(people)} here, none confirmed"
         win.addnstr(1, len(badge) + 1, summary, max(width - len(badge) - 2, 0),
                     curses.color_pair(C_DIM))
 
