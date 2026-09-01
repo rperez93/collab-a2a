@@ -16,11 +16,8 @@ from pathlib import Path
 from typing import Any
 
 from ..config import SessionProfile
-from ..client.daemon import is_running, read_status
-
-#: Beyond this, the daemon's heartbeat is old enough that it is not just quiet.
-STALE_AFTER = 10.0
-DEAD_AFTER = 45.0
+from ..client.daemon import (DEAD_AFTER, STALE_AFTER, effective_state,
+                             is_running, read_status)
 
 RESET = "\033[0m"
 COLORS = {
@@ -44,23 +41,11 @@ def _paint(text: str, color: str) -> str:
     return f"{COLORS.get(color, '')}{text}{RESET}"
 
 
-def _effective_state(status: dict[str, Any]) -> str:
-    """Judge liveness from the heartbeat age, not from what the daemon claimed.
-
-    A daemon that was killed leaves 'live' behind in its last status write, so
-    the timestamp is the only trustworthy signal.
-    """
-    raw = status.get("state", "offline")
-    age = time.time() - float(status.get("heartbeat") or 0)
-    if raw in ("stopped", "unauthorized"):
-        return "offline"
-    if age > DEAD_AFTER:
-        return "offline"
-    if raw == "live" and age > STALE_AFTER:
-        return "reconnecting"
-    if raw == "live":
-        return "live"
-    return "reconnecting" if raw in ("reconnecting", "starting") else "offline"
+#: The judgement now lives beside the file it distrusts, in client.daemon, so
+#: that everything reading `status.json` reaches the same verdict. It was here
+#: alone, and `collab status` printed the raw field instead: the status line
+#: dropped a dead session correctly while the command called it live.
+_effective_state = effective_state
 
 
 def stash_agent_stats(raw: str, cwd: Path | None) -> None:

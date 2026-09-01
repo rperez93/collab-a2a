@@ -40,7 +40,7 @@ from ..protocol import (
 )
 from .. import peers
 from .. import themes
-from .daemon import DaemonPaths, is_running, read_status
+from .daemon import DaemonPaths, effective_state, is_running, read_status
 from .inbox import Inbox
 
 #: How much of the window the roster gets. The conversation is the thing you
@@ -551,6 +551,9 @@ class Model:
     #: Whether anything older than what is loaded exists; None = not asked yet.
     _older: bool | None = None
     _inbox: Any = None
+    #: The daemon's state as judged, not as it last wrote it down. Refreshed
+    #: once a second with the snapshot; see state().
+    _state: str = "offline"
 
     @property
     def paths(self) -> DaemonPaths:
@@ -736,12 +739,27 @@ class Model:
             self._older = bool(first) and self.inbox.has_before(first)
         return self._older
 
+    def state(self) -> str:
+        """What the daemon is doing, judged rather than quoted.
+
+        The badge used to print `status.json`'s own word for itself, so a pane
+        left open after its listener died sat there saying `live` in green,
+        beside a roster and an unread count that had stopped moving hours
+        before. Worked out once a second in refresh_side rather than per frame:
+        it costs a pid read and a `kill(pid, 0)`, which is nothing, but nothing
+        four times a second is still four times more often than the answer can
+        change usefully.
+        """
+        return self._state
+
     def refresh_side(self) -> None:
         try:
             self.snapshot = json.loads(self.paths.snapshot.read_text())
         except (OSError, ValueError):
             pass
         self.status = read_status(self.profile) or self.status
+        self._state = effective_state(
+            self.status, running=is_running(self.profile) is not None)
 
     def poll_events(self, follow: bool = True) -> int:
         """Read whatever has been appended since we last looked.
@@ -1620,7 +1638,7 @@ class Tui:
 
         # --- title bar -----------------------------------------------------
         m = self.model
-        state = str(m.status.get("state") or "?")
+        state = m.state()
         state_pair = {"live": C_ONLINE, "reconnecting": C_WARN}.get(state, C_OFFLINE)
         title = m.title()
         left = f" {title} "
@@ -1939,7 +1957,7 @@ class Tui:
             pane, label = self.chat, self._chat_label()
             self._chat_top = 1
 
-        state = str(m.status.get("state") or "?")
+        state = m.state()
         state_pair = {"live": C_ONLINE, "reconnecting": C_WARN}.get(state, C_OFFLINE)
         head = f" {m.title()} · {label} "
         win.attron(curses.color_pair(C_TITLE) | curses.A_BOLD)

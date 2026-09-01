@@ -130,6 +130,42 @@ def read_status(profile: SessionProfile) -> dict[str, Any]:
         return {}
 
 
+#: Beyond this, the daemon's heartbeat is old enough that it is not just quiet.
+STALE_AFTER = 10.0
+DEAD_AFTER = 45.0
+
+
+def effective_state(status: dict[str, Any], *, running: bool | None = None) -> str:
+    """What the daemon is ACTUALLY doing, which is not what it last wrote down.
+
+    `status.json` is the daemon's own account of itself, and a daemon that was
+    killed never gets to correct it: the last thing it wrote was ``live``, and
+    ``live`` is what the file says for ever after. Read literally —which is what
+    `collab status` did— a session whose listener died hours ago reports itself
+    connected, with a name, a host and an unread count, all of it history.
+
+    Two things say otherwise. The pid, when the caller has looked it up, is
+    decisive: no process, no daemon, whatever the file claims. Failing that the
+    heartbeat is the only trustworthy signal, because it is the one thing that
+    cannot be left behind by a process that is gone.
+
+    Returns the vocabulary the status line paints: live, reconnecting, offline.
+    """
+    if running is False:
+        return "offline"
+    raw = status.get("state", "offline")
+    age = time.time() - float(status.get("heartbeat") or 0)
+    if raw in ("stopped", "unauthorized"):
+        return "offline"
+    if age > DEAD_AFTER:
+        return "offline"
+    if raw == "live" and age > STALE_AFTER:
+        return "reconnecting"
+    if raw == "live":
+        return "live"
+    return "reconnecting" if raw in ("reconnecting", "starting") else "offline"
+
+
 class Daemon:
     def __init__(self, profile: SessionProfile, *, bridge_port: int = 0) -> None:
         self.profile = profile

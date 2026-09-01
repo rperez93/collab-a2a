@@ -22,7 +22,8 @@ from typing import Any
 
 from . import __version__, lockfile, peers, update
 from .client import onboard
-from .client.daemon import (DaemonPaths, is_running, read_status,
+from .client.daemon import (DaemonPaths, effective_state as daemon_state,
+                            is_running, read_status,
                             stop as stop_daemon, stop_orphans)
 from .client.hub_client import HubClient, HubError
 from .client.inbox import Inbox
@@ -1415,19 +1416,36 @@ def cmd_status(args: argparse.Namespace) -> int:
         "is_host": profile.is_host,
         "url": profile.url,
         "daemon_pid": pid,
+        "daemon_running": pid is not None,
         "monitor_command": f"{sys.argv[0]} listen --follow",
         "monitor_ws": (f"ws://127.0.0.1:{status['bridge_port']}/events"
                        if status.get("bridge_port") else None),
         **{k: status.get(k) for k in
-           ("state", "others_connected", "others_total", "unread", "last_seq")},
+           ("others_connected", "others_total", "unread", "last_seq")},
     }
+    # WHAT IT IS DOING, NOT WHAT IT LAST WROTE DOWN. `status.json` is the
+    # daemon's own account of itself and a killed daemon never gets to correct
+    # it, so this command reported a listener that died hours ago as `live` —
+    # with an unread count and a monitor line to go with it, every figure of it
+    # history. The status line has judged this properly all along; the command
+    # was reading the raw field.
+    payload["state"] = daemon_state(status, running=pid is not None)
+    recorded = status.get("state")
+    if recorded and recorded != payload["state"]:
+        # Kept, not hidden: it is the last thing the daemon managed to say, and
+        # it is how you tell «stopped cleanly» from «killed while connected».
+        payload["recorded_state"] = recorded
     if hint := status.get("hint"):
         payload["hint"] = hint
+    if pid is None:
+        payload["hint"] = (f"the listener is not running — "
+                           f"`{Path(sys.argv[0]).name} daemon start` brings it back")
     if args.json:
         print(json.dumps(payload, indent=2))
         return 0
     heading(f"collab session {payload['session_id']}")
-    for key in ("name", "host", "url", "state", "others_connected", "unread",
+    for key in ("name", "host", "url", "state", "recorded_state",
+                "others_connected", "unread",
                 "last_seq", "daemon_pid", "monitor_command", "monitor_ws"):
         if payload.get(key) is not None:
             print(f"  {key:<16} {payload[key]}")
@@ -2054,7 +2072,13 @@ def cmd_daemon(args: argparse.Namespace) -> int:
     profile = _require_profile(args)
     if args.action == "status":
         pid = is_running(profile)
-        print(json.dumps({"pid": pid, **read_status(profile)}, indent=2))
+        recorded = read_status(profile)
+        # `state` here is the daemon's last word about itself, which a killed
+        # one never got to take back. Same file, same correction as `status`.
+        print(json.dumps({"pid": pid, "running": pid is not None,
+                          **recorded,
+                          "state": daemon_state(recorded, running=pid is not None),
+                          "recorded_state": recorded.get("state")}, indent=2))
         return 0
     if args.action == "stop":
         print("stopped" if stop_daemon(profile) else "was not running")
