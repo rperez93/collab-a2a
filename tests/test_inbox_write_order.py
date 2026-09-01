@@ -14,6 +14,9 @@ messages are seen.
 
 from __future__ import annotations
 
+import json
+import os
+
 import pytest
 
 from collab.client.inbox import Inbox
@@ -96,3 +99,33 @@ def test_an_event_we_already_have_appends_nothing(inbox, tmp_path):
 
     lines = (tmp_path / "inbox.jsonl").read_text().splitlines()
     assert len(lines) == 1
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes a read-only file anyway")
+def test_a_log_that_cannot_be_written_takes_the_row_with_it(inbox, tmp_path):
+    """The append can FAIL, not merely be interrupted — and that escaped.
+
+    A read-only state directory or a full disk raises inside the append, and
+    the write transaction was left open. Everything after it then read through
+    the transaction rather than the database: `last_seq` answered with a seq
+    that had not been committed, so the resume skipped that event, and the next
+    successful record committed the orphaned row alongside its own. The seq was
+    in the database, absent from the log, and unreachable for ever — the same
+    silent divergence, one step further along.
+    """
+    inbox.record(_env(1))
+    log = tmp_path / "inbox.jsonl"
+    log.chmod(0o400)
+    try:
+        with pytest.raises(OSError):
+            inbox.record(_env(50))
+
+        assert inbox.last_seq() == 1, "the cursor moved past an event nobody has"
+        assert [e.seq for e in inbox.all_events()] == [1]
+    finally:
+        log.chmod(0o600)
+
+    # And the next event must not carry the orphan in with it.
+    assert inbox.record(_env(51)) is True
+    assert [e.seq for e in inbox.all_events()] == [1, 51]
+    assert [json.loads(line)["seq"] for line in log.read_text().splitlines()] == [1, 51]

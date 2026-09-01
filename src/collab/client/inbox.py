@@ -99,6 +99,19 @@ class Inbox:
                     "INSERT INTO inbox (seq, ts, kind, sender, payload) VALUES (?,?,?,?,?)",
                     (env.seq, env.ts, env.kind, env.sender, json.dumps(env.to_dict())),
                 )
+                self._db.execute(
+                    "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_seq', ?)",
+                    (str(env.seq),),
+                )
+                # The append goes here, inside the lock and BEFORE the commit:
+                # the commit is the moment the event becomes one we will never
+                # ask for again, so nothing may become unfetchable while the log
+                # a Monitor tails does not have it yet. Inside the lock because
+                # two writers appending at once interleave their lines.
+                with self.jsonl.open("a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(env.to_dict(), ensure_ascii=False) + "\n")
+                    fh.flush()
+                self._db.commit()
             except sqlite3.IntegrityError:
                 # SOMEBODY ELSE GOT THERE BETWEEN THE LOOK AND THE LEAP. The
                 # primary key is doing its job and the answer is the same one
@@ -110,19 +123,20 @@ class Inbox:
                 # link, over a race that never left this machine.
                 self._db.rollback()
                 return False
-            self._db.execute(
-                "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_seq', ?)",
-                (str(env.seq),),
-            )
-            # The append goes here, inside the lock and BEFORE the commit: the
-            # commit is the moment the event becomes one we will never ask for
-            # again, so nothing may become unfetchable while the log a Monitor
-            # tails does not have it yet. Inside the lock because two writers
-            # appending at once interleave their lines.
-            with self.jsonl.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(env.to_dict(), ensure_ascii=False) + "\n")
-                fh.flush()
-            self._db.commit()
+            except BaseException:
+                # AND THE APPEND CAN FAIL, not merely be interrupted — a
+                # read-only state directory or a full disk raises right here.
+                # Without this the write transaction escaped still open, and
+                # everything after it read through the transaction rather than
+                # the database: `last_seq` answered with a seq that had not
+                # been committed, so the resume skipped that event, and the
+                # next successful record committed the orphaned row alongside
+                # its own. The seq then existed in the database, was absent
+                # from the log, and could never be fetched again — the exact
+                # divergence the ordering above exists to prevent, moved one
+                # step along. Anything that leaves this block leaves it clean.
+                self._db.rollback()
+                raise
         return True
 
     def last_seq(self) -> int:
