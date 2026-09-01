@@ -460,11 +460,7 @@ class Daemon:
         self.profile = profile
         self.paths = DaemonPaths(profile.dir)
         self._lock = exclusive.DaemonLock(profile.dir)
-        # NOT HERE. Opening it runs the schema and leaves `inbox.db-wal` and
-        # `-shm` beside it, which a daemon that turns out not to hold this
-        # session has no business creating. It is opened in `_serve`, once the
-        # lock says we are the daemon.
-        self.inbox: Inbox | None = None
+        self._inbox: Inbox | None = None
         self.bridge = Bridge(port=bridge_port)
         self.state = "starting"
         self.last_event_at = time.time()
@@ -495,6 +491,32 @@ class Daemon:
         #: What we put on the roster on the woken turn's behalf, so that we
         #: retract that and nothing the agent said for itself.
         self._wake_activity: dict[str, Any] | None = None
+
+    @property
+    def inbox(self) -> Inbox:
+        """The local store, opened the first time something actually needs it.
+
+        Not in `__init__`, because a daemon that loses the race for this
+        session must leave nothing behind, and opening this runs the schema and
+        leaves `inbox.db-wal` and `-shm` beside it — a trace of a daemon that
+        never ran.
+
+        Not in `_serve` either, which is where that reasoning first put it. It
+        made the attribute None for the window between construction and
+        serving, and everything that reads it —`write_status`, `_stream_once`—
+        is written as though it is simply there. Nothing in production crossed
+        that window, but a caller driving the daemon without going through
+        `_serve` got an AttributeError raised from inside the status write,
+        which is a long way from the cause and says nothing about it.
+
+        On demand gives both: the loser never asks, so nothing is created, and
+        whoever does ask gets one that works. The cost is that merely reading
+        this attribute builds the database — so a test proving the loser left
+        no trace must not touch it.
+        """
+        if self._inbox is None:
+            self._inbox = Inbox(self.profile.dir)
+        return self._inbox
 
     # --- status ---------------------------------------------------------------
 
@@ -1369,7 +1391,6 @@ class Daemon:
         # that is what the rest of the tree reads out of this file — and the
         # start time goes underneath it.
         self.paths.pid.write_text(exclusive.stamp())
-        self.inbox = Inbox(self.profile.dir)
         await self.bridge.start()
         self.profile.bridge_port = self.bridge.port
         # This one DOES claim the pointer: a daemon starting up for a session is

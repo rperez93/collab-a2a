@@ -16,6 +16,7 @@ kernel takes it back when the process ends, however it ends.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
 import sys
@@ -307,3 +308,43 @@ def test_a_stale_pid_file_does_not_make_the_repo_look_occupied(tmp_path, monkeyp
     lock = lockfile.read(home)
     assert lock.listener_pid == 0
     assert not lock.held
+
+
+def test_a_daemon_can_be_driven_without_going_through_serve(profile):
+    """`write_status` and `_stream_once` read `self.inbox` as though it is
+    simply there, so building it in `_serve` made the attribute None for the
+    window between construction and serving.
+
+    Nothing in production crosses that window — the losing daemon returns from
+    `run` before anything reads it, and the one statement between entering
+    `_serve` and the inbox does not. But a caller that drives a real Daemon
+    directly, which is how you hold it to one event instead of a timer, got an
+    AttributeError raised from inside the status write, a long way from the
+    cause and saying nothing about it.
+    """
+    daemon = d.Daemon(profile)
+    try:
+        daemon.write_status()
+
+        assert json.loads((profile.dir / "status.json").read_text())["state"] \
+            == "starting"
+        assert daemon.inbox.last_seq() == 0
+    finally:
+        daemon.inbox.close()
+
+
+def test_a_daemon_that_never_serves_never_opens_the_database(profile):
+    """The other half of the same property, and the reason it is not built in
+    `__init__`: opening it runs the schema and leaves `inbox.db-wal` and
+    `-shm` beside it, which a daemon that turns out not to hold this session
+    has no business creating. Constructing one must touch nothing."""
+    first = exclusive.DaemonLock(profile.dir)
+    assert first.acquire()
+    try:
+        before = sorted(p.name for p in profile.dir.iterdir())
+
+        d.Daemon(profile)
+
+        assert sorted(p.name for p in profile.dir.iterdir()) == before
+    finally:
+        first.release()
