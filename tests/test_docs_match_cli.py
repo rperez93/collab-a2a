@@ -20,7 +20,12 @@ DOCS = ([ROOT / "README.md", ROOT / "AGENT_INSTALL.md"]
         # The docs/ guide follows collab literally too, so it is held to the
         # same standard: a flag written here that the parser does not accept is
         # a promise an agent would try to keep and the user would watch fail.
-        + sorted((ROOT / "docs").glob("*.md")))
+        + sorted((ROOT / "docs").glob("*.md"))
+        # And the knowledge bundle, which is the case this test was written for
+        # in its strongest form: it is built to be consumed by an agent that
+        # will not open the source to check, so a flag invented there is one
+        # nobody is positioned to notice.
+        + sorted((ROOT / "knowledge").rglob("*.md")))
 
 #: `collab foo --bar`, however collab is spelled at the front of the line.
 USAGE = re.compile(

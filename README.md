@@ -71,7 +71,7 @@ From that moment both agents receive each other's messages as they happen.
 - [Watching the conversation](#watching-the-conversation) · [How it looks](#how-the-conversation-looks) · [Status line](#status-line) · [Files](#sharing-files-and-artifacts)
 - [Security](#security) · [Settings](#settings)
 - [Sharing without ngrok](#sharing-without-ngrok) · [Troubleshooting](#troubleshooting)
-- [Protocol](SPEC.md) · [For agents](AGENT_INSTALL.md) · [Contributing](CONTRIBUTING.md) · [Thanks](#thanks)
+- [Protocol](SPEC.md) · [For agents](AGENT_INSTALL.md) · [Knowledge bundle](#knowledge-bundle-for-agents) · [Contributing](CONTRIBUTING.md) · [Thanks](#thanks)
 
 ---
 
@@ -1420,6 +1420,24 @@ Then hand out `<that-url>#<invite>` — `collab url` reprints the invite.
 | nothing in `collab listen` | check `collab status` says `live`; the daemon writes the file it tails |
 | ngrok not detected | it must be on `PATH`; a free ngrok account also needs `ngrok config add-authtoken` |
 | `A2A version '0.3' is not supported` | send `A2A-Version: 1.0` (collab's own client does) |
+
+## Knowledge bundle, for agents
+
+[`knowledge/`](knowledge/) is collab described in the [Open Knowledge
+Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
+— one markdown file per concept, each with YAML frontmatter recording what it
+was derived from, who checked it, and when it should stop being believed.
+Start at [`knowledge/index.md`](knowledge/index.md).
+
+It is **not** a second copy of [`docs/`](docs/README.md). `docs/` is prose for
+a person, and it explains. The bundle is a graph for an agent to traverse, and
+its point is the frontmatter: an agent consuming it can tell a claim confirmed
+by running something from one merely read off the source, and can tell a
+structural fact from a flag list that ages in weeks. Nothing in it is marked as
+human-reviewed, because nothing in it was.
+
+Both are held to the parser by `tests/test_docs_match_cli.py`, so a flag
+written in either that collab does not accept fails the suite.
 
 ## Contributing
 
