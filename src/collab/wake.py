@@ -39,6 +39,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import time
@@ -93,6 +94,12 @@ MAX_TEXT = 2_000
 #: the inside that is indistinguishable from a quiet room — so past this it is
 #: said out loud rather than retried forever in silence.
 GIVE_UP_AFTER = 3
+
+#: How long a run of «not now» answers may last before it is the same problem
+#: under a politer name. A pager is seconds; a pane left in tmux's copy mode
+#: overnight is a session nobody is reading, which is the silence this feature
+#: exists to break rather than to join.
+DEFERRED_TOO_LONG = 3600.0
 
 
 def _wake_home(root: Path) -> Path:
@@ -162,6 +169,10 @@ OPEN_SESSION = "open session"
 #: session and has to read the room to catch up.
 FRESH_RUN = "fresh run"
 
+#: `{cwd}`, `{target}` and friends, found in one pass so that a value cannot
+#: contain another placeholder's name and have it expanded after quoting.
+_PLACEHOLDER = re.compile(r"\{([a-z]+)\}")
+
 
 @dataclass(frozen=True)
 class Recipe:
@@ -184,7 +195,8 @@ class Recipe:
         return any("{target}" in part for part in self.argv)
 
     def command(self, cwd: str = "", target: str = "",
-                collab: str = "collab", pid: str = "") -> list[str]:
+                collab: str = "collab", pid: str = "",
+                running: str = "") -> list[str]:
         """The argv to run, with everything substituted SAFELY.
 
         Half of these recipes are `sh -c` strings, because the agent behind them
@@ -197,18 +209,23 @@ class Recipe:
         close. `shlex.quote` on a value that is genuinely an id changes nothing.
         """
         here = cwd or str(Path.cwd())
-        whole = {"{cwd}": here, "{target}": target, "{collab}": collab,
-                 "{pid}": pid}
+        whole = {"cwd": here, "target": target, "collab": collab,
+                 "pid": pid, "command": running}
         out = []
         for part in self.argv:
-            if part in whole:
+            if part[1:-1] in whole and part.startswith("{"):
                 # A whole argv entry: passed as one argument, never re-parsed,
                 # so it needs no quoting and must not get any.
-                out.append(whole[part])
+                out.append(whole[part[1:-1]])
                 continue
-            for token, value in whole.items():
-                part = part.replace(token, shlex.quote(value))
-            out.append(part)
+            # ONE PASS. Replacing each placeholder in turn meant a value could
+            # contain a later placeholder's name and have it substituted inside
+            # the quoting already applied — which `shlex.quote` keeps safe, but
+            # leaves a repository genuinely called `{target}` with a corrupted
+            # path and a wake that fails forever. One pass cannot do that.
+            out.append(_PLACEHOLDER.sub(
+                lambda m: shlex.quote(whole[m.group(1)])
+                if m.group(1) in whole else m.group(0), part))
         return out
 
     def detect_target(self, env: dict[str, str] | None = None) -> str:
@@ -242,7 +259,8 @@ RECIPES: tuple[Recipe, ...] = (
         " or pass --target <thread-id>"),
     Recipe(
         "tmux", ["{collab}", "wake", "deliver", "--to", "tmux",
-                 "--target", "{target}", "--expect-pid", "{pid}"], False,
+                 "--target", "{target}", "--expect-pid", "{pid}",
+                 "--expect-command", "{command}"], False,
         "THE GENERAL ANSWER: types one line into the terminal the agent is"
         " already sitting in, so it reaches ANY interactive agent running in a"
         " tmux pane. It sends a pointer to the batch rather than the batch"
@@ -327,7 +345,7 @@ def _tmux(args: list[str], runner=None) -> tuple[int, str]:
     return int(done.returncode), (done.stdout or done.stderr or "").strip()
 
 
-def pane_identity(target: str, runner=None) -> tuple[str, str]:
+def pane_identity(target: str, runner=None) -> tuple[str, str, str]:
     """What is in this pane: its process id, and the command running in front.
 
     Both, because they catch different things. The pid catches a RECYCLED pane
@@ -337,31 +355,58 @@ def pane_identity(target: str, runner=None) -> tuple[str, str]:
     pid never changed.
     """
     code, said = _tmux(["display-message", "-p", "-t", target,
-                        "#{pane_pid} #{pane_current_command}"], runner)
+                        "#{pane_pid} #{pane_in_mode} #{pane_current_command}"],
+                       runner)
     if code != 0 or not said.strip():
         # A pane that has gone answers with a blank line AND a zero exit, with
         # nothing on stderr — so «did the command succeed» is not the question
         # to ask here, and taking that answer as «something is running» let the
         # check pass and left send-keys to be the thing that noticed.
-        return "", ""
-    parts = said.split(None, 1)
-    return parts[0], (parts[1].strip() if len(parts) > 1 else "")
+        return "", "", ""
+    parts = said.split(None, 2)
+    while len(parts) < 3:
+        parts.append("")
+    return parts[0], parts[1], parts[2].strip()
 
 
-def pane_holds_an_agent(target: str, runner=None, *,
-                        expect_pid: str = "") -> tuple[bool, str]:
-    """Is there still something in this pane worth typing into?"""
-    pid, what = pane_identity(target, runner)
+def pane_holds_an_agent(target: str, runner=None, *, expect_pid: str = "",
+                        expect_command: str = "") -> tuple[bool, str]:
+    """Is the thing we armed against still the thing in this pane?
+
+    Asked as “is it still what it was”, not “is it not a shell”. The denylist
+    came first and was the wrong shape: everything unlisted counted as an
+    agent, so a pane where the user had since opened an editor passed — and
+    `collab: messages arrived …` typed into vi is not a failed delivery, it is
+    a change operator and a series of motions applied to somebody's open file,
+    saved by their next `:wq`. A denylist can never answer that; it cannot
+    enumerate every program that must not be typed into, and the list of things
+    that quietly corrupt something when typed into is longer than the list of
+    shells. What it was at arming is a fact, and facts are checkable.
+
+    The pid catches a RECYCLED pane id — tmux starts again at `%0` on a new
+    server, so a stale target names a stranger's terminal rather than failing.
+    The command catches the agent having been replaced inside a pane whose own
+    process never changed, which is every editor, pager and `sudo` prompt.
+    """
+    pid, in_mode, what = pane_identity(target, runner)
     if not pid:
         return False, f"no such pane {target!r} — nothing answered for it"
     if expect_pid and pid != expect_pid:
         return False, (f"pane {target} is process {pid} now, not {expect_pid} —"
                        " this id belongs to a different terminal")
-    if not what or what in SHELLS:
-        # An unnamed foreground process is not evidence of an agent either.
-        # Both are «cannot tell right now», which is a wait, not a verdict.
-        return False, (f"pane {target} is running {what or 'nothing named'},"
-                       " not an agent — whatever was there has exited")
+    if in_mode == "1":
+        # tmux's own copy mode eats the keys as copy-mode commands: the line
+        # never reaches the application, and nothing says so.
+        return False, f"pane {target} is in copy mode — the keys would not arrive"
+    if not what:
+        return False, f"pane {target} is running nothing named"
+    if expect_command and what != expect_command:
+        return False, (f"pane {target} is running {what}, not the"
+                       f" {expect_command} this was armed against")
+    if not expect_command and what in SHELLS:
+        # Only reachable for a wake armed before commands were recorded.
+        return False, (f"pane {target} is running {what}, not an agent —"
+                       " whatever was there has exited")
     return True, what
 
 
@@ -374,17 +419,19 @@ TRY_AGAIN = 75
 
 
 def deliver_to_tmux(target: str, prompt_path: str, *, runner=None,
-                    expect_pid: str = "") -> tuple[int, str]:
-    """Type one line into the pane, having checked there is an agent in it."""
+                    expect_pid: str = "", expect_command: str = "") -> tuple[int, str]:
+    """Type one line into the pane, having checked what is in it."""
     if not target:
         return 1, "no pane to deliver to"
-    holds, what = pane_holds_an_agent(target, runner, expect_pid=expect_pid)
+    holds, what = pane_holds_an_agent(target, runner, expect_pid=expect_pid,
+                                      expect_command=expect_command)
     if not holds:
-        # A shell in the pane may be the agent gone for good, or the agent
-        # shelling out for the next four seconds. They are indistinguishable
-        # from here, so it is retried rather than counted as a fault; the pane
-        # being gone or belonging to somebody else is neither.
-        return (TRY_AGAIN if "not an agent" in what else 1), what
+        # Something in front of the agent — a pager, copy mode — passes, and is
+        # gone in a moment. The pane being gone, or belonging to somebody else
+        # now, is permanent and is counted.
+        transient = ("copy mode" in what or "not the" in what
+                     or "not an agent" in what)
+        return (TRY_AGAIN if transient else 1), what
     line = (f"collab: messages arrived — read {prompt_path} and act on it")
     code, said = _tmux(["send-keys", "-t", target, "--", line, "Enter"], runner)
     if code != 0:
@@ -417,10 +464,16 @@ def deliver_to_codex(target: str, prompt: str, *, runner=None) -> tuple[int, str
 
 
 def recipe(agent: str) -> Recipe | None:
-    """The known invocation for an agent, by name or by its binary."""
+    """The known invocation for an agent, by the name this table calls it.
+
+    By that name ONLY. Matching `argv[0]` as well looked helpful and was not:
+    most of these recipes begin `sh` or `{collab}`, so `--agent sh` quietly
+    armed cursor-agent and announced it as though the user had chosen it,
+    while every genuinely unknown name got a clear refusal.
+    """
     wanted = agent.strip().lower()
     for known in RECIPES:
-        if wanted in (known.agent, known.argv[0]):
+        if wanted == known.agent:
             return known
     return None
 
@@ -580,9 +633,12 @@ class Waker:
         self.session_id = session_id
         self.attended = attended or (lambda: False)
         self.now = now
-        self.last_wake = 0.0
-        self.failed_at = 0.0
-        self.failures = self._load_failures()
+        # EVERY PIECE OF THIS IS DURABLE, because the ones that were not made
+        # the daemon's restart a way of undoing its own safeguards: a batch
+        # thirty minutes into its backoff became due again immediately, and the
+        # rule that a woken turn's own poll is not a reader forgot which turn
+        # it had started. A restart is not evidence that anything has changed.
+        self._state = self._load_state()
 
     # --- state on disk ---------------------------------------------------------
 
@@ -667,6 +723,13 @@ class Waker:
         if len(lines) <= keep:
             return
         dropped = len(lines) - keep
+        # CARRIED FORWARD. The count was worked out per capping, and the marker
+        # from the previous capping was itself one of the lines being dropped —
+        # so a queue that had shed a thousand messages reported two. «The agent
+        # is told the count» was the one thing it did not do.
+        for line in lines[:-keep]:
+            with contextlib.suppress(ValueError, TypeError):
+                dropped += int(json.loads(line).get("dropped") or 0)
         # STAMPED WITH THE OLDEST KEPT ARRIVAL, not with now: the settle window
         # is measured from the first line of the file, and a marker dated now
         # would restart that window every time a message came in — a busy room
@@ -677,7 +740,7 @@ class Waker:
         except (ValueError, TypeError, IndexError):
             oldest = self.now()
         earlier = json.dumps({"at": oldest, "kind": "system",
-                              "from": "collab",
+                              "from": "collab", "dropped": dropped,
                               "text": f"[{dropped} earlier message(s) not shown"
                                       " — `collab recv --limit 50` has them]"},
                              ensure_ascii=False)
@@ -737,22 +800,28 @@ class Waker:
         if not config.enabled:
             return False, "no wake command configured"
         now = self.now()
-        if now - self.last_wake < config.min_gap:
-            return False, f"woken {int(now - self.last_wake)}s ago"
+        if now - self.last_attempt < config.min_gap:
+            return False, f"tried {int(now - self.last_attempt)}s ago"
         waited = now - self.failed_at
         if self.failed_at and waited < self.retry_pause:
             broken = f" ({self.failures} failures)" if self.broken else ""
             return False, f"retrying in {int(self.retry_pause - waited)}s{broken}"
-        if self.outstanding():
-            return True, "a batch is waiting to be delivered"
-        if not self.waiting():
+        if not self.outstanding() and not self.waiting():
             return False, "nothing unread"
-        # ATTENDED IS CHECKED LAST, and only when there is something to deliver.
-        # It has to be true at the moment of firing rather than at the moment
-        # the message landed — a watcher that arrived in between is exactly the
-        # case where the wake should be dropped.
+        # CHECKED FOR THE RETRY TOO, which it was not. The gate sat below the
+        # «a batch is waiting» shortcut, so a delivery that failed once while
+        # the agent was busy would fire regardless two minutes later — even
+        # with a person sitting in `collab watch` reading every line. The
+        # README and the skill both promise this never happens while somebody
+        # is reading, and on the retry path it was not true.
+        #
+        # It has to be asked at the moment of firing rather than the moment the
+        # message landed: a watcher that arrived in between is exactly the case
+        # where the wake should be dropped.
         if self.attended():
             return False, "somebody is already reading"
+        if self.outstanding():
+            return True, "a batch is waiting to be delivered"
         age = now - self.oldest_pending_at()
         if age < config.settle:
             return False, f"letting the burst finish ({int(config.settle - age)}s)"
@@ -789,21 +858,30 @@ class Waker:
         return Batch(target)
 
     def _fold_into(self, batch: Batch) -> None:
-        """Move what is waiting into a batch that has yet to be delivered."""
+        """Move what is waiting into a batch that has yet to be delivered.
+
+        MOVED FIRST, then read. Appending and then deleting looks equivalent
+        and is not: an append that succeeds followed by an unlink that does not
+        leaves the same lines in both files, and the next fold appends them a
+        second time — the agent is told the same thing twice and cannot tell.
+        A rename cannot half-happen, so after it the lines exist in exactly one
+        place whatever else fails.
+        """
+        if not self.waiting():
+            return
+        moving = self.home / f"{batch.path.stem}.folding"
         try:
-            with self.pending.open(encoding="utf-8") as fh:
-                arrived = [line for line in fh if line.strip()]
+            os.replace(self.pending, moving)
         except OSError:
             return
-        if not arrived:
-            return
         try:
-            with batch.path.open("a", encoding="utf-8") as fh:
-                fh.writelines(arrived)
+            with moving.open(encoding="utf-8") as source, \
+                    batch.path.open("a", encoding="utf-8") as fh:
+                fh.writelines(line for line in source if line.strip())
         except OSError:
-            return
+            return                          # kept as .folding; nothing is lost
         with contextlib.suppress(OSError):
-            self.pending.unlink()
+            moving.unlink()
         self._cap_file(batch.path)
 
     def prompt(self, batch: Batch) -> str:
@@ -834,35 +912,55 @@ class Waker:
         Typing a multi-line batch into a live TUI submits it at the first
         newline and leaves the rest as stray keystrokes. Those deliveries send
         one line naming this file instead, and the agent reads it.
+
+        NAMED FOR ITS BATCH, because one fixed name lost messages. A delivery
+        into a live session is complete the moment the keystrokes land, but the
+        agent reads the file whenever it next gets a turn — and a second batch
+        arriving in between overwrote the first, which the agent then never saw
+        while both were recorded as delivered.
         """
-        path = self.home / "prompt.txt"
-        tmp = path.with_suffix(".tmp")
+        path = self.home / f"prompt-{batch.path.stem}.txt"
+        tmp = path.with_suffix(".writing")
         tmp.write_text(self.prompt(batch), encoding="utf-8")
         os.replace(tmp, path)
+        with contextlib.suppress(OSError):
+            # The batch is what other people said, which is at least as much
+            # nobody else's business as the command line beside it — and that
+            # one was the only file being protected.
+            path.chmod(0o600)
         return path
 
     # --- finishing -------------------------------------------------------------
 
     def succeeded(self, batch: Batch) -> None:
         self.ensure()
-        self.last_wake = self.now()
-        self.failed_at = 0.0
-        self.failures = 0
-        self._save_failures()
+        now = self.now()
+        self._set(attempted_at=now, delivered_at=now, failed_at=0.0,
+                  failures=0.0, deferred_since=0.0, alarmed=0.0)
         with contextlib.suppress(OSError):
             os.replace(batch.path, self.done / batch.name)
         self._trim()
 
     def try_again_later(self, batch: Batch) -> None:
-        """Not delivered, and nobody's fault. Wait, but hold nothing against it.
+        """Not delivered, and nobody's fault yet. Wait, and keep the clock.
 
-        The agent shelling out mid-turn looks exactly like the agent having
-        exited, for as long as the shell runs. Counting those would declare a
-        healthy wake broken for doing its job — and the alarm that follows is
-        one the whole room sees.
+        A pager or tmux's own copy mode holds the terminal for a moment and the
+        line would not reach the agent, so it is not sent and nothing is held
+        against the wake. But a pane left in copy mode overnight answers «not
+        now» for eight hours, and counting nothing at all would make that
+        indistinguishable from a quiet room — which is the exact silence this
+        whole feature exists to break. So the RUN is timed even though the
+        attempts are not counted, and long enough is its own alarm.
         """
-        self.last_wake = self.now()
-        self.failed_at = self.now()
+        now = self.now()
+        began = self._state["deferred_since"] or now
+        self._set(attempted_at=now, failed_at=now, deferred_since=began)
+
+    @property
+    def deferred_for(self) -> float:
+        """How long deliveries have been answering «not now», unbroken."""
+        began = self._state["deferred_since"]
+        return (self.now() - began) if began else 0.0
 
     def failed(self, batch: Batch) -> None:
         """Keep the batch, back off, and start counting.
@@ -876,10 +974,9 @@ class Waker:
         counted, the retries slow down, and past GIVE_UP_AFTER the count is
         loud enough for `collab check` and the room to be told.
         """
-        self.last_wake = self.now()
-        self.failed_at = self.now()
-        self.failures += 1
-        self._save_failures()
+        now = self.now()
+        self._set(attempted_at=now, failed_at=now,
+                  failures=float(self.failures + 1))
 
     @property
     def retry_pause(self) -> float:
@@ -888,21 +985,89 @@ class Waker:
 
     @property
     def broken(self) -> bool:
-        """Has this failed often enough to be somebody's problem?"""
-        return self.failures >= GIVE_UP_AFTER
+        """Has this stopped reaching anybody, by either route?
 
-    def _save_failures(self) -> None:
-        # On disk because the daemon restarts, and a counter that resets with it
-        # would keep the alarm permanently one restart away from sounding.
+        Counted failures are the obvious one. The other is a delivery that has
+        been politely declining for hours — the pane in copy mode, the pager
+        nobody quit — which counts nothing by design and would otherwise be the
+        one silent failure left in a feature built to end silent failures.
+        """
+        return (self.failures >= GIVE_UP_AFTER
+                or self.deferred_for > DEFERRED_TOO_LONG)
+
+    #: Everything that must outlive the process, and what it means.
+    _STATE_FIELDS = {
+        "failures": 0.0,        # consecutive failed deliveries
+        "attempted_at": 0.0,    # when delivery was last ATTEMPTED, good or bad
+        "failed_at": 0.0,       # when it last failed, driving the backoff
+        "delivered_at": 0.0,    # when a delivery last actually SUCCEEDED
+        "deferred_since": 0.0,  # when a run of «not now» answers began
+        "turn_ended": 0.0,      # when the last woken turn finished
+        "alarmed": 0.0,         # whether the room has been told already
+    }
+
+    def _load_state(self) -> dict[str, float]:
+        stored: dict[str, Any] = {}
+        with contextlib.suppress(OSError, ValueError):
+            stored = json.loads((self.home / "state.json").read_text())
+        if not isinstance(stored, dict):
+            stored = {}
+        out = {}
+        for name, default in self._STATE_FIELDS.items():
+            try:
+                out[name] = float(stored.get(name, default))
+            except (TypeError, ValueError):
+                out[name] = default
+        return out
+
+    def _save_state(self) -> None:
         with contextlib.suppress(OSError):
             self.ensure()
-            (self.home / "failures").write_text(str(self.failures))
+            path = self.home / "state.json"
+            tmp = path.with_suffix(".writing")
+            tmp.write_text(json.dumps(self._state))
+            os.replace(tmp, path)
 
-    def _load_failures(self) -> int:
-        try:
-            return int((self.home / "failures").read_text().strip())
-        except (OSError, ValueError):
-            return 0
+    def _set(self, **values: float) -> None:
+        self._state.update(values)
+        self._save_state()
+
+    @property
+    def failures(self) -> int:
+        return int(self._state["failures"])
+
+    @property
+    def last_attempt(self) -> float:
+        """When a delivery was last tried — success or not. Drives `min_gap`."""
+        return self._state["attempted_at"]
+
+    @property
+    def last_delivery(self) -> float:
+        """When one last actually ARRIVED. The only honest «last woke».
+
+        Kept apart from the attempt because they were one field, and a wake
+        that had never once succeeded still printed «last woke 2m ago» to a
+        person reading `collab wake show` for exactly that reassurance.
+        """
+        return self._state["delivered_at"]
+
+    @property
+    def failed_at(self) -> float:
+        return self._state["failed_at"]
+
+    @property
+    def turn_ended(self) -> float:
+        return self._state["turn_ended"]
+
+    def turn_finished(self, when: float) -> None:
+        self._set(turn_ended=when)
+
+    @property
+    def alarmed(self) -> bool:
+        return bool(self._state["alarmed"])
+
+    def alarm_raised(self) -> None:
+        self._set(alarmed=1.0)
 
     def _trim(self, keep: int = 20) -> None:
         try:
@@ -912,17 +1077,40 @@ class Waker:
         for path in old:
             with contextlib.suppress(OSError):
                 path.unlink()
+            # The prompt written for that batch goes with it. They are named
+            # together so that they can be cleaned up together.
+            with contextlib.suppress(OSError):
+                (self.home / f"prompt-{path.stem}.txt").unlink()
 
 
 def summarise(events: Iterable[dict[str, Any]], limit: int = 3) -> str:
-    """A line for the notify command and for status output."""
+    """A line for the notify command and for status output.
+
+    The names in it were chosen by other participants, and this line is printed
+    to a terminal by `collab wake show` and `collab check` and handed to the
+    notify command as an argument. A name is not a safe string: an escape
+    sequence in one rewrites the reader's terminal, a carriage return hides
+    what follows it, and an unbounded one makes an unbounded argument. So it is
+    cut to something that can only be a name.
+    """
     kept = list(events)
     if not kept:
         return "nothing"
     who: list[str] = []
     for event in kept:
-        name = str(event.get("from") or "someone")
-        if name not in who:
+        name = _printable(str(event.get("from") or "someone"))
+        if name and name not in who:
             who.append(name)
     names = ", ".join(who[:limit]) + ("…" if len(who) > limit else "")
     return f"{len(kept)} message{'s' if len(kept) != 1 else ''} from {names}"
+
+
+#: Long enough for any name somebody means, short enough that a thousand of
+#: them cannot become the argument that will not fit.
+MAX_NAME = 40
+
+
+def _printable(value: str) -> str:
+    """One line, no control characters, bounded."""
+    cleaned = "".join(ch for ch in value if ch.isprintable())[:MAX_NAME]
+    return cleaned.strip()

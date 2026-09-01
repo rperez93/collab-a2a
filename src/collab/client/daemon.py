@@ -346,10 +346,6 @@ class Daemon:
             self.paths.root, profile.session_id, attended=self._somebody_reads)
         self._waking: asyncio.Task | None = None
         self._wake_note = ""
-        self._wake_alarmed = False
-        #: When the last woken turn finished. Polls up to here were made by that
-        #: turn, doing what it was woken to do, and are not evidence of a reader.
-        self._wake_turn_ended = 0.0
         #: What we put on the roster on the woken turn's behalf, so that we
         #: retract that and nothing the agent said for itself.
         self._wake_activity: dict[str, Any] | None = None
@@ -397,7 +393,11 @@ class Daemon:
                 "armed": self.waker.config().enabled,
                 "pending": self.waker.waiting(),
                 "batches": len(self.waker.outstanding()),
-                "last_wake": self.waker.last_wake or None,
+                # KEPT APART. One field for both meant a wake that had
+                # never once succeeded still reported «last woke 2m ago».
+                "last_wake": self.waker.last_delivery or None,
+                "last_attempt": self.waker.last_attempt or None,
+                "deferred_for": self.waker.deferred_for or None,
                 "failures": self.waker.failures,
                 "broken": self.waker.broken,
                 "note": self._wake_note,
@@ -577,6 +577,48 @@ class Daemon:
 
     # --- waking the agent ------------------------------------------------------
 
+    async def _finish_any_wake(self) -> None:
+        """Do not walk away from a turn that is halfway through.
+
+        A wake abandoned by shutdown was neither completed nor failed: its
+        batch stayed outstanding, the next daemon delivered it again, and the
+        child it had started was still running — detached, by design, so it
+        outlived the daemon that spawned it. A duplicate turn on top of a live
+        one, in the same checkout.
+
+        So it is given a moment to finish properly. If it will not, the batch
+        is explicitly kept for a retry rather than left in an answer nobody
+        wrote down.
+        """
+        turn = self._waking
+        self._waking = None
+        if turn is None or turn.done():
+            self._drain_wake_result(turn)
+            return
+        try:
+            await asyncio.wait_for(asyncio.shield(turn), timeout=15)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            logger.warning("shutting down with a woken turn still running;"
+                           " its batch is kept for the next start")
+            batch = self.waker.take()
+            if batch is not None:
+                self.waker.try_again_later(batch)
+        except Exception as exc:                        # noqa: BLE001
+            logger.warning("the woken turn ended badly (%r)", exc)
+
+    def _drain_wake_result(self, turn: asyncio.Task | None) -> None:
+        """Look at what a finished turn returned, so failures are not silent.
+
+        A task whose exception is never retrieved says so at garbage collection
+        and nowhere else — which is exactly where this one went, because the
+        result was dropped on the floor.
+        """
+        if turn is None or not turn.done() or turn.cancelled():
+            return
+        exc = turn.exception()
+        if exc is not None:
+            logger.warning("the woken turn raised (%r)", exc)
+
     def _somebody_reads(self) -> bool:
         """Is anything actually reading this feed — other than a turn we started?
 
@@ -598,7 +640,7 @@ class Daemon:
         polled_at = last_poll(self.profile)
         if not polled_at:
             return False
-        if polled_at <= self._wake_turn_ended:
+        if polled_at <= self.waker.turn_ended:
             return False                    # our own woken turn, reading
         return (time.time() - polled_at) < wake.POLL_COUNTS_AS_LISTENING
 
@@ -611,6 +653,7 @@ class Daemon:
         """
         if self._waking is not None and not self._waking.done():
             return                       # a turn is already in flight
+        self._drain_wake_result(self._waking)
         self._waking = None
         due, why = self.waker.due()
         self._wake_note = why
@@ -640,7 +683,7 @@ class Daemon:
                     await self._report_stats(self._http)
             # Set however the turn ended, including a crash: every poll up to
             # this instant may have been the woken turn reading its own batch.
-            self._wake_turn_ended = time.time()
+            self.waker.turn_finished(time.time())
 
     async def _say_it_is_working(self, batch: wake.Batch) -> None:
         """Put the woken turn on the roster, because nobody else will.
@@ -740,16 +783,26 @@ class Daemon:
                 proc.communicate(self.waker.prompt(batch).encode()),
                 timeout=config.timeout)
         except asyncio.TimeoutError:
+            # THE WHOLE GROUP, not the direct child. Five of the recipes are
+            # `sh -c 'cd … && agent …'`, which the shell does not exec-optimise
+            # across the `&&` — so killing the child killed the shell and left
+            # the agent running. The next retry then started a SECOND unattended
+            # agent in the same checkout, neither aware of the other. The group
+            # exists precisely because `start_new_session=True` made one.
             with contextlib.suppress(ProcessLookupError, OSError):
-                proc.kill()
-            await proc.wait()
+                os.killpg(proc.pid, signal.SIGTERM)
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=10)
+            except asyncio.TimeoutError:
+                with contextlib.suppress(ProcessLookupError, OSError):
+                    os.killpg(proc.pid, signal.SIGKILL)
+                await proc.wait()
             logger.warning("wake timed out after %ss", config.timeout)
             self.waker.failed(batch)
             self._wake_note = f"the woken turn did not finish in {int(config.timeout)}s"
             return
         if proc.returncode == 0:
             self.waker.succeeded(batch)
-            self._wake_alarmed = False      # armed again for the next spell
             self._wake_note = f"woke the agent with {wake.summarise(batch.events())}"
             if config.notify:
                 await self._notify(config.notify, batch)
@@ -781,9 +834,9 @@ class Daemon:
         Once per spell of breakage, not once per retry: an alarm that repeats
         every two minutes is an alarm nobody reads.
         """
-        if not self.waker.broken or self._wake_alarmed:
+        if not self.waker.broken or self.waker.alarmed:
             return
-        self._wake_alarmed = True
+        self.waker.alarm_raised()
         self._wake_note = (f"the wake command has failed {self.waker.failures}"
                            f" times — nothing is reaching me. {detail[:120]}")
         logger.error("%s", self._wake_note)
@@ -796,7 +849,11 @@ class Daemon:
                       f" failed {self.waker.failures} times, so messages are"
                       " reaching my machine and going unread. Assume I have not"
                       " seen anything since."})
-        except (httpx.HTTPError, AttributeError, TypeError) as exc:
+        except (httpx.HTTPError, AttributeError, TypeError,
+                RuntimeError) as exc:
+            # RuntimeError included: a wake failing during shutdown finds
+            # the http client already closed, which is exactly when this
+            # alarm is most likely to be the one that matters.
             logger.warning("could not report the broken wake (%r)", exc)
 
     async def _notify(self, argv: list[str], batch: wake.Batch) -> None:
@@ -1063,6 +1120,7 @@ class Daemon:
             heartbeat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat
+            await self._finish_any_wake()
             await self.bridge.stop()
             self.state = "stopped"
             self.write_status()

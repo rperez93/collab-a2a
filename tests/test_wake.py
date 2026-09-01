@@ -20,6 +20,7 @@ import asyncio
 import contextlib
 import io
 import json
+import os
 import subprocess
 import sys
 import time
@@ -174,7 +175,7 @@ def test_no_two_turns_at_once(tmp_path):
     w.note(chat("and another"))
     clock[0] += 10
     due, why = w.due()
-    assert not due and "woken" in why
+    assert not due and "tried" in why
     clock[0] += 100
     assert w.due()[0] is True
 
@@ -232,6 +233,56 @@ def test_a_stepped_clock_does_not_stall_the_wake(tmp_path):
     os.utime(w.pending, (time.time() + 10_000, time.time() + 10_000))
     clock[0] += 60
     assert w.due()[0] is True
+
+
+def test_a_retry_waits_for_a_reader_too(tmp_path):
+    """The gate sat below the «a batch is waiting» shortcut, so a delivery that
+    failed once fired regardless two minutes later — with a person sitting in
+    `collab watch` reading every line. Both the README and the skill promise
+    that never happens."""
+    reading = [False]
+    w, clock = waker(tmp_path, attended=lambda: reading[0],
+                     command=["false"], settle=0, min_gap=0)
+    w.note(chat())
+    clock[0] += 1
+    w.failed(w.take())
+    clock[0] += wake.RETRY_PAUSE + 1
+    assert w.due()[0] is True
+    reading[0] = True
+    due, why = w.due()
+    assert not due and "already reading" in why
+
+
+def test_the_marker_counts_everything_it_dropped(tmp_path):
+    """The count was worked out per capping, and the previous marker was one of
+    the lines being dropped — so a queue that shed a thousand reported two."""
+    w, clock = waker(tmp_path)
+    for i in range(wake.MAX_BATCH * 6):
+        w.note(chat(f"m{i}"))
+        clock[0] += 1
+    events = w.take().events()
+    assert events[0]["dropped"] >= wake.MAX_BATCH * 5
+    assert str(events[0]["dropped"]) in events[0]["text"]
+
+
+def test_folding_cannot_deliver_the_same_message_twice(tmp_path, monkeypatch):
+    """Append-then-delete looks equivalent to move-then-read and is not: an
+    append that succeeds followed by an unlink that does not leaves the lines
+    in both files, and the next fold appends them again."""
+    w, clock = waker(tmp_path, command=["false"], settle=0, min_gap=0)
+    w.note(chat("only once"))
+    clock[0] += 1
+    stuck = w.take()
+
+    real = os.unlink
+    monkeypatch.setattr(os, "unlink", lambda p: (_ for _ in ()).throw(OSError()))
+    w.note(chat("folded"))
+    w.take()
+    monkeypatch.setattr(os, "unlink", real)
+    w.take()
+
+    said = [e["text"] for e in stuck.events()]
+    assert said.count("folded") == 1, f"delivered twice: {said}"
 
 
 def test_a_stuck_batch_does_not_starve_what_arrives_behind_it(tmp_path):
@@ -474,8 +525,6 @@ def a_daemon(profile):
                               attended=lambda: False)
     daemon._waking = None
     daemon._wake_note = ""
-    daemon._wake_alarmed = False
-    daemon._wake_turn_ended = 0.0
     daemon._http = None
     return daemon
 
@@ -678,7 +727,7 @@ def test_the_room_is_told_when_nothing_is_reaching_the_agent(profile):
         for _ in range(wake.GIVE_UP_AFTER):
             daemon.waker.note(chat())
             await _wake_once(daemon)
-            daemon.waker.failed_at = 0.0          # skip the back-off wait
+            daemon.waker._set(failed_at=0.0)      # skip the back-off wait
     asyncio.run(keep_failing())
 
     assert daemon.waker.broken
@@ -715,7 +764,8 @@ class _Answer:
         self.returncode, self.stdout, self.stderr = code, out, ""
 
 
-def _tmux_answering(current_command, sent=None, *, pane_exists=True, pid="900"):
+def _tmux_answering(current_command, sent=None, *, pane_exists=True, pid="900",
+                    in_mode="0"):
     """A fake tmux: says what is in the pane, records what was typed."""
     def runner(argv, **_kwargs):
         if sent is not None:
@@ -723,7 +773,7 @@ def _tmux_answering(current_command, sent=None, *, pane_exists=True, pid="900"):
         if "display-message" in argv:
             if not pane_exists:
                 return _Answer(0, "")     # observed: blank line, exit 0
-            return _Answer(0, f"{pid} {current_command}".strip())
+            return _Answer(0, f"{pid} {in_mode} {current_command}".strip())
         return _Answer(0)
     return runner
 
@@ -803,6 +853,130 @@ def test_codex_missing_entirely_is_reported_not_raised():
         raise FileNotFoundError("codex")
     code, why = wake.deliver_to_codex("t", "prompt", runner=runner)
     assert code != 0 and "PATH" in why
+
+
+def test_it_refuses_to_type_into_whatever_replaced_the_agent():
+    """THE SEVERITY REGRESSION a denylist of shells could never catch.
+
+    A pane where the user has since opened an editor is not a failed delivery:
+    `collab: messages arrived …` typed into vi is a change operator and a run
+    of motions applied to their open file, saved by the next `:wq`. Nor can the
+    list be completed — `less`, `top`, `sudo`, `ssh` all take a typed line and
+    do something with it. What was in the pane at arming is a fact; «is this
+    not a shell» is a guess.
+    """
+    for replaced_by in ("vi", "less", "top", "sudo", "ssh", "python3"):
+        sent = []
+        code, why = wake.deliver_to_tmux(
+            "%0", "/tmp/p.txt", expect_command="codex",
+            runner=_tmux_answering(replaced_by, sent))
+        assert code != 0, f"typed into {replaced_by}"
+        assert "not the codex" in why
+        assert not any("send-keys" in a for argv in sent for a in argv), \
+            f"typed into {replaced_by} anyway"
+
+
+def test_copy_mode_eats_the_keys_so_they_are_not_sent():
+    """tmux reads them as copy-mode commands; the application never sees them,
+    and send-keys reports success regardless."""
+    sent = []
+    code, why = wake.deliver_to_tmux("%0", "/tmp/p.txt",
+                                     runner=_tmux_answering("codex", sent,
+                                                            in_mode="1"))
+    assert code == wake.TRY_AGAIN
+    assert "copy mode" in why
+    assert not any("send-keys" in a for argv in sent for a in argv)
+
+
+def test_a_pane_declining_for_hours_is_the_same_silence_under_a_politer_name(
+        tmp_path):
+    """`try_again_later` counts nothing, by design. A pane left in copy mode
+    overnight would otherwise be indistinguishable from a quiet room — which is
+    the exact failure this feature exists to break."""
+    w, clock = waker(tmp_path, command=["false"], settle=0, min_gap=0)
+    w.note(chat())
+    clock[0] += 1
+    batch = w.take()
+    w.try_again_later(batch)
+    assert not w.broken and w.failures == 0
+    clock[0] += wake.DEFERRED_TOO_LONG + 1
+    w.try_again_later(batch)
+    assert w.broken, "declining for an hour is a fault, however politely"
+
+
+def test_one_delivery_ends_the_run_of_declines(tmp_path):
+    w, clock = waker(tmp_path, command=["true"], settle=0, min_gap=0)
+    w.note(chat())
+    clock[0] += 1
+    batch = w.take()
+    w.try_again_later(batch)
+    clock[0] += 30
+    assert w.deferred_for > 0
+    w.succeeded(batch)
+    assert w.deferred_for == 0
+
+
+# --- what survives the daemon being restarted ----------------------------------
+#
+# The queue and the batches were durable from the start; the rules governing
+# them were not, so a restart undid the safeguards. A restart is not evidence
+# that anything has changed.
+
+def test_the_backoff_survives_a_restart(tmp_path):
+    """Otherwise a batch thirty minutes into its backoff is due immediately."""
+    # min_gap of zero, so only the failure backoff can be what holds it.
+    w, clock = waker(tmp_path, command=["false"], settle=0, min_gap=0)
+    w.note(chat())
+    clock[0] += 1
+    w.failed(w.take())
+
+    again = wake.Waker(tmp_path, "s_test", now=lambda: clock[0])
+    due, why = again.due()
+    assert not due, "a restart bypassed the backoff"
+    assert "retrying" in why
+    assert again.failures == 1
+
+
+def test_which_turn_we_started_survives_a_restart(tmp_path, profile, monkeypatch):
+    """The woken turn's own `collab recv` is not a reader. A restart inside the
+    ten-minute window made it one again — the fix undone by a crash."""
+    daemon = a_daemon(profile)
+    now = time.time()
+    daemon.waker.turn_finished(now + 1)
+
+    fresh = a_daemon(profile)               # as if the daemon had restarted
+    monkeypatch.setattr(d, "watchers", lambda p: [])
+    fresh.bridge = type("B", (), {"clients": 0})()
+    monkeypatch.setattr(d, "last_poll", lambda p: now)
+    assert fresh._somebody_reads() is False
+
+
+def test_the_alarm_is_not_re_raised_by_every_restart(tmp_path):
+    """«my agent is not being reached» once is a warning; on every restart it
+    is noise the room learns to ignore."""
+    w, clock = waker(tmp_path, command=["false"])
+    w.note(chat())
+    clock[0] += 1
+    batch = w.take()
+    for _ in range(wake.GIVE_UP_AFTER):
+        w.failed(batch)
+    w.alarm_raised()
+    again = wake.Waker(tmp_path, "s_test", now=lambda: clock[0])
+    assert again.broken and again.alarmed
+
+
+def test_last_woke_means_delivered_not_attempted(tmp_path):
+    """A wake that had never once succeeded still printed «last woke 2m ago»
+    to a person reading that line for exactly that reassurance."""
+    w, clock = waker(tmp_path, command=["false"], settle=0, min_gap=0)
+    w.note(chat())
+    clock[0] += 1
+    batch = w.take()
+    w.failed(batch)
+    assert w.last_attempt > 0
+    assert w.last_delivery == 0, "a failure is not a delivery"
+    w.succeeded(batch)
+    assert w.last_delivery > 0
 
 
 # --- reaching the session that is already open ---------------------------------
@@ -936,10 +1110,10 @@ def test_the_woken_turns_own_reading_does_not_silence_the_next_wake(
 
     now = time.time()
     monkeypatch.setattr(d, "last_poll", lambda p: now)      # polled just now
-    daemon._wake_turn_ended = now + 1                       # by the woken turn
+    daemon.waker.turn_finished(now + 1)                       # by the woken turn
     assert daemon._somebody_reads() is False
 
-    daemon._wake_turn_ended = now - 1                       # somebody else's
+    daemon.waker.turn_finished(now - 1)                       # somebody else's
     assert daemon._somebody_reads() is True
 
 
@@ -967,7 +1141,7 @@ def test_the_turn_is_marked_finished_even_when_it_crashes(profile):
         command=["/nonexistent/agent"], settle=0, min_gap=0))
     daemon.waker.note(chat())
     asyncio.run(_wake_once(daemon))
-    assert daemon._wake_turn_ended > 0
+    assert daemon.waker.turn_ended > 0
 
 
 def test_the_delivery_is_told_where_the_prompt_is(profile):

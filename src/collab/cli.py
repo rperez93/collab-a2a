@@ -1737,14 +1737,31 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
     #     something is nominally arranged to read, and the agent that would
     #     notice is precisely the agent not being reached.
     woken = status.get("wake") or {}
+    waiting_to_go = int(woken.get("pending") or 0) + int(woken.get("batches") or 0)
     if woken.get("broken"):
-        add("wake", CHECK_FAIL,
-            f"the wake has failed {woken.get('failures')} times —"
-            " nothing is reaching you",
+        deferred = woken.get("deferred_for") or 0
+        why = (f"deliveries have been declined for {_ago_seconds(deferred)}"
+               if deferred > wake_module_deferred_limit()
+               else f"the wake has failed {woken.get('failures')} times")
+        add("wake", CHECK_FAIL, f"{why} — nothing is reaching you",
             f"{exe} wake show   (then re-arm from inside the session you want"
             " woken; its id changes when you restart it)")
     elif woken.get("armed") and not armed:
-        add("wake", CHECK_OK, "a wake is armed and delivering")
+        # SAYS WHAT IT KNOWS, which is not «delivering». That word was derived
+        # from «armed, and not yet declared broken» — so a wake that had fired
+        # twice, failed twice and delivered nothing reported that it was
+        # delivering, right up until the third failure. The check that exists
+        # to catch this asserted its opposite.
+        delivered = woken.get("last_wake")
+        if delivered:
+            add("wake", CHECK_OK,
+                f"a wake is armed; last delivered {_ago_seconds(time.time() - delivered)} ago")
+        elif waiting_to_go:
+            add("wake", CHECK_WARN,
+                f"a wake is armed with {waiting_to_go} waiting, and has not yet"
+                " delivered anything", f"{exe} wake show")
+        else:
+            add("wake", CHECK_OK, "a wake is armed; nothing has needed it yet")
 
     # 3. Has anything been left undrained? ONLY MEANINGFUL WHILE POLLING.
     #
@@ -1828,6 +1845,13 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
         else:
             add("stats", CHECK_OK, "your usage is current")
     return out
+
+
+def wake_module_deferred_limit() -> float:
+    """The wake's own threshold, asked of it rather than repeated here."""
+    from . import wake as wk
+
+    return wk.DEFERRED_TOO_LONG
 
 
 #: Past this, a usage figure is history rather than news. Generous: the pull
@@ -1929,8 +1953,9 @@ def _wake_deliver(args: argparse.Namespace, wk) -> int:
     target = args.target or ""
     if args.to == "tmux":
         where = os.environ.get("COLLAB_WAKE_PROMPT") or "the batch"
-        code, detail = wk.deliver_to_tmux(target, where,
-                                          expect_pid=args.expect_pid or "")
+        code, detail = wk.deliver_to_tmux(
+            target, where, expect_pid=args.expect_pid or "",
+            expect_command=args.expect_command or "")
     elif args.to == "codex":
         code, detail = wk.deliver_to_codex(target, prompt)
     else:
@@ -1992,7 +2017,7 @@ def cmd_wake(args: argparse.Namespace) -> int:
             # every new server, so a stale pane id does not fail — it points at
             # a stranger, and the daemon types a line into whatever is there.
             # Checked now, while the agent is present to be told.
-            pid = ""
+            pid = what = ""
             if known.agent == "tmux":
                 holds, what = wk.pane_holds_an_agent(target)
                 if not holds:
@@ -2004,9 +2029,9 @@ def cmd_wake(args: argparse.Namespace) -> int:
                 # is not an identity: tmux starts again at %0 on a new server,
                 # so the id outlives the terminal it named and then belongs to
                 # somebody else's.
-                pid, what = wk.pane_identity(target)
+                pid, _mode, what = wk.pane_identity(target)
                 print(dim(f"  pane {target} is process {pid}, running {what}"))
-            args.run = known.command(target=target, pid=pid,
+            args.run = known.command(target=target, pid=pid, running=what,
                                      collab=str(Path(sys.argv[0]).resolve()))
             if known.delivers == wk.OPEN_SESSION:
                 ok(f"this reaches your open session ({target})")
@@ -2033,7 +2058,11 @@ def cmd_wake(args: argparse.Namespace) -> int:
                    else shlex.split(" ".join(args.run)))
         config = wk.WakeConfig(
             command=command,
-            notify=shlex.split(args.notify or ""),
+            # Kept when not given, like the three settings below it. Re-arming
+            # with a rotated thread id silently wiped a configured notify
+            # command, which is not what «set the wake» was asked to do.
+            notify=(shlex.split(args.notify) if args.notify is not None
+                    else config.notify),
             settle=args.settle if args.settle is not None else config.settle,
             min_gap=args.min_gap if args.min_gap is not None else config.min_gap,
             timeout=args.timeout if args.timeout is not None else config.timeout,
@@ -3262,6 +3291,9 @@ def build_parser() -> argparse.ArgumentParser:
     wa.add_argument("--to", metavar="KIND",
                     help="with `deliver`: how to reach the session. Run by the"
                          " daemon, not meant to be typed")
+    wa.add_argument("--expect-command", dest="expect_command", metavar="NAME",
+                    help="with `deliver`: the program that was in the pane when"
+                         " this was armed; type into nothing else")
     wa.add_argument("--expect-pid", dest="expect_pid", metavar="PID",
                     help="with `deliver`: the process that was in the pane when"
                          " this was armed; refuse to type into any other")
