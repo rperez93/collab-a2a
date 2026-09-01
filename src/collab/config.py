@@ -141,24 +141,18 @@ def candidate_homes(cwd: Path | None = None) -> list[Path]:
     return found
 
 
-def resolve_home(name: str = "", cwd: Path | None = None) -> Path:
-    """Which state directory this invocation should use.
+def claimed_home(cwd: Path | None = None) -> Path | None:
+    """The state directory this process can PROVE is its own, or None.
 
-    A later command — `collab send`, minutes after the join, as a fresh
-    process — has to reach the same directory the join chose, and must not
-    reach the other agent's. Names cannot decide it: two agents on one machine
-    resolve the same default name, which is why they collided to begin with.
-    Their process trees do differ, so ownership is read from there.
-
-    An earlier version guessed instead: if exactly one per-agent directory was
-    in use, it assumed that one was ours. For the agent holding the *default*
-    directory that was precisely backwards — every bare command it ran was
-    redirected into the other agent's state, where it sent messages under their
-    name and stopped their listener.
+    Separated from resolve_home because the difference between «this is mine»
+    and «this is the one I would use for want of anything better» matters to
+    some callers and not to others. A command has to act on something, so it
+    falls back to the repo's own directory. Anything that WRITES on an agent's
+    behalf must not: writing into a directory you cannot prove is yours is how
+    one agent's usage figures end up published under another agent's name.
     """
     from . import lockfile
 
-    base = base_home(cwd)
     chain = lockfile.ancestry()
 
     # Two agents started from one terminal share everything above that
@@ -178,6 +172,27 @@ def resolve_home(name: str = "", cwd: Path | None = None) -> Path:
     ranked.sort(key=lambda pair: pair[0])
     if ranked and (len(ranked) == 1 or ranked[0][0] < ranked[1][0]):
         return ranked[0][1]
+    return None
+
+
+def resolve_home(name: str = "", cwd: Path | None = None) -> Path:
+    """Which state directory this invocation should use.
+
+    A later command — `collab send`, minutes after the join, as a fresh
+    process — has to reach the same directory the join chose, and must not
+    reach the other agent's. Names cannot decide it: two agents on one machine
+    resolve the same default name, which is why they collided to begin with.
+    Their process trees do differ, so ownership is read from there.
+
+    An earlier version guessed instead: if exactly one per-agent directory was
+    in use, it assumed that one was ours. For the agent holding the *default*
+    directory that was precisely backwards — every bare command it ran was
+    redirected into the other agent's state, where it sent messages under their
+    name and stopped their listener.
+    """
+    base = base_home(cwd)
+    if (mine := claimed_home(cwd)) is not None:
+        return mine
 
     held = _held_by(base)
     if held is None:

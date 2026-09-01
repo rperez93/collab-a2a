@@ -53,6 +53,7 @@ that already emit something close.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 #: Fields we understand, and how to coerce them.
@@ -345,6 +346,58 @@ def sanitise(reported: dict[str, Any]) -> dict[str, Any]:
             out[key[:MAX_STRING]] = value[:MAX_STRING]
             extras += 1
     return out
+
+
+# --- whose figures these are ------------------------------------------------
+#
+# Usage is published under a name, so a file of figures is a claim about a
+# person. Two agents in one repo have two state directories, and everything
+# that writes here has to work out which is which — the status line worst of
+# all, because it is started by the agent and knows the agent's cwd and nothing
+# else. When it got that wrong, one agent's spend and quota were published as
+# the other's: not a display glitch, an attribution error, and the wrong figure
+# to hand work out on.
+#
+# So the file says who wrote it, and the reader checks before publishing. The
+# stamp is the participant id where there is one — it survives a rename, which
+# a name does not — and the state directory otherwise.
+
+OWNER_KEY = "_owner"
+
+STATS_FILE = "agent_stats.json"
+
+
+def owner_of(profile: Any) -> str:
+    """The stamp identifying whose figures a file holds."""
+    return str(getattr(profile, "participant_id", "") or getattr(profile, "dir", ""))
+
+
+def write_stats(profile: Any, figures: dict[str, Any]) -> bool:
+    """Record figures as belonging to this profile. False if it could not."""
+    stamped = {**figures, OWNER_KEY: owner_of(profile)}
+    try:
+        Path(profile.dir).mkdir(parents=True, exist_ok=True)
+        (Path(profile.dir) / STATS_FILE).write_text(json.dumps(stamped))
+    except (OSError, TypeError, ValueError):
+        return False
+    return True
+
+
+def read_stats(profile: Any) -> dict[str, Any]:
+    """This profile's own figures. Somebody else's are not returned at all.
+
+    An unstamped file is somebody else's too — every writer stamps now, so what
+    is left unstamped came from a version that could not say, or from a hand
+    that should not have. Publishing it under this name is the bug; the next
+    write replaces it with a stamped one seconds later.
+    """
+    try:
+        data = json.loads((Path(profile.dir) / STATS_FILE).read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict) or data.get(OWNER_KEY) != owner_of(profile):
+        return {}
+    return {k: v for k, v in data.items() if k != OWNER_KEY}
 
 
 def window_label(name: str) -> str:

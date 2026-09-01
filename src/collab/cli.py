@@ -787,11 +787,9 @@ def _current_stats(profile: SessionProfile) -> dict[str, Any]:
     """Whatever the host agent last told the status line about itself."""
     if not share_stats_enabled():
         return {}
-    path = profile.dir / "agent_stats.json"
-    try:
-        return json.loads(path.read_text())
-    except (OSError, ValueError):
-        return {}
+    from .stats import read_stats
+
+    return read_stats(profile)
 
 
 def cmd_send(args: argparse.Namespace) -> int:
@@ -978,7 +976,9 @@ def cmd_stats(args: argparse.Namespace) -> int:
             return 1
 
         profile = _require_profile(args)
-        (profile.dir / "agent_stats.json").write_text(json.dumps(figures))
+        # Stamped with whose they are: two agents in one repo publish from two
+        # directories, and an unstamped file is one anybody can be given.
+        statmod.write_stats(profile, figures)
         if not share_stats_enabled():
             warn("recorded, but sharing is off (collab stats --share on)")
             return 0

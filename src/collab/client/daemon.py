@@ -28,6 +28,7 @@ from httpx_sse import aconnect_sse
 from .. import __version__, lockfile, peers
 from ..config import SessionProfile, share_stats_enabled, stats_source
 from ..protocol import EXT_PREFIX, Envelope
+from ..stats import read_stats, write_stats
 from .bridge import Bridge
 from .inbox import Inbox
 
@@ -353,10 +354,7 @@ class Daemon:
         figures = normalise(output) if output else {}
         if not figures:
             return
-        try:
-            (self.paths.root / "agent_stats.json").write_text(json.dumps(figures))
-        except OSError:
-            pass
+        write_stats(self.profile, figures)
 
     async def _report_stats(self, client: httpx.AsyncClient) -> None:
         """Tell the hub where we are running, and what we know about our usage.
@@ -367,13 +365,10 @@ class Daemon:
         """
         if not share_stats_enabled():
             return
-        payload = {**peers.identity(), "stats": {}}
-        stats_file = self.paths.root / "agent_stats.json"
-        try:
-            if stats_file.exists():
-                payload["stats"] = json.loads(stats_file.read_text())
-        except (OSError, ValueError):
-            payload["stats"] = {}
+        # OURS ONLY. The file is written by whatever the agent runs — a status
+        # line, a --report, our own probe — and publishing it unread meant
+        # publishing whoever wrote there last, under our name.
+        payload = {**peers.identity(), "stats": read_stats(self.profile)}
         if payload == self._last_stats:
             return
         try:

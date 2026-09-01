@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..config import SessionProfile
+from ..config import SessionProfile, claimed_home
 from ..client.daemon import (DEAD_AFTER, STALE_AFTER, effective_state,
                              is_running, read_status)
 
@@ -60,19 +60,46 @@ def stash_agent_stats(raw: str, cwd: Path | None) -> None:
     """
     if not raw.strip():
         return
-    from ..stats import normalise
+    from ..stats import normalise, write_stats
 
     figures = normalise(raw)
     if not figures:
         return
 
     try:
-        profile = SessionProfile.current(cwd)
+        profile = _own_profile(cwd)
         if profile is None:
             return
-        (profile.dir / "agent_stats.json").write_text(json.dumps(figures))
+        write_stats(profile, figures)
     except (OSError, ValueError):
         pass
+
+
+def _own_profile(cwd: Path | None) -> SessionProfile | None:
+    """The session THIS agent owns, or nothing at all.
+
+    `SessionProfile.current` answers with the repo's default directory when it
+    cannot tell the agents apart, which is the right answer for a command —
+    something has to be shown — and the wrong one here. Two agents in a repo,
+    one of them a Claude Code with a status line: every prompt, the status line
+    wrote its cost and quota into whichever directory that fallback landed on,
+    and the daemon living there published them as its own. The other agent's
+    roster line then showed this agent's spend, its model and its remaining
+    quota — figures a collaborator uses to decide who takes the next task.
+
+    A directory nobody can prove is ours gets nothing written to it.
+    """
+    home = os.environ.get("COLLAB_HOME") or claimed_home(cwd)
+    if home is None:
+        return None
+    pointer = Path(home) / "current"
+    try:
+        session_id = pointer.read_text().strip()
+    except OSError:
+        return None
+    if not session_id:
+        return None
+    return SessionProfile.load_from(Path(home) / "sessions" / session_id)
 
 
 def cwd_from_session_json(raw: str) -> Path | None:
