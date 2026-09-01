@@ -605,6 +605,9 @@ class Waker:
         return True
 
     def _cap_pending(self, keep: int = MAX_BATCH) -> None:
+        self._cap_file(self.pending, keep)
+
+    def _cap_file(self, path: Path, keep: int = MAX_BATCH) -> None:
         """Keep the newest arrivals and say how many were dropped.
 
         A queue that grows without bound turns into a batch that cannot be
@@ -613,7 +616,7 @@ class Waker:
         the count, and the conversation itself is still in the inbox.
         """
         try:
-            with self.pending.open(encoding="utf-8") as fh:
+            with path.open(encoding="utf-8") as fh:
                 lines = [line for line in fh if line.strip()]
         except OSError:
             return
@@ -634,11 +637,11 @@ class Waker:
                               "text": f"[{dropped} earlier message(s) not shown"
                                       " — `collab recv --limit 50` has them]"},
                              ensure_ascii=False)
-        tmp = self.pending.with_suffix(".tmp")
+        tmp = path.with_suffix(".capping")
         with contextlib.suppress(OSError):
             tmp.write_text(earlier + "\n" + "".join(lines[-keep:]),
                            encoding="utf-8")
-            os.replace(tmp, self.pending)
+            os.replace(tmp, path)
 
     def waiting(self) -> int:
         """How many arrivals are queued but not yet cut into a batch."""
@@ -716,9 +719,20 @@ class Waker:
 
         The rename is atomic, so a crash mid-cut leaves the events in exactly
         one of the two places and never in neither.
+
+        A batch that keeps failing used to STARVE everything behind it: while
+        one was outstanding nothing new was ever cut, so with the target gone,
+        the retries walked up to half an hour apart and every message that
+        arrived in between sat in the queue undelivered — not delayed, never
+        even considered. So anything waiting is folded into the batch being
+        retried. Safe because the daemon never calls this while a turn is in
+        flight, and right because the retry should carry everything unread, not
+        a snapshot of the moment it first failed.
         """
         existing = self.outstanding()
         if existing:
+            if self.waiting():
+                self._fold_into(existing[0])
             return existing[0]
         if not self.waiting():
             return None
@@ -729,6 +743,24 @@ class Waker:
         except OSError:
             return None
         return Batch(target)
+
+    def _fold_into(self, batch: Batch) -> None:
+        """Move what is waiting into a batch that has yet to be delivered."""
+        try:
+            with self.pending.open(encoding="utf-8") as fh:
+                arrived = [line for line in fh if line.strip()]
+        except OSError:
+            return
+        if not arrived:
+            return
+        try:
+            with batch.path.open("a", encoding="utf-8") as fh:
+                fh.writelines(arrived)
+        except OSError:
+            return
+        with contextlib.suppress(OSError):
+            self.pending.unlink()
+        self._cap_file(batch.path)
 
     def prompt(self, batch: Batch) -> str:
         """The framing, then the batch, then a hard ceiling on the whole thing.

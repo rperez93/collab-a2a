@@ -234,6 +234,42 @@ def test_a_stepped_clock_does_not_stall_the_wake(tmp_path):
     assert w.due()[0] is True
 
 
+def test_a_stuck_batch_does_not_starve_what_arrives_behind_it(tmp_path):
+    """A failing delivery used to freeze the queue, not just delay it.
+
+    With the target gone every retry fails, the interval walks out to half an
+    hour, and everything that arrived meanwhile sat in the queue never even
+    considered — `take()` returned the stuck batch and nothing else was cut.
+    """
+    w, clock = waker(tmp_path, command=["false"], settle=0, min_gap=0)
+    w.note(chat("the first thing"))
+    clock[0] += 1
+    stuck = w.take()
+    for i in range(3):
+        w.failed(stuck)
+        w.note(chat(f"arrived during retry {i}"))
+        clock[0] += w.retry_pause + 1
+        again = w.take()
+        assert again.name == stuck.name, "cut a second batch while one was stuck"
+    said = [e["text"] for e in stuck.events()]
+    assert "the first thing" in said
+    assert "arrived during retry 2" in said, "later messages never got in"
+    assert w.waiting() == 0
+
+
+def test_folding_into_a_stuck_batch_still_respects_the_ceiling(tmp_path):
+    """Otherwise the fix for starvation recreates the batch that cannot ship."""
+    w, clock = waker(tmp_path, command=["false"], settle=0, min_gap=0)
+    w.note(chat("first"))
+    clock[0] += 1
+    stuck = w.take()
+    for i in range(wake.MAX_BATCH * 2):
+        w.note(chat(f"m{i}"))
+        clock[0] += 1
+        w.take()
+    assert len(stuck.events()) <= wake.MAX_BATCH + 1
+
+
 # --- a batch that could never be delivered -------------------------------------
 #
 # Linux refuses any single argument over 128 KiB, and five of the recipes hand
@@ -339,6 +375,7 @@ def a_daemon(profile):
     daemon._waking = None
     daemon._wake_note = ""
     daemon._wake_alarmed = False
+    daemon._wake_turn_ended = 0.0
     daemon._http = None
     return daemon
 
@@ -756,6 +793,51 @@ def test_a_recipe_is_not_taken_apart_at_its_quotes(profile, monkeypatch):
     command = wake.read_config(d.DaemonPaths(profile.dir).root).command
     assert command[:2] == ["sh", "-c"]
     assert len(command) == 3
+
+
+def test_the_woken_turns_own_reading_does_not_silence_the_next_wake(
+        profile, monkeypatch):
+    """The prompt tells the woken agent to run `collab recv`. It does — and
+    that poll counted as «somebody is reading», buying ten minutes of silence
+    from an agent that had already finished its turn and gone."""
+    daemon = a_daemon(profile)
+    monkeypatch.setattr(d, "watchers", lambda p: [])
+    daemon.bridge = type("B", (), {"clients": 0})()
+
+    now = time.time()
+    monkeypatch.setattr(d, "last_poll", lambda p: now)      # polled just now
+    daemon._wake_turn_ended = now + 1                       # by the woken turn
+    assert daemon._somebody_reads() is False
+
+    daemon._wake_turn_ended = now - 1                       # somebody else's
+    assert daemon._somebody_reads() is True
+
+
+def test_a_stale_poll_is_not_somebody_reading(profile, monkeypatch):
+    daemon = a_daemon(profile)
+    monkeypatch.setattr(d, "watchers", lambda p: [])
+    daemon.bridge = type("B", (), {"clients": 0})()
+    monkeypatch.setattr(d, "last_poll",
+                        lambda p: time.time() - wake.POLL_COUNTS_AS_LISTENING - 1)
+    assert daemon._somebody_reads() is False
+
+
+def test_an_armed_watcher_is_always_somebody_reading(profile, monkeypatch):
+    daemon = a_daemon(profile)
+    monkeypatch.setattr(d, "watchers", lambda p: [4242])
+    daemon.bridge = type("B", (), {"clients": 0})()
+    monkeypatch.setattr(d, "last_poll", lambda p: 0.0)
+    assert daemon._somebody_reads() is True
+
+
+def test_the_turn_is_marked_finished_even_when_it_crashes(profile):
+    """Otherwise one broken turn suppresses every poll check that follows."""
+    daemon = a_daemon(profile)
+    wake.write_config(daemon.paths.root, wake.WakeConfig(
+        command=["/nonexistent/agent"], settle=0, min_gap=0))
+    daemon.waker.note(chat())
+    asyncio.run(_wake_once(daemon))
+    assert daemon._wake_turn_ended > 0
 
 
 def test_the_delivery_is_told_where_the_prompt_is(profile):

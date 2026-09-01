@@ -343,12 +343,13 @@ class Daemon:
         # never arm this; for the rest it is the difference between a message
         # arriving and a message being read.
         self.waker = wake.Waker(
-            self.paths.root, profile.session_id,
-            attended=lambda: bool(watchers(profile) or self.bridge.clients)
-            or (time.time() - last_poll(profile)) < wake.POLL_COUNTS_AS_LISTENING)
+            self.paths.root, profile.session_id, attended=self._somebody_reads)
         self._waking: asyncio.Task | None = None
         self._wake_note = ""
         self._wake_alarmed = False
+        #: When the last woken turn finished. Polls up to here were made by that
+        #: turn, doing what it was woken to do, and are not evidence of a reader.
+        self._wake_turn_ended = 0.0
 
     # --- status ---------------------------------------------------------------
 
@@ -573,6 +574,31 @@ class Daemon:
 
     # --- waking the agent ------------------------------------------------------
 
+    def _somebody_reads(self) -> bool:
+        """Is anything actually reading this feed — other than a turn we started?
+
+        An armed watcher or a bridge subscriber is unambiguous. A recent poll is
+        the documented fallback and counts too, with one exception that is the
+        whole reason this is a method rather than a lambda: THE WOKEN TURN ITSELF
+        POLLS. It is told to, by the prompt that woke it — `collab recv` is how
+        it reads what arrived. Counting that poll as «somebody is reading» meant
+        one wake bought ten minutes of silence afterwards, so a message landing
+        five minutes later waited for the rest of the window while the agent it
+        was for had long since finished its turn and gone.
+
+        So a poll counts only if it happened after the last woken turn ended.
+        A poll from a genuinely polling agent always does; the woken turn's own
+        never can.
+        """
+        if watchers(self.profile) or self.bridge.clients:
+            return True
+        polled_at = last_poll(self.profile)
+        if not polled_at:
+            return False
+        if polled_at <= self._wake_turn_ended:
+            return False                    # our own woken turn, reading
+        return (time.time() - polled_at) < wake.POLL_COUNTS_AS_LISTENING
+
     async def _maybe_wake(self) -> None:
         """Start a turn in an agent that cannot start one for itself.
 
@@ -593,6 +619,14 @@ class Daemon:
         self._waking = asyncio.create_task(self._wake(batch))
 
     async def _wake(self, batch: wake.Batch) -> None:
+        try:
+            await self._wake_once(batch)
+        finally:
+            # Set however the turn ended, including a crash: every poll up to
+            # this instant may have been the woken turn reading its own batch.
+            self._wake_turn_ended = time.time()
+
+    async def _wake_once(self, batch: wake.Batch) -> None:
         config = self.waker.config()
         logger.info("waking the agent with %s", batch.name)
         # Both are given, because the two ways of delivering want different
