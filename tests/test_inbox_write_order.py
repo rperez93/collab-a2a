@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 
 import pytest
 
@@ -129,3 +130,71 @@ def test_a_log_that_cannot_be_written_takes_the_row_with_it(inbox, tmp_path):
     assert inbox.record(_env(51)) is True
     assert [e.seq for e in inbox.all_events()] == [1, 51]
     assert [json.loads(line)["seq"] for line in log.read_text().splitlines()] == [1, 51]
+
+
+class _RollbackAlsoFails:
+    """The second failure: the log cannot be written AND the rollback refuses.
+
+    Only once, so the recovery afterwards is the real connection's behaviour
+    rather than this stand-in's.
+    """
+
+    def __init__(self, real):
+        self._real, self.armed = real, True
+
+    def rollback(self):
+        if self.armed:
+            self.armed = False
+            raise sqlite3.OperationalError("rollback refused too")
+        return self._real.rollback()
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes a read-only file anyway")
+def test_a_rollback_that_fails_too_does_not_leave_the_row_behind(inbox, tmp_path):
+    """Both at once, which the first guard did not survive.
+
+    A rollback that raises leaves the transaction open, so `last_seq` reads
+    through it, the next `record` finds its own uncommitted row and answers
+    that we already have it, and the next write that succeeds commits the
+    orphan behind it. Measured before this: database [1, 50, 51] and log
+    [1, 51] — seq 50 committed with no log line and unreachable by resume,
+    which is the divergence the ordering exists to prevent arriving through
+    the handler written for it.
+    """
+    inbox.record(_env(1))
+    log = tmp_path / "inbox.jsonl"
+    log.chmod(0o400)
+    inbox._db = _RollbackAlsoFails(inbox._db)
+    try:
+        with pytest.raises(OSError) as caught:
+            inbox.record(_env(50))
+    finally:
+        log.chmod(0o600)
+
+    assert not isinstance(caught.value, sqlite3.Error), \
+        "the rollback's complaint replaced the failure a person can act on"
+    assert inbox.last_seq() == 1, "it read through a transaction nobody closed"
+    assert [e.seq for e in inbox.all_events()] == [1]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes a read-only file anyway")
+def test_a_moment_of_bad_luck_does_not_deafen_the_daemon_for_good(inbox, tmp_path):
+    """The Inbox is built once and never rebuilt, so a connection left closed
+    would stop this process recording anything for the rest of its life over
+    one bad moment. A fault that persists is loud through the append anyway."""
+    inbox.record(_env(1))
+    log = tmp_path / "inbox.jsonl"
+    log.chmod(0o400)
+    inbox._db = _RollbackAlsoFails(inbox._db)
+    try:
+        with pytest.raises(OSError):
+            inbox.record(_env(50))
+    finally:
+        log.chmod(0o600)
+
+    assert inbox.record(_env(50)) is True, "it never recorded again"
+    assert [e.seq for e in inbox.all_events()] == [1, 50]
+    assert [json.loads(x)["seq"] for x in log.read_text().splitlines()] == [1, 50]

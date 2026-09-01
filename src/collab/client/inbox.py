@@ -45,21 +45,30 @@ class Inbox:
         self.dir.mkdir(parents=True, exist_ok=True)
         self.jsonl = self.dir / "inbox.jsonl"
         self._lock = threading.Lock()
-        self._db = sqlite3.connect(self.dir / "inbox.db", check_same_thread=False)
-        self._db.row_factory = sqlite3.Row
         with self._lock:
-            # WAL, because the readers are the point: `collab recv`, the
-            # viewer and the status line all read this file while the daemon
-            # writes it, and under the rollback journal a reader holding a
-            # snapshot locks the daemon out of its own inbox. WAL lets them
-            # miss each other entirely. It is set every time rather than once:
-            # the mode lives in the file, and a database restored from a copy
-            # or created by an older collab arrives without it.
-            with contextlib.suppress(sqlite3.DatabaseError):
-                self._db.execute("PRAGMA journal_mode=WAL")
-            self._db.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
-            self._db.executescript(SCHEMA)
-            self._db.commit()
+            self._db = self._connect()
+
+    def _connect(self) -> sqlite3.Connection:
+        """Open the inbox, set up the way every connection to it must be.
+
+        In one place because there are two reasons to open it: starting up,
+        and replacing a connection whose transaction could not be rolled back.
+        """
+        db = sqlite3.connect(self.dir / "inbox.db", check_same_thread=False)
+        db.row_factory = sqlite3.Row
+        # WAL, because the readers are the point: `collab recv`, the viewer and
+        # the status line all read this file while the daemon writes it, and
+        # under the rollback journal a reader holding a snapshot locks the
+        # daemon out of its own inbox. WAL lets them miss each other entirely.
+        # It is set every time rather than once: the mode lives in the file,
+        # and a database restored from a copy or created by an older collab
+        # arrives without it.
+        with contextlib.suppress(sqlite3.DatabaseError):
+            db.execute("PRAGMA journal_mode=WAL")
+        db.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+        db.executescript(SCHEMA)
+        db.commit()
+        return db
 
     def close(self) -> None:
         with self._lock:
@@ -134,10 +143,55 @@ class Inbox:
                 # its own. The seq then existed in the database, was absent
                 # from the log, and could never be fetched again — the exact
                 # divergence the ordering above exists to prevent, moved one
-                # step along. Anything that leaves this block leaves it clean.
-                self._db.rollback()
+                # step along. Anything that leaves this block leaves it clean,
+                # which `_discard` is responsible for even when the rollback
+                # itself is what fails.
+                self._discard()
                 raise
         return True
+
+    def _discard(self) -> None:
+        """Undo the half-written event, even when the rollback itself fails.
+
+        A rollback that raises leaves the transaction OPEN, and everything
+        after it reads through the transaction rather than through the
+        database: `last_seq` answers with the uncommitted seq, the next
+        `record` finds its own row and reports that we already have it, and
+        the first write that does succeed commits the orphan behind it.
+        Measured with both failing, the database ended [1, 50, 51] and the log
+        [1, 51] — the divergence this ordering exists to prevent, arriving
+        through the handler written for it.
+
+        So the connection is closed, which discards the transaction whatever
+        state it is in, and a fresh one is opened in its place. A new
+        connection starts clean and reads only what was committed, which is
+        the consistent state.
+
+        Reopening rather than staying closed, because a transient fault must
+        not become a permanent one: this object is built once and never
+        rebuilt, so a closed connection would deafen the daemon for the rest
+        of its life over one bad moment. Nothing is masked by recovering —
+        a fault that persists, a full disk or a read-only directory, fails the
+        append again immediately and is just as loud through that path.
+
+        And if the reopen fails too, the closed connection stays: every later
+        call then raises, the daemon reports a dropped feed and retries, and
+        it is loud and stuck rather than quiet and wrong. Being stuck is the
+        intended outcome there and not an oversight — a daemon nobody can hear
+        from gets looked at; a log missing one message does not.
+
+        Every failure in here is suppressed because the caller re-raises the
+        ORIGINAL one, and that is the useful one: a full disk or a read-only
+        directory is what a person can act on. Neither the rollback's
+        complaint nor the reopen's may take its place.
+        """
+        try:
+            self._db.rollback()
+        except BaseException:
+            with contextlib.suppress(BaseException):
+                self._db.close()
+            with contextlib.suppress(BaseException):
+                self._db = self._connect()
 
     def last_seq(self) -> int:
         with self._lock:
