@@ -61,7 +61,7 @@ def _draws_a_row(*, personal: bool, session: bool) -> bool:
     tui.chat = _Chat()
     tui._command = _Command()
     tui.behind = lambda: 0
-    tui._paint_bar = lambda win, y, width, parts, behind=0: painted.append(
+    tui._paint_bar = lambda win, y, width, parts, behind=0, keep=1: painted.append(
         (y, "".join(str(p) for p in parts) or "·"))
     T.Tui._hint(tui, Win(), 20, 80, notice=False, roster=True,
                 keys=(T.ROSTER_KEYS, T.ROSTER_KEYS_SHORT))

@@ -2025,16 +2025,28 @@ class Tui:
         # and takes the row; see statusbar.messages_segment.)
         session = self._roster_bar() if self._roster_settings["enabled"] else []
         session_h = 1 if session and roster_h - 2 >= 2 else 0
-        # A RULE ABOVE THAT ROW, drawn the way the section headers are, so the
-        # figures read as the foot of the panel and not as one more line of
-        # the list: they sat directly under the last participant, in the same
-        # dim colour as the state words beside the names. The rule costs a row
-        # too, and it is paid for last — taken only while two rows of
-        # participants, one whole person, still remain after it, and below that
-        # the rule is what goes, never a participant and never the row. Out of
-        # the roster's allocation, so `chat_top` does not move.
+        # A RULE ABOVE THAT ROW, drawn the way the section headers are and
+        # labelled the way they are — `STATUS`, beside `PARTICIPANTS (3)` and
+        # `CONVERSATION` — so the figures read as a section of the panel and
+        # not as one more line of the list: they sat directly under the last
+        # participant, in the same dim colour as the state words beside the
+        # names. The rule costs a row too, and it is paid for after the row —
+        # taken only while two rows of participants, one whole person, still
+        # remain after it, and below that the rule is what goes, never a
+        # participant and never the row. Out of the roster's allocation, so
+        # `chat_top` does not move.
         rule_h = 1 if session_h and roster_h - 3 >= 2 else 0
-        self.roster.rows = roster_h - 1 - session_h - rule_h
+        # AND A ROW OF AIR ON EITHER SIDE, on the same terms and paid for last:
+        # one above the rule, so the last participant and the section header
+        # do not touch, and one under the status row, so the figures do not
+        # sit on the conversation's header. Each is taken only while a whole
+        # person still fits after it, and they are the first to go when the
+        # pane shrinks — the one below first, the one above next, then the
+        # rule — because they are the only things at the foot that say
+        # nothing. Also out of the roster's allocation.
+        pad_top = 1 if rule_h and roster_h - 4 >= 2 else 0
+        pad_bottom = 1 if pad_top and roster_h - 5 >= 2 else 0
+        self.roster.rows = roster_h - 1 - session_h - rule_h - pad_top - pad_bottom
         # AND THE HEIGHT IS SETTLED BEFORE THE WIDTH IS ASKED FOR, because
         # `_gutter_width` reads `rows` to decide whether there is anything to
         # scroll. The gutter then costs the content a column, so the rows are
@@ -2069,8 +2081,11 @@ class Tui:
                                self.roster)
 
         chat_top = body_top + roster_h
+        # From the bottom of the panel up: the padding under the row (left
+        # blank), the row, the rule, the padding above it (left blank).
+        row_y = chat_top - 1 - pad_bottom
         if rule_h:
-            self._hline(win, chat_top - 2, width, "")
+            self._hline(win, row_y - 1, width, "STATUS")
         if session_h:
             # THE LAST ROW OF THE ROSTER PANEL, mirroring the conversation's
             # own row at the last row of the window — one bar per panel, each
@@ -2079,7 +2094,13 @@ class Tui:
             # the whole session that scrolled away the moment somebody looked
             # down the participant list would be figures you could only read by
             # not using the pane.
-            self._paint_bar(win, chat_top - 1, width, session)
+            #
+            # AND NOTHING ON IT IS GIVEN UP FOR WIDTH. There is no legend here,
+            # so every part is a figure, and a figure this row lost is the
+            # feature not working: in a `collab watch --tmux` pane the count
+            # went and the batch kept its glyphs. Narrow forms first, then a
+            # clip that shows — see `statusbar.fit`.
+            self._paint_bar(win, row_y, width, session, keep=len(session))
         self._chat_top = chat_top
         self._hline(win, chat_top, width, self._chat_label())
 
@@ -2226,15 +2247,23 @@ class Tui:
         if notice and not self.chat.follow:
             what = (f"⏸ {behind} new below" if behind else "⏸ scrolled back")
             what += " — End (or G) jumps to the newest"
+        keep = 1
         if roster and self._roster_settings["enabled"]:
             parts = self._roster_bar(keys=keys)
+            # EVERY FIGURE ON THIS ROW IS KEPT, and only the legend may go. The
+            # figures are what the row is for; the legend is the same words
+            # every session. `compose` appends the very object it was handed
+            # for the keys, so identity is what tells the legend apart from a
+            # figure that happened to render as the same text.
+            keep = sum(1 for part in parts if part is not keys)
         else:
             parts = statusbar.compose(notice=what, keys=keys,
                                       batch=self.model.status.get("batch"),
                                       stats=self.model.own_stats,
                                       command=self._command.text(),
                                       segments=self._settings["segments"])
-        line = self._paint_bar(win, height - 1, width, parts, behind=behind)
+        line = self._paint_bar(win, height - 1, width, parts, behind=behind,
+                               keep=keep)
         # THE NOTICE IS THE WAY BACK, so a click on it is too. It already says
         # what the click would do — «End (or G) jumps to the newest» — and it
         # is the one part of this row that is news rather than a reminder, so
@@ -2285,7 +2314,7 @@ class Tui:
             segments=self._roster_settings["segments"])
 
     def _paint_bar(self, win, y: int, width: int, parts: list[Any], *,
-                   behind: int = 0) -> str:
+                   behind: int = 0, keep: int = 1) -> str:
         """Fit a composed row to the pane and put it on the screen.
 
         One painter for both rows, so the column arithmetic is written once and
@@ -2299,11 +2328,15 @@ class Tui:
         measure its span from what actually reached the screen rather than from
         what it hoped would fit. `fit` narrows and clips; a span taken from the
         text before that answers clicks that landed on empty terminal.
+
+        `keep` is how many of the leading parts may be clipped but never
+        dropped — one for the reader's row, where it is the scrolled-back
+        notice, and every figure for the roster's; see `statusbar.fit`.
         """
         room = max(width - 1, 0)
         if not room:
             return ""
-        line = statusbar.fit(parts, room, _w, _clip)
+        line = statusbar.fit(parts, room, _w, _clip, keep=keep)
         attr = (curses.color_pair(C_ACCENT) | curses.A_BOLD if behind
                 else curses.color_pair(C_DIM) | curses.A_DIM)
         try:
@@ -2615,11 +2648,17 @@ class Tui:
             # the session's row, and only while two rows of participants remain
             # after paying for it. The reader's own row, when it is the one
             # down there, gets no rule — it is not the roster's foot.
+            #
+            # THE PADDING ABOVE THE RULE on the same terms, and none below the
+            # row: the row is on the pane's last line, where the conversation's
+            # own bar is in its pane, and under it is a tmux border that
+            # already separates it from whatever is next.
             row = self._bar or self._roster_settings["enabled"]
             rule = self._roster_settings["enabled"] and height - 3 >= 2
+            pad = rule and height - 4 >= 2
         else:
-            row, rule = self._bar, False
-        pane.rows = height - 1 - (1 if row else 0) - (1 if rule else 0)
+            row, rule, pad = self._bar, False, False
+        pane.rows = height - 1 - (1 if row else 0) - (1 if rule else 0) - (1 if pad else 0)
         pane.total = len(rows)
         pane.settle()
         for i in range(pane.rows):
@@ -2633,7 +2672,7 @@ class Tui:
                 more_above=pane is self.chat and m.more_above(),
                 more_below=pane is self.chat and bool(m.pending()))
         if rule:
-            self._hline(win, height - 2, width, "")
+            self._hline(win, height - 2, width, "STATUS")
 
         if self.view == "roster":
             # Its own keys, and no scrolled-back notice: the roster does not

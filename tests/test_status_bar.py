@@ -28,6 +28,12 @@ from collab.client import tui
 from collab.config import SessionProfile
 
 
+def _wide(part):
+    """A segment's widest form: `compose` hands `fit` a tuple of forms for the
+    two hub figures, widest first, and a plain string for everything else."""
+    return part[0] if isinstance(part, tuple) else part
+
+
 def _fit(parts, width):
     """Through the viewer's own measure and clip, which is the point of them."""
     return sb.fit(parts, width, tui._w, tui._clip)
@@ -47,7 +53,7 @@ def test_everything_that_has_something_to_say_is_on_it():
                        batch={"done": 6, "total": 10, "fetched_at": time.time()},
                        stats={"cost_usd": 3.1}, command="main", segments=FULL)
     assert parts[0] == "⏸ 4 new below", "the notice comes first"
-    assert [p.split()[0] for p in parts[1:]] == ["batch", "$3.10", "main", "q:"]
+    assert [_wide(p).split()[0] for p in parts[1:]] == ["batch", "$3.10", "main", "q:"]
 
 
 def test_an_unknown_segment_name_costs_that_segment_and_not_the_row():
@@ -72,7 +78,9 @@ def _full():
 
 def test_the_keys_are_the_first_thing_given_up():
     line = _fit(_full(), 60)
-    assert "batch" in line and "$3.10" in line and "main" in line
+    # `6/10` and not the word: at sixty the batch has already been asked for
+    # its narrow form, which has no word in it, and the figure is the claim.
+    assert "6/10" in line and "$3.10" in line and "main" in line
     assert "q: quit" not in line
 
 
@@ -95,7 +103,9 @@ def test_a_shorter_form_that_still_does_not_fit_is_given_up_anyway():
     parts = sb.compose(keys=("the whole legend, at some length", "q: quit"),
                        batch={"done": 6, "total": 10, "fetched_at": time.time()},
                        segments=FULL)
-    line = _fit(parts, 26)
+    # Sixteen, not twenty-six: the batch now narrows to `60% 6/10` before
+    # anything is dropped, and at twenty-six the short legend fits beside it.
+    line = _fit(parts, 16)
     assert "q: quit" not in line and "6/10" in line
 
 
@@ -105,7 +115,9 @@ def test_the_batch_figure_is_the_last_thing_given_up():
     A viewer that hid it at eighty columns is one where the two of them quietly
     stop sharing a figure, which is the whole point of the batch.
     """
-    line = _fit(_full(), 38)
+    # Thirty: with the batch in its narrow form the row holds the spend as
+    # well at thirty-eight, so the width has to be one that forces a choice.
+    line = _fit(_full(), 30)
     assert "$3.10" not in line and "main" not in line
     assert "6/10" in line
 
@@ -654,9 +666,10 @@ def test_turning_the_row_off_returns_its_line_in_a_single_pane_view(
     win = _Pane()
     _draw(viewer, win)
     assert 29 not in win.rows, "the row is gone"
-    # The roster's row brings a rule above it, so that pane gets two lines
-    # back; the conversation's row has no rule and gives back one.
-    grew = 2 if view == "roster" else 1
+    # The roster's row brings a rule above it and a blank row above that, so
+    # that pane gets three lines back; the conversation's row has neither and
+    # gives back one.
+    grew = 3 if view == "roster" else 1
     assert pane.rows == with_row + grew, "and the pane grew into it"
 
 
@@ -715,8 +728,8 @@ def test_the_roster_row_carries_the_batch_and_the_message_count(cfg):
     status = _roster_row()
     parts = sb.compose(batch=status["batch"], messages=status["messages"],
                        segments=ROSTER)
-    assert any("6/10" in p for p in parts), parts
-    assert "128 messages" in parts, parts
+    assert any("6/10" in _wide(p) for p in parts), parts
+    assert "128 messages" in [_wide(p) for p in parts], parts
 
 
 def test_a_figure_that_is_only_the_readers_cannot_be_put_on_that_row(cfg):
@@ -809,8 +822,9 @@ def test_the_batch_on_the_roster_row_is_the_one_renderer():
     """Not a second one. Two drawings of one figure that disagreed would be
     worse than either, and the reader has both rows on screen at once."""
     figures = {"done": 6, "total": 10, "fetched_at": time.time()}
-    assert sb.batch_segment(figures) in sb.compose(batch=figures,
-                                                   segments=ROSTER)
+    parts = sb.compose(batch=figures, segments=ROSTER)
+    assert sb.batch_segment(figures) in parts[0], parts
+    assert sb.batch_segment(figures, narrow=True) in parts[0], parts
 
 
 # --- and on a real draw ------------------------------------------------------
@@ -828,10 +842,13 @@ def test_the_roster_panel_has_a_row_of_its_own_at_the_foot_of_the_roster(
     viewer.model.status = _roster_row()
     _draw(viewer, win)
 
-    assert "6/10" in win.rows[9] and "128 messages" in win.rows[9]
-    assert not any(name in win.rows[9] for name in ("bob", "alice")), \
-        f"a participant was painted onto this row: {win.rows[9]!r}"
-    assert "CONVERSATION" in win.rows[10], "and the chat header is right below"
+    # Row 8, not 9: the foot keeps a blank row under the status row at this
+    # height, so the figures sit one above the conversation's header.
+    assert "6/10" in win.rows[8] and "128 messages" in win.rows[8]
+    assert not any(name in win.rows[8] for name in ("bob", "alice")), \
+        f"a participant was painted onto this row: {win.rows[8]!r}"
+    assert 9 not in win.rows, "a blank row under it"
+    assert "CONVERSATION" in win.rows[10], "and the chat header right below that"
 
 
 def test_the_conversation_row_keeps_the_readers_own_figures(tmp_path, cfg):
@@ -851,14 +868,14 @@ def test_turning_it_off_gives_the_row_back_to_the_roster(tmp_path, cfg):
     win = _Pane()
     _draw(viewer, win)
     with_row = viewer.roster.rows
-    assert "6/10" in win.rows[9]
+    assert "6/10" in win.rows[8]
 
     config.save_watch_roster(enabled=False)
     win = _Pane()
     _draw(viewer, win)
-    assert "6/10" not in win.rows.get(9, ""), "the row is gone"
-    assert viewer.roster.rows == with_row + 2, \
-        "and the roster grew into it, and into the rule above it"
+    assert "6/10" not in win.rows.get(8, ""), "the row is gone"
+    assert viewer.roster.rows == with_row + 4, \
+        "and the roster grew into it, the rule above it, and the padding round both"
 
 
 def test_a_session_with_nothing_to_say_does_not_reserve_the_row(tmp_path, cfg):
@@ -869,13 +886,13 @@ def test_a_session_with_nothing_to_say_does_not_reserve_the_row(tmp_path, cfg):
     win = _Pane()
     _draw(viewer, win)
     empty = viewer.roster.rows
-    assert 9 not in win.rows
+    assert 8 not in win.rows and 9 not in win.rows
 
     viewer.model.status = _roster_row()
     win = _Pane()
     _draw(viewer, win)
-    assert viewer.roster.rows == empty - 2, \
-        "the row, and the rule above it, are taken only when used"
+    assert viewer.roster.rows == empty - 4, \
+        "the row, the rule above it and the padding are taken only when used"
 
 
 def test_a_hub_gone_quiet_takes_the_row_with_it(tmp_path, cfg):
@@ -893,8 +910,8 @@ def test_a_hub_gone_quiet_takes_the_row_with_it(tmp_path, cfg):
     win = _Pane()
     _draw(viewer, win)
 
-    assert "6/10" not in win.rows[9] and "128 messages" not in win.rows[9]
-    assert "batch ? 10m old" in win.rows[9] and "messages ? 10m old" in win.rows[9]
+    assert "6/10" not in win.rows[8] and "128 messages" not in win.rows[8]
+    assert "batch ? 10m old" in win.rows[8] and "messages ? 10m old" in win.rows[8]
 
 
 def test_it_gives_up_its_row_before_squeezing_the_roster(tmp_path, cfg):
@@ -980,8 +997,9 @@ def test_the_roster_only_view_spends_no_extra_row_on_it(tmp_path, cfg):
     win = _Pane()
     _draw(viewer, win)
     # The bottom row stays — it was never an extra one — and only the rule
-    # above it, which is the roster's and not the reader's, is given back.
-    assert viewer.roster.rows == with_figures + 1, "the row was never an extra one"
+    # above it and the blank row above that, which are the roster's and not
+    # the reader's, are given back.
+    assert viewer.roster.rows == with_figures + 2, "the row was never an extra one"
     assert "$3.10" in win.rows[29], "and it goes back to being the reader's"
 
 

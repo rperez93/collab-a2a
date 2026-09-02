@@ -91,7 +91,8 @@ def money_text(value: Any) -> str:
         return ""
 
 
-def batch_segment(figures: Any, *, now: float | None = None) -> str:
+def batch_segment(figures: Any, *, now: float | None = None,
+                  narrow: bool = False) -> str:
     """How much of the shared batch is done — or nothing, when nothing is true.
 
     Deliberately the same four refusals as the host agent's status line, in
@@ -103,6 +104,13 @@ def batch_segment(figures: Any, *, now: float | None = None) -> str:
     Two renderings of one figure that disagreed would be worse than either,
     because the reader has both on screen — the roster viewer in one pane and
     the agent's own bar in another.
+
+    `narrow` is the same trade that status line makes: `44% 4/9` without the
+    word or the six glyphs of bar, for a pane that cannot hold them. The bar
+    is decoration on a number that is still there without it, and a row that
+    kept the decoration and lost its other figure had the priorities inverted
+    — see `compose`. The stale form has no narrow version; it is short already
+    and a bare `?` would say nothing.
     """
     if not isinstance(figures, dict):
         return ""
@@ -115,7 +123,11 @@ def batch_segment(figures: Any, *, now: float | None = None) -> str:
         return f"batch ? {seen} old" if seen else "batch ?"
     if figures.get("state") == batch_progress.CLOSED:
         return ""
-    text = f"batch {batch_progress.bar(pct)} {pct}% {batch_progress.counts(figures)}"
+    counts = batch_progress.counts(figures)
+    if narrow:
+        text = f"{pct}% {counts}"
+    else:
+        text = f"batch {batch_progress.bar(pct)} {pct}% {counts}"
     if moved := batch_progress.delta_note(figures, now=now):
         text += f" {moved}"
     if batch_progress.is_complete(figures):
@@ -142,7 +154,8 @@ def stats_segment(figures: Any) -> str:
     return " · ".join(bits)
 
 
-def messages_segment(figures: Any, *, now: float | None = None) -> str:
+def messages_segment(figures: Any, *, now: float | None = None,
+                     narrow: bool = False) -> str:
     """How much has been said in this session — or nothing, when nothing is true.
 
     THE SAME FOR EVERY PARTICIPANT, which is the whole reason this segment may
@@ -173,16 +186,24 @@ def messages_segment(figures: Any, *, now: float | None = None) -> str:
     * A count that is not a count renders nothing rather than raising. For a
       guest this arrived over the network from somebody else's hub, and this
       runs on the draw path of a curses program.
+
+    `narrow` is `128 msgs`: the form a pane too narrow for the word gets before
+    it is allowed to lose the number. It was the ONLY figure on the roster row
+    with no shorter form, and the one to the right of the batch, so `fit` gave
+    it up first — on every `collab watch --tmux` pane under about forty
+    columns the row read `batch ██░░░░ 44% 4/9` and nothing else, and the
+    feature was reported as not working. See `compose`.
     """
     if not isinstance(figures, dict):
         return ""
     total = _counted(figures.get("total"))
     if total is None:
         return ""
+    word = "msg" if narrow else "message"
     if batch_progress.is_stale(figures, now=now):
         seen = batch_progress.age(figures, now=now)
-        return f"messages ? {seen} old" if seen else "messages ?"
-    return f"{total} message" + ("" if total == 1 else "s")
+        return f"{word}s ? {seen} old" if seen else f"{word}s ?"
+    return f"{total} {word}" + ("" if total == 1 else "s")
 
 
 def _counted(raw: Any) -> int | None:
@@ -332,11 +353,27 @@ def compose(*, notice: str = "", keys: Any = "", batch: Any = None,
     config file a person edits by hand, and a typo in it should cost them that
     segment, not the whole bar.
 
-    A piece may be a string or a tuple of forms, widest first — see `fit`.
+    A piece may be a string or a tuple of forms, widest first — see `fit`. The
+    two hub figures come as a pair, `("batch ██░░░░ 44% 4/9", "44% 4/9")` and
+    `("128 messages", "128 msgs")`, so that a narrow pane narrows them before
+    `fit` is ever in a position to drop one. Their order on the roster row is
+    batch first, then the count, and `fit` gives up from the right: with no
+    narrow forms that meant the count went while the bar kept its glyphs, on
+    every `collab watch --tmux` pane of an 80- or 100-column terminal. A row
+    that exists to carry two figures does not spend one of them on the
+    decoration of the other.
     """
+    def forms(*made: str) -> Any:
+        """A segment's renderings, widest first, or the one string when the
+        narrow form is the same or there is nothing."""
+        kept = tuple(dict.fromkeys(m for m in made if m))
+        return kept if len(kept) > 1 else (kept[0] if kept else "")
+
     built = {
-        "batch": lambda: batch_segment(batch, now=now),
-        "messages": lambda: messages_segment(messages, now=now),
+        "batch": lambda: forms(batch_segment(batch, now=now),
+                               batch_segment(batch, now=now, narrow=True)),
+        "messages": lambda: forms(messages_segment(messages, now=now),
+                                  messages_segment(messages, now=now, narrow=True)),
         "stats": lambda: stats_segment(stats),
         "command": lambda: command,
         "keys": lambda: keys,
@@ -359,7 +396,8 @@ def _forms(piece: Any) -> tuple[str, ...]:
 
 
 def fit(parts: Iterable[Any], width: int,
-        measure: Callable[[str], int], clip: Callable[[str, int], str]) -> str:
+        measure: Callable[[str], int], clip: Callable[[str, int], str],
+        *, keep: int = 1) -> str:
     """Join what fits: narrow from the right, then give up from the right.
 
     `measure` and `clip` are handed in rather than imported so that this module
@@ -377,9 +415,15 @@ def fit(parts: Iterable[Any], width: int,
     first. This is what the host agent's status line already does with its own
     batch figure; see `statusline.render._batch_segment(narrow=True)`.
 
-    The first part survives whatever happens. It is the scrolled-back notice
-    when there is one, and the reader's only sign that what they are looking at
-    is not live.
+    The first `keep` parts survive whatever happens — CLIPPED, when even their
+    narrowest forms will not fit, and never dropped. By default that is one
+    part: the scrolled-back notice when there is one, the reader's only sign
+    that what they are looking at is not live. The roster row asks for every
+    figure it composed, because there the figures ARE the row: a count that
+    vanished for want of eight columns read as the feature not working, and a
+    clip at least leaves an ellipsis to say the row was cut. Whatever follows
+    the kept parts — the key legend, on the one pane that carries it — is still
+    given up before any of them is touched.
     """
     forms = [f for f in (_forms(p) for p in parts) if f]
     if not forms or width <= 1:
@@ -396,7 +440,7 @@ def fit(parts: Iterable[Any], width: int,
             chosen[i] = form
             if measure(line()) <= width:
                 break
-    while len(chosen) > 1 and measure(line()) > width:
+    while len(chosen) > max(keep, 1) and measure(line()) > width:
         chosen.pop()
     return clip(line(), width)
 

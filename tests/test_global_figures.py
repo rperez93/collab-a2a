@@ -250,8 +250,10 @@ def test_two_viewers_of_one_session_read_the_same_roster_row(
 
     reference = rows["alice"]
     assert len(reference) == 2, f"nothing to compare: {reference}"
-    assert any("1/4" in part for part in reference), reference
-    assert "3 messages" in reference, reference
+    # Each figure is a tuple of forms, widest first; the claim is about the
+    # figure, not the form.
+    assert any("1/4" in form for part in reference for form in part), reference
+    assert any("3 messages" in part for part in reference), reference
     for name, row in rows.items():
         assert row == reference, f"{name} reads a different row: {row}"
 

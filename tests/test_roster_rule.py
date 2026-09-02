@@ -1,17 +1,26 @@
-"""A rule between the participants and the roster panel's status row.
+"""A titled rule, and a row of air on either side, between the participants and
+the roster panel's status row.
 
 The row at the foot of the roster carries the session's figures — the batch
 and the message count — and it sat directly under the last participant, in the
 same dim colour as the state words beside the names, so it read as one more
-line of the list. A rule above it, drawn the way the section headers are, is
-what says where the list ends and the figures begin.
+line of the list. A rule above it, drawn the way the section headers are and
+labelled `STATUS` the way they are labelled, is what says where the list ends
+and the figures begin; a blank row above the rule and one below the status row
+are what stop the block reading as glued to whichever neighbour it touches.
 
-The rule costs a row, and the rules for paying it are what these tests hold:
-it comes out of the roster only while the roster keeps at least two rows of
-participants after it, and below that it is the RULE that is dropped, never a
-participant and never the status row. With the status row off there is no
-rule either. And the conversation pane does not move: the rule lives inside
+All of it costs rows, and the rules for paying them are what these tests hold.
+They come out of the roster only while the roster keeps at least two rows of
+participants — one whole person — after paying, and below that they are given
+up in order: the bottom padding first, then the top padding, then the rule;
+never a participant and never the status row. With the status row off there is
+none of it. And the conversation pane does not move: everything lives inside
 the roster panel's allocation.
+
+The roster-only view pays for the top padding and the rule on the same terms
+and nothing below the row: there the row sits on the pane's last line, where
+the conversation's own bar sits in its pane, and a blank line under it would
+separate it from a tmux border that separates it already.
 
 The sweep draws on a cell grid rather than on a fake that concatenates writes
 per row, because the failures it is looking for — a rule painted over a
@@ -34,7 +43,7 @@ from collab.config import SessionProfile
 # eight rows the split view gives the whole window to the conversation.
 HEIGHTS = range(4, 61)
 SPLIT_HEIGHTS = range(8, 61)
-WIDTHS = (24, 40, 80, 110)
+WIDTHS = (24, 40, 80, 120)
 
 
 class Screen:
@@ -119,14 +128,29 @@ def _draw(viewer, win) -> None:
         pass
 
 
-def _is_rule(line: str) -> bool:
-    return bool(line.strip()) and set(line.strip()) == {"-"}
+def _is_status_rule(line: str) -> bool:
+    """A rule drawn the way the section headers are: dashes across the row
+    with the label two columns in, in the same case as `PARTICIPANTS`."""
+    body = line.rstrip()
+    if not body.startswith("-- STATUS -"):
+        return False
+    return set(body.replace(" STATUS ", "", 1)) == {"-"}
+
+
+def _is_any_rule(line: str) -> bool:
+    """Labelled or not: a run of the rule glyph is what no participant row has."""
+    return "----" in line
 
 
 def _is_roster_row(line: str) -> bool:
-    # The batch is the last thing the row gives up for width, and it is not on
-    # the reader's own row by default, so it is what tells the row apart.
-    return "6/10" in line
+    """Both figures, because both are what the row is for: a row that carried
+    the batch and had lost the count is the defect this panel was reported
+    for. The count may be in its narrow form on a narrow pane."""
+    return "6/10" in line and ("128 messages" in line or "128 msgs" in line)
+
+
+def _blank(line: str) -> bool:
+    return not line.strip()
 
 
 def _columns(line: str, n: int) -> str:
@@ -160,12 +184,26 @@ def _participants_shown(screen: Screen, top: int, rows: list, content: int) -> i
     return shown
 
 
+def _foot(panel: int, roster_row: bool) -> dict[str, bool]:
+    """What the panel's foot is made of, given `panel` rows under its header.
+
+    Paid for in this order, each only while two participant rows survive it:
+    the status row, the rule, the padding above the rule, the padding below
+    the row. Given up in the reverse order.
+    """
+    bar = roster_row and panel - 1 >= 2
+    rule = bar and panel - 2 >= 2
+    pad_top = rule and panel - 3 >= 2
+    pad_bottom = pad_top and panel - 4 >= 2
+    return {"bar": bar, "rule": rule, "pad_top": pad_top, "pad_bottom": pad_bottom}
+
+
 # --- the split view -----------------------------------------------------------
 
 def _split_geometry(height: int) -> tuple[int, int]:
     """(chat_top, panel): where the conversation header is, and how many rows
     the roster panel has under its own header. The arithmetic the viewer has
-    always used for the panel's size — the rule must not change it."""
+    always used for the panel's size — nothing at the foot may change it."""
     body_height = height - 2 - 1                      # title rows, bottom bar
     roster_h = max(int(body_height * tui.ROSTER_SHARE), tui.MIN_ROSTER_ROWS)
     roster_h = min(roster_h, max(body_height - 4, 2))
@@ -173,18 +211,18 @@ def _split_geometry(height: int) -> tuple[int, int]:
 
 
 @pytest.mark.parametrize("roster_row", [True, False])
-def test_the_split_view_pays_for_the_rule_only_out_of_a_roster_that_can(
+def test_the_split_view_pays_for_the_foot_only_out_of_a_roster_that_can(
         tmp_path, cfg, roster_row):
     if not roster_row:
         config.save_watch_roster(enabled=False)
     viewer = _viewer(tmp_path, "both", people=40)
-    saw_a_rule = saw_no_rule_for_want_of_room = False
+    seen: dict[str, set[bool]] = {k: set() for k in ("rule", "pad_top", "pad_bottom")}
     for height in HEIGHTS:
         if height not in SPLIT_HEIGHTS:
             win = Screen(height, 80)
             _draw(viewer, win)
             assert "CONVERSATION" in win.row(0), f"nothing drawn at {height}"
-            assert not any(_is_rule(win.row(y)) for y in range(height)), height
+            assert not any(_is_status_rule(win.row(y)) for y in range(height)), height
             continue
         for width in WIDTHS:
             where = f"at {height}x{width}"
@@ -207,50 +245,73 @@ def test_the_split_view_pays_for_the_rule_only_out_of_a_roster_that_can(
             assert shown == viewer.roster.rows, \
                 f"{where}: {viewer.roster.rows} rows reserved, {shown} drawn intact"
 
-            # THE STATUS ROW, on the terms it always had: when it has something
-            # to say and a whole participant still fits above it.
-            bar = roster_row and panel - 1 >= 2
-            assert _is_roster_row(win.row(chat_top - 1)) is bar, \
-                f"{where}: status row {'missing' if bar else 'drawn'}"
-            # THE RULE: only with the row, and only while two rows of
-            # participants remain after paying for it.
-            rule = bar and panel - 2 >= 2
-            assert _is_rule(win.row(chat_top - 2)) is rule, \
-                f"{where}: rule {'missing' if rule else 'drawn'} above the row"
-            saw_a_rule |= rule
-            saw_no_rule_for_want_of_room |= bar and not rule
+            foot = _foot(panel, roster_row)
+            for k in seen:
+                if foot["bar"]:
+                    seen[k].add(foot[k])
+            # THE ROWS LEFT TO THE LIST: what they were before any of this
+            # existed, less exactly what was drawn at the foot.
+            spent = sum(foot.values())
+            assert shown == panel - spent, \
+                f"{where}: {panel} rows in the panel, {spent} at the foot, {shown} participants"
 
-            # NEVER A PARTICIPANT INSTEAD OF THE RULE. The rows left to the
-            # list are what they were before the rule existed, less one only
-            # where the rule was actually drawn.
-            before = panel - (1 if bar else 0)
-            assert shown == before - (1 if rule else 0), \
-                f"{where}: {before} participant rows before the rule, {shown} after"
-            # And no rule anywhere else in the panel — not painted over a
+            # FROM THE BOTTOM UP: padding, the status row, the rule, padding.
+            y = chat_top - 1
+            if foot["pad_bottom"]:
+                assert _blank(win.row(y)), f"{where}: no blank row under the status row"
+                y -= 1
+            assert _is_roster_row(win.row(y)) is foot["bar"], \
+                f"{where}: status row {'missing' if foot['bar'] else 'drawn'}: {win.row(y)!r}"
+            if foot["bar"]:
+                y -= 1
+            assert _is_status_rule(win.row(y)) is foot["rule"], \
+                f"{where}: rule {'missing' if foot['rule'] else 'drawn'} above the row: {win.row(y)!r}"
+            if foot["rule"]:
+                y -= 1
+            if foot["pad_top"]:
+                assert _blank(win.row(y)), f"{where}: no blank row above the rule"
+                y -= 1
+            # And the last participant row is the one directly above all that.
+            assert y == 3 + shown - 1, f"{where}: a gap of unknown rows at the foot"
+            # No rule anywhere else in the panel — not painted over a
             # participant, not left where the row it belongs to is not.
-            for y in range(3, chat_top - (2 if rule else 1)):
-                assert not _is_rule(win.row(y)), f"{where}: a rule at row {y}"
+            for yy in range(3, 3 + shown):
+                assert not _is_any_rule(win.row(yy)), f"{where}: a rule at row {yy}"
     if roster_row:
-        assert saw_a_rule and saw_no_rule_for_want_of_room, \
-            "the sweep did not reach both sides of the threshold"
+        for k, sides in seen.items():
+            assert sides == {True, False}, \
+                f"the sweep did not reach both sides of the {k} threshold: {sides}"
     else:
-        assert not saw_a_rule
+        assert not any(seen.values())
 
 
-def test_the_rule_sits_directly_above_the_row_when_the_list_is_short(
-        tmp_path, cfg):
-    """One participant on a tall pane: the rule is pinned with the row it
-    separates, at the foot of the panel, not floating under the last name."""
+def test_the_foot_is_pinned_to_the_panel_when_the_list_is_short(tmp_path, cfg):
+    """One participant on a tall pane: the rule and its padding sit with the
+    row they belong to, at the foot of the panel, not floating under the last
+    name."""
     viewer = _viewer(tmp_path, "both", people=1)
-    win = Screen(40, 110)
+    win = Screen(40, 120)
     _draw(viewer, win)
     assert "PARTICIPANTS" in win.row(2)
     chat_top, _ = _split_geometry(40)
-    assert _is_roster_row(win.row(chat_top - 1))
-    assert _is_rule(win.row(chat_top - 2))
+    assert _blank(win.row(chat_top - 1)), "a blank row under the status row"
+    assert _is_roster_row(win.row(chat_top - 2))
+    assert _is_status_rule(win.row(chat_top - 3))
     assert " bob" in win.row(3)
-    assert all(not win.row(y).strip() for y in range(5, chat_top - 2)), \
+    assert all(_blank(win.row(y)) for y in range(5, chat_top - 3)), \
         "the rows between the list and the rule are blank"
+
+
+def test_the_status_rule_is_drawn_like_the_section_headers(tmp_path, cfg):
+    """Same painter, same place for the label, same case."""
+    viewer = _viewer(tmp_path, "both", people=3)
+    win = Screen(30, 80)
+    _draw(viewer, win)
+    chat_top, _ = _split_geometry(30)
+    header, rule = win.row(2), win.row(chat_top - 3)
+    assert header.startswith("-- PARTICIPANTS")
+    assert rule.startswith("-- STATUS -"), rule
+    assert _is_status_rule(rule)
 
 
 # --- the roster-only view -----------------------------------------------------
@@ -261,14 +322,15 @@ def test_the_rule_sits_directly_above_the_row_when_the_list_is_short(
 def test_the_roster_only_view_rules_off_its_own_row_and_no_other(
         tmp_path, cfg, roster_row, personal):
     """That pane's one bottom row is the roster's when the session row is on,
-    and the reader's when only the personal row is. The rule belongs to the
-    first and never to the second."""
+    and the reader's when only the personal row is. The rule and the padding
+    above it belong to the first and never to the second; nothing is spent
+    below the row, which sits on the pane's last line."""
     if not roster_row:
         config.save_watch_roster(enabled=False)
     if not personal:
         config.save_watch_status(enabled=False)
     viewer = _viewer(tmp_path, "roster", people=40)
-    saw_a_rule = False
+    saw = {"rule": set(), "pad": set()}
     for height in HEIGHTS:
         for width in WIDTHS:
             where = f"at {height}x{width}"
@@ -280,7 +342,7 @@ def test_the_roster_only_view_rules_off_its_own_row_and_no_other(
             bottom = win.row(height - 1)
             row = roster_row or personal
             if roster_row:
-                assert _is_roster_row(bottom), f"{where}: the session's row is missing"
+                assert _is_roster_row(bottom), f"{where}: the session's row is missing: {bottom!r}"
             elif personal:
                 assert "$3.10" in bottom, f"{where}: the reader's row is missing"
             else:
@@ -288,23 +350,29 @@ def test_the_roster_only_view_rules_off_its_own_row_and_no_other(
                 assert not _is_roster_row(bottom) and "$3.10" not in bottom, \
                     f"{where}: a row nobody asked for"
 
-            rule = roster_row and height - 1 - 1 - 1 >= 2
-            assert _is_rule(win.row(height - 2)) is rule, \
-                f"{where}: rule {'missing' if rule else 'drawn'}"
-            saw_a_rule |= rule
+            rule = roster_row and height - 3 >= 2
+            pad = rule and height - 4 >= 2
+            assert _is_status_rule(win.row(height - 2)) is rule, \
+                f"{where}: rule {'missing' if rule else 'drawn'}: {win.row(height - 2)!r}"
+            if pad:
+                assert _blank(win.row(height - 3)), f"{where}: no blank row above the rule"
+            if roster_row:
+                saw["rule"].add(rule)
+                saw["pad"].add(pad)
 
             rows = viewer._roster_rows
-            # The width the rows were BUILT to: the gutter is decided from the
-            # previous frame, so asking for it after the draw is a frame late.
             content = viewer._roster_key[0]
             shown = _participants_shown(win, 1, rows, content)
             assert shown == viewer.roster.rows, \
                 f"{where}: {viewer.roster.rows} rows reserved, {shown} drawn intact"
-            assert shown == height - 1 - (1 if row else 0) - (1 if rule else 0), \
+            assert shown == height - 1 - (1 if row else 0) - (1 if rule else 0) - (1 if pad else 0), \
                 f"{where}: {shown} participant rows"
-            for y in range(1, height - (2 if rule else 1)):
-                assert not _is_rule(win.row(y)), f"{where}: a rule at row {y}"
-    assert saw_a_rule is roster_row
+            for y in range(1, 1 + shown):
+                assert not _is_any_rule(win.row(y)), f"{where}: a rule at row {y}"
+    if roster_row:
+        assert saw["rule"] == {True, False} and saw["pad"] == {True, False}, saw
+    else:
+        assert not saw["rule"] and not saw["pad"]
 
 
 def test_the_chat_only_view_has_no_roster_and_so_no_rule(tmp_path, cfg):
@@ -313,4 +381,4 @@ def test_the_chat_only_view_has_no_roster_and_so_no_rule(tmp_path, cfg):
         win = Screen(height, 80)
         _draw(viewer, win)
         assert "CONVERSATION" in win.row(0), f"nothing drawn at {height}"
-        assert not any(_is_rule(win.row(y)) for y in range(1, height)), height
+        assert not any(_is_status_rule(win.row(y)) for y in range(1, height)), height
