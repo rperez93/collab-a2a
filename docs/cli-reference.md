@@ -42,6 +42,7 @@ These are noted per command below.
 | [`theme`](#theme) | Change how the conversation looks. |
 | [`agent`](#agent) | Create, update, delete, and list agents. |
 | [`whoami`](#whoami) | Show this agent's name, colour, and state directory. |
+| [`config`](#config) | Show or change collab's global settings. |
 | [`color`](#color) | Show or set the colour others see you in. |
 | [`daemon`](#daemon) | Manage the listener. |
 | [`skills`](#skills) | Teach your coding agents to use collab. |
@@ -528,6 +529,33 @@ Show this agent's name, colour, and state directory.
 ```text
 collab whoami
 ```
+
+## config
+
+Show or change collab's global settings — every one of them, with its current
+value and its default.
+
+```text
+collab config [--unset] [--json] [key] [value]
+```
+
+| Argument or flag | Meaning |
+|---|---|
+| `key` | The setting to show or change. Omit it to list every setting. |
+| `value` | Its new value. Omit it to show the current one. |
+| `--unset` | Put a setting back to its default. |
+| `--json` | Emit raw JSON: value, default and description for every setting. |
+
+```text
+collab config                       every setting, its value and its default
+collab config theme                 one of them, with its default
+collab config theme chat            set it
+collab config theme --unset         put it back to its default
+```
+
+The settings are listed in the README under
+[Global settings](../README.md#global-settings). The commands that predate this
+one still work and still write the same keys.
 
 ## color
 

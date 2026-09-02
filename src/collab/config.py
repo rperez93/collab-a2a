@@ -20,7 +20,7 @@ import subprocess
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # Module level, unlike most of this file's imports: `__setattr__` below runs on
 # every field assignment, and protocol depends on nothing here, so there is no
@@ -405,6 +405,79 @@ def save_watch_settings(*, layout: str | None = None, roster_size: int | None = 
     return watch_settings()
 
 
+#: What the viewer's bottom row can carry, and the order it carries it in.
+#: `command` is the user's own; the rest are described in client.statusbar,
+#: which is also where the order is argued for.
+WATCH_STATUS_SEGMENTS = ("batch", "stats", "command", "keys")
+#: How often to re-run the bottom row's command. Thirty seconds because the row
+#: is glanced at rather than watched: a branch name, a build state or a ticket
+#: count does not change faster than that, and the alternative is a shell every
+#: few seconds for the whole time a pane is open.
+DEFAULT_WATCH_STATUS_INTERVAL = 30
+#: And a floor under it, for the same reason `stats_source` has one. Lower than
+#: that command's 15s on purpose: this one is a person's own status row rather
+#: than figures shared with a session, and a ten-second clock in it is a
+#: legitimate thing to want. What the floor is actually for is the typo —
+#: `"watch_status_interval": 0` in a hand-edited file — which without it means
+#: a shell on every redraw, four times a second, for ever.
+MIN_WATCH_STATUS_INTERVAL = 5
+
+
+def watch_status_settings() -> dict[str, Any]:
+    """The viewer's bottom row, as the viewer needs it and never as written.
+
+    Every field is validated against what the file could hold rather than what
+    it should: this is read on the draw path of a curses program, where a
+    TypeError out of a config value is not an error message but a viewer that
+    exits to a broken terminal.
+    """
+    cfg = load_config()
+    enabled = cfg.get("watch_status")
+    raw = cfg.get("watch_status_segments")
+    if isinstance(raw, (list, tuple)):
+        # Unknown names are dropped, not refused, and duplicates collapse: a
+        # person editing this by hand should lose the segment they mistyped
+        # rather than the whole row.
+        seen: list[str] = []
+        for item in raw:
+            name = str(item).strip().lower()
+            if name in WATCH_STATUS_SEGMENTS and name not in seen:
+                seen.append(name)
+        segments = tuple(seen)
+    else:
+        segments = WATCH_STATUS_SEGMENTS
+    try:
+        interval = int(cfg.get("watch_status_interval")
+                       or DEFAULT_WATCH_STATUS_INTERVAL)
+    except (TypeError, ValueError):
+        interval = DEFAULT_WATCH_STATUS_INTERVAL
+    return {
+        "enabled": True if enabled is None else bool(enabled),
+        "segments": segments,
+        "command": str(cfg.get("watch_status_command") or ""),
+        "interval": max(MIN_WATCH_STATUS_INTERVAL, interval),
+    }
+
+
+def save_watch_status(*, enabled: bool | None = None,
+                      segments: Any = None, command: str | None = None,
+                      interval: int | None = None) -> dict[str, Any]:
+    cfg = load_config()
+    if enabled is not None:
+        cfg["watch_status"] = bool(enabled)
+    if segments is not None:
+        cfg["watch_status_segments"] = [str(s) for s in segments]
+    if command is not None:
+        if command:
+            cfg["watch_status_command"] = command
+        else:
+            cfg.pop("watch_status_command", None)
+    if interval:
+        cfg["watch_status_interval"] = int(interval)
+    save_config(cfg)
+    return watch_status_settings()
+
+
 #: How often to re-run the usage command, in seconds. Usage moves slowly; this
 #: is about keeping the roster honest, not about precision.
 DEFAULT_STATS_INTERVAL = 120
@@ -622,6 +695,208 @@ def set_default_name(name: str) -> str:
     cfg["display_name"] = _slug(name)
     save_config(cfg)
     return cfg["display_name"]
+
+
+# --- every global setting, in one place ---------------------------------------
+#
+# The settings arrived one at a time, each with the command that motivated it —
+# `collab theme`, `collab color`, `collab name`, `collab stats --source`,
+# `collab watch --layout --save` — so there were nine ways to change something
+# and no way to see what there was. Somebody who had set a `stats_command`
+# months ago had no command that would tell them so, and an agent asked to
+# «configure collab» had to be told which of nine commands to reach for.
+#
+# This is the list, and `collab config` is the one place. It DELEGATES: every
+# writer here is the setter that already existed, because those are where the
+# validation lives — `set_theme` refuses a theme that is not installed,
+# `set_default_color` normalises a hex triplet, `save_config` clears the read
+# cache so a viewer with the file open sees the change. Writing the keys
+# directly would have reimplemented all three, slightly differently.
+
+
+@dataclass(frozen=True)
+class Setting:
+    """One global setting: what it is, what it is now, and how to change it."""
+
+    name: str
+    #: One line, for a person reading `collab config` who has never seen it.
+    about: str
+    #: What collab does when the key is absent — the value, not a description,
+    #: so the listing can mark a setting that is still at its default.
+    default: Any
+    #: Text to `parse`, then `write`. Both raise ValueError on anything they
+    #: will not accept, and `collab config` turns that into the error message.
+    parse: Callable[[str], Any]
+    read: Callable[[], Any]
+    write: Callable[[Any], Any]
+
+
+def _as_bool(text: str) -> bool:
+    value = text.strip().lower()
+    if value in ("on", "true", "yes", "y", "1"):
+        return True
+    if value in ("off", "false", "no", "n", "0"):
+        return False
+    raise ValueError("expected on or off")
+
+
+def _as_int(text: str) -> int:
+    try:
+        return int(text.strip())
+    except ValueError:
+        raise ValueError("expected a whole number") from None
+
+
+def _as_list(text: str) -> list[str]:
+    """Commas or spaces, either way. An empty string is an empty list.
+
+    Both separators because this is typed at a shell: `batch,keys` needs no
+    quoting and `"batch keys"` is what somebody writes when it is already
+    quoted.
+    """
+    return [part for part in re.split(r"[,\s]+", text.strip()) if part]
+
+
+def _one_of(values: tuple[str, ...]) -> Callable[[str], str]:
+    def parse(text: str) -> str:
+        value = text.strip().lower()
+        if value not in values:
+            raise ValueError("expected one of " + ", ".join(values))
+        return value
+    return parse
+
+
+def _write_theme(value: str) -> str:
+    # set_theme answers None rather than raising: it is the caller that warns,
+    # because the caller is the one that knows how to say «you have these».
+    if set_theme(value) is None:
+        raise ValueError("no theme by that name — `collab theme --list`")
+    return value
+
+
+def _write_color(value: str) -> Any:
+    parsed = parse_color(value)
+    if parsed is None:
+        raise ValueError("expected a hex triplet like #00cccc")
+    return set_default_color(parsed)
+
+
+def _write_segments(value: list[str]) -> Any:
+    unknown = [name for name in value if name not in WATCH_STATUS_SEGMENTS]
+    if unknown:
+        # Refused HERE and ignored in `watch_status_settings`, on purpose. A
+        # typo in a hand-edited file must cost one segment and not the row;
+        # a typo typed at a command that answered «ok» would leave somebody
+        # waiting for a segment that was never going to appear.
+        raise ValueError("not a segment: " + ", ".join(unknown)
+                         + " — have " + ", ".join(WATCH_STATUS_SEGMENTS))
+    return save_watch_status(segments=value)
+
+
+def _name_fallback() -> str:
+    """What `resolve_name` lands on with nothing in the config or the identity.
+
+    The listing has to show a default that is true HERE — «git `user.name`,
+    else `$USER`» is a rule, and a rule is not something somebody can compare
+    against the value beside it.
+    """
+    for candidate in (_git_user_name(),
+                      os.environ.get("USER") or os.environ.get("USERNAME")):
+        if candidate and str(candidate).strip():
+            return _slug(str(candidate))
+    return "agent"
+
+
+def settings() -> tuple[Setting, ...]:
+    """Every global setting, in the order somebody would want to read them.
+
+    A function and not a constant: two of the defaults are computed — the name
+    falls back to git's, and the theme list depends on what is in the themes
+    folder — and a constant would have frozen both at import.
+    """
+    return (
+        # The GLOBAL key, not `resolve_name()`. An agent with a directory of
+        # its own answers to the name in its identity file, which this cannot
+        # set and `collab name` can — so reporting the effective name here
+        # would have shown a value that setting this key did not change.
+        Setting("display_name", "the name others see you as, machine-wide "
+                                "(`collab name` sets it for one agent)",
+                _name_fallback(), str,
+                lambda: load_config().get("display_name") or _name_fallback(),
+                lambda v: set_default_name(v)),
+        Setting("color", "the colour others see you in, machine-wide "
+                         "(`collab color` sets it for one agent)",
+                None, str,
+                lambda: load_config().get("color"),
+                _write_color),
+        Setting("theme", "how the conversation is laid out in `collab watch`",
+                DEFAULT_THEME, str,
+                theme, _write_theme),
+        Setting("share_stats", "publish your quota and spend to the session",
+                SHARE_STATS_DEFAULT, _as_bool,
+                share_stats_enabled,
+                lambda v: set_share_stats(v)),
+        Setting("stats_command", "a command printing your usage as JSON, for "
+                                 "an agent whose host tool cannot report it",
+                "", str,
+                lambda: stats_source()[0],
+                lambda v: set_stats_source(command=v)),
+        Setting("stats_interval", "how often to run it, in seconds",
+                DEFAULT_STATS_INTERVAL, _as_int,
+                lambda: stats_source()[1],
+                lambda v: set_stats_source(interval=v)),
+        Setting("watch_layout", "how `collab watch` arranges its two panes",
+                DEFAULT_WATCH_LAYOUT, _one_of(WATCH_LAYOUTS),
+                lambda: watch_settings()["layout"],
+                lambda v: save_watch_settings(layout=v)),
+        Setting("watch_roster_size", "how much room the roster gets, in percent",
+                DEFAULT_ROSTER_SIZE, _as_int,
+                lambda: watch_settings()["roster_size"],
+                lambda v: save_watch_settings(roster_size=v)),
+        Setting("watch_roster_position", "which side the roster sits on",
+                DEFAULT_ROSTER_POSITION,
+                _one_of(("top", "bottom", "left", "right")),
+                lambda: watch_settings()["roster_position"],
+                lambda v: save_watch_settings(roster_position=v)),
+        Setting("watch_status", "show the bottom status row in `collab watch`",
+                True, _as_bool,
+                lambda: watch_status_settings()["enabled"],
+                lambda v: save_watch_status(enabled=v)),
+        Setting("watch_status_segments", "what that row carries, in order",
+                list(WATCH_STATUS_SEGMENTS), _as_list,
+                lambda: list(watch_status_settings()["segments"]),
+                _write_segments),
+        Setting("watch_status_command", "a command of your own for that row; "
+                                        "its first line of output is a segment",
+                "", str,
+                lambda: watch_status_settings()["command"],
+                lambda v: save_watch_status(command=v)),
+        Setting("watch_status_interval", "how often to run it, in seconds",
+                DEFAULT_WATCH_STATUS_INTERVAL, _as_int,
+                lambda: watch_status_settings()["interval"],
+                lambda v: save_watch_status(interval=v)),
+    )
+
+
+def setting(name: str) -> Setting | None:
+    for item in settings():
+        if item.name == name:
+            return item
+    return None
+
+
+def unset_setting(name: str) -> None:
+    """Take a key out of the file so its default applies again.
+
+    Not delegated, because there is nothing to delegate to: the setters take a
+    value and write it, and half of them treat an empty one as «leave it
+    alone». Removal is removal, and `save_config` still clears the read cache
+    on the way out, which is the part that matters to a viewer already open.
+    """
+    cfg = load_config()
+    if name in cfg:
+        cfg.pop(name)
+        save_config(cfg)
 
 
 # --- per-repo session state ---------------------------------------------------

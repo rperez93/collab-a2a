@@ -41,6 +41,10 @@ from ..protocol import (
 )
 from .. import activity, peers
 from .. import themes
+from ..config import watch_status_settings
+from ..stats import read_stats
+from . import statusbar
+from .statusbar import money_text
 from .daemon import DaemonPaths, effective_state, is_running, read_status
 from .inbox import Inbox
 
@@ -51,6 +55,23 @@ MIN_ROSTER_ROWS = 3
 #: Lines per wheel notch. Three is what terminals and pagers settled on.
 WHEEL_LINES = 3
 POLL_SECONDS = 0.25
+
+#: The key legend, per view, in two lengths. It is a segment of the bottom row
+#: like any other and is the first thing given up when the pane is narrow: it
+#: says the same six things every session, so it is the piece a reader has
+#: already read.
+#:
+#: The short form exists because giving it up entirely was too blunt. The full
+#: legend is ninety columns, so on anything under about a hundred and thirty —
+#: which is most panes, with a batch figure and a quota beside it — the keys
+#: vanished altogether, and the legend is how anybody learns the viewer. The
+#: short form keeps the two that are not guessable: how to get back to the live
+#: end, and how to leave.
+CHAT_KEYS = ("wheel/tab: pane · ↑↓ pgup/pgdn: scroll · [ ]: roster · "
+             "End/G: newest · Home/g: top · q: quit")
+CHAT_KEYS_SHORT = "End/G: newest · tab: pane · q: quit"
+ROSTER_KEYS = "wheel · ↑↓ pgup/pgdn: scroll · Home/End: top/end · q: quit"
+ROSTER_KEYS_SHORT = "Home/End: top/end · q: quit"
 
 #: HOW MANY MESSAGES THE PANE HOLDS AT ONCE, and how many it opens with.
 #:
@@ -428,13 +449,6 @@ def _theme_version() -> int:
     return int(_THEME_CACHE.get("version", 0))
 
 
-def _fmt_money(value: Any) -> str:
-    try:
-        return f"${float(value):.2f}"
-    except (TypeError, ValueError):
-        return ""
-
-
 def _fmt_pct(value: Any, label: str) -> str:
     try:
         return f"{label} {float(value):.0f}%"
@@ -467,7 +481,7 @@ def stat_line(person: dict[str, Any]) -> str:
         bits.append(str(stats["model"]))
     if (quota := quota_text(stats)):
         bits.append(quota)
-    if (money := _fmt_money(stats.get("cost_usd"))):
+    if (money := money_text(stats.get("cost_usd"))):
         bits.append(money)
     if stats.get("tokens_in") is not None:
         try:
@@ -548,6 +562,11 @@ class Model:
     events: list[Envelope] = field(default_factory=list)
     snapshot: dict[str, Any] = field(default_factory=dict)
     status: dict[str, Any] = field(default_factory=dict)
+    #: OUR OWN usage figures, for the bottom row. Read beside the snapshot and
+    #: not on the draw path: the row is composed four times a second and the
+    #: figures move once every few minutes at best, so reading the file per
+    #: frame would be a hundred reads to notice one change.
+    own_stats: dict[str, Any] = field(default_factory=dict)
     _seen: int = 0
     #: Whether anything older than what is loaded exists; None = not asked yet.
     _older: bool | None = None
@@ -787,6 +806,11 @@ class Model:
         self.status = read_status(self.profile) or self.status
         self._state = effective_state(
             self.status, running=is_running(self.profile) is not None)
+        # Not `or self.own_stats`, unlike the status above: an empty answer
+        # here means the file was never written or belongs to another agent,
+        # and holding the last figures would leave a quota on the row that
+        # nothing is refreshing any more.
+        self.own_stats = read_stats(self.profile)
 
     def poll_events(self, follow: bool = True) -> int:
         """Read whatever has been appended since we last looked.
@@ -1528,6 +1552,16 @@ class Tui:
         self._chat_width = 0
         self._roster_key: tuple = ()
         self._roster_rows: list[Row] = []
+        #: The user's own command for the bottom row. It holds the last line
+        #: that command printed and runs it on a timer in a thread of its own;
+        #: the draw never does more than read the string. See statusbar.
+        self._command = statusbar.CommandSegment()
+        #: Whether the bottom row exists at all, decided once per draw and read
+        #: by the geometry: with the row off, the line it reserves belongs to
+        #: the panes, and a viewer that hid the row but kept the gap would just
+        #: have traded a useful line for a blank one.
+        self._bar = True
+        self._settings: dict[str, Any] = watch_status_settings()
 
     # -- cached layout -------------------------------------------------------
 
@@ -1664,6 +1698,15 @@ class Tui:
 
     def _draw(self, win) -> None:
         win.erase()
+        # ASKED ONCE PER FRAME, from the config, so a change made in another
+        # terminal reaches a pane that is already open — the same live reload
+        # `theme` has. `load_config` re-reads only when the file's mtime or
+        # size moves, so this costs a stat and nothing else.
+        self._settings = watch_status_settings()
+        self._bar = bool(self._settings["enabled"])
+        if self._bar:
+            self._command.poll(self._settings["command"],
+                               self._settings["interval"])
         height, width = win.getmaxyx()
         if height < 4 or width < 24:
             # Never into the last cell of the last row: on a one-column pane
@@ -1727,7 +1770,11 @@ class Tui:
 
         # --- geometry ------------------------------------------------------
         body_top = 2
-        body_height = height - body_top - 1
+        # The last row belongs to the bottom bar only while there IS one.
+        # Reserved unconditionally, turning the bar off bought a blank line
+        # instead of a line of conversation.
+        foot = 1 if self._bar else 0
+        body_height = height - body_top - foot
         roster_h = max(int(body_height * ROSTER_SHARE), MIN_ROSTER_ROWS)
         # Leave the conversation room to exist, but never squeeze the roster
         # out entirely: at MIN_ROSTER_ROWS-1 visible rows it renders nothing at
@@ -1770,7 +1817,7 @@ class Tui:
 
         chat_rows = self._conversation(width - 1)
         self._chat_top = chat_top + 1
-        self.chat.rows = height - chat_top - 2
+        self.chat.rows = height - chat_top - 1 - foot
         self.chat.total = len(chat_rows)
         self.chat.settle()
 
@@ -1790,27 +1837,44 @@ class Tui:
         self._hint(win, height, width)
         win.refresh()
 
-    def _hint(self, win, height: int, width: int) -> None:
-        """The bottom line: the keys, or what you are missing by not being at
-        the bottom.
+    def _hint(self, win, height: int, width: int,
+              keys: tuple[str, str] = (CHAT_KEYS, CHAT_KEYS_SHORT),
+              notice: bool = True) -> None:
+        """The bottom row: what you are missing, then whatever else fits.
 
         Scrolled back, the count is the point — «G to resume following» does not
         say whether anything has been said since you left, which is the only
         reason to go back down. The key is named twice, End first: it is the one
-        people try, and the one that needs no explaining.
+        people try, and the one that needs no explaining. That notice goes in
+        first and `statusbar.fit` never drops it; everything after it is a
+        segment and every segment is expendable.
+
+        The line used to be cut with `line[:width - 1]`. That was right while
+        the row held nothing but ASCII key names and stopped being right the
+        moment a block bar, a `⏸` and a user's command could land on it: one
+        kanji is two columns and one character, so a character slice measured
+        the row in the wrong unit and over-ran the pane by however many wide
+        characters it contained.
         """
-        keys = (" wheel/tab: pane · ↑↓ pgup/pgdn: scroll · [ ]: roster · "
-                "End/G: newest · Home/g: top · q: quit ")
-        line, attr = keys, curses.color_pair(C_DIM) | curses.A_DIM
-        if not self.chat.follow:
-            behind = self.behind()
-            what = (f"{behind} new below" if behind else "scrolled back")
-            line = f" ⏸ {what} — End (or G) jumps to the newest ·{keys}"
-            if behind:
-                attr = curses.color_pair(C_ACCENT) | curses.A_BOLD
+        room = max(width - 1, 0)
+        if not self._bar or not room:
+            return
+        behind = 0 if self.chat.follow or not notice else self.behind()
+        what = ""
+        if notice and not self.chat.follow:
+            what = (f"⏸ {behind} new below" if behind else "⏸ scrolled back")
+            what += " — End (or G) jumps to the newest"
+        line = statusbar.fit(
+            statusbar.compose(notice=what, keys=keys,
+                              batch=self.model.status.get("batch"),
+                              stats=self.model.own_stats,
+                              command=self._command.text(),
+                              segments=self._settings["segments"]),
+            room, _w, _clip)
+        attr = (curses.color_pair(C_ACCENT) | curses.A_BOLD if behind
+                else curses.color_pair(C_DIM) | curses.A_DIM)
         try:
-            win.addnstr(height - 1, 0, line[:max(width - 1, 0)],
-                        max(width - 1, 0), attr)
+            win.addnstr(height - 1, 0, line, room, attr)
         except curses.error:
             pass
 
@@ -2041,7 +2105,7 @@ class Tui:
                     max(width - 1, 0),
                     curses.color_pair(state_pair) | curses.A_BOLD)
 
-        pane.rows = height - 2
+        pane.rows = height - 1 - (1 if self._bar else 0)
         pane.total = len(rows)
         pane.settle()
         for i in range(pane.rows):
@@ -2051,13 +2115,13 @@ class Tui:
             self._paint_row(win, 1 + i, rows[idx], width - 1)
 
         if self.view == "roster":
-            hint = " wheel · ↑↓ pgup/pgdn: scroll · Home/End: top/end · q: quit "
-            try:
-                win.addnstr(height - 1, 0, hint[:max(width - 1, 0)],
-                            max(width - 1, 0),
-                            curses.color_pair(C_DIM) | curses.A_DIM)
-            except curses.error:
-                pass
+            # Its own keys, and no scrolled-back notice: the roster does not
+            # follow a tail, so there is nothing to be behind. Everything else
+            # on the row — the batch, your usage, your command — is the same
+            # bar, composed the same way, and it went through the same
+            # character slice before.
+            self._hint(win, height, width, notice=False,
+                       keys=(ROSTER_KEYS, ROSTER_KEYS_SHORT))
         else:
             self._hint(win, height, width)
 

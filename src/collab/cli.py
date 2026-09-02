@@ -55,6 +55,10 @@ from .config import (
     theme_names,
     set_theme,
     theme,
+    global_config_path,
+    setting,
+    settings,
+    unset_setting,
 )
 from .client.context import gather as ctx_gather
 from .protocol import (DEFAULT_ROOM, MAX_FILE_BYTES, Envelope, KIND_CHAT,
@@ -3181,6 +3185,86 @@ def cmd_name(args: argparse.Namespace) -> int:
     return 0
 
 
+def _shown(value: Any) -> str:
+    """A setting's value as a person reads it, not as JSON spells it.
+
+    `True` and `False` are not what anyone types at `collab config share_stats`,
+    and a bare `None` beside a setting says nothing about whether that is a
+    value or an absence.
+    """
+    if value is None or value == "":
+        return "(unset)"
+    if isinstance(value, bool):
+        return "on" if value else "off"
+    if isinstance(value, (list, tuple)):
+        return ",".join(str(item) for item in value) or "(none)"
+    return str(value)
+
+
+def cmd_config(args: argparse.Namespace) -> int:
+    """Every global setting in one place — see them, and change them.
+
+    The settings arrived one command at a time and there was no way to ask what
+    there was: somebody who had set a `stats_command` months earlier had
+    nothing that would remind them, and an agent told to «configure collab» had
+    to be handed the right one of nine commands. The commands all still work
+    and none of them changed; this is the index they never had.
+    """
+    known = settings()
+
+    if not args.key:
+        if args.json:
+            print(json.dumps({s.name: {"value": s.read(), "default": s.default,
+                                       "about": s.about} for s in known},
+                             indent=2))
+            return 0
+        heading("settings")
+        for item in known:
+            value = item.read()
+            line = f"  {item.name:<24}{_shown(value)}"
+            if value != item.default:
+                line += dim(f"   (default {_shown(item.default)})")
+            print(line)
+            print(dim(f"      {item.about}"))
+        print()
+        print(dim(f"  they live in {global_config_path()}"))
+        print(dim("  collab config <key> <value>   set one"))
+        print(dim("  collab config <key> --unset   put it back to its default"))
+        return 0
+
+    item = setting(args.key)
+    if item is None:
+        fail(f"no setting called {args.key!r}")
+        print(dim("  " + ", ".join(s.name for s in known)))
+        return 2
+
+    if args.unset:
+        if args.value is not None:
+            # Two instructions in one command, and no way to tell which was
+            # meant. Refused rather than guessed: the guess is silent and the
+            # user finds out later, from the value.
+            fail("--unset takes no value")
+            return 2
+        unset_setting(item.name)
+        ok(f"{item.name} is back to its default, {_shown(item.default)}")
+        return 0
+
+    if args.value is None:
+        # Bare, on its own line, so `$(collab config theme)` is worth writing.
+        print(_shown(item.read()))
+        print(dim(f"  {item.about}"))
+        print(dim(f"  default {_shown(item.default)}"))
+        return 0
+
+    try:
+        item.write(item.parse(args.value))
+    except ValueError as exc:
+        fail(f"{item.name}: {exc}")
+        return 2
+    ok(f"{item.name} is now {c(_shown(item.read()), '1')}")
+    return 0
+
+
 def cmd_daemon(args: argparse.Namespace) -> int:
     profile = _require_profile(args)
     if args.action == "status":
@@ -3338,6 +3422,7 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("status", "your connection state and how to watch it"),
         ("check", "silent when all is well; says what to fix when it is not"),
         ("name [value]", "show or set your display name"),
+        ("config [key] [value]", "every global setting, its value and default"),
         ("url", "reprint the join line (host)"),
         ("kick <name>", "remove a participant (host)"),
         ("daemon start|stop|status", "the listener that holds the connection"),
@@ -3705,6 +3790,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     who = sub.add_parser("whoami", help="this agent's name, colour and state directory")
     who.set_defaults(func=cmd_whoami)
+
+    cf = sub.add_parser("config", help="show or change collab's global settings")
+    cf.add_argument("key", nargs="?", help="the setting to show or change")
+    cf.add_argument("value", nargs="?", help="its new value")
+    cf.add_argument("--unset", action="store_true",
+                    help="put a setting back to its default")
+    cf.add_argument("--json", action="store_true")
+    cf.set_defaults(func=cmd_config)
 
     col = sub.add_parser("color", help="show or set the colour others see you in")
     col.add_argument("--agent", default="",

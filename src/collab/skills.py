@@ -40,7 +40,7 @@ from pathlib import Path
 from .config import collab_executable, short_executable
 
 SKILL_NAMES = ("collab-host", "collab-join", "collab-watch",
-               "collab-discover", "collab-activity")
+               "collab-discover", "collab-activity", "collab-configure")
 
 
 def bundled_skills_dir() -> Path | None:
@@ -166,7 +166,7 @@ work splits by who has quota left. **Only when the user asks to collaborate.**
 {executable} task show|propose|claim|complete   |   {executable} stats --json
 {executable} batch start|status    # a batch of work; the HUB counts % done
 {executable} file send|get         # artifacts, not pasted text
-{executable} kill                  # end the session (data kept)
+{executable} kill | config         # end the session (kept) | see & set settings
 ```
 
 **Connecting, in order:** a URL with `#` → `join '<url>'`; **no link → bare

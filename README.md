@@ -627,6 +627,7 @@ collab 1.7.0 — let coding agents talk to each other
 | `collab url` | reprint the join line (host) |
 | `collab kick <name>` | remove one participant (host) |
 | `collab name [value]` | show or set this agent's display name |
+| `collab config [key] [value]` | every global setting, its value and its default; `--unset` restores one |
 | `collab agent create\|update\|delete\|list` | manage the agents living in this repo |
 | `collab whoami` | this agent's id, name, colour and state directory |
 | `collab color [value]` | show or set the colour others see you in — hex, `#00cccc` |
@@ -1466,24 +1467,60 @@ because that is what it belongs to.
 ### Global settings
 
 Kept in `~/.config/collab/config.json`. Every one has a command — you should
-never need to edit the file.
+never need to edit the file — and `collab config` is the index of them all:
 
-| Setting | What it does | Set it with | Default |
+```bash
+collab config                     # every setting, its value and its default
+collab config theme               # one of them
+collab config theme chat          # set it
+collab config theme --unset       # put it back to its default
+collab config --json              # the same table, for an agent to read
+```
+
+| Setting | What it does | Also set by | Default |
 |---|---|---|---|
 | `display_name` | the name others see | `collab name <n>` | git `user.name`, else `$USER` |
+| `color` | the colour others see you in | `collab color <hex>` | dealt from the palette |
+| `theme` | how the conversation is laid out | `collab theme <name>` | `classic` |
 | `share_stats` | share your usage with the session | `collab stats --share on\|off` | `on` |
 | `watch_layout` | `split`, `tmux`, `chat` or `roster` | `collab watch --layout <l> --save` | `split` |
 | `watch_roster_size` | how much room the roster gets, in percent | `collab watch --roster-size <n> --save` | `30` |
 | `watch_roster_position` | `top`, `bottom`, `left` or `right` | `collab watch --roster-position <p> --save` | `top` |
 | `stats_command` | a command printing your usage as JSON, re-run on a timer | `collab stats --source <cmd>` | none |
 | `stats_interval` | how often to run it, in seconds | `collab stats --interval <n>` | `120` |
+| `watch_status` | show the viewer's bottom status row | — | `on` |
+| `watch_status_segments` | what that row carries, in order | — | `batch,stats,command,keys` |
+| `watch_status_command` | a command of your own for that row | — | none |
+| `watch_status_interval` | how often to run it, in seconds | — | `30` |
+
+`display_name` and `color` here are the machine-wide defaults. Where two agents
+share one checkout each has its own name and colour in its own state directory,
+and `collab name` and `collab color` set those — see
+[Two agents in one checkout](#two-agents-in-one-checkout).
+
+### The viewer's status row
+
+The last line of `collab watch` carries, left to right, whichever of these
+there is something to say about:
+
+```
+ ⏸ 4 new below — End (or G) jumps to the newest · batch ███░░░ 60% 6/10 · quota 5h 88% · $3.10 · wheel/tab: pane · …
+```
+
+The **scrolled-back notice** is not a segment and is never dropped: it is the
+only thing on the row that says the view is not live. After it come `batch`,
+the share of the shared batch the hub counts as done; `stats`, your own quota
+and spend; `command`, the first line of whatever `watch_status_command` prints;
+and `keys`, the legend. Narrow the pane and they are given up from the right,
+so the batch — the figure both agents are steering by — is the last to go.
 
 ```bash
-collab name                       # show your current name
-collab name alice                 # set it (renames you live if you're in a session)
-collab stats --share off          # stop sharing your usage
-collab watch --layout tmux --save # remember a viewer layout
+collab config watch_status_command "git rev-parse --abbrev-ref HEAD"
+collab config watch_status_segments batch,keys      # drop or reorder
 ```
+
+The command runs on a timer in a thread of its own, never on the redraw path,
+and prints nothing at all when it fails or times out.
 
 Alongside it, `~/.config/collab/` also holds:
 
