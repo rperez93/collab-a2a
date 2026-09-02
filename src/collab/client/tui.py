@@ -41,7 +41,7 @@ from ..protocol import (
 )
 from .. import activity, peers
 from .. import themes
-from ..config import watch_status_settings
+from ..config import watch_session_settings, watch_status_settings
 from ..stats import read_stats
 from . import statusbar
 from .statusbar import money_text
@@ -1562,6 +1562,10 @@ class Tui:
         #: have traded a useful line for a blank one.
         self._bar = True
         self._settings: dict[str, Any] = watch_status_settings()
+        #: Whether the roster carries the session summary line. Its own setting
+        #: rather than a bottom-bar segment: that row is the reader's own and
+        #: this one is everybody's.
+        self._session = watch_session_settings()["enabled"]
 
     # -- cached layout -------------------------------------------------------
 
@@ -1704,6 +1708,7 @@ class Tui:
         # size moves, so this costs a stat and nothing else.
         self._settings = watch_status_settings()
         self._bar = bool(self._settings["enabled"])
+        self._session = watch_session_settings()["enabled"]
         if self._bar:
             self._command.poll(self._settings["command"],
                                self._settings["interval"])
@@ -1782,7 +1787,16 @@ class Tui:
         roster_h = min(roster_h, max(body_height - 4, 2))
 
         rows = self._roster(width - 1)
-        self.roster.rows = roster_h - 1
+        # THE ROW IS TAKEN ONLY WHEN IT IS USED, and only where a whole
+        # participant still fits after it. Reserved unconditionally, a session
+        # with nothing to say — no batch, nobody fetched yet — would have cost
+        # the roster a blank line; and a roster is two rows per person, so
+        # taking one from a three-row pane leaves half a participant, which is
+        # worse than no summary at all.
+        session = statusbar.session_segments(self.model.snapshot) \
+            if self._session else []
+        session_h = 1 if session and roster_h - 2 >= 2 else 0
+        self.roster.rows = roster_h - 1 - session_h
         self.roster.total = len(rows)
         self.roster.settle()
         hidden = max(len(rows) - self.roster.rows - self.roster.offset, 0)
@@ -1794,6 +1808,12 @@ class Tui:
             more = ("▴" if self.roster.offset else "") + ("▾" if hidden else "")
             label += f" · scroll {more} (tab, or [ ])"
         self._hline(win, body_top, width, label)
+        if session_h:
+            # PINNED, not part of `rows`: the roster scrolls and this does not.
+            # A summary of the whole session that slid off the top the moment
+            # somebody looked down the participant list would be a summary you
+            # could only read by not using the pane.
+            self._session_line(win, body_top + 1, width, session)
         for i in range(self.roster.rows):
             idx = self.roster.offset + i
             if idx >= len(rows):
@@ -1803,7 +1823,7 @@ class Tui:
             # and painting them here by hand meant that colour was computed and
             # then thrown away — the split view showed none of it while the
             # roster-only view did.
-            self._paint_row(win, body_top + 1 + i, rows[idx], width - 1)
+            self._paint_row(win, body_top + 1 + session_h + i, rows[idx], width - 1)
 
         chat_top = body_top + roster_h
         self._chat_top = chat_top
@@ -1875,6 +1895,24 @@ class Tui:
                 else curses.color_pair(C_DIM) | curses.A_DIM)
         try:
             win.addnstr(height - 1, 0, line, room, attr)
+        except curses.error:
+            pass
+
+    def _session_line(self, win, y: int, width: int, parts: list[str]) -> None:
+        """How the session is going, in the pane that is about the session.
+
+        Through `statusbar.fit` and the file's own `_w`/`_clip` like the bottom
+        bar, so the block bar in it is measured in columns rather than in
+        characters — one `█` is Ambiguous width, and a row cut by character
+        count over-runs the pane by however many of those it holds.
+        """
+        room = max(width - 1, 0)
+        if not room:
+            return
+        line = statusbar.fit(parts, room, _w, _clip)
+        try:
+            win.addnstr(y, 0, line, room,
+                        curses.color_pair(C_DIM) | curses.A_DIM)
         except curses.error:
             pass
 
@@ -2105,14 +2143,24 @@ class Tui:
                     max(width - 1, 0),
                     curses.color_pair(state_pair) | curses.A_BOLD)
 
-        pane.rows = height - 1 - (1 if self._bar else 0)
+        # The roster-only view is the one place the session summary is MOST
+        # wanted and least otherwise available: the title bar's «2/3 online»
+        # belongs to the split view, and a tmux pane showing only the roster
+        # has nothing else saying how the session as a whole is going.
+        session = statusbar.session_segments(m.snapshot) \
+            if self._session and self.view == "roster" else []
+        top = height - 1 - (1 if self._bar else 0)
+        session_h = 1 if session and top - 1 >= 2 else 0
+        pane.rows = top - session_h
         pane.total = len(rows)
         pane.settle()
+        if session_h:
+            self._session_line(win, 1, width, session)
         for i in range(pane.rows):
             idx = pane.offset + i
             if idx >= len(rows):
                 break
-            self._paint_row(win, 1 + i, rows[idx], width - 1)
+            self._paint_row(win, 1 + session_h + i, rows[idx], width - 1)
 
         if self.view == "roster":
             # Its own keys, and no scrolled-back notice: the roster does not

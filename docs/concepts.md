@@ -301,6 +301,30 @@ value that is the wrong type there is not an error message but a terminal left
 in a broken state.
 A setting collab does not understand is ignored rather than fatal.
 
+### The session line
+
+Above the roster sits one line about the session as a whole: the batch bar, how
+many participants there are and how many are connected, and how many events the
+hub has sequenced.
+
+It is built from the hub's snapshot and from nothing else, and that is the
+point.
+Most of what the daemon records locally is written from the reader's point of
+view — `others_connected` and `others_total` exclude the reader by participant
+id, `unread` is a property of one inbox, `watchers` counts that daemon's own
+subscribers — and a line assembled from those would show every participant a
+different number while looking like a shared fact.
+That is the failure the batch feature exists to prevent, and it would be worse
+here, because a hub-counted bar sits beside it lending it credit.
+
+The count of events is the hub's own sequence number rather than the local
+inbox's, which only ever reaches the highest sequence THIS client was
+delivered.
+The hub sequences a direct message and then withholds it from everybody but its
+two ends, so a third party's local figure skips it and trails until the next
+room-wide event carries it forward — two viewers can hold different values for
+it at the same moment, and neither of them is the session's.
+
 ### The viewer's status row
 
 The last line of `collab watch` is composed of segments, and which ones it

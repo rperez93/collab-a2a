@@ -470,6 +470,26 @@ def watch_status_settings() -> dict[str, Any]:
     }
 
 
+def watch_session_settings() -> dict[str, Any]:
+    """Whether the roster carries a line about the session as a whole.
+
+    Its own key rather than a `watch_status` segment: that row is the reader's
+    own — their keys, their quota, their command — and this one is everybody's.
+    Somebody turning off the bottom bar has not asked to stop seeing how the
+    session is going.
+    """
+    value = load_config().get("watch_session")
+    return {"enabled": True if value is None else bool(value)}
+
+
+def save_watch_session(*, enabled: bool | None = None) -> dict[str, Any]:
+    cfg = load_config()
+    if enabled is not None:
+        cfg["watch_session"] = bool(enabled)
+    save_config(cfg)
+    return watch_session_settings()
+
+
 def save_watch_status(*, enabled: bool | None = None,
                       segments: Any = None, command: str | None = None,
                       interval: int | None = None) -> dict[str, Any]:
@@ -869,6 +889,10 @@ def settings() -> tuple[Setting, ...]:
                 _one_of(("top", "bottom", "left", "right")),
                 lambda: watch_settings()["roster_position"],
                 lambda v: save_watch_settings(roster_position=v)),
+        Setting("watch_session", "show the session summary line above the roster",
+                True, _as_bool,
+                lambda: watch_session_settings()["enabled"],
+                lambda v: save_watch_session(enabled=v)),
         Setting("watch_status", "show the bottom status row in `collab watch`",
                 True, _as_bool,
                 lambda: watch_status_settings()["enabled"],

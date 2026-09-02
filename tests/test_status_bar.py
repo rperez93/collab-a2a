@@ -25,6 +25,7 @@ import pytest
 from collab import config
 from collab.client import statusbar as sb
 from collab.client import tui
+from collab.client.tui import MIN_ROSTER_ROWS
 from collab.config import SessionProfile
 
 
@@ -638,3 +639,203 @@ def test_turning_the_row_off_returns_its_line_in_a_single_pane_view(
     _draw(viewer, win)
     assert 29 not in win.rows, "the row is gone"
     assert pane.rows == with_row + 1, "and the pane grew into it"
+
+
+# --- the session line: one set of figures, true for everybody ---------------
+#
+# The trap here is that most of what the daemon writes into `status.json` is
+# written from the VIEWER'S point of view — `others_connected` and
+# `others_total` exclude the reader by participant id, `unread` is per-inbox,
+# `watchers` and `ws_clients` are that daemon's own subscribers. A line
+# assembled from those would show four participants four different numbers
+# while looking authoritative, with a hub-counted batch bar sitting beside it
+# lending it credit. So this line is built from `snapshot.json` — the hub's own
+# answer, fetched and stamped — and from nothing else.
+
+def _snapshot(**over):
+    base = {
+        "fetched_at": time.time(),
+        "seq": 128,
+        "batch": {"done": 6, "total": 10},
+        "participants": [
+            {"id": "p_me", "name": "bob", "connected": True},
+            {"id": "p_a", "name": "alice", "connected": True},
+            {"id": "p_c", "name": "carol", "connected": False},
+        ],
+    }
+    base.update(over)
+    return base
+
+
+def test_the_session_line_carries_the_batch_the_people_and_the_events():
+    parts = sb.session_segments(_snapshot())
+    assert any("6/10" in p for p in parts)
+    assert any("3" in p for p in parts), "the count includes the reader"
+    assert any("128" in p for p in parts)
+
+
+def test_the_head_count_includes_the_reader():
+    """`others_total` excludes the reader by design, so it must not be used.
+
+    Four participants reading a line labelled global would each have seen
+    «3 here» and each believed the other three saw the same number.
+    """
+    parts = " · ".join(sb.session_segments(_snapshot()))
+    assert "3 here" in parts, parts
+
+
+def test_a_remembered_snapshot_is_never_drawn_as_a_current_one():
+    """The staleness defect, in the most authoritative-looking place there is.
+
+    A session line drawn from a snapshot the daemon has stopped refreshing is
+    indistinguishable from a live one, and it sits directly above the roster
+    lending its own credibility to it.
+    """
+    parts = sb.session_segments(_snapshot(fetched_at=time.time() - 600))
+    joined = " · ".join(parts)
+    assert "6/10" not in joined and "128" not in joined and "here" not in joined
+    assert "batch ?" in joined and "10m old" in joined
+
+
+def test_a_snapshot_with_no_stamp_behind_it_claims_nothing():
+    """No `fetched_at` at all is a memory of unknown age, not a fresh read."""
+    assert sb.session_segments(_snapshot(fetched_at=None)) == ["batch ?"]
+
+
+def test_figures_that_are_not_figures_do_not_take_the_line_with_them():
+    """`seq` and the roster come off the hub — a remote party chose them."""
+    assert sb.session_segments(_snapshot(seq="lots", participants="nobody")) \
+        == [sb.batch_segment({"done": 6, "total": 10, "fetched_at": time.time()})]
+    assert sb.session_segments("not a dict") == []
+    assert sb.session_segments({}) == []
+
+
+def test_an_empty_session_draws_nothing_rather_than_zeroes():
+    """A row of `0 events · 0 here` is worse than no row."""
+    assert sb.session_segments(
+        {"fetched_at": time.time(), "seq": 0, "participants": []}) == []
+
+
+def test_the_batch_is_rendered_by_the_one_renderer():
+    """Not a second one. Two drawings of one figure that disagreed would be
+    worse than either, and the reader has both on screen at once."""
+    snap = _snapshot()
+    stamped = {**snap["batch"], "fetched_at": snap["fetched_at"]}
+    assert sb.batch_segment(stamped) in sb.session_segments(snap)
+
+
+# --- and on a real draw ------------------------------------------------------
+
+def test_the_session_line_is_drawn_above_the_roster(tmp_path, cfg):
+    """On its own row, with the participants moved down for it.
+
+    Asserted as «alone on row 3», not merely «present on row 3»: the fake pane
+    concatenates everything written to a line, so a participant row painted
+    over the top of this one would still leave the session figures findable
+    there and the test would pass on a genuinely overlapping draw.
+    """
+    viewer, win = _viewer(tmp_path, cfg), _Pane()
+    viewer.model.snapshot = _snapshot()
+    _draw(viewer, win)
+
+    assert "6/10" in win.rows[3] and "128" in win.rows[3]
+    everyone = ("bob", "alice", "carol")
+    assert not any(name in win.rows[3] for name in everyone), \
+        f"a participant was painted onto this row: {win.rows[3]!r}"
+    below = " ".join(win.rows.get(y, "") for y in range(4, 30))
+    assert "bob" in below, "and the roster still starts under it"
+
+
+def test_turning_it_off_gives_the_row_back_to_the_roster(tmp_path, cfg):
+    viewer = _viewer(tmp_path, cfg)
+    viewer.model.snapshot = _snapshot()
+    win = _Pane()
+    _draw(viewer, win)
+    with_line = viewer.roster.rows
+
+    config.save_watch_session(enabled=False)
+    win = _Pane()
+    _draw(viewer, win)
+    assert "6/10" not in win.rows.get(3, "")
+    assert viewer.roster.rows == with_line + 1
+
+
+def test_a_session_with_nothing_to_say_does_not_reserve_the_row(tmp_path, cfg):
+    """Reserved unconditionally, an empty session line is a blank row stolen
+    from the roster — which is the one pane that cannot spare one."""
+    viewer = _viewer(tmp_path, cfg)
+    viewer.model.snapshot = {"fetched_at": time.time(), "participants": []}
+    win = _Pane()
+    _draw(viewer, win)
+    empty = viewer.roster.rows
+
+    viewer.model.snapshot = _snapshot()
+    win = _Pane()
+    _draw(viewer, win)
+    assert viewer.roster.rows == empty - 1, "the row is taken only when used"
+
+
+def test_it_gives_up_its_row_before_squeezing_the_roster(tmp_path, cfg):
+    """The roster is TWO rows per person, and it is already down to one row at
+    the smallest heights before this line exists — so the rule cannot be «the
+    roster always has N rows», it has to be «this line never makes that worse».
+
+    It takes its row only where at least one whole participant still fits after
+    it. Below that it draws nothing: half a participant is worse than no
+    summary, and the roster is the one pane that cannot spare a line.
+    """
+    viewer = _viewer(tmp_path, cfg)
+    viewer.model.snapshot = _snapshot()
+
+    drawn_somewhere = False
+    for height in range(8, 40):
+        win = _Pane(height=height)
+        _draw(viewer, win)
+        if "6/10" in win.rows.get(3, ""):
+            drawn_somewhere = True
+            assert viewer.roster.rows >= 2, \
+                f"took the row at height {height}, leaving {viewer.roster.rows}"
+    assert drawn_somewhere, "never drawn at all, so the rule is untested"
+
+
+def test_the_roster_only_view_carries_it_too(tmp_path, cfg):
+    """That view is where it is most wanted and least otherwise available.
+
+    The split view's title bar says «2/3 online»; a tmux pane showing only the
+    roster has nothing at all saying how the session as a whole is going.
+    """
+    viewer = _viewer(tmp_path, cfg, view="roster")
+    viewer.model.snapshot = _snapshot()
+    win = _Pane()
+    _draw(viewer, win)
+
+    assert "6/10" in win.rows[1] and "128" in win.rows[1]
+    assert not any(n in win.rows[1] for n in ("bob", "alice", "carol"))
+
+
+def test_the_chat_only_view_does_not(tmp_path, cfg):
+    """It is a roster figure, and that view has no roster.
+
+    Tested on the event count and not on the batch: the batch legitimately
+    appears in this view, on the BOTTOM BAR, so `6/10` proves nothing here.
+    The events count is drawn by the session line and by nothing else.
+    """
+    viewer = _viewer(tmp_path, cfg, view="chat")
+    viewer.model.snapshot = _snapshot()
+    win = _Pane()
+    _draw(viewer, win)
+
+    assert "128 events" not in " ".join(win.rows.values())
+
+
+def test_turning_it_off_gives_the_row_back_in_the_roster_only_view(tmp_path, cfg):
+    viewer = _viewer(tmp_path, cfg, view="roster")
+    viewer.model.snapshot = _snapshot()
+    win = _Pane()
+    _draw(viewer, win)
+    with_line = viewer.roster.rows
+
+    config.save_watch_session(enabled=False)
+    win = _Pane()
+    _draw(viewer, win)
+    assert viewer.roster.rows == with_line + 1

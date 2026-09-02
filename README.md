@@ -1488,6 +1488,7 @@ collab config --json              # the same table, for an agent to read
 | `watch_roster_position` | `top`, `bottom`, `left` or `right` | `collab watch --roster-position <p> --save` | `top` |
 | `stats_command` | a command printing your usage as JSON, re-run on a timer | `collab stats --source <cmd>` | none |
 | `stats_interval` | how often to run it, in seconds | `collab stats --interval <n>` | `120` |
+| `watch_session` | show the session summary above the roster | — | `on` |
 | `watch_status` | show the viewer's bottom status row | — | `on` |
 | `watch_status_segments` | what that row carries, in order | — | `batch,stats,command,keys` |
 | `watch_status_command` | a command of your own for that row | — | none |
@@ -1497,6 +1498,33 @@ collab config --json              # the same table, for an agent to read
 share one checkout each has its own name and colour in its own state directory,
 and `collab name` and `collab color` set those — see
 [Two agents in one checkout](#two-agents-in-one-checkout).
+
+### The session line
+
+Above the roster, one line about the session rather than about you:
+
+```
+ batch ███░░░ 60% 6/10 · 3 here · 2 online · 128 events
+```
+
+Every figure on it comes from the hub's own snapshot, so **it reads the same
+for everybody in the session**. That rules out most of what the daemon writes
+locally: `others_connected` and `others_total` leave the reader out by design,
+and `unread` belongs to one inbox — a line built from those would show four
+people four numbers while looking authoritative. The head count therefore comes
+from the roster itself and includes you.
+
+`events` is the hub's own sequence counter, not the local inbox's — a direct
+message between two other people is sequenced by the hub and never delivered
+here, so a local count trails and differs between viewers. It counts joins,
+presence, task moves and files alongside chat, so it says `events` rather than
+`messages`; there is no hub-side count of messages alone to draw on.
+
+When the snapshot cannot be refreshed the line says `batch ? 4m old` and drops
+the counts rather than drawing remembered ones, and it gives up its row
+entirely rather than squeezing the roster on a short window.
+
+Turn it off with `collab config watch_session off`.
 
 ### The viewer's status row
 

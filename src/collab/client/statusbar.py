@@ -125,6 +125,78 @@ def stats_segment(figures: Any) -> str:
     return " · ".join(bits)
 
 
+def session_segments(snapshot: Any, *, now: float | None = None) -> list[str]:
+    """How the SESSION is going — the same figures for everybody in it.
+
+    Built from `snapshot.json` and from nothing else, and that is the whole
+    design. Most of what the daemon writes into `status.json` is written from
+    the VIEWER's point of view: `others_connected` and `others_total` filter the
+    reader out by participant id so a daemon does not count itself, `unread` and
+    `unread_messages` are properties of one inbox, and `watchers`/`ws_clients`
+    are that daemon's own subscribers. A line assembled from those would show
+    four participants four different numbers while looking authoritative — and
+    it would do it directly above a hub-counted batch bar, which would lend it
+    credit it had not earned. That is the failure the whole batch feature exists
+    to prevent, so this line refuses the ingredients that would cause it.
+
+    The snapshot is the hub's own answer to the same questions, fetched whole
+    and stamped with when it arrived, so every client that has fetched it holds
+    the same numbers. `participants` is the full roster INCLUDING the reader,
+    which is why the head count comes from `len()` here rather than from
+    `others_total` plus one.
+
+    `seq` is the hub's own event counter — `MAX(seq)` over its log — so it is
+    the same number for everyone and is NOT the local inbox's `last_seq`, which
+    is only the highest sequence THIS client has been DELIVERED. The hub
+    sequences a direct message and then withholds it from everybody but its two
+    ends (`hub._entitled`), so a third party's `last_seq` skips it and trails
+    until the next room-wide event carries it forward again — which means two
+    viewers can hold different values for it at the same instant, and neither
+    is the session's.
+
+    It counts EVENTS and is labelled as events: joins, presence, task moves and
+    files are all sequenced alongside chat, so this is not the count of messages
+    that was asked for, and there is no hub-side count of messages alone to
+    draw on without changing the hub and the wire format.
+    """
+    if not isinstance(snapshot, dict):
+        return []
+    # The stamp belongs to the whole snapshot, so it is what every figure taken
+    # out of it is as old as.
+    stamped = {"fetched_at": snapshot.get("fetched_at")}
+    parts: list[str] = []
+
+    figures = snapshot.get("batch")
+    if isinstance(figures, dict):
+        # THE ONE RENDERER, not a second one. The bottom bar and this line draw
+        # the same figure a few rows apart, and two drawings of it that
+        # disagreed would be worse than either — the reader has both on screen.
+        parts.append(batch_segment({**figures, **stamped}, now=now))
+
+    if batch_progress.is_stale(stamped, now=now):
+        # A COUNT OF WHAT IS TRUE, OR OF WHAT WAS TRUE WHEN THE HUB LAST
+        # ANSWERED? The batch part above says so for itself, with its age. The
+        # rest are memories of exactly the same age and have no way to say it,
+        # so they are withheld rather than drawn as current. This line is the
+        # most authoritative-looking place in the viewer, which makes it the
+        # worst place to commit the staleness defect.
+        return [part for part in parts if part]
+
+    people = snapshot.get("participants")
+    if isinstance(people, list) and people:
+        here = len(people)
+        online = sum(1 for p in people if isinstance(p, dict) and p.get("connected"))
+        parts.append(f"{here} here" if online >= here
+                     else f"{here} here · {online} online")
+
+    # Parsed rather than trusted, like every other figure off the hub: a string
+    # here raised, and the draw's catch-all would have taken the frame with it.
+    if events := batch_progress.count_of(snapshot, "seq"):
+        parts.append(f"{events} events")
+
+    return [part for part in parts if part]
+
+
 def compose(*, notice: str = "", keys: Any = "", batch: Any = None,
             stats: Any = None, command: str = "",
             segments: Sequence[str] = DEFAULT_SEGMENTS,
