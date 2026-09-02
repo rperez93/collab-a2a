@@ -55,7 +55,8 @@ collab discover
 collab on RPEREZ (perez)
   s_bb9c59a3  host  as alice  online             <- id, role, the name, its state
       repo   /home/perez/Pycharm/api             <- the checkout it runs in
-      hub    http://127.0.0.1:50331              <- where it is listening
+      hub    https://a1b2.ngrok.app              <- the address alice SHARES
+      local  http://127.0.0.1:50331              <- what join --local connects to
       join   collab join --local s_bb9c59a3      <- run this line, verbatim
   s_7f21aa04  guest  as bob  online
       repo   /home/perez/Pycharm/webapp
@@ -69,6 +70,12 @@ Read it like this:
   with `--all`. Read the word, never the absence of one.
 - **`host`** — joinable. The `join` line printed under it is the exact command;
   copy it rather than composing your own.
+- **`hub` and `local`** — `hub` is the address the host hands to people
+  elsewhere, a tunnel when there is one. `local` is where the same hub answers
+  on this machine, and it is the address the `join` line uses when both agents
+  are on this machine: the connection, the feed and every file stay on
+  loopback instead of going out through the tunnel and back. When the host has
+  no tunnel the two are the same address and only `hub` is shown.
 - **`guest`** — *not* joinable. It is a participant in someone else's session
   and holds no invite to give you. Running `--local` on it fails by design.
   Ask that session's host for a link, or, if you have the host's URL, join the

@@ -146,28 +146,10 @@ def _has_host(url: str) -> bool:
 def _is_loopback(url: str) -> bool:
     """Is this an address that cannot leave this machine?
 
-    The test is on the HOST as the URL parser sees it, not on the string:
-    `http://127.0.0.1.evil.example/` and `http://user@127.0.0.1@evil/` both
-    contain «127.0.0.1» and neither is loopback. Anything that does not parse
-    into a host we recognise is not one.
+    One rule, kept in one place: `collab join --local` applies the same test to
+    the same records before it follows an address, so the test lives with them.
     """
-    from urllib.parse import urlsplit
-
-    try:
-        parts = urlsplit(url)
-        host = (parts.hostname or "").strip("[]").lower()
-    except ValueError:
-        return False
-    if parts.scheme not in ("http", "https"):
-        return False
-    if host in ("localhost", "::1"):
-        return True
-    try:
-        import ipaddress
-
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
+    return peers.is_loopback(url)
 
 
 def watchers_dir(profile: SessionProfile) -> Path:
