@@ -197,6 +197,10 @@ more history than fits in the window.
 collab theme chat && collab watch --demo    # try a theme on something real
 ```
 
+For a screenshot of the whole picture, `collab demo` puts a fake agent's
+terminal beside it — `collab demo agent` for that half alone, `collab demo
+watch` for this one. Both are pictures; nothing real is touched.
+
 ## What the roster tells you
 
 The top pane is not decoration. Each participant shows their repo and branch,

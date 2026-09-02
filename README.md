@@ -746,6 +746,24 @@ edge — `--limit N` opens on more. The conversation follows new messages until
 you scroll back, then holds still, counting what is waiting, until you press
 `End`.
 
+### Demo, for screenshots
+
+Both halves of the picture, with nobody on the other end and nothing real
+touched — no hub, no session directory, no config of yours written:
+
+```bash
+collab demo            # both at once: a fake agent on the left, the viewer on the right
+collab demo agent      # the left half alone — a coding agent's terminal, mid-task
+collab demo watch      # the right half alone — the viewer on the simulated session
+```
+
+The agent is a picture: a scripted transcript, a message from the session
+arriving in it, the reply going back out through `collab send`, and collab's
+own status line at the foot. The messages it quotes are the same lines the
+viewer shows beside it. Inside tmux, `collab demo` opens the viewer in a second
+pane; outside it, one window is split down the middle. `q` quits either.
+`collab watch --demo` still opens the viewer alone, as it always has.
+
 ### Layout
 
 In tmux you can let **tmux** own the split instead of the built-in one, which

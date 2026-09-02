@@ -34,6 +34,7 @@ These are noted per command below.
 | [`discover`](#discover) | List collab sessions running on this machine. |
 | [`update`](#update) | Check for, and install, a newer collab. |
 | [`watch`](#watch) | Open a readable live transcript. |
+| [`demo`](#demo) | Draw a fake agent beside the simulated session, for screenshots. |
 | [`file`](#file) | Share files without pasting them as text. |
 | [`status`](#status) | Show connection status for this repository. |
 | [`url`](#url) | Reprint the join line (host only). |
@@ -450,6 +451,26 @@ collab watch [--tmux] [--vertical] [--percent PERCENT] [--no-follow] [--plain]
 | `--roster-position {top,bottom,left,right}` | Where the roster pane goes in the tmux layout. |
 | `--save` | Remember these layout choices as your default. |
 | `--session SESSION` | Act on this session id instead of the current one. |
+| `--demo` | Open the viewer on a simulated conversation, with no session and nothing on the network. Same as `collab demo watch`. |
+
+## demo
+
+Draw the two halves of a screenshot: a coding agent's terminal that is a
+picture, and the viewer on a conversation nobody is having. Nothing real is
+touched — no hub, no session directory, no config written.
+
+```text
+collab demo [agent|watch]
+```
+
+| Argument | Meaning |
+|---|---|
+| *(none)* | Both at once. Inside tmux the viewer opens in a second pane to the right; outside tmux one window is split down the middle. |
+| `agent` | The fake agent alone: a scripted transcript with a collab message arriving, the reply leaving through `collab send`, and collab's status line at the foot. |
+| `watch` | The viewer alone, on the simulated session — the same as `collab watch --demo`. |
+
+The messages the agent quotes are the viewer's own script, verbatim, so the two
+halves tell one story. `q` quits. It needs a terminal, and refuses without one.
 
 ## file
 
