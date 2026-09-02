@@ -117,6 +117,39 @@ def test_a_filesystem_that_will_not_lock_still_starts(profile, monkeypatch):
     lock.release()
 
 
+def test_an_unwritable_state_directory_still_starts(profile, monkeypatch):
+    """The third case, and it is deliberate too.
+
+    A lock file that cannot even be opened is not a platform without locking;
+    it is one directory that will not take one, and the session should still
+    run. Untested anywhere until now, which matters more since the refusal
+    above was put into the same function and in front of this.
+    """
+    def unwritable(*a, **kw):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(exclusive.os, "open", unwritable)
+    lock = exclusive.DaemonLock(profile.dir)
+    assert lock.acquire() is True
+    assert lock.enforced is False
+    assert lock.held is False
+
+
+def test_no_locking_beats_an_unwritable_directory(profile, no_fcntl, monkeypatch):
+    """Which of the two answers first, when both are true at once.
+
+    The platform is the wider fact, so it is checked before the file is
+    touched: «run this under WSL 2» is the useful thing to say, and «your
+    state directory is read-only» would send somebody after the wrong fault.
+    """
+    def unwritable(*a, **kw):
+        raise AssertionError("opened a lock file on a platform that cannot lock")
+
+    monkeypatch.setattr(exclusive.os, "open", unwritable)
+    with pytest.raises(exclusive.UnsupportedPlatform):
+        exclusive.DaemonLock(profile.dir).acquire()
+
+
 def test_the_daemon_does_not_come_up_without_a_lock(profile, no_fcntl, caplog):
     """It stops, it leaves nothing behind, and it says why into daemon.log.
 
