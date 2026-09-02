@@ -1885,7 +1885,18 @@ class Tui:
         foot of the roster, and a second one would cost a participant to say
         what the first had room for.
         """
-        if not self._bar:
+        # WHICHEVER SWITCH OWNS THIS ROW IS THE ONE THAT DECIDES IT. `_bar` is
+        # `watch_status`, which governs the row carrying the READER'S figures;
+        # the roster row carries the SESSION'S and has its own key. Returning on
+        # `_bar` alone meant turning off the personal row silently took the
+        # shared one with it — in the roster-only view, which the two keys exist
+        # to tell apart and which has no title bar to carry those figures
+        # instead.
+        # Either switch can put a row here: with the session row off, this pane
+        # falls through to the reader's own bar below, which is what `_bar`
+        # governs — so the test is whether ANYTHING was asked for, not whether
+        # the personal one was.
+        if not (self._bar or (roster and self._roster_settings["enabled"])):
             return
         behind = 0 if self.chat.follow or not notice else self.behind()
         what = ""

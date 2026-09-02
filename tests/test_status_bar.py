@@ -624,6 +624,15 @@ def test_turning_the_row_off_returns_its_line_in_a_single_pane_view(
     `_draw_single` does the same arithmetic on its own line, so it could drift
     from `_draw` without a single test noticing — and it did not, but nothing
     was watching.
+
+    BOTH SWITCHES, because the roster pane's row is no longer the reader's.
+    `watch_status` governs the row carrying the reader's own figures and
+    `watch_status_roster` the one carrying the session's; the roster-only pane
+    has a single row and either switch can claim it. Turning off only the
+    personal one used to empty that row and now correctly does not, so the
+    line is reclaimed when NEITHER is asked for. This assertion read the same
+    before and after that change while meaning something different, which is
+    the more dangerous half: it went on passing and stopped guarding.
     """
     viewer = _viewer(tmp_path, cfg, view=view)
     pane = viewer.chat if view == "chat" else viewer.roster
@@ -634,10 +643,29 @@ def test_turning_the_row_off_returns_its_line_in_a_single_pane_view(
     assert 29 in win.rows, "the row is drawn in this view"
 
     config.save_watch_status(enabled=False)
+    config.save_watch_roster(enabled=False)
     win = _Pane()
     _draw(viewer, win)
     assert 29 not in win.rows, "the row is gone"
     assert pane.rows == with_row + 1, "and the pane grew into it"
+
+
+def test_the_roster_pane_keeps_its_row_when_only_the_personal_one_is_off(
+        tmp_path, cfg):
+    """The half the parametrised test above can no longer see.
+
+    Somebody who turns off the row about themselves has said nothing about the
+    row about everybody — and the roster-only pane is the view with no title
+    bar to carry those figures instead, which is the reason the second key
+    exists at all.
+    """
+    viewer = _viewer(tmp_path, cfg, view="roster")
+
+    config.save_watch_status(enabled=False)
+    win = _Pane()
+    _draw(viewer, win)
+    assert 29 in win.rows, "the session's row went with the reader's"
+    assert "batch" in win.rows[29], win.rows[29]
 
 
 # --- the roster panel's own row: figures that are true for everybody ---------
