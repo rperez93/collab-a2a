@@ -75,6 +75,13 @@ def hub(monkeypatch):
         def report_stats(self, figures, **kw):
             reported.append((self.token, dict(figures)))
 
+        def send(self, env):
+            reported.append((self.token, {"sent": env.text}))
+
+        def report_activity(self, payload):
+            reported.append((self.token, {"activity": payload["state"]}))
+            return payload
+
     @contextlib.contextmanager
     def fake_client(profile):
         yield Client(profile)
@@ -96,8 +103,65 @@ def _figures(profile: SessionProfile) -> dict:
     return raw
 
 
+def _run(argv: list[str]) -> int:
+    """Exit code, whether the command returned it or raised it."""
+    try:
+        return main(argv)
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) else 1
+
+
 def _report(*figures: str) -> list[int]:
-    return [main(["stats", "--report", f]) for f in figures]
+    return [_run(["stats", "--report", f]) for f in figures]
+
+
+# --- every command that ACTS as the agent stops the same way -----------------
+
+def test_send_does_not_speak_as_the_other_agent(repo, hub, monkeypatch, capsys):
+    """Worse than a misfiled figure: words in a colleague's mouth."""
+    _as(monkeypatch, [os.getpid()])
+
+    assert _run(["send", "on it"]) == 1
+    assert hub == [], "nothing reached the hub under anybody's token"
+    text = capsys.readouterr().out
+    assert "COLLAB_HOME" in text and "collab send" in text, "the exact fix"
+
+
+def test_working_does_not_speak_as_the_other_agent(repo, hub, monkeypatch):
+    _as(monkeypatch, [os.getpid()])
+
+    assert _run(["working", "the client side"]) == 1
+    assert hub == []
+    for who in ("alice", "bob"):
+        assert not list(repo[who].dir.glob("activity*")), "nothing written either"
+
+
+def test_a_lone_agent_is_never_asked(tmp_path, hub, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("COLLAB_CONFIG", str(tmp_path / "config.json"))
+    monkeypatch.delenv("COLLAB_HOME", raising=False)
+    monkeypatch.setattr(config, "repo_root", lambda cwd=None: tmp_path)
+    _agent(tmp_path / ".collab", "alice", "p_alice", "t_alice", ALICE_CHAIN,
+           is_host=True)
+    _as(monkeypatch, [os.getpid()])
+
+    assert _run(["send", "hello"]) == 0
+    assert _run(["working", "auth"]) == 0
+    assert [t for t, _ in hub] == ["t_alice", "t_alice"]
+
+
+def test_a_proven_agent_speaks_as_itself(repo, hub, monkeypatch):
+    _as(monkeypatch, BOB_CHAIN)
+    assert _run(["send", "hello"]) == 0
+    monkeypatch.setenv("COLLAB_HOME", str(repo["root"] / ".collab"))
+    assert _run(["send", "hello"]) == 0
+    assert [t for t, _ in hub] == ["t_bob", "t_alice"]
+
+
+def test_reads_keep_the_fallback(repo, hub, monkeypatch):
+    """A command that has to show something still shows something."""
+    _as(monkeypatch, [os.getpid()])
+    assert _run(["lock"]) == 0
 
 
 # --- the ordinary case: both chains readable ---------------------------------

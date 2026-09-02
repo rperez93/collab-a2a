@@ -375,11 +375,16 @@ collab stats [--json] [--share {on,off}] [--report JSON] [--source CMD]
 | `--json` | Emit raw JSON. |
 | `--session SESSION` | Act on this session id instead of the current one. |
 
-`--report` writes under your name, so it refuses when two agents hold state in
-this repository and nothing proves which one you are — neither `COLLAB_HOME`
-nor the process ancestry the lock recorded. Say which directory is yours:
-`COLLAB_HOME=<repo>/.collab-<you> collab stats --report '…'`. `collab lock`
-run in each directory says who claimed it.
+`--report` writes under your name, so — like every command that acts as you:
+`send`, `working`, `idle`, `task claim|propose|complete`, `batch start|close`,
+`file send|get`, `kick`, `kill`, `color`, `name`, `wake set|off` — it refuses
+when two agents hold state in this repository and nothing proves which one you
+are, neither `COLLAB_HOME` nor the process ancestry the lock recorded. The
+refusal prints the exact command to re-run for each directory, e.g.
+`COLLAB_HOME=<repo>/.collab-<you> collab stats --report '…'`. Commands that
+only show something (`status`, `who`, `watch`, `activity`, `stats` without
+`--report`) keep answering from the repository's default directory. `collab
+lock` run in each directory says who claimed it.
 
 ## discover
 

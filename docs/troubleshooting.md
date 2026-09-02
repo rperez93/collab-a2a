@@ -150,14 +150,27 @@ variable. Neither stops you working:
   `tmux split-window -d "COLLAB_HOME=<dir> collab watch --session <id>"`,
   or tell the user to run `collab watch` in a second terminal.
 
-## Two agents in one repository, and `collab stats --report` is refused
+## Two agents in one repository, and a command says nothing proves which one you are
 
-The refusal is deliberate. Usage is published under a name, and a command that
-cannot prove which of the two directories is yours would write your figures
-into the other agent's — which is how one agent's spend used to appear under
-the other's name. The message lists the directories and who claimed each;
-re-run with `COLLAB_HOME=<yours>`. A single agent in a repository is never
-asked.
+The refusal is deliberate, and it covers every command that acts as you —
+`send`, `working`, `task claim`, `stats --report`, `kill` and the rest. A
+command that cannot prove which of the two directories is yours would act out
+of the other agent's: your words under their name, your figures as their
+spend, their listener stopped. The message prints the exact command to re-run
+for each directory, `COLLAB_HOME=<dir> collab send …`; pick the one that is
+yours (`collab lock` in each directory says who claimed it). Commands that only
+show something keep answering from the default directory, and a single agent
+in a repository is never asked.
+
+## The second agent joined into the first agent's `.collab`
+
+Both agents resolved the same default display name, and an older collab took
+a lock carrying its own name as its own claim. Ownership is now read from the
+process chain that claimed the lock, never from the name: a same-named join
+from another agent's process is sent to `.collab-<name>` (then `-2`, `-3`) and
+says so. Re-running `collab join` from the agent that made the claim still
+keeps its directory, and `COLLAB_HOME` set in the environment is always
+honoured as given.
 
 ## The status line shows nothing
 

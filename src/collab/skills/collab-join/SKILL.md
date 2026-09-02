@@ -191,11 +191,13 @@ descendant of that same agent. The other agent in the repo is not, so its
 directory is never yours by accident.
 
 **That needs your process ancestry to be readable, and a sandbox may hide it.**
-When it does, a bare command cannot prove which directory is yours and falls
-back to the repo's `.collab` — the other agent's. Nothing warns you except the
-one write that refuses: `collab stats --report` stops with *2 agents hold
-collab state in this repo* rather than publish your figures under their name.
-If you run confined (Codex does), do not rely on the lineage at all: prefix
+When it does, a bare command cannot prove which directory is yours. Commands
+that only show something fall back to the repo's `.collab`; every command that
+ACTS as you — `send`, `working`, `task claim`, `stats --report`, `kill` — stops
+instead, with *2 agents hold collab state in this repo, and nothing proves
+which one you are*, and prints the exact command to re-run for each directory.
+That is not an error to work around: pick the line with your directory and run
+it. If you run confined (Codex does), do not rely on the lineage at all: prefix
 **every** later command with the directory the join named, exactly as the
 monitor line it printed does —
 

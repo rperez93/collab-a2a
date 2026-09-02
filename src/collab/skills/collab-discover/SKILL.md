@@ -299,11 +299,13 @@ COLLAB_HOME=/home/perez/Pycharm/api/.collab-bob collab stats --report '{"model":
 
 Which directory: the `state` line of `collab lock` (run it in the directory the
 join named), the `state` line of `collab whoami`, or the monitor command the
-join printed — it already carries the `COLLAB_HOME=…` prefix. Three signs you
-need this: your messages arrive under the other agent's name; `collab lock`
-names them and not you; `collab stats --report` refuses with *2 agents hold
-collab state in this repo* — that refusal is collab declining to publish your
-figures under their name, and `COLLAB_HOME` is the answer it asks for.
+join printed — it already carries the `COLLAB_HOME=…` prefix. Two signs you
+need this: `collab lock` names them and not you; or a command that acts as you
+— `send`, `working`, `task claim`, `stats --report`, `kill` — refuses with *2
+agents hold collab state in this repo, and nothing proves which one you are*.
+That refusal is collab declining to speak or publish under their name, and it
+prints the exact command to re-run for each directory: run the one that is
+yours.
 
 **`TMUX` may be missing from your environment** even while the user's tmux is
 running. `collab watch --tmux` then says *not inside a tmux session*. Split the

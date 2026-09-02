@@ -181,8 +181,8 @@ def _require_profile(args: argparse.Namespace) -> SessionProfile:
     return profile
 
 
-def _refuse_to_write_as_a_stranger() -> int | None:
-    """Stop a write that would land in another agent's state directory.
+def _acting_as_a_stranger(args: argparse.Namespace) -> bool:
+    """Would this command act out of a state directory it cannot prove is ours?
 
     A later command is a fresh process that has to work out whose it is, and it
     reads that from process ancestry against the lock. `resolve_home` falls
@@ -191,27 +191,45 @@ def _refuse_to_write_as_a_stranger() -> int | None:
     agent in a repo. With TWO live agents here it is the other agent's directory
     half the time: bob, redirected to `.collab-bob` at join, ran `collab stats
     --report` from a process whose ancestry could not be read, resolved to
-    `.collab`, and published his spend under alice's name and token.
+    `.collab`, and published his spend under alice's name and token. A `send`
+    down the same path puts words in a colleague's mouth.
 
-    So a write under a name stops here when the repo holds more than one live
-    claim and nothing says which is ours — neither the ancestry nor
-    COLLAB_HOME. Returns an exit code, or None to carry on.
+    So anything that ACTS as the agent — publishes to the hub or writes state
+    under this identity — stops when the repo holds more than one live claim
+    and nothing says which is ours, neither the ancestry nor COLLAB_HOME.
+    Reads keep the fallback. When it stops, this prints the exact command that
+    would not be ambiguous, one per directory, so the fix is a paste.
     """
     if os.environ.get("COLLAB_HOME") or claimed_home() is not None:
-        return None
+        return False
     held = held_homes()
     if len(held) < 2:
-        return None
+        return False
+    exe = Path(sys.argv[0]).name if sys.argv and sys.argv[0] else "collab"
+    if not exe.startswith("collab"):
+        exe = "collab"
+    command = getattr(args, "command", None) or "<command>"
     fail(f"{len(held)} agents hold collab state in this repo, and nothing"
          " proves which one you are")
+    print(dim("  acting from the wrong one would speak and publish under the"
+              " other agent's name, so this is refused"))
+    print(dim("  say which is yours, then re-run — one of:"))
     for home, lock in held:
-        print(f"    {c(home.name, '1')}  {lock.name} ({lock.role})")
-    print(dim("  writing into the wrong one would publish your figures under"
-              " the other agent's name, so this is refused"))
-    print(dim("  say which is yours: COLLAB_HOME=<one of those> "
-              f"{Path(sys.argv[0]).name} stats --report …"))
+        print(f"    COLLAB_HOME={home} {exe} {command} …"
+              + dim(f"    ({lock.name}, {lock.role})"))
     print(dim("  `collab lock` in each directory says who claimed it"))
-    return 1
+    return True
+
+
+def _require_own_profile(args: argparse.Namespace) -> SessionProfile:
+    """`_require_profile` for commands that act as the agent.
+
+    Same answer when the directory is provably ours or the only one here;
+    refuses instead of guessing when it is neither.
+    """
+    if _acting_as_a_stranger(args):
+        raise SystemExit(1)
+    return _require_profile(args)
 
 
 def _client(profile: SessionProfile) -> HubClient:
@@ -1007,7 +1025,7 @@ def _current_stats(profile: SessionProfile) -> dict[str, Any]:
 
 
 def cmd_send(args: argparse.Namespace) -> int:
-    profile = _require_profile(args)
+    profile = _require_own_profile(args)
     text = " ".join(args.text).strip()
     if not text:
         fail("nothing to send")
@@ -1157,7 +1175,7 @@ def cmd_working(args: argparse.Namespace) -> int:
     """Say what you are doing, so the others do not have to ask."""
     from . import activity as act
 
-    profile = _require_profile(args)
+    profile = _require_own_profile(args)
     what = " ".join(args.what).strip()
     if not what and not args.task:
         fail("say what you are working on")
@@ -1178,7 +1196,7 @@ def cmd_idle(args: argparse.Namespace) -> int:
     """Say that you have stopped, which is the half that gets forgotten."""
     from . import activity as act
 
-    profile = _require_profile(args)
+    profile = _require_own_profile(args)
     note = " ".join(args.note).strip() if args.note else ""
     stored = _publish_activity(profile, act.IDLE, what=note)
     ok(f"idle{' · ' + note if note else ''}")
@@ -1225,7 +1243,10 @@ def cmd_activity(args: argparse.Namespace) -> int:
 
 
 def cmd_task(args: argparse.Namespace) -> int:
-    profile = _require_profile(args)
+    # `list` and `show` only read; everything else is a claim, a proposal or a
+    # completion under this agent's name.
+    profile = (_require_profile(args) if args.action in ("list", "show")
+               else _require_own_profile(args))
     try:
         with _client(profile) as client:
             if args.action == "list":
@@ -1319,7 +1340,8 @@ def cmd_batch(args: argparse.Namespace) -> int:
     computed from a remembered snapshot, so `collab batch status` on two
     machines a second apart prints the same numbers or fails saying why.
     """
-    profile = _require_profile(args)
+    profile = (_require_own_profile(args) if args.action in ("start", "close")
+               else _require_profile(args))
     try:
         with _client(profile) as client:
             if args.action == "start":
@@ -1444,9 +1466,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
             print(dim(f"  understood fields: {', '.join(statmod.CANONICAL)}"))
             return 1
 
-        if (code := _refuse_to_write_as_a_stranger()) is not None:
-            return code
-        profile = _require_profile(args)
+        profile = _require_own_profile(args)
         # Stamped with whose they are: two agents in one repo publish from two
         # directories, and an unstamped file is one anybody can be given.
         statmod.write_stats(profile, figures)
@@ -1561,6 +1581,10 @@ def cmd_kill(args: argparse.Namespace) -> int:
             print(dim("  `collab sessions` lists what is here"))
             return 1
     else:
+        # Stopping a listener and releasing a lock are the other agent's to
+        # lose if the directory is theirs.
+        if _acting_as_a_stranger(args):
+            return 1
         current = SessionProfile.current()
         targets = [c for c in sessions
                    if current and c.session_id == current.session_id]
@@ -1875,7 +1899,9 @@ def cmd_watch(args: argparse.Namespace) -> int:
 
 
 def cmd_file(args: argparse.Namespace) -> int:
-    profile = _require_profile(args)
+    # Sending is under our name, and fetching deletes the host's copy in it.
+    profile = (_require_profile(args) if args.action == "list"
+               else _require_own_profile(args))
     try:
         with _client(profile) as client:
             if args.action == "send":
@@ -2270,6 +2296,10 @@ def cmd_wake(args: argparse.Namespace) -> int:
     if args.action == "deliver":
         return _wake_deliver(args, wk)
 
+    # Arming stores a command this directory's daemon then runs unattended;
+    # arming the other agent's daemon is not ours to do.
+    if args.action in ("set", "off") and _acting_as_a_stranger(args):
+        return 1
     profile = (SessionProfile.load(args.session) if getattr(args, "session", None)
                else SessionProfile.current())
     if profile is None:
@@ -2664,7 +2694,7 @@ def cmd_url(args: argparse.Namespace) -> int:
 
 
 def cmd_kick(args: argparse.Namespace) -> int:
-    profile = _require_profile(args)
+    profile = _require_own_profile(args)
     try:
         with _client(profile) as client:
             removed = client.revoke(args.name)
@@ -3279,6 +3309,8 @@ def cmd_color(args: argparse.Namespace) -> int:
     # Published NOW, not at the next start: stored only in the config, whoever
     # is looking at you would keep seeing the old colour with no way to know
     # why.
+    if _acting_as_a_stranger(args):
+        return 1
     profile = SessionProfile.current()
     if profile is None:
         print("  (no active session: it will be published when you join)")
@@ -3316,6 +3348,10 @@ def cmd_name(args: argparse.Namespace) -> int:
     else:
         final = set_default_name(args.value)
         ok(f"default display name is now {c(final, '1')}")
+    # The rename above is ours whatever happens; the one on the hub is not,
+    # unless the session it reaches is provably ours.
+    if _acting_as_a_stranger(args):
+        return 1
     profile = SessionProfile.current()
     if profile is not None:
         try:
