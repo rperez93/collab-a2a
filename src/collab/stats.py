@@ -57,6 +57,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .protocol import MONTHS, local_day_clock  # noqa: F401  MONTHS is read here too
+
 #: Fields we understand, and how to coerce them.
 CANONICAL: dict[str, type] = {
     "model": str,
@@ -375,6 +377,28 @@ STATS_STALE_AFTER = 30 * 60
 CLOCK_SKEW = 5.0
 
 
+def _stamp_of(stats: Any) -> float | None:
+    """The `reported_at` epoch, or None for anything that is not one.
+
+    Junk never raises. Both readers of the stamp are printed on every roster
+    row and on a curses pane, from a value a remote party wrote — and they
+    have to agree on what counts as a stamp, or the row would say a time for
+    a report whose age it calls unknown.
+    """
+    if not isinstance(stats, dict):
+        return None
+    raw = stats.get("reported_at")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return None
+    try:
+        stamp = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if stamp <= 0 or stamp != stamp or stamp in (float("inf"), float("-inf")):
+        return None
+    return stamp
+
+
 def reported_age(stats: Any, *, now: float | None = None) -> str:
     """How long ago these figures were reported, in words — never nothing.
 
@@ -384,20 +408,9 @@ def reported_age(stats: Any, *, now: float | None = None) -> str:
     unstamped figure is the older one, not the newer. Past `STATS_STALE_AFTER`
     the word «old» is added: «3h ago» beside a quota figure still reads as a
     quota figure, and the word is what does the work.
-
-    Junk never raises. This is printed on every roster row and on a curses
-    pane, from a value a remote party wrote.
     """
-    if not isinstance(stats, dict):
-        return "age unknown"
-    raw = stats.get("reported_at")
-    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
-        return "age unknown"
-    try:
-        stamp = float(raw)
-    except (TypeError, ValueError):
-        return "age unknown"
-    if stamp <= 0 or stamp != stamp or stamp in (float("inf"), float("-inf")):
+    stamp = _stamp_of(stats)
+    if stamp is None:
         return "age unknown"
     gap = (now if now is not None else time.time()) - stamp
     if gap < -CLOCK_SKEW:
@@ -419,6 +432,26 @@ def reported_age(stats: Any, *, now: float | None = None) -> str:
     else:
         words = f"{int(gap // 86400)}d ago"
     return f"{words} — old" if gap > STATS_STALE_AFTER else words
+
+
+def reported_when(stats: Any) -> str:
+    """The moment these figures were reported, as the reader's own clock.
+
+    The age says how fresh a figure is to the one reading it; the time is what
+    lets a room of people compare notes — «reported 14:05» means the same
+    thing on every screen, where «4m ago» is true for one reader for one
+    minute. Same words the transcript dates its messages with: the clock
+    alone when the stamp fell today, «2 sep 14:05» when it did not. Empty for
+    anything `reported_age` would call unknown, so the two never disagree.
+    """
+    stamp = _stamp_of(stats)
+    if stamp is None:
+        return ""
+    try:
+        wire = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stamp))
+    except (OverflowError, OSError, ValueError):
+        return ""
+    return local_day_clock(wire)
 
 
 def is_stale(stats: Any, *, now: float | None = None) -> bool:

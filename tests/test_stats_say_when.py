@@ -83,3 +83,47 @@ def test_the_roster_line_leaves_a_fresh_report_alone():
 def test_the_roster_line_marks_an_unstamped_report():
     line = tui.stat_line(_person(None))
     assert "unknown" in line, line
+
+
+# --- the clock beside the age -------------------------------------------------------
+
+def _local_clock_of(epoch):
+    import datetime as _dt
+    return _dt.datetime.fromtimestamp(epoch).strftime("%H:%M")
+
+
+def test_the_stats_row_says_the_time_as_well_as_the_age():
+    """«4m ago» tells one reader how fresh it is; a room of people comparing
+    notes need the moment itself. Both, in one bit: `reported 14:05 · 4m ago`."""
+    when = time.time() - 240
+    bits = cli._stat_bits(_person(240))
+    last = bits[-1]
+    assert _local_clock_of(when) in last, bits
+    assert "4m ago" in last, bits
+
+
+def test_a_stamp_from_another_day_carries_its_date():
+    """The clock alone reads as today. Yesterday's 14:05 is not today's."""
+    import datetime as _dt
+    when = time.time() - 26 * 3600
+    d = _dt.datetime.fromtimestamp(when)
+    bits = cli._stat_bits(_person(26 * 3600))
+    last = bits[-1]
+    assert str(d.day) in last and statmod.MONTHS[d.month - 1] in last, bits
+    assert _local_clock_of(when) in last, bits
+    assert "old" in last, bits
+
+
+def test_a_stamp_from_today_carries_no_date():
+    bits = cli._stat_bits(_person(30))
+    assert not any(m in bits[-1] for m in statmod.MONTHS), bits
+
+
+def test_junk_or_missing_stamps_show_no_clock():
+    """No stamp, no time — the same words as before, and nothing invented."""
+    assert cli._stat_bits(_person(None))[-1] == "age unknown"
+    for junk in ("lots", True, -5, "1e400"):
+        person = _person(None)
+        person["stats"]["reported_at"] = junk
+        assert cli._stat_bits(person)[-1] == "age unknown", junk
+        assert statmod.reported_when(person["stats"]) == ""

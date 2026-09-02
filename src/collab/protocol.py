@@ -11,7 +11,7 @@ from __future__ import annotations
 import time
 import unicodedata
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -241,6 +241,38 @@ def local_clock(ts: str, fmt: str = "%H:%M") -> str:
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone().strftime(fmt)
+
+
+#: SPELLED OUT RATHER THAN ASKED OF strftime. `%b` is locale-dependent, so a
+#: date beside a figure came out in whatever language the machine happened to
+#: be set to — and two people comparing one `collab stats` output cannot have
+#: half its dates in one language. The same table the transcript spells its
+#: dates from.
+MONTHS = ("jan", "feb", "mar", "apr", "may", "jun",
+          "jul", "aug", "sep", "oct", "nov", "dec")
+
+
+def local_day_clock(ts: str, *, today: date | None = None) -> str:
+    """«15:22» when it is today, «30 aug 15:22» when it is not.
+
+    The date appears only when it is needed: always showing it spends six
+    columns on every row to say something the reader already knew. Judged on
+    the reader's own calendar, like the clock — a stamp from 23:50 UTC is
+    «today» or «yesterday» according to where the reader sits.
+    """
+    clock = local_clock(ts)
+    if not clock:
+        return ""
+    try:
+        parsed = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        ).astimezone()
+    except ValueError:
+        return clock
+    day = parsed.date()
+    if day == (today if today is not None else datetime.now().date()):
+        return clock
+    return f"{day.day} {MONTHS[day.month - 1]} {clock}"
 
 
 @dataclass

@@ -1555,8 +1555,15 @@ def _stat_bits(person: dict[str, Any]) -> list[str]:
         # opposite decisions about who takes the next task. Always, even for a
         # fresh one: the reader has to be able to tell «fresh» from «the row
         # did not say».
-        from .stats import reported_age
-        bits.append(reported_age(stats))
+        #
+        # AND THE MOMENT ITSELF, beside the age. The age is one reader's
+        # figure — «4m ago» is true on one screen for one minute — where a
+        # clock time is the same fact for everyone comparing this output; a
+        # stamp the age calls unknown has no clock to give and says only that.
+        from .stats import reported_age, reported_when
+        age = reported_age(stats)
+        when = reported_when(stats)
+        bits.append(f"reported {when} · {age}" if when else age)
     return bits
 
 
