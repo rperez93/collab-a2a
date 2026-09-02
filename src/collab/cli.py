@@ -1621,7 +1621,10 @@ def cmd_discover(args: argparse.Namespace) -> int:
     found = peers.discover(include_stale=args.all)
     if args.json:
         print(json.dumps([{**p.__dict__, "joinable": p.joinable,
-                           "alive": p.alive} for p in found], indent=2))
+                           "alive": p.alive,
+                           "status": "online" if p.alive else "stale",
+                           "last_seen": int(p.last_seen())}
+                          for p in found], indent=2))
         return 0
 
     ident = peers.identity()
@@ -1646,8 +1649,15 @@ def cmd_discover(args: argparse.Namespace) -> int:
     joinable = [p for p in found if p.joinable]
     for peer in found:
         role = c("host", "32") if peer.role == "host" else "guest"
-        state = "" if peer.alive else dim(" (stale)")
-        print(f"  {c(peer.session_id, '36')}  {role}  as {c(peer.name, '1')}{state}")
+        # Said on every row, in a word. «online» used to be the ABSENCE of
+        # «(stale)», and an agent reading the listing has no way to tell a
+        # session that is up from one whose marker it missed — so it asked the
+        # user for a link instead.
+        if peer.alive:
+            state = c("online", "32")
+        else:
+            state = dim(f"stale (last seen {_ago_seconds(peer.last_seen())})")
+        print(f"  {c(peer.session_id, '36')}  {role}  as {c(peer.name, '1')}  {state}")
         print(f"      repo   {peer.repo}")
         print(f"      hub    {peer.url}")
         if peer.joinable:

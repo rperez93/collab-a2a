@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import global_config_path
+from .lockfile import process_alive
 
 #: A record is stale once its process is gone or it stops being refreshed.
 STALE_AFTER = 90.0
@@ -113,11 +114,14 @@ class Peer:
     def alive(self) -> bool:
         if (time.time() - self.updated_at) > STALE_AFTER:
             return False
-        try:
-            os.kill(self.pid, 0)
-        except (OSError, ProcessLookupError):
-            return False
-        return True
+        # Not `os.kill` here: a process this one may not signal is a live
+        # process (EPERM), and reading it as dead is what made every session on
+        # the machine look stale from inside a sandbox. See lockfile.process_alive.
+        return process_alive(self.pid)
+
+    def last_seen(self) -> float:
+        """Seconds since this record was last refreshed, never negative."""
+        return max(time.time() - self.updated_at, 0.0)
 
     @property
     def joinable(self) -> bool:

@@ -122,9 +122,10 @@ def is_running(profile: SessionProfile) -> int | None:
 
 
 def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except (OSError, ProcessLookupError):
+    # EPERM is a live process this one may not signal, not a dead one; the
+    # distinction lives in lockfile.process_alive so it cannot drift between
+    # the lock, the registry and this.
+    if not lockfile.process_alive(pid):
         return False
     # A zombie keeps its /proc entry and still answers `kill(pid, 0)`, so a
     # daemon that had already exited went on counting as a live one until
@@ -1442,11 +1443,11 @@ class Daemon:
         cfg = HubConfig.load(self.profile.session_id, self.profile.home)
         if cfg is None or not cfg.pid:
             return
-        try:
-            os.kill(cfg.pid, 0)
+        # Never `except OSError` around `kill(pid, 0)`: EPERM is a hub that is
+        # alive and not ours to signal, and restarting on top of it would put
+        # a second hub on the session.
+        if lockfile.process_alive(cfg.pid):
             return  # still alive; this is a network problem, not a dead hub
-        except (OSError, ProcessLookupError):
-            pass
 
         logger.warning("hub process %s is gone; restarting it", cfg.pid)
         log = (self.paths.root / "hub.log").open("a")

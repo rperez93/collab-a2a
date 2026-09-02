@@ -75,14 +75,44 @@ def ancestry(limit: int = 12) -> list[int]:
     return chain
 
 
-def _alive(pid: int) -> bool:
-    if not pid:
+def process_alive(pid: int) -> bool:
+    """Does this process exist? THE one answer, for every liveness check here.
+
+    `os.kill(pid, 0)` says two different things with two different errors, and
+    catching `OSError` flattened them into one. ESRCH (`ProcessLookupError`) is
+    «no such process». EPERM (`PermissionError`) is «there is one, and you may
+    not signal it» — which is every other agent's process seen from inside a
+    sandbox. Codex confines its commands so they cannot signal anything outside
+    the sandbox, so from inside it every peer read as dead and was pruned, and
+    every lock read as stale and was RELEASED on the agent holding it. That is
+    the failure this exists to stop, and why the two errors are told apart in
+    one place rather than at each call.
+
+    Anything else `kill` might say is read as alive too. Nothing here can name
+    such a case — signal 0 cannot be an invalid signal — and the destructive
+    branch is the «dead» one: a live lock cleared, a live record deleted, a
+    listener declared gone. An answer that cannot be read is not evidence of
+    death.
+
+    Zero and below are not a process: `kill(0, 0)` asks about the caller's own
+    process group and `kill(-1, 0)` about everything the user can reach, so
+    both would answer «alive» for a pid that was never recorded.
+    """
+    if not isinstance(pid, int) or pid <= 0:
         return False
     try:
         os.kill(pid, 0)
-    except (OSError, ProcessLookupError):
+    except ProcessLookupError:
         return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
     return True
+
+
+def _alive(pid: int) -> bool:
+    return process_alive(pid)
 
 
 @dataclass
