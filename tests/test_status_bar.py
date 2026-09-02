@@ -12,8 +12,12 @@ wrong unit, or run a subprocess on the redraw path.
 
 from __future__ import annotations
 
+import contextlib
 import curses
+import io
 import json
+import os
+import threading
 import time
 
 import pytest
@@ -351,7 +355,7 @@ def _no_terminal(monkeypatch):
     monkeypatch.setattr(curses, "ACS_HLINE", ord("-"), raising=False)
 
 
-def _viewer(tmp_path, cfg_path):
+def _viewer(tmp_path, cfg_path, view="both"):
     home = tmp_path / "collab"
     (home / "sessions" / "s").mkdir(parents=True)
     profile = SessionProfile(session_id="s", url="u", name="bob",
@@ -363,7 +367,7 @@ def _viewer(tmp_path, cfg_path):
     model.status = {"batch": {"done": 6, "total": 10, "fetched_at": time.time()}}
     model.own_stats = {"cost_usd": 3.1}
     model._state = "live"
-    return tui.Tui(model)
+    return tui.Tui(model, view=view)
 
 
 def _draw(viewer, win):
@@ -430,3 +434,207 @@ def test_turning_the_row_off_gives_its_line_back_to_the_panes(tmp_path, cfg):
     _draw(viewer, win)
     assert 29 not in win.rows, "the row is gone"
     assert viewer.chat.rows == with_row + 1, "and the pane grew into it"
+
+
+# --- what the command path must survive -------------------------------------
+
+def _settle(segment, seconds=5.0):
+    """Wait for the background run to finish, rather than sleeping a fixed gap."""
+    deadline = time.monotonic() + seconds
+    while segment._running and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+
+def test_output_that_is_not_utf8_is_replaced_rather_than_fatal(tmp_path):
+    """`text=True` decodes STRICTLY, and plenty of ordinary commands do not.
+
+    `ls` over a Latin-1 filename, `cat` of a Latin-1 file, `git log` under
+    `i18n.logOutputEncoding=latin1`, `grep -a` over a binary. Every one of them
+    raises UnicodeDecodeError, which is a ValueError — so it walked straight
+    through the `(OSError, SubprocessError)` this thread was catching.
+    """
+    bad = tmp_path / "latin1.txt"
+    bad.write_bytes("caf\xe9 au lait\n".encode("latin-1"))
+
+    segment = sb.CommandSegment()
+    segment._run(f"cat {bad}")
+
+    assert segment.text().startswith("caf"), "the readable part still lands"
+
+
+def test_a_command_that_cannot_be_decoded_does_not_disable_the_segment(tmp_path):
+    """The thread died before clearing `_running`, so `poll` refused for ever.
+
+    One undecodable byte, once, and the segment was gone for the rest of the
+    session: no text, and no way to ever run again. That is exactly the silent
+    death this class exists to avoid.
+    """
+    bad = tmp_path / "latin1.txt"
+    bad.write_bytes(b"\xff\xfe not utf-8 at all\n")
+
+    segment = sb.CommandSegment()
+    segment.poll(f"cat {bad}", 30)
+    _settle(segment)
+
+    assert segment._running is False, "the run flag was left set"
+    assert segment.poll("echo recovered", 0, now=time.time() + 10_000), \
+        "the segment never ran again"
+    _settle(segment)
+    assert segment.text() == "recovered"
+
+
+def test_the_thread_never_dies_and_so_never_paints_a_traceback(tmp_path):
+    """An escaping exception reaches `threading.excepthook`, which writes a
+    traceback to stderr — and under curses stderr IS the pane. Measured at 1636
+    bytes of it, painted over the conversation, out of a segment whose whole
+    promise is that it cannot disturb the draw.
+
+    The hook is watched directly rather than by capturing stderr or by reading
+    pytest's warning. Both of those miss it: pytest installs its own
+    `threading.excepthook`, so `redirect_stderr` sees nothing, and the warning
+    it raises instead arrives at teardown, after `recwarn` has been read. The
+    hook is the thing that does the printing, so the hook is what to watch.
+    """
+    bad = tmp_path / "latin1.txt"
+    bad.write_bytes(b"\xff\xfe\n")
+
+    died: list = []
+    previous = threading.excepthook
+    threading.excepthook = died.append
+    try:
+        segment = sb.CommandSegment()
+        segment.poll(f"cat {bad}", 30)
+        _settle(segment)
+    finally:
+        threading.excepthook = previous
+
+    assert not died, f"the thread died with {died[0].exc_type.__name__}"
+
+
+def test_the_command_cannot_eat_the_viewers_keystrokes():
+    """It inherited the viewer's stdin, so it read what the user was typing.
+
+    Under a pty a `head -c 5` in the status row swallowed five characters aimed
+    at the viewer. This row is a reader; a reader consumes no input.
+    """
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, b"typed at the viewer\n")
+    saved = os.dup(0)
+    try:
+        os.dup2(read_fd, 0)
+        sb.CommandSegment()._run("head -c 5")
+    finally:
+        os.dup2(saved, 0)
+        os.close(saved)
+        os.close(write_fd)
+
+    left = os.read(read_fd, 200)
+    os.close(read_fd)
+    assert left == b"typed at the viewer\n", "the command ate the reader's input"
+
+
+def test_any_failure_at_all_leaves_the_segment_usable_and_silent(monkeypatch):
+    """The broad catch, tested on something the lenient decode cannot mask.
+
+    `errors="replace"` removes the one failure we know about; the catch is for
+    the ones we do not. It runs on a thread, so anything that escapes goes to
+    `threading.excepthook` and is painted on the pane — there is no caller
+    above this to handle it.
+    """
+    def explode(*a, **kw):
+        raise RuntimeError("something nobody predicted")
+
+    monkeypatch.setattr(sb.subprocess, "run", explode)
+
+    died: list = []
+    previous = threading.excepthook
+    threading.excepthook = died.append
+    try:
+        segment = sb.CommandSegment()
+        segment.poll("anything", 30)
+        _settle(segment)
+    finally:
+        threading.excepthook = previous
+
+    assert not died, "the thread died"
+    assert segment.text() == ""
+    assert segment._running is False
+    assert segment.poll("echo back", 0, now=time.time() + 10_000)
+
+
+def test_the_flag_is_cleared_even_by_what_the_catch_does_not_catch(monkeypatch):
+    """Which is why it is a `finally` and not the last line of the `try`.
+
+    `except Exception` does not catch a BaseException, and a thread that took
+    one would leave `_running` set — and `poll` refuses for ever on a set flag,
+    so the segment would be gone for the rest of the session with nothing said.
+    """
+    def interrupt(*a, **kw):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(sb.subprocess, "run", interrupt)
+
+    segment = sb.CommandSegment()
+    segment._running = True
+    with pytest.raises(KeyboardInterrupt):
+        segment._run("anything")
+
+    assert segment._running is False, "the segment was left unable to run again"
+
+
+# --- a config value that is neither of the two exceptions we caught ----------
+
+def test_an_infinite_interval_does_not_stop_the_viewer_starting(cfg):
+    """`int(float("inf"))` raises OverflowError — not TypeError, not ValueError.
+
+    `json.load` accepts a bare `Infinity` token, so this is reachable from a
+    hand-edited config. It escaped `Tui.__init__`, which runs BEFORE any
+    draw-path guard exists, so `collab watch` did not start at all.
+    """
+    cfg.write_text('{"watch_status_interval": Infinity}')
+    assert (config.watch_status_settings()["interval"]
+            == config.DEFAULT_WATCH_STATUS_INTERVAL)
+
+
+@pytest.mark.parametrize("raw", [
+    '{"watch_status_interval": Infinity}',
+    '{"watch_status_interval": -Infinity}',
+    '{"watch_status_interval": NaN}',
+    '{"watch_status_interval": 1e400}',
+])
+def test_no_number_in_the_file_can_stop_the_row_being_read(raw, cfg):
+    cfg.write_text(raw)
+    assert (config.watch_status_settings()["interval"]
+            >= config.MIN_WATCH_STATUS_INTERVAL)
+
+
+def test_the_viewer_still_constructs_with_a_hostile_config(tmp_path, cfg):
+    """`Tui.__init__` reads the settings, and nothing above it catches."""
+    cfg.write_text('{"watch_status_interval": Infinity}')
+    _viewer(tmp_path, cfg)
+
+
+# --- and the single-pane views reserve the row on the same terms -------------
+
+@pytest.mark.parametrize("view", ["chat", "roster"])
+def test_turning_the_row_off_returns_its_line_in_a_single_pane_view(
+        view, tmp_path, cfg):
+    """The split view was guarded and these were not.
+
+    `_draw_single` does the same arithmetic on its own line, so it could drift
+    from `_draw` without a single test noticing — and it did not, but nothing
+    was watching.
+    """
+    viewer = _viewer(tmp_path, cfg, view=view)
+    pane = viewer.chat if view == "chat" else viewer.roster
+
+    win = _Pane()
+    _draw(viewer, win)
+    with_row = pane.rows
+    assert 29 in win.rows, "the row is drawn in this view"
+
+    config.save_watch_status(enabled=False)
+    win = _Pane()
+    _draw(viewer, win)
+    assert 29 not in win.rows, "the row is gone"
+    assert pane.rows == with_row + 1, "and the pane grew into it"

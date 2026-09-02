@@ -253,22 +253,57 @@ class CommandSegment:
     def _run(self, command: str) -> None:
         try:
             done = subprocess.run(command, shell=True, capture_output=True,
-                                  text=True, timeout=self._timeout)
+                                  # DECODED LENIENTLY. `text=True` alone decodes
+                                  # strictly, and a great many ordinary commands
+                                  # do not print UTF-8: `ls` over a Latin-1
+                                  # filename, `cat` of a Latin-1 file, `git log`
+                                  # under i18n.logOutputEncoding=latin1, `grep
+                                  # -a` over a binary. Each raised
+                                  # UnicodeDecodeError — a ValueError, so not
+                                  # one of the two caught below — and killed
+                                  # this thread. A byte we cannot read should
+                                  # cost that byte, not the segment.
+                                  text=True, errors="replace",
+                                  # NOTHING TO READ. Without this the command
+                                  # inherits the viewer's terminal, and a
+                                  # `head -c 5` in the status row swallowed five
+                                  # characters the user was typing AT the
+                                  # viewer. This row reports; it consumes no
+                                  # input.
+                                  stdin=subprocess.DEVNULL,
+                                  timeout=self._timeout)
             output = done.stdout if done.returncode == 0 else ""
-        except (OSError, subprocess.SubprocessError):
-            # A command that does not exist, or one that hung past its timeout.
-            # Both render nothing: a viewer that printed the error would print
-            # it four times a second in the row the keys live on.
-            output = ""
-        lines = output.splitlines()
-        # SCRUBBED, because this is text on its way to a terminal. It is the
-        # user's own command rather than a remote party's, but `git log -1
-        # --format=%s` puts somebody else's commit subject on the row and `gh
-        # pr view` puts a stranger's title there. An ESC in either is not text,
-        # it is an instruction to the terminal. Same reasoning as protocol.scrub.
-        self._text = scrub(lines[0]).strip()[:MAX_COMMAND_TEXT] if lines else ""
-        # Last, so `poll` cannot start a second run against a half-written
-        # value. Plain assignment and no lock: CPython publishes an attribute
-        # store atomically, and the reader is a draw that can happily show the
-        # previous line for one more frame.
-        self._running = False
+            lines = output.splitlines()
+            # SCRUBBED, because this is text on its way to a terminal. It is the
+            # user's own command rather than a remote party's, but `git log -1
+            # --format=%s` puts somebody else's commit subject on the row and
+            # `gh pr view` puts a stranger's title there. An ESC in either is
+            # not text, it is an instruction to the terminal. Same reasoning as
+            # protocol.scrub.
+            self._text = scrub(lines[0]).strip()[:MAX_COMMAND_TEXT] if lines else ""
+        except Exception:                                     # noqa: BLE001
+            # BROAD ON PURPOSE, and this is the one place in the file where that
+            # is the careful choice rather than the lazy one. This runs on a
+            # thread of its own, so an exception that escapes does not surface
+            # anywhere a caller could handle it: `threading.excepthook` writes
+            # the traceback to stderr, and under curses stderr is the pane —
+            # 1636 bytes of it painted over the conversation, measured. The
+            # narrow `(OSError, SubprocessError)` that used to be here let
+            # UnicodeDecodeError through and did exactly that.
+            #
+            # A command that does not exist, one that hung past its timeout, one
+            # whose output will not decode: all of them render nothing, because
+            # a viewer that printed the error would print it four times a second
+            # in the row the keys live on.
+            self._text = ""
+        finally:
+            # IN A `finally`, because the thread used to die before reaching it.
+            # One undecodable byte left this set for ever, `poll` refused every
+            # subsequent run, and the segment was gone for the rest of the
+            # session — the silent death this class exists to avoid.
+            #
+            # Last, so `poll` cannot start a second run against a half-written
+            # value. Plain assignment and no lock: CPython publishes an
+            # attribute store atomically, and the reader is a draw that can
+            # happily show the previous line for one more frame.
+            self._running = False

@@ -383,7 +383,7 @@ def watch_settings() -> dict[str, Any]:
         layout = DEFAULT_WATCH_LAYOUT
     try:
         size = int(cfg.get("watch_roster_size") or DEFAULT_ROSTER_SIZE)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         size = DEFAULT_ROSTER_SIZE
     position = str(cfg.get("watch_roster_position") or DEFAULT_ROSTER_POSITION)
     if position not in ("top", "bottom", "left", "right"):
@@ -449,7 +449,18 @@ def watch_status_settings() -> dict[str, Any]:
     try:
         interval = int(cfg.get("watch_status_interval")
                        or DEFAULT_WATCH_STATUS_INTERVAL)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError is in that list because it is neither of the other two
+        # and it was reachable: `json.load` accepts a bare `Infinity` token, and
+        # `int(float("inf"))` raises OverflowError. This function is read from
+        # `Tui.__init__`, which runs BEFORE the draw is wrapped in anything, so
+        # one word in a hand-edited config stopped `collab watch` starting at
+        # all — the exact failure this reader's own docstring claims to prevent.
+        # `float("nan")` was already covered; it raises ValueError.
+        #
+        # The two sibling readers above and below had the identical hole and
+        # were widened with it, because `collab config` now reads all three in
+        # one command and any one of them would take the listing down.
         interval = DEFAULT_WATCH_STATUS_INTERVAL
     return {
         "enabled": True if enabled is None else bool(enabled),
@@ -494,7 +505,7 @@ def stats_source() -> tuple[str, int]:
     command = str(cfg.get("stats_command") or "")
     try:
         interval = int(cfg.get("stats_interval") or DEFAULT_STATS_INTERVAL)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         interval = DEFAULT_STATS_INTERVAL
     return command, max(15, interval)
 
