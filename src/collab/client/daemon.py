@@ -641,6 +641,29 @@ class Daemon:
         Growth undone inside the window sums back to nothing, and nothing is
         the right answer: the bar is where it was, and there is no movement
         left to explain.
+
+        IT DOES NOT SUPPRESS ON A FLAT PERCENTAGE, and the argument that it
+        should is answered here rather than had again. Summing leaves one loud
+        reading: a batch being populated shows «0% 0/10 +10», because the
+        denominator really did move by ten. The marker exists to explain a
+        FALL, so «record a change only when the percentage actually fell» looks
+        like making the trigger match the purpose, and it would silence that.
+
+        It would also tie a denominator's explanation to a ROUNDED figure.
+        `percent` floors, so one task added to a hundred-task batch need not
+        move the integer at all, and the rule would then withhold the only
+        account available exactly where the change is too subtle to see —
+        which is this file's own defect in a new place, an explanation missing
+        where a reader most needs one. Bought, in exchange, to quieten a marker
+        in the one situation that misleads nobody: the bar has not fallen, so
+        there is nothing for a reader to misattribute to it.
+
+        Measured before it was rejected. Spaced the way a session spaces
+        things, the population note expires long before any work lands, and
+        the case the marker is for reads «58% 7/12 +2» with no contamination;
+        the two merge only when a batch is created, populated, worked and grown
+        inside DELTA_SHOWN_FOR, which is a shell script and not a session. If
+        this is picked up again, measure the large-batch rounding case first.
         """
         batch_id = str(figures.get("id") or "")
         total = int(figures.get("total") or 0)
