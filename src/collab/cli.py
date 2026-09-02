@@ -1784,6 +1784,88 @@ def _view_for(layout: str, view: str) -> str:
     return view
 
 
+# --- demo: the simulated session, and the fake agent beside it ------------------
+#
+# `collab watch --demo` is the viewer on a conversation nobody is having;
+# `collab demo` adds the other half of the screenshot — an agent's terminal that
+# is a picture — and puts the two side by side. See client/demo_agent.
+
+#: Said the same way by every demo entry point, so a test can hold them to it.
+NEEDS_TERMINAL = "needs a terminal: it opens the full-screen viewer"
+
+
+def _demo_watch(*, layout: str, roster_size: int, view: str,
+                limit: int | None) -> int:
+    """The viewer on the simulated session. Nothing here touches the network
+    or the disk: the model reads a log that lives in memory."""
+    from . import demo as demo_session
+    from .client import tui
+
+    tui.ROSTER_SHARE = max(5, min(roster_size, 90)) / 100
+    # `--layout tmux` splits a real session across two panes, each rejoining
+    # by id. There is no session to rejoin here, so it reads as the built-in
+    # split — which is the same two panes, in one window.
+    view = _view_for("split" if layout == "tmux" else layout, view)
+    opening = tui.OPEN_WITH if limit is None else max(limit, 0)
+    try:
+        return tui.run(demo_session.profile(), view=view, limit=opening,
+                       model=demo_session.model())
+    except KeyboardInterrupt:
+        return 0
+
+
+def _self_argv() -> list[str]:
+    """How to run THIS collab again from another pane.
+
+    The console script, when that is what is running; `python -m collab.cli`
+    when it is the module — a pane handed the path to `cli.py` gets
+    «permission denied», because the file is not the program.
+    """
+    exe = Path(sys.argv[0]).resolve()
+    if exe.suffix == ".py":
+        return [sys.executable, "-m", "collab.cli"]
+    return [str(exe)]
+
+
+def cmd_demo(args: argparse.Namespace) -> int:
+    """`agent`: the fake agent alone. `watch`: the viewer alone, as `watch
+    --demo`. Neither: both at once — two real tmux panes when inside tmux, one
+    window split down the middle when not."""
+    if not sys.stdout.isatty():
+        fail(f"demo {NEEDS_TERMINAL}")
+        return 1
+    if args.what == "watch":
+        saved = watch_settings()
+        return _demo_watch(layout=saved["layout"], roster_size=saved["roster_size"],
+                           view="both", limit=None)
+
+    from .client import demo_agent, watch as w
+
+    try:
+        if args.what == "agent":
+            return demo_agent.run()
+        if w.in_tmux() and w.tmux_available():
+            # The viewer in a new pane to the right, this pane for the agent.
+            # No COLLAB_HOME goes across: there is no session directory to
+            # point at, and a pane that found a real one would be showing it.
+            argv = [*_self_argv(), "demo", "watch"]
+            passthrough = {k: os.environ[k]
+                           for k in ("COLLAB_CONFIG", "NO_COLOR", "PYTHONPATH")
+                           if k in os.environ}
+            try:
+                w.open_tmux_pane(argv, env=passthrough, percent=50, horizontal=True)
+            except RuntimeError as exc:
+                fail(str(exc))
+                return 1
+            return demo_agent.run()
+        return demo_agent.run_together()
+    except KeyboardInterrupt:
+        return 0
+
+
+# --- end of demo ------------------------------------------------------------------
+
+
 def cmd_watch(args: argparse.Namespace) -> int:
     """A readable live transcript, for a person to leave open in a pane."""
     from .client import watch as w
@@ -1810,24 +1892,11 @@ def cmd_watch(args: argparse.Namespace) -> int:
     # them used to mean finding a second agent and hoping they said something
     # long enough to fold. Nothing here touches the network or the disk.
     if getattr(args, "demo", False):
-        from . import demo as demo_session
-
         if not sys.stdout.isatty():
-            fail("--demo needs a terminal: it opens the full-screen viewer")
+            fail(f"--demo {NEEDS_TERMINAL}")
             return 1
-        from .client import tui
-
-        tui.ROSTER_SHARE = max(5, min(roster_size, 90)) / 100
-        # `--layout tmux` splits a real session across two panes, each rejoining
-        # by id. There is no session to rejoin here, so it reads as the built-in
-        # split — which is the same two panes, in one window.
-        view = _view_for("split" if layout == "tmux" else layout, args.view)
-        opening = tui.OPEN_WITH if args.limit is None else max(args.limit, 0)
-        try:
-            return tui.run(demo_session.profile(), view=view, limit=opening,
-                           model=demo_session.model())
-        except KeyboardInterrupt:
-            return 0
+        return _demo_watch(layout=layout, roster_size=roster_size,
+                           view=args.view, limit=args.limit)
 
     profile = _require_profile(args)
 
@@ -3646,6 +3715,7 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("skills install", "teach your coding agents to use collab"),
         ("statusline install", "show connection state in your status bar"),
         ("update", "check for, and install, a newer collab"),
+        ("demo [agent|watch]", "a fake agent and a fake session, for screenshots"),
     ]),
 ]
 
@@ -3953,6 +4023,16 @@ def build_parser() -> argparse.ArgumentParser:
                          "session and nothing on the network")
     add_session_flag(wa)
     wa.set_defaults(func=cmd_watch)
+
+    # --- demo (see cmd_demo) ---
+    dm = sub.add_parser("demo", help="a fake agent beside the simulated session, "
+                                     "for screenshots — nothing real is touched")
+    dm.add_argument("what", nargs="?", choices=["agent", "watch"],
+                    help="agent: the fake agent's terminal alone · watch: the "
+                         "viewer on the simulated session alone (as `watch "
+                         "--demo`) · neither: both, side by side")
+    dm.set_defaults(func=cmd_demo)
+    # --- end of demo ---
 
     f = sub.add_parser("file", help="share files and artifacts without pasting them as text")
     f.add_argument("action", choices=["send", "get", "list", "rm"])
