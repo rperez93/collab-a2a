@@ -786,7 +786,8 @@ class Model:
         """
         if self._older is None:
             first = int(getattr(self.events[0], "seq", 0) or 0) if self.events else 0
-            self._older = bool(first) and self.inbox.has_before(first)
+            self._older = bool(first) and self.inbox.has_before(
+                first, exclude=NOT_CONVERSATION)
         return self._older
 
     def roster_is_current(self) -> bool:

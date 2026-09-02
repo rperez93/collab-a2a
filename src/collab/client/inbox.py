@@ -373,16 +373,26 @@ class Inbox:
             ).fetchone()
         return int(row["c"])
 
-    def has_before(self, seq: int) -> bool:
+    def has_before(self, seq: int, *, exclude: tuple[str, ...] = ()) -> bool:
         """Is there anything older than ``seq`` in here?
 
         Asked rather than inferred from the seq itself: the numbers are the
         hub's, and a participant never receives what was said in other people's
         direct messages, so «my oldest is 12» does not mean eleven are missing.
+
+        ``exclude`` for the same reason every other read here takes it, and it
+        was the one path that did not. This answer labels the pane «older above
+        (keep scrolling, or g)», and `load_older` is what has to produce them —
+        so an answer taken over a wider set than that call draws from is an
+        offer nothing can fill. A daemon publishes its state before anybody
+        speaks, which puts undrawable rows at the very bottom of the inbox,
+        which is exactly where this question gets asked.
         """
+        clause, extra = _without(exclude)
         with self._lock:
             row = self._db.execute(
-                "SELECT 1 FROM inbox WHERE seq < ? LIMIT 1", (seq,)
+                f"SELECT 1 FROM inbox WHERE seq < ?{clause} LIMIT 1",
+                (seq, *extra),
             ).fetchone()
         return row is not None
 
