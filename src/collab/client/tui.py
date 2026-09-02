@@ -41,6 +41,16 @@ from ..protocol import (
     KIND_TASK,
     task_line,
 )
+try:
+    from ..protocol import file_outcome
+except ImportError:
+    # UNTIL THE ROOM-FILE BRANCH LANDS. `protocol.file_outcome` is the one
+    # wording for what an ack did to the host's copy — «deleted from the
+    # host», or how many are still to collect — shared with `watch` so the
+    # pane and the transcript cannot disagree. A protocol from before it only
+    # ever deleted. Remove this fallback with the merge.
+    def file_outcome(body: dict) -> str:
+        return "deleted from the host"
 from .. import activity, peers
 from .. import themes
 from ..config import watch_roster_settings, watch_status_settings
@@ -1171,7 +1181,9 @@ def _body_lines(env: Envelope, width: int) -> list[str]:
     if env.kind == KIND_FILE:
         b = env.body
         if b.get("action") == "received":
-            return _wrap(f"collected {b.get('name')} (deleted from the host)", width)
+            # The protocol's words for what the ack did, the same ones `watch`
+            # prints: a room file is not gone when one person has it.
+            return _wrap(f"collected {b.get('name')} ({file_outcome(b)})", width)
         size = int(b.get("size") or 0)
         return _wrap(f"shared {b.get('name')} ({size / 1024:.0f} KB) · "
                      f"collab file get {b.get('id')}", width)
