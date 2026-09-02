@@ -948,9 +948,15 @@ def cmd_join(args: argparse.Namespace) -> int:
                       "or run `collab discover`"))
             _hosting_is_not_the_fallback()
             return 1
-        url = peer.join_url()
+        # THE ADDRESS THAT STAYS ON THIS MACHINE. `peer.url` is the one the
+        # host SHARES — a tunnel when there is one — and joining through it
+        # sends an agent one directory over out through the internet and back,
+        # for this request and, because the profile keeps the address, for
+        # every request after it. The record says where the hub answers here;
+        # that is the address a neighbour joins at.
+        url = peer.local_join_url()
         ok(f"found {c(peer.session_id, '36')} hosted by {peer.name} "
-           f"in {Path(peer.repo).name}")
+           f"in {Path(peer.repo).name} — connecting at {url.split('#')[0]}")
 
     try:
         profile, snapshot, status = onboard.join_session(
@@ -1743,6 +1749,11 @@ def cmd_discover(args: argparse.Namespace) -> int:
         print(f"  {c(peer.session_id, '36')}  {role}  as {c(peer.name, '1')}  {state}")
         print(f"      repo   {peer.repo}")
         print(f"      hub    {peer.url}")
+        # Where a join FROM HERE goes, when that differs from the shared
+        # address: over loopback, not out through the tunnel and back.
+        here = peer.local_join_url().split("#")[0]
+        if peer.joinable and here != peer.url:
+            print(f"      local  {here}  {dim('(what join --local connects to)')}")
         if peer.joinable:
             print(f"      join   {dim(exe + ' join --local ' + peer.session_id)}")
         elif peer.role == "guest":

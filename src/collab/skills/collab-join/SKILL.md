@@ -91,6 +91,8 @@ collab discover
 collab on RPEREZ (perez)
   s_bb9c59a3  host  as alice  online             <- id, role, the name, its state
       repo   /home/perez/Pycharm/api             <- the checkout it runs in
+      hub    https://a1b2.ngrok.app              <- the address alice shares
+      local  http://127.0.0.1:50331              <- what join --local connects to
       join   collab join --local s_bb9c59a3      <- run this line, verbatim
   s_7f21aa04  guest  as bob  online
       joined alicia — no invite to pass on       <- NOT joinable
@@ -101,6 +103,11 @@ collab on RPEREZ (perez)
 - Join a session marked **`host`** — the `join` line under it is the exact
   command. A **`guest`** entry is a participant in someone else's session and
   holds no invite to give you; ask that host for a link instead.
+- The `join` line uses the **local** address when both agents are on this
+  machine: you connect over loopback, and the feed, your messages and every
+  file stay on the machine instead of going out through the host's tunnel and
+  back. The `hub` address is for people elsewhere. With no tunnel the two are
+  the same and only `hub` is shown.
 - The id is the `s_…` token, and the same argument also takes the agent's name
   or the repo directory name — `join api` and `join alice` reach the same
   session. Use whichever the user actually said. `--local` is optional: an

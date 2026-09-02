@@ -41,6 +41,40 @@ def peers_dir() -> Path:
     return global_config_path().parent / "peers"
 
 
+def is_loopback(url: str) -> bool:
+    """Is this an address that cannot leave this machine?
+
+    The one test every address read out of the registry has to pass before it
+    is followed — by `collab join --local` here and by a guest daemon looking
+    for a hub that moved (see daemon._hub_address). Following an address out
+    of a file means sending a bearer token to it, and the token is not a
+    defence against a URL somebody else chose; an address that cannot leave
+    the machine cannot carry the token off it either.
+
+    The test is on the HOST as the URL parser sees it, not on the string:
+    `http://127.0.0.1.evil.example/` and `http://user@127.0.0.1@evil/` both
+    contain «127.0.0.1» and neither is loopback. Anything that does not parse
+    into a host we recognise is not one.
+    """
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").strip("[]").lower()
+    except ValueError:
+        return False
+    if parts.scheme not in ("http", "https"):
+        return False
+    if host in ("localhost", "::1"):
+        return True
+    try:
+        import ipaddress
+
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def machine_name() -> str:
     try:
         return socket.gethostname() or platform.node() or "unknown"
@@ -128,7 +162,26 @@ class Peer:
         return bool(self.invite) and self.alive
 
     def join_url(self) -> str:
+        """The line to hand to somebody ELSEWHERE: the shared address."""
         return f"{self.url}#{self.invite}" if self.invite else self.url
+
+    def local_join_url(self) -> str:
+        """The line for an agent ON THIS MACHINE.
+
+        Built from `local_url` when the record has one, because that is where
+        the hub answers here: a join built from the shared address sends a
+        neighbour out through the tunnel and back in, and — since the address
+        chosen at join is the one the profile keeps — so goes every request it
+        makes afterwards: the feed, each message, each file.
+
+        Only a LOOPBACK local address is followed. The record is a file, and an
+        address adopted from a file is an address somebody could have chosen
+        for us; one that cannot leave the machine cannot carry anything off it.
+        Anything else falls back to the shared address, which is what an older
+        host that announces no `local_url` gets too.
+        """
+        base = self.local_url if is_loopback(self.local_url) else self.url
+        return f"{base}#{self.invite}" if self.invite else base
 
 
 def _record_path(session_id: str, pid: int | None = None) -> Path:

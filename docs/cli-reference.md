@@ -127,7 +127,7 @@ collab join [--agent AGENT] [--local] [--name NAME] [--focus FOCUS]
 |---|---|
 | `url` | The join URL (`https://host#INVITE`), or the session id or repository name of a session already running on this machine. |
 | `--agent AGENT` | Which of this repository's agents is joining. |
-| `--local` | Look the name up on this machine, and never read it as an address. Anything that is not an address is looked up anyway, so this only forces it. |
+| `--local` | Look the name up on this machine, and never read it as an address. Anything that is not an address is looked up anyway, so this only forces it. A session found this way is joined at the address the hub answers on this machine — loopback, not the shared tunnel — and every later request stays there. |
 | `--name NAME` | Your display name. |
 | `--focus FOCUS` | What you are working on, announced on arrival. |
 | `--home FOLDER` | State folder for this session. |
@@ -405,6 +405,13 @@ process exists, not whether this process may signal it, so an agent running in
 a sandbox that cannot signal other processes still sees them as online.
 `--json` carries `alive` and `joinable` as booleans, `status` as `online` or
 `stale`, and `last_seen` as seconds since the record was last refreshed.
+
+The `hub` row is the address the host shares — a tunnel when there is one. When
+the hub also answers on this machine, a `local` row shows that loopback address:
+it is the one the printed `join --local` line connects to, so two agents on one
+machine talk over loopback rather than out through the tunnel and back. Without
+a `local` row, `join --local` uses the `hub` address. In `--json`, the two are
+`url` and `local_url`.
 
 ## update
 
