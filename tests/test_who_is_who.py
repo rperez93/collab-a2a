@@ -147,12 +147,23 @@ def test_the_title_and_the_status_line_agree(tmp_path):
 def test_the_title_names_an_outdated_daemon(tmp_path):
     title = _title(_viewer(tmp_path, name="bob", host="alice", is_host=False,
                            status={"version": "1.22.2"}))
-    assert "daemon v1.22.2 — restart it" in title
+    assert "daemon v1.22.2 — collab daemon stop, then start" in title
+    assert "hub v" not in title, "one instruction at a time; theirs first"
+
+
+def test_the_title_names_an_outdated_hub_as_the_hosts(tmp_path):
+    from collab import __version__
+    title = _title(_viewer(tmp_path, name="bob", host="alice", is_host=False,
+                           status={"version": __version__,
+                                   "hub_version": "1.22.2"}))
+    assert f"v{__version__}" in title, "the daemon's own version stays"
+    assert "hub v1.22.2 — the host runs collab kill" in title
 
 
 def test_the_title_shows_a_current_daemons_version_plainly(tmp_path):
     from collab import __version__
     title = _title(_viewer(tmp_path, name="bob", host="alice", is_host=False,
-                           status={"version": __version__}))
+                           status={"version": __version__,
+                                   "hub_version": __version__}))
     assert f"v{__version__}" in title
-    assert "restart" not in title
+    assert "daemon v" not in title and "hub v" not in title

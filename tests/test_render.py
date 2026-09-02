@@ -12,8 +12,12 @@ from collab.statusline import render as r
 
 
 def _status(**kw):
+    from collab import __version__
+    # A daemon and a hub on THIS collab, unless a test says otherwise: an
+    # absent `hub_version` is an unknown hub, and unknown is drawn as a warning.
     base = {"name": "bob", "host": "alice", "state": "live",
-            "others_connected": 0, "unread": 0, "heartbeat": time.time()}
+            "others_connected": 0, "unread": 0, "heartbeat": time.time(),
+            "version": __version__, "hub_version": __version__}
     return {**base, **kw}
 
 
@@ -240,18 +244,46 @@ def test_a_daemon_on_another_version_is_named_on_the_line():
     what it is reading and what to do about it."""
     out = r.render(_status(version="1.22.2"))
     assert "daemon v1.22.2" in out
-    assert "restart" in out
+    assert "collab daemon stop, then start" in out
 
 
 def test_a_daemon_on_this_version_is_shown_as_a_plain_version():
     from collab import __version__
     out = r.render(_status(version=__version__))
     assert f"v{__version__}" in out
-    assert "restart" not in out
+    assert "daemon v" not in out and "hub v" not in out
 
 
-def test_the_json_payload_says_whether_the_daemon_is_outdated(monkeypatch):
-    monkeypatch.setattr(r, "read_status", lambda p: _status(version="1.22.2"))
+def test_an_old_hub_is_named_as_the_hosts_to_fix():
+    """Distinct from the daemon's wording: a guest cannot restart the host's
+    hub, and a line that said «restart it» would send them after a process
+    that is not theirs."""
+    out = r.render(_status(hub_version="1.22.2"))
+    assert "hub v1.22.2" in out
+    assert "the host runs collab kill" in out
+    assert "daemon v" not in out
+
+
+def test_a_hub_of_unknown_version_is_a_warning_and_not_a_pass():
+    out = r.render(_status(hub_version=None))
+    assert "hub v?" in out
+
+
+def test_an_old_daemon_is_the_one_thing_said_until_it_is_restarted():
+    """Its file cannot speak for the hub; one instruction at a time."""
+    out = r.render(_status(version="1.22.2", hub_version=None))
+    assert "daemon v1.22.2" in out
+    assert "hub v" not in out
+
+
+def test_the_json_payload_says_whether_the_daemon_and_the_hub_are_outdated(
+        monkeypatch):
     monkeypatch.setattr(r.SessionProfile, "current",
                         classmethod(lambda cls, cwd=None: object()))
+    monkeypatch.setattr(r, "read_status", lambda p: _status(version="1.22.2"))
     assert r.status_payload()["daemon_outdated"] is True
+    monkeypatch.setattr(r, "read_status", lambda p: _status(hub_version=None))
+    payload = r.status_payload()
+    assert payload["daemon_outdated"] is False
+    assert payload["hub_outdated"] is True
+    assert payload["hub_version"] is None

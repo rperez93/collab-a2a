@@ -1368,7 +1368,8 @@ how many others are connected**:
 ○  collab  v1.2.0  bob → alice  offline         red    — disconnected or removed
 ●  collab  v1.2.0  alice (host)  +2             the host's own view
 ●  collab  v1.2.0  bob → alice  +3  ↑update     a newer collab is available
-●  collab  daemon v1.1.0 — restart it  bob → alice  +3    the daemon predates this collab
+●  collab  daemon v1.1.0 — collab daemon stop, then start  bob → alice  +3
+●  collab  v1.2.0  bob → alice  +3  hub v1.1.0 — the host runs collab kill, then collab host --resume
 ```
 
 It prints nothing at all when there is no session.
@@ -1382,13 +1383,18 @@ agents share one checkout, both lines also name their state directory —
 `perez (host) [.collab]` beside `perez (guest) → perez [.collab-bob]` — so a
 line in the wrong terminal can be recognised as the wrong one.
 
-`daemon v1.1.0 — restart it` means the file the line reads is written by a
-daemon on other code than the collab drawing it: `collab update` with a session
-open leaves that session's daemon running the old version, and whatever the new
-version draws that the old one never wrote is simply missing. `collab daemon
-stop` and `collab daemon start` in that repo puts it on the new code; a host
-also has a hub on the old code, and `collab kill` then `collab host --resume`
-replaces both.
+The two version warnings are about two processes, and the wording says whose
+each is to fix. `collab update` with a session open leaves that session's
+processes running the old code, and whatever the new version draws that the old
+one never wrote is simply missing. `daemon v1.1.0 — …` is **your** listener,
+the one writing the file the line reads: `collab daemon stop` then `collab
+daemon start` in that repo puts it on the new code. `hub v1.1.0 — …` is the
+**host's** hub, whose snapshot every participant's figures come from — an old
+hub blanks the message count for fully updated guests too — and only the host
+can replace it, with `collab kill` then `collab host --resume`. `hub v?` is a
+hub too old to say its version, which is treated as outdated rather than
+assumed current. An old daemon is reported alone until it is restarted; it
+never wrote the hub's version, so its file cannot speak for the hub.
 
 ```bash
 collab statusline install                    # every host detected here

@@ -376,6 +376,39 @@ def test_a_status_file_from_an_older_collab_is_named_as_such(body, tmp_path):
     daemon.paths.status.write_text(body)
     status = read_status(daemon.profile)
     assert sb.messages_segment(status.get("messages")) == ""
-    assert sb.daemon_note(status) == "daemon v1.22.2 — restart it"
+    assert sb.daemon_note(status) == \
+        "daemon v1.22.2 — collab daemon stop, then start"
     assert sb.daemon_note({"version": __version__}) == ""
     assert sb.daemon_note({}) == "", "no version at all is no claim"
+
+
+def test_an_old_hub_is_named_as_the_hosts_to_fix():
+    """The hub is a process of the host's, and its snapshot is what EVERY
+    participant draws the count from — a hub without `messages` blanked the
+    row for fully updated guests. The daemon copies the hub's version into
+    `status.json` as `hub_version`; a guest is told whose it is to fix."""
+    from collab import __version__
+
+    current = {"version": __version__}
+    assert sb.hub_note({**current, "hub_version": __version__}) == ""
+    assert sb.hub_note({**current, "hub_version": "1.22.2"}) == \
+        "hub v1.22.2 — the host runs collab kill, then collab host --resume"
+
+
+def test_a_hub_that_never_said_its_version_is_unknown_and_not_current():
+    """`hub_version: null` is a hub from before the field — exactly the hub
+    whose snapshot also lacks the count, so it is the one most likely stale."""
+    from collab import __version__
+
+    assert sb.hub_note({"version": __version__, "hub_version": None}) \
+        .startswith("hub v? — the host runs")
+    assert sb.hub_note({"version": __version__}).startswith("hub v? —")
+
+
+def test_an_old_daemon_is_reported_before_its_hub_is_judged():
+    """An old daemon never wrote `hub_version`, so its absence says nothing
+    about the hub; and the daemon is the reader's own to restart first."""
+    old = {"version": "1.22.2"}
+    assert sb.daemon_note(old)
+    assert sb.hub_note(old) == ""
+    assert sb.hub_note({}) == "", "no daemon version at all is no claim"

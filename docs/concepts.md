@@ -369,7 +369,13 @@ A daemon from before the figure existed is the common way to meet that absence:
 `collab update` with a session open leaves its daemon running the old code and
 writing `status.json` without the field. The file carries the daemon's version,
 and when it differs from the collab drawing the pane, the title bar says so —
-`daemon v1.22.2 — restart it` — instead of drawing fewer segments in silence.
+`daemon v1.22.2 — collab daemon stop, then start` — instead of drawing fewer
+segments in silence. The host's hub is a second process on the old code, and
+its snapshot is what every participant's count comes from, so the daemon copies
+the hub's version into the file too and the title says `hub v1.22.2 — the host
+runs collab kill, then collab host --resume` when it differs; a hub too old to
+say its version reads `hub v?` and is treated as outdated, because it is
+precisely the hub whose snapshot also lacks the count.
 
 ### The viewer's status row
 

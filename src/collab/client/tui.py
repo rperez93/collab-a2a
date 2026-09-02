@@ -1951,6 +1951,11 @@ class Tui:
             tail += f" {note} "
         elif version:
             tail += f" v{version} "
+        if note := statusbar.hub_note(m.status):
+            # And the host's hub, whose snapshot is what every pane in the
+            # session draws from. Only the host can replace it, and the
+            # wording says so — a guest reading this has nothing to restart.
+            tail += f" {note} "
         # Placed by COLUMNS: the tail holds a `→` or a `—`, and a name may be
         # anything; `len()` put a kanji name one cell past the pane's edge.
         win.addnstr(0, max(width - _w(tail) - 1, 0), _clip(tail, max(width - 1, 0)),

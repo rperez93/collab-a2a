@@ -274,14 +274,52 @@ def daemon_note(status: Any) -> str:
 
     Nothing when the versions agree, and nothing when the file names none — a
     file with no version is from before the field, and saying `daemon v? —
-    restart it` about it would be a guess dressed as a reading.
+    …` about it would be a guess dressed as a reading.
+
+    The wording says what to do, because the reader is the one who can do it:
+    the daemon is theirs. The hub is not — see `hub_note`.
     """
     if not isinstance(status, dict):
         return ""
     version = str(status.get("version") or "")
     if not version or version == __version__:
         return ""
-    return f"daemon v{version} — restart it"
+    return f"daemon v{version} — collab daemon stop, then start"
+
+
+def hub_note(status: Any) -> str:
+    """Names a hub running a different collab than the one drawing.
+
+    A host's hub is a separate process from their daemon, and an upgrade under
+    a running session leaves it on the old code just the same — and an old hub
+    is worse than an old daemon, because its snapshot is what EVERY participant
+    draws from: a hub without `messages` blanked the count for fully updated
+    guests too. The hub puts its version on the snapshot and the daemon copies
+    it into `status.json` as `hub_version`, beside its own `version`.
+
+    Two rules, in this order:
+
+    * Only when the daemon is current. An old daemon never wrote `hub_version`,
+      so its absence says nothing about the hub; and the daemon is the reader's
+      own to restart, after which the file gains the field and the hub can be
+      judged. One problem at a time, and theirs first — see `daemon_note`.
+    * `null` or missing is UNKNOWN, and unknown is drawn as `hub v?` rather
+      than passed as current: a hub that put no version on its snapshot is
+      one from before the field, which is precisely the hub most likely to be
+      stale — it is the one whose snapshot also lacks the count.
+
+    The wording is distinct from the daemon's on purpose: a guest reading
+    this cannot fix it, and has to be told whose it is to fix.
+    """
+    if not isinstance(status, dict):
+        return ""
+    if not status.get("version") or daemon_note(status):
+        return ""
+    hub = status.get("hub_version")
+    if hub is not None and str(hub) == __version__:
+        return ""
+    shown = f"v{hub}" if hub else "v?"
+    return f"hub {shown} — the host runs collab kill, then collab host --resume"
 
 
 def compose(*, notice: str = "", keys: Any = "", batch: Any = None,

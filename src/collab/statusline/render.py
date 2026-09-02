@@ -22,7 +22,8 @@ from ..config import SessionProfile, claimed_home
 from ..protocol import scrub
 from ..client.daemon import (DEAD_AFTER, STALE_AFTER, effective_state,
                              is_running, read_status)
-from ..client.statusbar import daemon_note, state_dir_label, who as _who
+from ..client.statusbar import (daemon_note, hub_note, state_dir_label,
+                                who as _who)
 
 RESET = "\033[0m"
 COLORS = {
@@ -194,6 +195,12 @@ def render(status: dict[str, Any] | None = None, *, width: int | None = None,
     elif version:
         parts.append(_paint(f"v{version}", "dim"))
     parts += [who, tail]
+    if note := hub_note(status):
+        # The host's hub on other code: every participant's figures come off
+        # its snapshot, and only the host can replace it. After the identity,
+        # so the reader sees whose session it is before being told what the
+        # host of it has to do.
+        parts.append(_paint(note, "reconnecting"))
     if unread:
         # A SPACE AFTER THE ENVELOPE. U+2709 is one column by every width table
         # and is drawn two columns wide by a good many terminals — Windows
@@ -374,6 +381,11 @@ def status_payload(cwd: Path | None = None) -> dict[str, Any]:
         # same silence to explain when the two differ.
         "version": status.get("version"),
         "daemon_outdated": bool(daemon_note(status)),
+        # The hub's, as the daemon copied it off the snapshot: None is a hub
+        # from before it said, which `hub_outdated` counts as outdated — see
+        # statusbar.hub_note for why unknown is not current.
+        "hub_version": status.get("hub_version"),
+        "hub_outdated": bool(hub_note(status)),
         "update_available": _update_available(),
         "name": status.get("name"),
         "host": status.get("host"),
