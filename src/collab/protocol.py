@@ -82,13 +82,25 @@ def file_outcome(body: dict[str, Any]) -> str:
     """
     if body.get("deleted", "remaining" not in body):
         return "deleted from the host"
-    remaining = int(body.get("remaining") or 0)
-    if remaining == 0:
+    # A COUNT THAT IS NOT A COUNT SAYS NOTHING. This was `int(x or 0)`, and the
+    # body is a remote party's: `"lots"` raised, and none of the four renderers
+    # that call this — the transcript, the watch pane, the viewer, `file get`
+    # — wrap the call, so a hub sending junk here took the reader down rather
+    # than one line. `True` is an int to `int()` and is not one person still
+    # to collect; a negative is not a count of anything.
+    raw = body.get("remaining")
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        return "kept on the host for now"
+    if raw == 0:
         # Nobody was awaited — an empty room, or a hub that never wrote the
         # audience down — so the clock ends it, not an ack.
         return "kept on the host for the rest of the room"
-    who = ", ".join(str(n) for n in body.get("awaiting") or [])
-    still = f"{remaining} still to collect"
+    # Names are the hub's too: scrubbed like every other remote string that
+    # lands in a terminal, and a non-list is nobody rather than an error.
+    names = body.get("awaiting")
+    who = ", ".join(scrub(str(n)) for n in names
+                    if isinstance(n, (str, int))) if isinstance(names, list) else ""
+    still = f"{raw} still to collect"
     return f"{still} ({who})" if who else still
 
 
