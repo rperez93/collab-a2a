@@ -1383,6 +1383,30 @@ def test_a_closed_batch_at_100_percent_cannot_be_mistaken_for_a_live_one(
     assert "nothing is open" in out and "20m ago" in out
 
 
+def test_a_batch_closed_a_moment_ago_says_so_in_english(
+        cli_profile, monkeypatch, capsys):
+    """«closed just now ago» — the reading `collab batch close` itself produces.
+
+    `activity.elapsed` answers with a duration past ninety seconds and with the
+    phrase «just now» below it, and the caller appended «ago» to both. Every
+    test on this row used an age of twenty minutes, so the one case the command
+    prints for the person who just closed the batch was the one case never
+    covered.
+    """
+    from collab import cli
+
+    hub = _FakeHub({"id": "B_1", "name": "the migration", "state": "closed",
+                    "opened_by": "host", "closed_at": time.time() - 2,
+                    "total": 3, "done": 3, "withdrawn": 0, "outstanding": 0,
+                    "percent": 100, "complete": True, "holding": []})
+    monkeypatch.setattr(cli, "_client", lambda p: hub)
+
+    assert cli.cmd_batch(_cli_args(action="close", name=None)) == 0
+    out = capsys.readouterr().out
+    assert "closed just now" in out
+    assert "just now ago" not in out
+
+
 def test_collab_status_withholds_a_batch_figure_it_can_no_longer_refresh(
         cli_profile, monkeypatch, capsys):
     """`collab status` reads a file the daemon wrote, and that daemon may have

@@ -1313,9 +1313,9 @@ def _describe_batch(figures: dict[str, Any] | None, *, action: str = "status") -
         # confusing as an unexplained drop.
         print(f"  {'withdrawn':<12} {withdrawn} cancelled, out of the count")
     if closed:
-        since = activity.elapsed({"since": figures.get("closed_at")})
+        since = activity.ago({"since": figures.get("closed_at")})
         print(f"  {'state':<12} "
-              + c(f"closed{f' {since} ago' if since else ''}"
+              + c(f"closed{f' {since}' if since else ''}"
                   " — nothing is open, and nothing new is being counted", "33"))
     else:
         print(f"  {'state':<12} open")

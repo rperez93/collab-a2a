@@ -137,6 +137,12 @@ def describe(activity: Any, *, width: int = 0) -> str:
     return line
 
 
+#: Below the first bucket `elapsed` answers with a PHRASE rather than a
+#: duration, which is why `ago` below exists. Named so the two agree by
+#: construction instead of by a string literal repeated in both.
+JUST_NOW = "just now"
+
+
 def elapsed(activity: Any) -> str:
     """How long this state has been true, in words. Empty when unknowable."""
     if not isinstance(activity, dict):
@@ -148,12 +154,30 @@ def elapsed(activity: Any) -> str:
     if gap < 0 or not activity.get("since"):
         return ""
     if gap < 90:
-        return "just now"
+        return JUST_NOW
     if gap < 3600:
         return f"{int(gap // 60)}m"
     if gap < 86400:
         return f"{int(gap // 3600)}h"
     return f"{int(gap // 86400)}d"
+
+
+def ago(activity: Any) -> str:
+    """The same instant as `elapsed`, said so that it reads as English.
+
+    `elapsed` answers with a duration past a minute and a half and with the
+    phrase «just now» below it, and a caller appending «ago» is right about the
+    first and wrong about the second: `collab batch close` printed «closed just
+    now ago» on exactly the reading it exists to produce, which is somebody
+    closing a batch and being told about it.
+
+    The grammar sits beside the arithmetic rather than at each call site,
+    because the call site is where it was got wrong.
+    """
+    said = elapsed(activity)
+    if not said or said == JUST_NOW:
+        return said
+    return f"{said} ago"
 
 
 #: An activity is re-asserted by the daemon on a timer, so `updated_at` is a
