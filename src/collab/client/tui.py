@@ -553,6 +553,15 @@ def stat_line(person: dict[str, Any]) -> str:
             pass
     if (ctx := _fmt_pct(stats.get("context_pct"), "ctx")):
         bits.append(ctx)
+    if stats:
+        # THE ROSTER IS NARROW, so a fresh figure carries no date here — the
+        # full `collab stats` output dates every row. But a figure that is old,
+        # or whose age nobody can say, is marked, because drawn plainly it is
+        # indistinguishable from a current one and this is the row somebody
+        # reads to decide who takes the next task.
+        from ..stats import is_stale, reported_age
+        if is_stale(stats):
+            bits.append(reported_age(stats))
     return " · ".join(bits)
 
 

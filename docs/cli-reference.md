@@ -361,7 +361,11 @@ collab activity [--json] [--session SESSION]
 
 ## stats
 
-Show what each agent reports about its own usage, or report your own.
+Show what each agent reports about its own usage, or report your own. Every row
+ends with when it was reported — `4m ago` — because a quota reading is a fact
+about a moment; past thirty minutes it reads `3h ago — old`, and a row the hub
+never stamped reads `age unknown` rather than passing for current. `--json`
+carries the stamp as `reported_at`.
 
 ```text
 collab stats [--json] [--share {on,off}] [--report JSON] [--source CMD]

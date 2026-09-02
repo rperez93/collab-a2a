@@ -53,6 +53,7 @@ that already emit something close.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -361,6 +362,59 @@ def sanitise(reported: dict[str, Any]) -> dict[str, Any]:
 # So the file says who wrote it, and the reader checks before publishing. The
 # stamp is the participant id where there is one — it survives a rename, which
 # a name does not — and the state directory otherwise.
+
+#: Past this, a usage figure is called old rather than merely dated. Thirty
+#: minutes because the shortest quota window anybody reports is five hours: a
+#: reading half an hour stale can be a tenth of a window out, which is the
+#: difference between «has headroom» and «is about to be throttled».
+STATS_STALE_AFTER = 30 * 60
+
+
+def reported_age(stats: Any, *, now: float | None = None) -> str:
+    """How long ago these figures were reported, in words — never nothing.
+
+    The hub stamps `reported_at` when a report arrives (see hub.merge_stats).
+    A row with no stamp came from a hub that predates it, and its age is
+    UNKNOWN — which is said, because saying nothing reads as current, and an
+    unstamped figure is the older one, not the newer. Past `STATS_STALE_AFTER`
+    the word «old» is added: «3h ago» beside a quota figure still reads as a
+    quota figure, and the word is what does the work.
+
+    Junk never raises. This is printed on every roster row and on a curses
+    pane, from a value a remote party wrote.
+    """
+    if not isinstance(stats, dict):
+        return "age unknown"
+    raw = stats.get("reported_at")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return "age unknown"
+    try:
+        stamp = float(raw)
+    except (TypeError, ValueError):
+        return "age unknown"
+    if stamp <= 0 or stamp != stamp or stamp in (float("inf"), float("-inf")):
+        return "age unknown"
+    gap = (now if now is not None else time.time()) - stamp
+    if gap < 0:
+        # A stamp in the future is a clock that disagrees with ours, not a
+        # report from a moment ago.
+        return "age unknown"
+    if gap < 60:
+        words = f"{int(gap)}s ago"
+    elif gap < 3600:
+        words = f"{int(gap // 60)}m ago"
+    elif gap < 86400:
+        words = f"{int(gap // 3600)}h ago"
+    else:
+        words = f"{int(gap // 86400)}d ago"
+    return f"{words} — old" if gap > STATS_STALE_AFTER else words
+
+
+def is_stale(stats: Any, *, now: float | None = None) -> bool:
+    """Old, or of unknown age. Fresh is the only answer that says no."""
+    text = reported_age(stats, now=now)
+    return "old" in text or "unknown" in text
+
 
 OWNER_KEY = "_owner"
 

@@ -6,6 +6,8 @@ the next task, so the figures have to reach everyone, not just the host.
 
 from __future__ import annotations
 
+import time
+
 from collab.config import share_stats_enabled
 
 
@@ -166,3 +168,45 @@ def test_a_window_update_refreshes_that_window(client, session, host_headers):
                 json={"stats": {"quotas": {"five_hour": {"used_pct": 90}}}})
     windows = _person(client, host_headers, "bob")["stats"]["quotas"]
     assert windows["five_hour"]["used_pct"] == 90.0
+
+
+# --- when was this true? -------------------------------------------------------
+#
+# A quota reading is a fact about a moment. `collab stats` printed the number
+# and nothing about the moment, so a 91 % five-hour window reported three hours
+# ago read exactly like one reported just now — and the two call for opposite
+# decisions about who takes the next task.
+
+def test_the_hub_stamps_when_usage_arrived(client, session, host_headers):
+    """The hub's clock, at merge time: the one clock every participant shares."""
+    bob = _join(client, session, "bob")
+    before = time.time()
+    client.post("/ext/collab/v1/messages", headers=_headers(bob),
+                json={"text": "x", "stats": {"quota_five_hour": 40.0}})
+    stats = _person(client, host_headers, "bob")["stats"]
+    assert "reported_at" in stats, "the roster does not say when this was true"
+    assert before - 1 <= float(stats["reported_at"]) <= time.time() + 1
+
+
+def test_a_client_cannot_backdate_or_postdate_its_own_report(client, session,
+                                                             host_headers):
+    """A participant's own `reported_at` is a remote party's choice of value;
+    the hub's clock overrides it."""
+    bob = _join(client, session, "bob")
+    client.post("/ext/collab/v1/messages", headers=_headers(bob),
+                json={"text": "x", "stats": {"quota_five_hour": 40.0,
+                                             "reported_at": 1.0}})
+    stamped = float(_person(client, host_headers, "bob")["stats"]["reported_at"])
+    assert stamped > 1_000_000_000, "the client's stamp was believed"
+
+
+def test_a_later_report_moves_the_stamp(client, session, host_headers):
+    bob = _join(client, session, "bob")
+    client.post("/ext/collab/v1/messages", headers=_headers(bob),
+                json={"text": "x", "stats": {"quota_five_hour": 40.0}})
+    first = float(_person(client, host_headers, "bob")["stats"]["reported_at"])
+    time.sleep(0.02)
+    client.post("/ext/collab/v1/messages", headers=_headers(bob),
+                json={"text": "y", "stats": {"cost_usd": 1.0}})
+    second = float(_person(client, host_headers, "bob")["stats"]["reported_at"])
+    assert second > first

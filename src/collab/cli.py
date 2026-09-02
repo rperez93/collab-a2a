@@ -1548,6 +1548,15 @@ def _stat_bits(person: dict[str, Any]) -> list[str]:
         bits.append(f"{int(stats['tokens_out']) / 1000:.0f}k out")
     if stats.get("context_pct") is not None:
         bits.append(f"ctx {float(stats['context_pct']):.0f}%")
+    if bits:
+        # WHEN THAT WAS TRUE. Every figure above is a fact about a moment, and
+        # the row said nothing about the moment — so a reading from three hours
+        # ago read exactly like one from just now, and the two call for
+        # opposite decisions about who takes the next task. Always, even for a
+        # fresh one: the reader has to be able to tell «fresh» from «the row
+        # did not say».
+        from .stats import reported_age
+        bits.append(reported_age(stats))
     return bits
 
 

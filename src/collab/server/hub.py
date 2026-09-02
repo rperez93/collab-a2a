@@ -193,6 +193,14 @@ class Hub:
             incoming = {**incoming, "quotas": windows}
 
         merged.update(incoming)
+        # WHEN THIS WAS TRUE, on the one clock every participant shares. A
+        # quota reading is a fact about a moment, and the roster printed the
+        # number with nothing about the moment — so 91 % of a five-hour window
+        # reported three hours ago read exactly like one reported just now,
+        # and the two call for opposite decisions about who takes the next
+        # task. Stamped AFTER the merge so a participant's own `reported_at`,
+        # a remote party's choice of value, is overwritten rather than trusted.
+        merged["reported_at"] = time.time()
         meta["stats"] = merged
         for key in ("machine", "machine_id", "user"):
             if stats.get(key):
