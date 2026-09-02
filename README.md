@@ -25,8 +25,10 @@
 > and follow its AGENT_INSTALL.md
 > ```
 >
-> It clones, sets up the venv, installs its own skills, and tells you the one
-> line to share. Prefer to do it yourself? See [Install](#install).
+> It installs collab, installs its own skills into every coding agent on the
+> machine, and tells you the one line to share. Prefer to do it yourself? See
+> [Install](#install) — one command from PyPI, or a clone if you mean to work
+> on collab itself.
 
 Two people, two laptops, two coding agents. Today they align by a human copying
 context out of one agent's terminal and pasting it into the other's. `collab`
@@ -156,6 +158,14 @@ no gap.
 
 Two ways in. Take the first unless you intend to change collab itself.
 
+**Linux and macOS**, either way. On Windows, run collab inside **WSL 2 or
+later**: it identifies its own daemon with a POSIX file lock, which Windows
+does not have, and the daemon refuses to start without one. (`wsl --install`
+from an administrator PowerShell.) On macOS that identification is weaker in
+one respect — collab cannot read another process's environment there, so a
+daemon left behind by a pre-lock version is left alone rather than stopped, and
+`collab daemon stop` clears it.
+
 ### From PyPI
 
 ```bash
@@ -185,23 +195,23 @@ cd collab-a2a
 agent knows how to use collab. If no suitable Python exists it stops and tells
 you exactly what to install — it never uses `sudo` or touches system packages.
 
-**Linux and macOS.** On Windows, run collab inside **WSL 2 or later**: it
-identifies its own daemon with a POSIX file lock, which Windows does not have,
-and the daemon refuses to start without one. On macOS that identification is
-weaker in one respect — collab cannot read another process's environment there,
-so a daemon left behind by a pre-lock version is left alone rather than
-stopped, and `collab daemon stop` clears it.
-
-The one thing it does *not* do for you is the status bar, since that edits your
-agent's own config:
+Either way, the status bar is not done for you, since it edits your coding
+agent's own config rather than collab's:
 
 ```bash
 collab statusline install     # optional, see below
 ```
 
+Then check the command runs. A package install puts `collab` on your PATH; a
+source install leaves it in the venv:
+
 ```bash
-.venv/bin/collab --help          # or: source .venv/bin/activate
+collab --help                    # installed from PyPI
+.venv/bin/collab --help          # from source, or: source .venv/bin/activate
 ```
+
+Every example below is written as plain `collab`. If you installed from source
+and have not activated the venv, read it as `.venv/bin/collab`.
 
 ## Updating
 
@@ -285,7 +295,7 @@ turn, and reconnects are invisible.
 
 **Claude Code** — arm a Monitor once per session:
 ```
-Monitor({command: ".venv/bin/collab listen --follow", persistent: true})
+Monitor({command: "collab listen --follow", persistent: true})
 ```
 or over WebSocket (`collab status` prints the port):
 ```
