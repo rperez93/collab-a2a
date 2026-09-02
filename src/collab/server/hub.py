@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from .. import __version__
 from ..batch import DONE_STATE, WITHDRAWN_STATE, percent, tally
 from ..protocol import (DEFAULT_ROOM, Envelope, KIND_CHAT, KIND_HELLO,
                         KIND_PRESENCE, bounded_meta)
@@ -305,4 +306,11 @@ class Hub:
             "recent": [e.to_dict() for e in self.store.history(viewer=viewer, limit=history)],
             "seq": self.store.max_seq(),
             "server_time": time.time(),
+            # WHICH COLLAB THIS HUB RUNS. The hub is its own process, and an
+            # upgrade underneath a running session leaves it on the old code as
+            # surely as it leaves the daemon — the daemon says so about itself
+            # in status.json, the hub said nothing. An old hub whose snapshot
+            # had no `messages` blanked the count for every participant, fully
+            # updated guests included, and no screen could say why.
+            "version": __version__,
         }

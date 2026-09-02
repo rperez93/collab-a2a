@@ -602,6 +602,13 @@ class Daemon:
                 "note": self._wake_note,
             },
             "version": __version__,
+            # The hub's, under its own name, because the two are fixed by two
+            # different people: a stale daemon is `collab daemon stop` then
+            # `start` by whoever runs it, a stale hub is the host re-hosting.
+            # None when the snapshot carries none — a hub from before the field
+            # existed — and that reads as UNKNOWN, not as current: it is the
+            # hub most likely to be the stale one.
+            "hub_version": self.snapshot.get("version"),
         }
         tmp = self.paths.status.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload))
