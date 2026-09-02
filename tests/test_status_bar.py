@@ -660,12 +660,20 @@ def test_the_roster_pane_keeps_its_row_when_only_the_personal_one_is_off(
     exists at all.
     """
     viewer = _viewer(tmp_path, cfg, view="roster")
+    viewer.model.status = _roster_row()
 
     config.save_watch_status(enabled=False)
     win = _Pane()
     _draw(viewer, win)
     assert 29 in win.rows, "the session's row went with the reader's"
-    assert "batch" in win.rows[29], win.rows[29]
+    # NAMED BY WHAT ONLY IT HAS. `batch` appears on the reader's row too, so
+    # asserting it proves a row was drawn and not WHICH row — this test passed
+    # against a build where the roster branch was deleted entirely and the pane
+    # fell through to the personal bar. The message count is on the session's
+    # row alone, and the spend is on the reader's alone, so the pair of them
+    # tells the two apart.
+    assert "128 messages" in win.rows[29], win.rows[29]
+    assert "$3.10" not in win.rows[29], win.rows[29]
 
 
 # --- the roster panel's own row: figures that are true for everybody ---------
