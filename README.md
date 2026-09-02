@@ -822,7 +822,9 @@ $ collab theme -l
 ```
 
 `classic` is what collab ships: time, name, running text. Dense, and what you
-want when you are reading the session as a record.
+want when you are reading the session as a record. Messages longer than eight
+lines fold behind a «show more» you click; `collab fold off` unfolds
+everything, `collab fold 12` moves the line.
 
 Anything else is a file you write. The renderer can put each message in a
 framed box, side them by speaker, group them, separate days and fold long ones
@@ -930,7 +932,7 @@ $ collab theme --new midnight
 ---
 layout: bubbles
 own_side: right
-fold: 4
+fold: 8
 frame: $DEFAULT_COLOR
 ...
 ---

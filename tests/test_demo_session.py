@@ -72,11 +72,9 @@ def test_something_in_it_is_long_enough_to_fold(monkeypatch, layout, fold):
 
     THE FOLDING IS PINNED HERE, and it has to be. `conversation_rows` reads the
     live theme and the reader's own override, and both of those belong to
-    whoever is running the tests: `classic` is the only built-in, it is the
-    default, and it ships `fold: 0`. So on a stock install — no themes folder,
-    no `theme` key — nothing folds and the assertion cannot pass, while on a
-    machine whose owner happens to use a folding theme it does. A test that
-    reports the tester's configuration is not reporting the demo.
+    whoever is running the tests: a themes folder with a `fold: 0` file, or a
+    `collab fold off`, and nothing folds and the assertion cannot pass. A test
+    that reports the tester's configuration is not reporting the demo.
     """
     resolved = dict(themes.DEFAULTS) | {"layout": layout, "fold": fold}
     monkeypatch.setattr(tui, "_current_theme", lambda: resolved)
@@ -86,19 +84,37 @@ def test_something_in_it_is_long_enough_to_fold(monkeypatch, layout, fold):
     assert any(r.button for r in rows), "no «show more» to click"
 
 
-def test_nothing_folds_under_the_theme_that_actually_ships(monkeypatch):
-    """The other half of the same fact, said out loud rather than discovered.
+def test_the_theme_that_ships_folds_the_long_messages_and_only_those(monkeypatch):
+    """The shipped experience, said out loud rather than discovered.
 
-    `classic` does not fold, so the demo opens with no «show more» anywhere.
-    That is the shipped experience, and it is worth a test of its own so that
-    changing the built-in's `fold` is a decision somebody makes on purpose.
+    `classic` folds now, and the number it folds at was chosen against this
+    script — see `themes.FOLD` for the figures. At eighty columns only the two
+    file dumps fold. On the panes the viewer is actually opened in — `collab
+    watch --tmux`, 35 % of the terminal, 27 to 41 columns — the log layout's
+    body is a handful of columns and ordinary messages run to seven lines, so
+    the share folded there is the number that decides: a fold of four took
+    two-thirds of the messages at 40 columns, six took 40 %, eight takes 18 %.
+    This pins both halves: there IS a «show more» on the demo, and it is on a
+    minority of what was said, at the ordinary width and at the narrow ones.
     """
     resolved = dict(themes.DEFAULTS) | themes.BUILTIN["classic"]
     monkeypatch.setattr(tui, "_current_theme", lambda: resolved)
     monkeypatch.setattr(tui, "fold_override", lambda: None)
 
-    rows = conversation_rows(demo.events(), 80, demo.YOU)
-    assert not any(r.button for r in rows)
+    said = [e for e in demo.events() if e.kind == KIND_CHAT]
+    for width, at_most in ((80, 0.10), (27, 0.20), (41, 0.20)):
+        rows = conversation_rows(demo.events(), width, demo.YOU)
+        folded = {r.seq for r in rows if r.button}
+        assert folded, f"nothing folds at {width}: the fold is off"
+        share = len(folded) / len(said)
+        assert share <= at_most, \
+            f"{len(folded)} of {len(said)} messages fold at {width} — that hides the conversation"
+
+
+def test_the_default_fold_is_the_built_in_theme_s(monkeypatch):
+    """One number: a theme file that says nothing about folding, the shipped
+    theme, and `collab theme --new`'s template all agree."""
+    assert themes.DEFAULTS["fold"] == themes.BUILTIN["classic"]["fold"] == themes.FOLD == 8
 
 
 @pytest.mark.parametrize("hour,minute", [(0, 1), (0, 30), (7, 0), (13, 45),
@@ -167,9 +183,9 @@ def test_it_renders_at_every_width_with_folding_on_too(monkeypatch, layout,
     `classic` at 40 columns produced a 52-column row: a 31-column indent with a
     21-column «▸ show more (2 lines)» appended raw, while every header row
     beside it went through `_clip`. It never showed because the shipped
-    `classic` has `fold: 0` and this row is never drawn — so the guard above,
-    which reads the live theme, only ever measured the unfolded case on a
-    stock install.
+    `classic` then had `fold: 0` and this row was never drawn — so the guard
+    above, which reads the live theme, only ever measured the unfolded case on
+    a stock install.
     """
     resolved = dict(themes.DEFAULTS) | {"layout": layout, "fold": 2}
     monkeypatch.setattr(tui, "_current_theme", lambda: resolved)

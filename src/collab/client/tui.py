@@ -1413,8 +1413,12 @@ def classic_rows(env: Envelope, width: int, me: str,
     · YOUR OWN COLOUR GOES ON THE TEXT. There is no frame here to put it on, and
       a global setting that only works in one theme is not global. Whoever picks
       a colour picks it to be recognised, not to be recognised in one view.
-    · folding, IF it was asked for. By default this theme does not fold: people
-      who choose the log view usually want it all in front of them.
+    · folding, at the theme's number. The shipped `classic` did not fold, on
+      the theory that people who choose the log view want it all in front of
+      them; a forty-line file dump between the reader and the three lines
+      after it is what that theory looked like, and it folds now like every
+      other theme — see themes.FOLD. `collab fold off` is still there for
+      whoever really does want it all.
     """
     expanded = expanded if expanded is not None else set()
     T = theme or _current_theme()
@@ -1485,8 +1489,9 @@ def classic_rows(env: Envelope, width: int, me: str,
         # It goes wrong only where the header column is wide and the pane is
         # not: `classic` at 40 columns put a 31-column indent in front of a
         # 21-column label and returned a row of 52. Nobody met it because the
-        # shipped `classic` has `fold: 0` and never draws this row at all —
-        # until `collab fold` made every theme able to.
+        # shipped `classic` then had `fold: 0` and never drew this row at all —
+        # until `collab fold` made every theme able to, and then `classic`
+        # itself started folding.
         room = max(width - _w(label), 0)
         rows.append(Row(_clip(indent[:room] + label, width), C_BUTTON,
                         curses.A_BOLD, seq, True, pair))

@@ -174,6 +174,27 @@ def validate(key: str, value: Any, where: str = "") -> tuple[Any, str | None]:
     return str(value), None
 
 
+#: Lines of a message shown before «show more». EIGHT, measured rather than
+#: guessed, because a fold that hides most messages is worse than none. The
+#: demo script is sixty-seven chat messages of the lengths agents actually
+#: write, rendered through `conversation_rows`:
+#:
+#:   * at 80, 100 and 120 columns, in the log layout and in bubbles, a fold of
+#:     six and a fold of eight fold the same two messages — the file dumps of
+#:     twelve and thirteen lines. Nothing ordinary is touched by either.
+#:   * in the panes the viewer is opened in most — `collab watch --tmux`, 35 %
+#:     of the terminal, so 34 to 41 columns — the log layout has an eight- to
+#:     fifteen-column body and a two-sentence message is six or seven lines.
+#:     There a fold of four took 40 to 46 of the 67 behind a button, six took
+#:     21 to 27, and eight took 9 to 12. A third of the conversation folded
+#:     is not a fold, it is a conversation you cannot read.
+#:
+#: Eight lines is also still short: a twelve-line dump loses a third of itself
+#: to the button, and anything longer folds as it should. One number for the
+#: built-in, the default and the template, so a theme file that says nothing
+#: about folding behaves like the one that ships.
+FOLD = 8
+
 #: The one that comes in the box. `classic` is the project's original look, and
 #: it is the only built-in on purpose: a second one would be the project having
 #: an opinion about how a conversation should look, and that opinion belongs to
@@ -181,7 +202,11 @@ def validate(key: str, value: Any, where: str = "") -> tuple[Any, str | None]:
 BUILTIN: dict[str, dict[str, Any]] = {
     "classic": {
         "layout": "log",
-        "fold": 0,
+        # FOLDS. It shipped with `fold: 0` on the theory that people who choose
+        # the log view want it all in front of them; what they got was a
+        # forty-line file dump between them and the three lines that followed
+        # it. The number and the reasoning are `FOLD`, above.
+        "fold": FOLD,
         "header": "$DEFAULT_COLOR",
         "text": "$DEFAULT_COLOR",
         "tones": False,
@@ -193,7 +218,7 @@ BUILTIN: dict[str, dict[str, Any]] = {
 #: What a key nobody declares is worth. Without this, a theme saying only
 #: `frame: $GOOD` would end up with no width and no frame characters.
 DEFAULTS: dict[str, Any] = {
-    "layout": "bubbles", "fold": 4,
+    "layout": "bubbles", "fold": FOLD,
     "bubble_share": 0.90, "bubble_max_share": 0.40, "bubble_min": 28,
     "narrow_at": 56, "frame": "$SPEAKER", "header": "$SPEAKER",
     "text": "$TEXT", "own_side": "right", "group_by_author": True,

@@ -143,6 +143,11 @@ def test_a_theme_that_does_not_fold_has_nothing_to_click(monkeypatch, folder):
     (folder / "flat.md").write_text("---\nlayout: log\nfold: 0\n---\n",
                                     encoding="utf-8")
     monkeypatch.setattr(tui_mod, "theme", lambda: "flat")
+    # THE READER'S OWN OVERRIDE IS THEIRS, not the test's. `effective_fold`
+    # puts `collab fold N` over the theme, and it reads the real global config,
+    # so on a machine whose owner had run `collab fold 4` this drew a button
+    # over a theme that said `fold: 0` and failed for the tester's settings.
+    monkeypatch.setattr(tui_mod, "fold_override", lambda: None)
 
     rows = conversation_rows([_long_message()], 80, "someone-else")
     assert not any(r.button for r in rows)

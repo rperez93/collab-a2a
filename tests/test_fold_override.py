@@ -91,8 +91,8 @@ def test_an_override_of_zero_beats_a_theme_that_folds(monkeypatch):
 
 
 def test_a_theme_of_zero_is_not_overridden_by_absence(monkeypatch):
-    """`classic` ships `fold: 0`. Nobody setting an override must not turn its
-    folding on."""
+    """A theme file that says `fold: 0` has asked for no folding. Nobody
+    setting an override must not turn its folding on."""
     assert _rows(monkeypatch, declared_fold=0, override=None) == 0
 
 
