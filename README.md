@@ -1437,6 +1437,15 @@ if you have not set one. If your `statusLine` is an inline command rather than a
 script, it moves that command into a script verbatim and puts collab above it.
 `uninstall` removes only collab's block.
 
+**Collab takes the first line, and everything else follows on the next.** The
+block ends its row with a line break, so the segments after it — Boost,
+local-tts, whatever else the script hosts — start a new line instead of
+stretching collab's past the terminal. A session that has no collab in it gets
+nothing at all, not even the break: there is no blank first row to pay for a
+segment that is not there. Re-running `collab statusline install` replaces the
+block already in the script in place, which is how a script installed before
+this picks it up. tmux's `status-right` is one row and stays one row.
+
 ## Sharing files and artifacts
 
 Pasting a binary into chat is miserable. Instead:

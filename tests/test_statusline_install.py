@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -150,35 +151,137 @@ def test_real_world_three_vendor_script_survives(claude_home):
     assert sli.status_claude_code()["installed"] is False
 
 
-def test_appended_block_emits_no_trailing_separator(claude_home):
-    """Other vendors' blocks prefix their own separator.
+# --- the segment ends its line ----------------------------------------------
+#
+# Claude Code renders a status line of several rows, and so does every other
+# host that can. The collab segment used to end with a space and leave the row
+# open, so every tool that followed — Boost, local-tts, whatever else the script
+# hosted — landed on the same row and the line grew past the terminal. Ours is
+# the first block in the script, so ours ends the row: collab takes the first
+# line and everything after it starts on the next.
 
-    Appending one here left a dangling ' · ' at the end of the status line.
-    """
-    script = claude_home / "statusline-command.sh"
-    script.write_text("#!/usr/bin/env bash\ninput=$(cat)\n"
-                      "# >>> OTHER\nprintf ' · other'\n# <<< OTHER\n")
-    (claude_home / "settings.json").write_text(
-        json.dumps({"statusLine": {"type": "command", "command": str(script)}}))
-    sli.install_claude_code(executable="/opt/collab")
-    block = script.read_text().split(sli.BEGIN)[1].split(sli.END)[0]
-    assert "·" not in block
-    assert "printf '%s '" in block, "still padded, so the next segment is readable"
-
-
-def test_converted_inline_command_keeps_a_separator(claude_home):
-    """A moved inline command prints no separator of its own, so we supply one."""
-    (claude_home / "settings.json").write_text(
-        json.dumps({"statusLine": {"type": "command", "command": "echo hi"}}))
-    result = sli.install_claude_code(executable="/opt/collab")
-    block = result.script.read_text().split(sli.BEGIN)[1].split(sli.END)[0]
-    assert "printf '%s · '" in block
+def _fake_collab(tmp_path, prints: str) -> Path:
+    """A stand-in for the executable, saying `prints` for `statusline render`."""
+    exe = tmp_path / "fake-collab"
+    exe.write_text("#!/usr/bin/env bash\n"
+                   f"[ \"$1 $2\" = 'statusline render' ] && printf '%s' '{prints}'\n"
+                   "exit 0\n")
+    exe.chmod(0o755)
+    return exe
 
 
-def test_block_always_ends_with_padding(claude_home):
-    """Whatever renders next must not butt straight up against our segment."""
+def _run(script: Path) -> str:
+    """Run the installed script the way Claude Code does: session JSON on stdin."""
+    done = subprocess.run(["bash", str(script)], input="{}", capture_output=True,
+                          text=True, timeout=10)
+    assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+def test_the_block_ends_its_line(claude_home):
+    """Whatever renders next starts a new row, not the tail of ours."""
     sli.install_claude_code(executable="/opt/collab")
     script = Path(_settings(claude_home)["statusLine"]["command"])
     block = script.read_text().split(sli.BEGIN)[1].split(sli.END)[0]
     printf = [ln for ln in block.splitlines() if "__collab_seg" in ln and "printf" in ln][-1]
-    assert printf.strip().startswith("printf '%s ")
+    assert printf.strip() == "printf '%s\\n' \"$__collab_seg\"", printf
+    assert "·" not in block, "no separator: the line break is the separator"
+
+
+def test_the_rendered_segment_is_a_whole_line(claude_home, tmp_path):
+    """Executed, not inspected: the shell is what decides where the row ends."""
+    exe = _fake_collab(tmp_path, "● collab bob → alice")
+    sli.install_claude_code(executable=str(exe))
+    script = Path(_settings(claude_home)["statusLine"]["command"])
+    assert _run(script) == "● collab bob → alice\n"
+
+
+def test_an_empty_segment_prints_nothing_at_all(claude_home, tmp_path):
+    """Not even the line break.
+
+    A newline on its own would put a blank first row into every session that
+    has no collab in it, which is most of them.
+    """
+    exe = _fake_collab(tmp_path, "")
+    sli.install_claude_code(executable=str(exe))
+    script = Path(_settings(claude_home)["statusLine"]["command"])
+    assert _run(script) == ""
+
+
+def test_the_segments_that_follow_land_on_the_next_line(claude_home, tmp_path):
+    exe = _fake_collab(tmp_path, "collab-seg")
+    script = claude_home / "statusline-command.sh"
+    script.write_text("#!/usr/bin/env bash\ninput=$(cat)\n"
+                      "# >>> OTHER\nprintf 'other'\n# <<< OTHER\n")
+    script.chmod(0o755)
+    (claude_home / "settings.json").write_text(
+        json.dumps({"statusLine": {"type": "command", "command": str(script)}}))
+    sli.install_claude_code(executable=str(exe))
+    assert _run(script) == "collab-seg\nother"
+
+
+def test_a_converted_inline_command_lands_on_the_next_line(claude_home, tmp_path):
+    """A moved inline command prints no separator of its own, and needs none
+    now: the break at the end of our line is what keeps the two apart."""
+    exe = _fake_collab(tmp_path, "collab-seg")
+    (claude_home / "settings.json").write_text(
+        json.dumps({"statusLine": {"type": "command", "command": "echo hi"}}))
+    result = sli.install_claude_code(executable=str(exe))
+    block = result.script.read_text().split(sli.BEGIN)[1].split(sli.END)[0]
+    assert "·" not in block
+    assert _run(result.script) == "collab-seg\nhi\n"
+
+
+#: The block as `collab statusline install` wrote it before the line break —
+#: a trailing space, so the next tool's segment shared the row. Kept verbatim
+#: so the upgrade path is tested against what is actually on people's disks.
+OLD_BLOCK = (
+    f"{sli.BEGIN}\n"
+    "if [ -x '/opt/collab' ]; then\n"
+    "  __collab_seg=\"$(printf '%s' \"${input:-}\" | '/opt/collab' statusline render 2>/dev/null)\"\n"
+    "  if [ -n \"$__collab_seg\" ]; then\n"
+    "    printf '%s ' \"$__collab_seg\"\n"
+    "  fi\n"
+    "fi\n"
+    f"{sli.END}\n"
+)
+
+
+def test_reinstalling_replaces_an_older_block_in_place(claude_home):
+    """Re-running the installer is how an existing script gets the line break.
+
+    It has to find the block it wrote last time and replace it, not add a
+    second one below — and everything that is not ours has to come through
+    byte for byte.
+    """
+    others = ("# >>> OTHER-TOOL\n"
+              "printf ' · other'\n"
+              "# <<< OTHER-TOOL\n"
+              "# >>> ANOTHER\n"
+              "printf '\\n'\n"
+              "printf 'another'\n"
+              "# <<< ANOTHER\n")
+    head = "#!/usr/bin/env bash\ninput=$(cat)\n"
+    script = claude_home / "statusline-command.sh"
+    script.write_text(head + OLD_BLOCK + others)
+    script.chmod(0o755)
+    (claude_home / "settings.json").write_text(
+        json.dumps({"statusLine": {"type": "command", "command": str(script)}}))
+
+    result = sli.install_claude_code(executable="/opt/collab")
+    body = script.read_text()
+    assert result.action == "updated"
+    assert body.count(sli.BEGIN) == 1, "one block, not the old one and a new one"
+    assert "printf '%s ' " not in body, "the old tail is gone"
+    assert "printf '%s\\n' " in body, "and the new one is in its place"
+    assert body.split(sli.BEGIN, 1)[0] == head, "everything before our block is untouched"
+    assert body.split(sli.END, 1)[1] == "\n" + others, "and so is everything after it"
+
+
+def test_tmux_status_right_stays_on_one_line(tmp_path, monkeypatch):
+    """tmux's status-right is a single row; a newline there is a broken bar."""
+    monkeypatch.setattr(sli, "TMUX_CONF", tmp_path / ".tmux.conf")
+    sli.install_tmux(executable="/opt/collab")
+    block = (tmp_path / ".tmux.conf").read_text().split(sli.BEGIN)[1].split(sli.END)[0]
+    assert "statusline render --plain" in block
+    assert "\\n" not in block and "printf" not in block

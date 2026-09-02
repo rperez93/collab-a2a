@@ -637,3 +637,12 @@ collab statusline [--agent {auto,claude-code,tmux,generic}] [--scope {global,pro
 | `--json` | Render structured output. |
 | `--cwd CWD` | Render the session for this directory. |
 | `--width WIDTH` | Truncate the rendered line. |
+
+`install` puts a `# >>> COLLAB-STATUS-LINE` block at the top of the Claude Code
+status line script and leaves every other segment in it byte for byte. The
+block ends its line: collab takes the first row of the status line and every
+segment after it starts on the next, so a long status line no longer runs past
+the terminal. When there is no session it prints nothing, not even the line
+break. Running `install` again replaces an existing block in place, which is
+how a script installed by an older collab gains the line break. The tmux
+`status-right` segment is a single row and is not given one.

@@ -54,7 +54,7 @@ def settings_path(scope: str = "global") -> Path:
 from ..config import collab_executable  # noqa: E402  (re-exported)
 
 
-def build_block(executable: str, *, separator: bool) -> str:
+def build_block(executable: str) -> str:
     """The shell we inject.
 
     It never reads stdin directly — the surrounding script drains that once
@@ -62,17 +62,19 @@ def build_block(executable: str, *, separator: bool) -> str:
     the captured ``$input`` in, which is how the segment finds the per-repo
     .collab/ for the directory this Claude Code session is actually in.
     """
-    # Always end with a space: whatever segment renders next butts straight up
-    # against ours otherwise. When we know exactly what follows (an inline
-    # command we moved into a script ourselves, which prints no separator of
-    # its own) we use a full separator instead.
-    tail = "%s \u00b7 " if separator else "%s "
+    # THE SEGMENT ENDS ITS LINE. Claude Code renders a status line of several
+    # rows, and we are the first block in the script, so whatever renders after
+    # us — Boost, local-tts, anything — starts on the next row instead of
+    # growing ours past the terminal. It used to end with a space and leave
+    # the row open. Nothing at all is printed when the segment is empty, the
+    # newline included: a blank first row in every session without collab is
+    # not a status line anyone asked for.
     return (
         f"{BEGIN}\n"
         f"if [ -x '{executable}' ]; then\n"
         f"  __collab_seg=\"$(printf '%s' \"${{input:-}}\" | '{executable}' statusline render 2>/dev/null)\"\n"
         f"  if [ -n \"$__collab_seg\" ]; then\n"
-        f"    printf '{tail}' \"$__collab_seg\"\n"
+        f"    printf '%s\\n' \"$__collab_seg\"\n"
         f"  fi\n"
         f"fi\n"
         f"{END}\n"
@@ -149,18 +151,17 @@ def install_claude_code(scope: str = "global", *, executable: str | None = None)
         if (b := _backup(script)) is not None:
             backups.append(b)
 
-        # No trailing separator when other vendors' blocks follow: the
-        # convention in these scripts is that each block prefixes its own
-        # separator (local-tts uses ' · ', claude-statusline a newline), so
-        # appending one here leaves a dangling ' · ' at the end of the line.
-        block = build_block(exe, separator=False)
+        # Other vendors' blocks follow ours, each prefixing its own separator
+        # (local-tts ' · ', claude-statusline a newline); they now do so at
+        # the start of the second row, since our block ends the first.
+        block = build_block(exe)
         script.write_text(_insert_at_top(body, block))
         _make_executable(script)
         notes.append(f"kept every existing segment in {script}")
 
     elif command:
         # An inline command: give it a real script and move it in verbatim, so
-        # it keeps behaving exactly as it did.
+        # it keeps behaving exactly as it did — on the row after ours.
         action = "converted"
         script = _new_script_path(scope)
         if (b := _backup(spath)) is not None:
@@ -169,7 +170,7 @@ def install_claude_code(scope: str = "global", *, executable: str | None = None)
         script.write_text(
             "#!/usr/bin/env bash\n"
             "input=$(cat)\n"
-            f"{build_block(exe, separator=True)}"
+            f"{build_block(exe)}"
             "# >>> migrated by `collab statusline install` from settings.json statusLine.command\n"
             f"printf '%s' \"$input\" | {command}\n"
             "# <<< migrated\n"
@@ -189,7 +190,7 @@ def install_claude_code(scope: str = "global", *, executable: str | None = None)
         script.write_text(
             "#!/usr/bin/env bash\n"
             "input=$(cat)\n"
-            f"{build_block(exe, separator=False)}"
+            f"{build_block(exe)}"
         )
         _make_executable(script)
         settings["statusLine"] = {"type": "command", "command": str(script)}
