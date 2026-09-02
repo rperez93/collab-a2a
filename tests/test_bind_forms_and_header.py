@@ -90,13 +90,6 @@ def _model(tmp_path, *, state):
     return model
 
 
-@pytest.fixture(autouse=True)
-def _no_terminal(monkeypatch):
-    """Colour pairs need a real screen; the text does not."""
-    monkeypatch.setattr(curses, "color_pair", lambda n: 0)
-    monkeypatch.setattr(curses, "ACS_HLINE", ord("-"), raising=False)
-
-
 def _drawn(tmp_path, state):
     pane = tui.Tui(_model(tmp_path, state=state))
     win = _Pane()

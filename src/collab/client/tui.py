@@ -1999,7 +1999,16 @@ class Tui:
         # and takes the row; see statusbar.messages_segment.)
         session = self._roster_bar() if self._roster_settings["enabled"] else []
         session_h = 1 if session and roster_h - 2 >= 2 else 0
-        self.roster.rows = roster_h - 1 - session_h
+        # A RULE ABOVE THAT ROW, drawn the way the section headers are, so the
+        # figures read as the foot of the panel and not as one more line of
+        # the list: they sat directly under the last participant, in the same
+        # dim colour as the state words beside the names. The rule costs a row
+        # too, and it is paid for last — taken only while two rows of
+        # participants, one whole person, still remain after it, and below that
+        # the rule is what goes, never a participant and never the row. Out of
+        # the roster's allocation, so `chat_top` does not move.
+        rule_h = 1 if session_h and roster_h - 3 >= 2 else 0
+        self.roster.rows = roster_h - 1 - session_h - rule_h
         # AND THE HEIGHT IS SETTLED BEFORE THE WIDTH IS ASKED FOR, because
         # `_gutter_width` reads `rows` to decide whether there is anything to
         # scroll. The gutter then costs the content a column, so the rows are
@@ -2034,6 +2043,8 @@ class Tui:
                                self.roster)
 
         chat_top = body_top + roster_h
+        if rule_h:
+            self._hline(win, chat_top - 2, width, "")
         if session_h:
             # THE LAST ROW OF THE ROSTER PANEL, mirroring the conversation's
             # own row at the last row of the window — one bar per panel, each
@@ -2568,7 +2579,21 @@ class Tui:
                     max(width - 1, 0),
                     curses.color_pair(state_pair) | curses.A_BOLD)
 
-        pane.rows = height - 1 - (1 if self._bar else 0)
+        if self.view == "roster":
+            # THE ROW IS RESERVED BY WHICHEVER SWITCH CLAIMS IT — the same
+            # test `_hint` makes before it draws one. Reserved on `_bar` alone,
+            # the session's row drawn with the personal one off landed on top
+            # of the last participant row.
+            #
+            # AND THE RULE ABOVE IT is the roster's, as in the split view: with
+            # the session's row, and only while two rows of participants remain
+            # after paying for it. The reader's own row, when it is the one
+            # down there, gets no rule — it is not the roster's foot.
+            row = self._bar or self._roster_settings["enabled"]
+            rule = self._roster_settings["enabled"] and height - 3 >= 2
+        else:
+            row, rule = self._bar, False
+        pane.rows = height - 1 - (1 if row else 0) - (1 if rule else 0)
         pane.total = len(rows)
         pane.settle()
         for i in range(pane.rows):
@@ -2581,6 +2606,8 @@ class Tui:
                 win, width - 2, 1, pane.rows, pane,
                 more_above=pane is self.chat and m.more_above(),
                 more_below=pane is self.chat and bool(m.pending()))
+        if rule:
+            self._hline(win, height - 2, width, "")
 
         if self.view == "roster":
             # Its own keys, and no scrolled-back notice: the roster does not

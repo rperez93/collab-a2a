@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import curses
+
 import pytest
 
 from collab import themes
@@ -8,6 +10,22 @@ from collab.config import SessionProfile
 from collab.server.app import create_app
 from collab.server.auth import new_secret
 from collab.server.store import Store
+
+
+@pytest.fixture(autouse=True)
+def _no_terminal(monkeypatch):
+    """Colour pairs need a real screen; the text does not.
+
+    Here and autouse, rather than in each module that draws: an autouse
+    fixture does not cross module boundaries, so a new test file importing
+    another's `_draw` helper without its own copy of this stub got a
+    `curses.error` from `color_pair` that `_draw` swallowed — and every
+    assertion then passed over a window nothing had been drawn on. Five
+    times. Every draw harness should still open with a canary that says
+    something was drawn.
+    """
+    monkeypatch.setattr(curses, "color_pair", lambda n: 0)
+    monkeypatch.setattr(curses, "ACS_HLINE", ord("-"), raising=False)
 
 
 @pytest.fixture()

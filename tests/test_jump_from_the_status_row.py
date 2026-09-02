@@ -54,12 +54,6 @@ class _Pane:
         return lambda *a, **kw: None
 
 
-@pytest.fixture(autouse=True)
-def _no_terminal(monkeypatch):
-    monkeypatch.setattr(curses, "color_pair", lambda n: 0)
-    monkeypatch.setattr(curses, "ACS_HLINE", ord("-"), raising=False)
-
-
 def _drawn(*, following: bool, behind: int = 2, width=110, height=30):
     """A viewer with the bottom row laid out, as `_draw` leaves it.
 

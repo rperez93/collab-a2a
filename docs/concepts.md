@@ -316,6 +316,19 @@ There is one status row per pane, at the foot of what it describes.
 The roster's speaks for the session: the shared batch bar and how many messages
 have been sent in it, and for now nothing else.
 
+A rule separates it from the participants above, drawn the way the section
+headers are.
+The row sat directly under the last participant in the same dim colour as the
+state words beside the names, and read as one more line of the list; the rule
+is what says where the list ends and the session's figures begin.
+It costs a row and is paid for after the status row: taken from the roster only
+while two rows of participants — one whole person — still remain after it, and
+below that the rule is dropped, never a participant and never the row.
+With `watch_status_roster` off there is no rule either.
+It is drawn inside the roster panel's own allocation in the split view, and
+above the one bottom row in the roster-only view, so the conversation pane does
+not move for it.
+
 **A figure on that row has to be identical for every participant**, and that
 one rule is what decides its contents.
 Most of what the daemon records locally is written from the reader's point of

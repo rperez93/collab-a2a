@@ -13,8 +13,6 @@ from __future__ import annotations
 import curses
 import time
 
-import pytest
-
 from collab.client import statusbar as sb
 from collab.client import tui
 from collab.config import SessionProfile
@@ -86,12 +84,6 @@ class _Pane:
 
     def __getattr__(self, _name):
         return lambda *a, **kw: None
-
-
-@pytest.fixture(autouse=True)
-def _no_terminal(monkeypatch):
-    monkeypatch.setattr(curses, "color_pair", lambda n: 0)
-    monkeypatch.setattr(curses, "ACS_HLINE", ord("-"), raising=False)
 
 
 def _viewer(tmp_path, *, name, host, is_host, status=None):

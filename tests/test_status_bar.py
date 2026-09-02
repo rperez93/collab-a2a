@@ -358,12 +358,6 @@ class _Pane:
         return lambda *a, **kw: None
 
 
-@pytest.fixture(autouse=True)
-def _no_terminal(monkeypatch):
-    monkeypatch.setattr(curses, "color_pair", lambda n: 0)
-    monkeypatch.setattr(curses, "ACS_HLINE", ord("-"), raising=False)
-
-
 def _viewer(tmp_path, cfg_path, view="both"):
     home = tmp_path / "collab"
     (home / "sessions" / "s").mkdir(parents=True)
@@ -660,7 +654,10 @@ def test_turning_the_row_off_returns_its_line_in_a_single_pane_view(
     win = _Pane()
     _draw(viewer, win)
     assert 29 not in win.rows, "the row is gone"
-    assert pane.rows == with_row + 1, "and the pane grew into it"
+    # The roster's row brings a rule above it, so that pane gets two lines
+    # back; the conversation's row has no rule and gives back one.
+    grew = 2 if view == "roster" else 1
+    assert pane.rows == with_row + grew, "and the pane grew into it"
 
 
 def test_the_roster_pane_keeps_its_row_when_only_the_personal_one_is_off(
@@ -860,7 +857,8 @@ def test_turning_it_off_gives_the_row_back_to_the_roster(tmp_path, cfg):
     win = _Pane()
     _draw(viewer, win)
     assert "6/10" not in win.rows.get(9, ""), "the row is gone"
-    assert viewer.roster.rows == with_row + 1, "and the roster grew into it"
+    assert viewer.roster.rows == with_row + 2, \
+        "and the roster grew into it, and into the rule above it"
 
 
 def test_a_session_with_nothing_to_say_does_not_reserve_the_row(tmp_path, cfg):
@@ -876,7 +874,8 @@ def test_a_session_with_nothing_to_say_does_not_reserve_the_row(tmp_path, cfg):
     viewer.model.status = _roster_row()
     win = _Pane()
     _draw(viewer, win)
-    assert viewer.roster.rows == empty - 1, "the row is taken only when used"
+    assert viewer.roster.rows == empty - 2, \
+        "the row, and the rule above it, are taken only when used"
 
 
 def test_a_hub_gone_quiet_takes_the_row_with_it(tmp_path, cfg):
@@ -980,7 +979,9 @@ def test_the_roster_only_view_spends_no_extra_row_on_it(tmp_path, cfg):
     config.save_watch_roster(enabled=False)
     win = _Pane()
     _draw(viewer, win)
-    assert viewer.roster.rows == with_figures, "the row was never an extra one"
+    # The bottom row stays — it was never an extra one — and only the rule
+    # above it, which is the roster's and not the reader's, is given back.
+    assert viewer.roster.rows == with_figures + 1, "the row was never an extra one"
     assert "$3.10" in win.rows[29], "and it goes back to being the reader's"
 
 

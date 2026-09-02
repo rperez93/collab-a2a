@@ -1539,8 +1539,18 @@ and `collab name` and `collab color` set those — see
 how the **session** is going; the conversation's says how **you** are going.
 
 ```
+ ○ alice                     online
+     nothing shared yet
+──────────────────────────────────────────────
  batch ███░░░ 60% 6/10 · 128 messages
 ```
+
+A rule sits above it, drawn like the section headers, so the figures read as
+the foot of the panel and not as one more line of the list. The rule costs a
+row and is paid for last: it is drawn only while the roster keeps at least two
+rows of participants — one whole person — after it, and on a shorter pane the
+rule is what goes, never a participant and never the row. With the row off
+there is no rule either, and the conversation pane never moves for it.
 
 Two figures, and both of them are counted by the hub and handed out whole, so
 **every participant reads exactly the same row**. That is the whole rule, and
@@ -1603,9 +1613,10 @@ and prints nothing at all when it fails or times out.
 
 In the roster-only layout (`--layout roster`, or a tmux split) that pane's one
 bottom row is the roster's, so it carries the session's figures and the roster
-keys rather than your quota — no second row is spent on them. Your own figures
-are in your own roster row a few lines up, and `collab config
-watch_status_roster off` hands the bottom row back.
+keys rather than your quota — no second row is spent on them — with the same
+rule above it, on the same terms. Your own figures are in your own roster row a
+few lines up, and `collab config watch_status_roster off` hands the rule back
+and leaves the bottom row to your own figures.
 
 Alongside it, `~/.config/collab/` also holds:
 
