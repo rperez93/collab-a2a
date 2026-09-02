@@ -29,6 +29,14 @@ class Subscription:
     queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(QUEUE_MAXSIZE))
 
 
+#: The fields a usage report REPLACES rather than merges: the windows map and
+#: the flat figures derived from it, and the single-figure forms an agent with
+#: one number reports. Everything else in `stats.CANONICAL` merges. See
+#: `Hub.merge_stats` for why the quota is the exception.
+QUOTA_FIELDS = ("quotas", "quota_five_hour", "quota_seven_day",
+                "quota_used_pct", "quota_reset_at")
+
+
 class Hub:
     def __init__(self, store: Store, *, session_id: str, host_name: str,
                  title: str = "") -> None:
@@ -171,6 +179,17 @@ class Hub:
         return clean
 
     def merge_stats(self, participant_id: str, stats: dict[str, Any]) -> None:
+        """Fold what an agent says about itself into what everyone sees.
+
+        Two rules, for two kinds of figure:
+
+        * Everything that is not quota MERGES. Model, spend, tokens, context —
+          an agent learns these one at a time and a report carrying one of
+          them says nothing about the others.
+        * THE QUOTA IS REPLACED. Whatever windows a report carries are the
+          windows the agent has, and a report that carries none has none.
+          See `QUOTA_FIELDS` and the comment below for why.
+        """
         from ..stats import sanitise
 
         person = self.store.participant_by_id(participant_id)
@@ -182,15 +201,33 @@ class Hub:
         # and shape on the way in rather than trusted.
         incoming = sanitise(stats)
 
-        # Quota windows merge one at a time. An agent that can only see its
-        # five-hour window right now must not erase the weekly one and the
-        # spend cap it told us about a minute ago.
-        if isinstance(incoming.get("quotas"), dict):
-            windows = dict(merged.get("quotas") or {})
-            for name, figures in incoming["quotas"].items():
-                if isinstance(figures, dict):
-                    windows[name] = {**windows.get(name, {}), **figures}
-            incoming = {**incoming, "quotas": windows}
+        # A REPORT IS THE WHOLE TRUTH ABOUT THE QUOTA. Quota windows used to
+        # merge one at a time, so that an agent reporting only its five-hour
+        # window did not erase the weekly one it had reported a minute
+        # earlier. That produced the opposite defect, and the worse one: an
+        # agent that could no longer see a window — its tool stopped exposing
+        # it, its status line lost the block, it moved to a plan without one —
+        # went on showing the old figure to everybody, indefinitely, and work
+        # was split on a quota nobody had reported for an hour. A stale «91 %»
+        # sends work elsewhere; a stale «12 %» sends it to somebody who may
+        # have nothing left. So every quota field the agent stored is dropped
+        # before the report is folded in, and the report's own windows, flat
+        # figures and reset are what remain: what it said, exactly, and
+        # nothing it did not say. The instructions that tell agents how to
+        # report say the same thing from their side — report every window you
+        # know each time; an omitted one is read as gone.
+        #
+        # ONLY WHEN THE AGENT SPOKE. A body that sanitises to nothing and names
+        # no quota field is not a report: `collab color` posts `stats: {}`
+        # beside its colour, and a daemon with no stats file posts `stats: {}`
+        # beside its machine. Reading either as «my quota is gone» would let a
+        # colour change wipe a quota the agent still has. An explicit
+        # `quotas: {}` DOES name the field, and is the agent saying it has
+        # none — that is a statement, and it clears.
+        spoke = bool(incoming) or any(key in (stats or {}) for key in QUOTA_FIELDS)
+        if spoke:
+            for key in QUOTA_FIELDS:
+                merged.pop(key, None)
 
         merged.update(incoming)
         # WHEN THIS WAS TRUE, on the one clock every participant shares. A
@@ -207,7 +244,13 @@ class Hub:
         # flipped the «nobody has shared any usage yet» banner and, half an
         # hour on, put a bare «31m ago — old» on the roster: «this agent's data
         # is stale», where the truth is «this agent never said anything».
-        if incoming:
+        #
+        # `spoke` rather than `incoming`, so a report that CLEARS the quota
+        # moves the stamp too: the stamp is when the agent last spoke, and
+        # «no quota» was what it said then. Left where it was, it would date
+        # the absence to the old figure, and `stats.reported_age` would call
+        # a minute-old «none» stale.
+        if spoke:
             merged["reported_at"] = time.time()
         if merged:
             meta["stats"] = merged

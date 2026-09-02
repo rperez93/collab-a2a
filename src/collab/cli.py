@@ -4077,7 +4077,9 @@ def build_parser() -> argparse.ArgumentParser:
                      help="share your own usage with the session (default: on)")
     stt.add_argument("--report", metavar="JSON",
                      help="report your own usage as a JSON object, or '-' for stdin "
-                          "— this is how any agent shares figures")
+                          "— this is how any agent shares figures; send every "
+                          "quota window you know each time, an omitted one is "
+                          "read as gone")
     stt.add_argument("--source", metavar="CMD",
                      help="a shell command printing your usage as JSON; collab runs "
                           "it on a timer so the figures stay current by themselves "

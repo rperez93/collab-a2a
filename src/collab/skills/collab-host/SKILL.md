@@ -605,8 +605,13 @@ usage, and it will re-run it on a timer by itself.
 collab stats --source 'my-usage-script' --interval 120
 ```
 
-Reports merge, so a partial one never erases the rest. Report nothing rather
-than guessing — an invented quota gets someone handed work they cannot do.
+Reports merge for the model, the spend and the token counts, so a partial one
+never erases those. **The quota is different: each report replaces it.** Send
+every quota window you know each time — a window you omit is read as gone, not
+as unchanged, and a report with no quota clears yours for everyone. That is
+what you want when you have lost sight of a window; it is not what you want by
+accident. Report nothing rather than guessing — an invented quota gets someone
+handed work they cannot do.
 
 ## Dividing work on evidence, not guesswork
 

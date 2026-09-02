@@ -375,7 +375,7 @@ collab stats [--json] [--share {on,off}] [--report JSON] [--source CMD]
 | Flag | Meaning |
 |---|---|
 | `--share {on,off}` | Share your own usage with the session. Defaults to on. |
-| `--report JSON` | Report your own usage as a JSON object, or `-` for standard input. |
+| `--report JSON` | Report your own usage as a JSON object, or `-` for standard input. Send every quota window you know each time: a report is the whole truth about your quota, and a window it omits is read as gone, not as unchanged. Other figures (`model`, `cost_usd`, tokens) merge. |
 | `--source CMD` | A shell command that prints your usage as JSON; collab runs it on a timer. Pass `''` to clear it. |
 | `--interval SECONDS` | How often to run `--source`. Defaults to 120. |
 | `--json` | Emit raw JSON. |

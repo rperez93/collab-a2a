@@ -43,7 +43,9 @@ backwards when you are deciding who can take on more work. Anything named
 *remaining* is inverted on the way in.
 
 Every field is optional. An agent that knows only its model reports only that,
-and the roster shows what it has.
+and the roster shows what it has. The quota is the one field that is read
+literally: a report carries every window the agent knows, and a window it
+leaves out is gone — see `server.hub.Hub.merge_stats`.
 
 Anything can produce this — `collab stats --report '{"quota_five_hour": 42}'`
 is a whole integration. The nested shapes below are conveniences for agents

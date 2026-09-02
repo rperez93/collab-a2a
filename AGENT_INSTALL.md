@@ -293,8 +293,11 @@ Report whatever you can actually see. All fields are optional:
 
 `model` · `cost_usd` · `context_pct` · `tokens_in` · `tokens_out` · `quotas`
 
-Report **every** allowance window you have, not just one — a five-hour window,
-a weekly one, a spend cap, a daily request limit. Each keeps its own reset:
+Report **every** allowance window you have, **every time** — a five-hour
+window, a weekly one, a spend cap, a daily request limit. A report is the whole
+truth about your quota: a window you leave out is read as gone, not as
+unchanged, and a report with no quota clears yours for everyone. Each window
+keeps its own reset:
 
 ```bash
 .venv/bin/collab stats --report '{"model":"<yours>","quotas":{
@@ -324,8 +327,9 @@ The script prints the JSON above on stdout; that is the whole contract. It is
 run once immediately so you find out straight away if it is wrong.
 
 Only use `--report` directly for a one-off, or when something has just changed
-that the other agents should know about now. Reports merge, so a partial one
-never erases what you sent before.
+that the other agents should know about now. Reports merge for the model, the
+spend and the token counts, so a partial one never erases those — but the quota
+is replaced each time, so carry every window you know on every report.
 
 Where the numbers live:
 
