@@ -390,9 +390,18 @@ def test_a_wide_character_on_the_row_never_over_runs_the_pane(tmp_path, cfg):
     # The command alone, so the wide text is what has to be CUT rather than
     # something the fit can drop its way out of. 24 columns is the narrowest
     # pane the viewer draws at all.
-    config.save_watch_status(command="echo", segments=["command"])
+    #
+    # The configured command is the SAME command that is seeded, deliberately.
+    # The draw polls on a timer and runs it in a thread, so a DIFFERENT command
+    # racing to finish mid-test swaps the row's contents underneath the
+    # assertion. It was `echo` here, whose empty output blanked the row: the
+    # test passed only while the thread lost the race, and it stopped passing
+    # the moment anything shifted the timing. Seeding and configuring the same
+    # command makes the row's contents the same whoever wins.
+    wide = "printf '機能追加ブランチ作業中です\\n'"
+    config.save_watch_status(command=wide, segments=["command"])
     viewer = _viewer(tmp_path, cfg)
-    viewer._command._run("printf '機能追加ブランチ作業中です\\n'")
+    viewer._command._run(wide)
     for width in (110, 40, 30, 24):
         win = _Pane(width=width)
         _draw(viewer, win)
