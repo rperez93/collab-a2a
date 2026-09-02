@@ -1216,6 +1216,71 @@ def test_the_daemon_records_the_move_in_the_denominator():
     assert daemon._batch_figures()["total_delta"] == 2
 
 
+def test_two_scope_changes_in_a_row_add_up_to_the_drop_they_caused():
+    """The marker exists to account for the fall, so it must account for all of it.
+
+    Two tasks proposed a few seconds apart land in different snapshots, and
+    each observation replaced the last: the reader saw «+1» beside a bar that
+    had fallen by two tasks' worth. A number that explains half a drop is worse
+    than no number, because it sends them looking for a second cause.
+    """
+    daemon = _bare_daemon()
+    daemon.snapshot = {"fetched_at": time.time(),
+                       "batch": {"id": "B_1", "total": 10, "done": 7}}
+    daemon._batch_figures()
+
+    daemon.snapshot["batch"] = {"id": "B_1", "total": 11, "done": 7}
+    assert daemon._batch_figures()["total_delta"] == 1
+
+    daemon.snapshot["batch"] = {"id": "B_1", "total": 12, "done": 7}
+    assert daemon._batch_figures()["total_delta"] == 2, "10 to 12, however it arrived"
+
+
+def test_a_change_after_the_last_one_expired_counts_from_scratch():
+    """Accumulating is for one burst, not for the whole afternoon.
+
+    Summing across a quiet gap would report growth the reader watched happen an
+    hour ago as though it explained the bar in front of them now — which is the
+    same untruth the display window exists to prevent.
+    """
+    daemon = _bare_daemon()
+    daemon.snapshot = {"fetched_at": time.time(),
+                       "batch": {"id": "B_1", "total": 10, "done": 7}}
+    daemon._batch_figures()
+
+    daemon.snapshot["batch"] = {"id": "B_1", "total": 11, "done": 7}
+    assert daemon._batch_figures()["total_delta"] == 1
+
+    # Age the standing note past the window, the way a quiet minute and a half
+    # would, then move the scope again.
+    batch_id, moved, _ = daemon._batch_delta
+    daemon._batch_delta = (batch_id, moved,
+                           time.time() - batch_progress.DELTA_SHOWN_FOR - 1)
+
+    daemon.snapshot["batch"] = {"id": "B_1", "total": 12, "done": 7}
+    assert daemon._batch_figures()["total_delta"] == 1, "this change, not both"
+
+
+def test_growth_undone_inside_the_window_leaves_nothing_to_explain():
+    """A task proposed and then cancelled puts the bar back where it was.
+
+    Reporting «+1» and «-1» in turn would announce two movements to somebody
+    who saw none, and the sum is what they actually experienced.
+    """
+    daemon = _bare_daemon()
+    daemon.snapshot = {"fetched_at": time.time(),
+                       "batch": {"id": "B_1", "total": 10, "done": 7}}
+    daemon._batch_figures()
+
+    daemon.snapshot["batch"] = {"id": "B_1", "total": 11, "done": 7}
+    assert daemon._batch_figures()["total_delta"] == 1
+
+    daemon.snapshot["batch"] = {"id": "B_1", "total": 10, "done": 7}
+    figures = daemon._batch_figures()
+    assert figures["total_delta"] == 0
+    assert batch_progress.delta_note(figures) == "", "and so nothing is drawn"
+
+
 def test_a_delta_from_one_batch_is_not_reported_against_another():
     """Closing a batch and opening another is not a scope change.
 

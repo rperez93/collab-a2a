@@ -624,13 +624,35 @@ class Daemon:
         rather than as more of it. This is the only place that sees the before
         and the after, so the change is recorded here and stamped — a scope
         change still being announced an hour later is not news any more.
+
+        CHANGES INSIDE THE WINDOW ADD UP, and each observation used to replace
+        the last instead. Two tasks proposed a few seconds apart land in
+        different snapshots, so they were seen as two moves of one and the
+        marker read «+1» beside a bar that had fallen by two tasks' worth. Half
+        an explanation is worse here than none: the reader is looking at a drop
+        the number does not account for, so they go looking for a second cause
+        that does not exist.
+
+        The stamp is refreshed on every change, so the explanation stays up
+        while the scope is still moving rather than expiring in the middle of a
+        burst — and a change arriving after the previous one has expired starts
+        a fresh count, so the marker never spans a quiet gap.
+
+        Growth undone inside the window sums back to nothing, and nothing is
+        the right answer: the bar is where it was, and there is no movement
+        left to explain.
         """
         batch_id = str(figures.get("id") or "")
         total = int(figures.get("total") or 0)
         now = time.time()
         seen_id, seen_total = self._batch_seen
         if batch_id and batch_id == seen_id and total != seen_total:
-            self._batch_delta = (batch_id, total - seen_total, now)
+            moved = total - seen_total
+            standing = self._batch_delta
+            if (standing is not None and standing[0] == batch_id
+                    and (now - standing[2]) <= DELTA_SHOWN_FOR):
+                moved += standing[1]
+            self._batch_delta = (batch_id, moved, now)
         self._batch_seen = (batch_id, total)
 
         if self._batch_delta is None:
