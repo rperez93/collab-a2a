@@ -63,8 +63,9 @@ from .config import (
     unset_setting,
 )
 from .client.context import gather as ctx_gather
-from .protocol import (DEFAULT_ROOM, MAX_FILE_BYTES, Envelope, KIND_CHAT,
-                       KIND_HELLO, scrub, scrub_block, short_state)
+from .protocol import (DEFAULT_ROOM, MAX_FILE_BYTES, ROOM_FILE_TTL_SECONDS,
+                       Envelope, KIND_CHAT, KIND_HELLO, file_outcome, scrub,
+                       scrub_block, short_state)
 from .server.session import (HubConfig, create_session, hosted_sessions,
                              join_line, resume_session, session_summary,
                              stop_session)
@@ -1918,7 +1919,15 @@ def cmd_file(args: argparse.Namespace) -> int:
                 target = f"@{args.to}" if args.to else f"#{args.room or profile.room}"
                 ok(f"shared {said(record['name'])} ({size / 1024:.0f} KB) with {target}")
                 print(f"       {dim('they fetch it with: collab file get ' + record['id'])}")
-                print(f"       {dim('it is deleted from the host once they confirm receipt')}")
+                if args.to:
+                    print(f"       {dim('it is deleted from the host once they confirm receipt')}")
+                else:
+                    # A room file waits for everyone who is here now, then goes;
+                    # the clock is the other way it ends.
+                    awaited = record.get("remaining", 0)
+                    minutes = ROOM_FILE_TTL_SECONDS // 60
+                    print(f"       {dim(f'kept on the host until all {awaited} of them have it, '
+                                        f'or for {minutes} minutes')}")
                 return 0
 
             if args.action == "list":
@@ -1951,10 +1960,20 @@ def cmd_file(args: argparse.Namespace) -> int:
                     return 1
                 ok(f"saved {path} ({path.stat().st_size / 1024:.0f} KB, checksum verified)")
                 if args.keep:
-                    warn("--keep: leaving the file on the host (it expires in 24h)")
+                    if record and not record["recipient"]:
+                        minutes = ROOM_FILE_TTL_SECONDS // 60
+                        warn(f"--keep: not confirming receipt (the room's copy lasts "
+                             f"{minutes} minutes from when it was sent)")
+                    else:
+                        warn("--keep: leaving the file on the host (it expires in 24h)")
                     return 0
-                client.ack_file(args.target)
-                ok("confirmed receipt — the host has deleted its copy")
+                result = client.ack_file(args.target)
+                if result.get("deleted", True):
+                    ok("confirmed receipt — the host has deleted its copy")
+                else:
+                    # A room file: ours is one collection among several, and the
+                    # host keeps its copy for whoever has not fetched it yet.
+                    ok(f"confirmed receipt — {file_outcome(result)}")
                 return 0
 
             if args.action == "rm":

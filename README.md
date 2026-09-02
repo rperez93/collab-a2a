@@ -1465,7 +1465,14 @@ collab file get f_71d13ac99020
 
 The checksum is verified **before** confirming, so a corrupt download never
 deletes the only copy. Files sent `--to` someone are downloadable only by that
-person and the sender. Anything left un-collected is swept after 24 hours.
+person and the sender, and are swept after 24 hours if never collected.
+
+Without `--to`, the file goes to the room and is held for **everyone who was in
+the session when it was sent**: each agent's `collab file get` records its own
+collection and says how many are still to collect, and the host's copy goes
+only with the last of them — or after 30 minutes, whichever comes first.
+Someone who joins later may still fetch it while it lasts, but does not keep it
+alive; someone removed from the session does not hold it up.
 
 ## Security
 

@@ -45,6 +45,7 @@ from ..protocol import (
     MAX_ROOM,
     MAX_TITLE,
     REST_PREFIX,
+    ROOM_FILE_TTL_SECONDS,
     RPC_PATH,
     bounded_meta,
     clip,
@@ -598,8 +599,11 @@ def create_app(
     # --- extension: file transfer -------------------------------------------------
     #
     # Binaries and build artifacts should not be squeezed through chat messages.
-    # A file is uploaded once, handed to its recipient as a URL, and deleted from
-    # the host's disk the moment they confirm they have it.
+    # A file is uploaded once and handed out as a URL. Addressed to one person,
+    # it is deleted from the host's disk the moment they confirm they have it.
+    # Shared with a room, it is deleted once everyone who was in the session
+    # when it was sent has confirmed — the first collector's ack used to take
+    # it away from everybody else — or when its half-hour runs out.
 
     files_dir = Path(store.path).parent / "files"
     files_dir.mkdir(parents=True, exist_ok=True)
@@ -607,12 +611,31 @@ def create_app(
     def _blob(file_id: str) -> Path:
         return files_dir / file_id
 
+    def _remove(file_id: str, state: str, *, acked_by: str | None = None) -> None:
+        with contextlib.suppress(OSError):
+            _blob(file_id).unlink()
+        store.mark_file(file_id, state, acked_by=acked_by)
+
     def _sweep_expired() -> None:
-        """Un-acked files should not accumulate on the host's disk forever."""
-        for record in store.expired_files(FILE_TTL_SECONDS):
-            with contextlib.suppress(OSError):
-                _blob(record["id"]).unlink()
-            store.mark_file(record["id"], "expired")
+        """Files should not accumulate on the host's disk forever.
+
+        Two clocks: a day for a file addressed to somebody, half an hour for
+        one shared with a room. And a room file whose last awaited collector
+        was removed from the session instead of acking — nobody left here is
+        owed it, and no ack is coming, so it goes now rather than at the bell.
+        """
+        for record in store.expired_files(FILE_TTL_SECONDS, ROOM_FILE_TTL_SECONDS):
+            _remove(record["id"], "expired")
+        for record in store.files_nobody_awaits():
+            _remove(record["id"], "collected", acked_by=record["sender"])
+
+    def _file_view(record: dict[str, Any]) -> dict[str, Any]:
+        """A file record as the client sees it: with its URL and, for a room
+        file, who has it and who is still to collect."""
+        view = {**record, "download_url": _download_url(record["id"])}
+        if not record["recipient"]:
+            view.update(store.file_progress(record["id"]))
+        return view
 
     def _may_touch(record: dict[str, Any], who: str) -> bool:
         """Compare by id where we have one, so a rename cannot lock you out."""
@@ -655,9 +678,21 @@ def create_app(
             raise
 
         name = Path(file.filename or "file").name
+        # WHO A ROOM FILE WAITS FOR is decided now, not at each ack: everyone in
+        # the session at this moment, except the sender. Rooms have no
+        # membership of their own — every participant sees every room — so
+        # «in the room» is «in the session». Someone who joins later may still
+        # fetch it while it lasts, but was never awaited and holds nothing up;
+        # someone removed with `collab kick` before collecting drops out of
+        # the count (see Store.file_progress). A file addressed to one person
+        # has no audience: their single ack is what ends it, as it always was.
+        audience = () if to_id else [
+            p.id for p in await asyncio.to_thread(store.participants)
+            if p.id != user.id]
         record = await asyncio.to_thread(
             store.add_file, file_id, name=name, size=size, sha256=digest.hexdigest(),
             sender=user.name, recipient=to_name or None, room=room or DEFAULT_ROOM,
+            audience=audience,
         )
         await hub.publish(Envelope(
             kind=KIND_FILE, sender=user.name, sender_id=user.id,
@@ -666,7 +701,7 @@ def create_app(
             body={"action": "shared", "id": file_id, "name": name, "size": size,
                   "sha256": record["sha256"], "url": _download_url(file_id)},
         ))
-        return {**record, "download_url": _download_url(file_id)}
+        return _file_view(record)
 
     @app.get(f"{EXT_PREFIX}/files", tags=["collab"])
     async def list_files(request: Request) -> dict[str, Any]:
@@ -674,8 +709,7 @@ def create_app(
         _sweep_expired()
         visible = [f for f in store.files()
                    if _may_touch(f, user.id)]
-        return {"files": [{**f, "download_url": _download_url(f["id"])}
-                          for f in visible]}
+        return {"files": [_file_view(f) for f in visible]}
 
     @app.get(f"{EXT_PREFIX}/files/{{file_id}}/content", tags=["collab"])
     async def download_file(request: Request, file_id: str):
@@ -694,24 +728,55 @@ def create_app(
 
     @app.post(f"{EXT_PREFIX}/files/{{file_id}}/ack", tags=["collab"])
     async def ack_file(request: Request, file_id: str) -> dict[str, Any]:
-        """Confirm receipt, which is what actually deletes the file."""
+        """Confirm receipt.
+
+        For a file addressed to one person this is what deletes it. For a room
+        file it records THIS participant's collection and reports how many are
+        still to collect; the blob goes only with the last of them. The answer
+        carries the file's state either way, so a client can say which.
+        """
         user = _require(request)
         record = store.get_file(file_id)
         if record is None:
             raise HTTPException(status_code=404, detail="no such file")
         if not _may_touch(record, user.id):
             raise HTTPException(status_code=403, detail="that file was not shared with you")
-        with contextlib.suppress(OSError):
-            _blob(file_id).unlink()
-        await asyncio.to_thread(store.mark_file, file_id, "collected", acked_by=user.name)
-        await hub.publish(Envelope(
-            kind=KIND_FILE, sender=user.name, sender_id=user.id,
-            to=record["sender"] if record["recipient"] else None,
-            to_id=store.resolve_name(record["sender"]) or "" if record["recipient"] else "",
-            room=None if record["recipient"] else record["room"],
-            body={"action": "received", "id": file_id, "name": record["name"]},
-        ))
-        return {"id": file_id, "state": "collected", "deleted": True}
+
+        if record["recipient"]:
+            await asyncio.to_thread(_remove, file_id, "collected", acked_by=user.name)
+            await hub.publish(Envelope(
+                kind=KIND_FILE, sender=user.name, sender_id=user.id,
+                to=record["sender"], to_id=store.resolve_name(record["sender"]) or "",
+                body={"action": "received", "id": file_id, "name": record["name"],
+                      "by": user.name, "collected": 1, "remaining": 0, "deleted": True},
+            ))
+            return {"id": file_id, "state": "collected", "deleted": True,
+                    "collected": 1, "remaining": 0, "awaiting": []}
+
+        # The sender's own ack is not a collection: they have the file already,
+        # and counting them would let a file shared with an empty room be
+        # completed by the one person who never needed it.
+        new = user.name != record["sender"] and await asyncio.to_thread(
+            store.record_collection, file_id, user.id)
+        progress = await asyncio.to_thread(store.file_progress, file_id)
+        # Complete when everyone awaited has it — and only when somebody WAS
+        # awaited. An empty audience is nobody to count, not everybody done.
+        done = progress["expected"] > 0 and progress["remaining"] == 0
+        if done and record["state"] == "available":
+            await asyncio.to_thread(_remove, file_id, "collected", acked_by=user.name)
+        deleted = record["state"] != "available" or done
+        if new:
+            await hub.publish(Envelope(
+                kind=KIND_FILE, sender=user.name, sender_id=user.id,
+                room=record["room"],
+                body={"action": "received", "id": file_id, "name": record["name"],
+                      "by": user.name, "room": record["room"],
+                      "collected": progress["collected"],
+                      "remaining": progress["remaining"],
+                      "awaiting": progress["awaiting"], "deleted": deleted},
+            ))
+        return {"id": file_id, "state": "collected" if deleted else "available",
+                "deleted": deleted, **progress}
 
     @app.delete(f"{EXT_PREFIX}/files/{{file_id}}", tags=["collab"])
     async def delete_file(request: Request, file_id: str) -> dict[str, Any]:

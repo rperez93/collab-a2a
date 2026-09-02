@@ -71,10 +71,38 @@ def task_line(body: dict[str, Any]) -> str:
             f"“{body.get('title', '')}” [{state}]{owner}")
 
 
+def file_outcome(body: dict[str, Any]) -> str:
+    """What an ack did to the host's copy, for every renderer of a `received`.
+
+    A room file is not gone when one person has it. The event says how many
+    are still to collect, and the transcript, the watch pane and the TUI all
+    have to say the same thing about it — so the words are made here. An event
+    from a hub that predates the count carries none of these keys and reads as
+    the deletion it was.
+    """
+    if body.get("deleted", "remaining" not in body):
+        return "deleted from the host"
+    remaining = int(body.get("remaining") or 0)
+    if remaining == 0:
+        # Nobody was awaited — an empty room, or a hub that never wrote the
+        # audience down — so the clock ends it, not an ack.
+        return "kept on the host for the rest of the room"
+    who = ", ".join(str(n) for n in body.get("awaiting") or [])
+    still = f"{remaining} still to collect"
+    return f"{still} ({who})" if who else still
+
+
 #: Files are shared out of band rather than pasted as text, so binaries and
 #: build artifacts never have to be squeezed through a chat message.
 MAX_FILE_BYTES = 10 * 1024 * 1024
+#: A file addressed to ONE person waits a day for them to collect it.
 FILE_TTL_SECONDS = 24 * 3600
+#: A file shared with a ROOM waits for everyone who was there when it was sent,
+#: or for this long — whichever comes first. Shorter than the direct TTL because
+#: the room's copy is not held for anyone in particular: once the people it was
+#: for have moved on, keeping it another day serves nobody and fills the host's
+#: disk with artifacts nobody will ask for.
+ROOM_FILE_TTL_SECONDS = 30 * 60
 
 
 def scrub(text: str) -> str:
@@ -305,7 +333,7 @@ class Envelope:
             b = self.body
             action = b.get("action", "shared")
             if action == "received":
-                return f"[file] {self.sender} confirmed receipt of {b.get('name')} — deleted"
+                return f"[file] {self.sender} collected {b.get('name')} — {file_outcome(b)}"
             size = _human_size(int(b.get("size") or 0))
             to = f" → {self.to}" if self.to else ""
             return (f"[file{to}] {self.sender} shared {b.get('name')} ({size}) — "

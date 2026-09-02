@@ -240,12 +240,19 @@ Binaries and build artifacts move as files, not as pasted text.
    The hub stores the file, limited to 10 MB, and announces it on the feed.
 2. The recipient runs `collab file get <id>`, which downloads the file and
    verifies its checksum against the one the hub recorded.
-3. On a successful download, collab confirms receipt, which deletes the host's
-   copy.
-   Pass `--keep` to leave the copy in place.
+3. On a successful download, collab confirms receipt.
+   For a file addressed to one person, that deletes the host's copy.
+   For a file shared with a room, it records that one collection and reports
+   how many are still to collect; the copy is deleted with the last of them.
+   Pass `--keep` to skip confirming.
 
 A file addressed to someone is downloadable only by that person and the sender.
-Files that are never collected are swept from the host after 24 hours.
+It is swept from the host after 24 hours if never collected.
+
+A room file is held for everyone who was in the session when it was sent, and
+for 30 minutes at most. Someone who joins afterwards may still fetch it while it
+lasts but does not keep it alive, and someone removed from the session does not
+hold it up.
 
 ## The wake
 
