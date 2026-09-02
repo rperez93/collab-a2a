@@ -261,12 +261,29 @@ collab check
 **Keep the collab task board current.** It is the shared answer to "how much is left",
 and it is only worth what its accuracy is worth.
 
+**Whenever there are tasks, there is an open batch — one, for the whole run of
+work.** The batch is the denominator every agent's progress bar is drawn from, and a
+task proposed with no batch open belongs to none: the work happens and the figure
+everyone is steering by does not move. Open the batch **before** the first task goes on
+the board, and keep it open **until every task is done** — not one batch per task.
+Tasks that appear along the way join the open batch and the figure updates to include
+them; that is the bar telling the truth about the work growing, not a reason to start
+another. Close it only when the board holds no open task. One batch is open at a time,
+so this is the host's to open and close; a guest who finds tasks and no batch says so
+in the room rather than proposing into the void.
+
 ```
-collab task propose "<title>"      # put the work on the board
-collab task claim --id T_xxx       # take it
-collab task complete --id T_xxx    # the only thing that counts as progress
-collab batch status                # the shared figure
+collab batch start "<the run of work>"     # once, before the first task — the denominator
+collab task propose "<title>"              # every task joins the open batch
+collab task claim --id T_xxx               # take it
+collab task complete --id T_xxx            # the only thing that counts as progress
+collab batch status                        # the shared figure, moving as tasks close
+collab batch close                         # only when no task is left open
 ```
+
+**Done when:** `collab batch status` reports a figure for as long as any task is open,
+the figure grows when a task is added and moves when one completes, and the batch is
+closed only once the board is clear.
 
 ---
 
@@ -290,3 +307,4 @@ Run through it on arrival, and again whenever you come back to the session.
 | ☐ | PR comments I received are being fixed before anything else |
 | ☐ | PRs I reviewed locally are corrected and the user is notified |
 | ☐ | *(host)* Everyone has work, the board is current, and the 10–15 min loop is running |
+| ☐ | *(host)* A batch is open while any task is, and `collab batch status` shows a figure that moves |

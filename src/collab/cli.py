@@ -1374,6 +1374,19 @@ def cmd_task(args: argparse.Namespace) -> int:
         return 1
     ok(f"{args.action}: {said(task['id'])}  {said(task['title'])}  "
        f"[{short_state(task['state'])}]  {said(task.get('owner')) or 'unclaimed'}")
+    if args.action == "propose" and task.get("batch") is None:
+        # A TASK OUTSIDE ANY BATCH IS WORK THE FIGURE CANNOT SEE. The batch is
+        # the denominator every agent's progress bar is drawn from, and the hub
+        # deliberately leaves a task proposed with none open out of whichever
+        # batch comes next (see test_batch_progress: a set nobody agreed on is
+        # not a set). So the work gets done and the shared number never moves —
+        # which is worse than no number, because everybody reads a bar that
+        # says nothing has happened. Said here, at the one moment it can still
+        # be fixed for this task: the rules make it the host's duty to open
+        # one first, and this is the reminder for the moment it was forgotten.
+        warn("no batch is open, so this task counts towards no figure")
+        print(dim('  open one first — `collab batch start "<the piece of work>"`'
+                  " — then propose; the progress bar is drawn from the batch"))
 
     # THE BOARD AND THE ROSTER MOVE TOGETHER. Claiming a task is already the
     # statement «I am doing this»; making the agent say it twice is how the two
