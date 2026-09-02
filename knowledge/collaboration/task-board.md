@@ -2,7 +2,7 @@
 type: Feature
 title: The task board
 description: The shared list of work, the six verbs that move a task, and the two transitions the hub refuses because they rewind a figure somebody was reading.
-resource: ../../src/collab/server/app.py
+resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/server/app.py
 tags: [tasks, board, state-machine, coordination]
 status: stable
 generated: { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
@@ -11,15 +11,14 @@ verified:
   - { by: process:pytest, at: 2026-09-01T23:30:00Z }
 sources:
   - id: app-src
-    resource: ../../src/collab/server/app.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/server/app.py
     title: collab.server.app — the task route and its refusals
     last_modified: 2026-09-01T23:18:43Z
   - id: board-run
-    resource: ../../src/collab/cli.py
-    title: A live session, driven through propose / claim / complete / cancel and the refusals
-    last_modified: 2026-09-01T23:21:22Z
+    resource: a live session at f9abc76, driven through propose / claim / complete / cancel and each of the three refusals
+    title: Live run — the board's verbs and its refusals
   - id: overview-test
-    resource: ../../tests/test_overview.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/tests/test_overview.py
     title: tests/test_overview.py
 ---
 

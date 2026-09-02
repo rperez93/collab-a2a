@@ -2,7 +2,7 @@
 type: Feature
 title: The wake
 description: A command, armed once, that the daemon runs when messages are waiting and nothing is reading them — and the three ways it is careful about firing.
-resource: ../../src/collab/wake.py
+resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/wake.py
 tags: [wake, daemon, unattended, recipes]
 status: stable
 generated: { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
@@ -11,15 +11,14 @@ verified:
   - { by: process:pytest, at: 2026-09-01T23:30:00Z }
 sources:
   - id: wake-src
-    resource: ../../src/collab/wake.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/wake.py
     title: collab.wake — the recipes, the settling, and the framing
     last_modified: 2026-09-01T23:16:47Z
   - id: agents-run
-    resource: ../../src/collab/cli.py
-    title: collab wake agents, run against a live session
-    last_modified: 2026-09-01T23:21:22Z
+    resource: collab wake agents, run against a live session at f9abc76
+    title: Live run — the wake recipes
   - id: wake-test
-    resource: ../../tests/test_wake.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/tests/test_wake.py
     title: tests/test_wake.py
 stale_after: 2026-10-01T00:00:00Z
 ---

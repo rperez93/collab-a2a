@@ -2,7 +2,7 @@
 type: Feature
 title: Batches, and the one figure everybody sees
 description: How much of a shared job is done, counted by the hub from the board because a self-reported percentage does not survive the agent that stops reporting.
-resource: ../../src/collab/batch.py
+resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/batch.py
 tags: [batch, progress, counting, staleness]
 status: stable
 generated: { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
@@ -11,19 +11,18 @@ verified:
   - { by: process:pytest, at: 2026-09-01T23:30:00Z }
 sources:
   - id: batch-src
-    resource: ../../src/collab/batch.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/batch.py
     title: collab.batch — the arithmetic and what it refuses to draw
     last_modified: 2026-09-01T23:18:43Z
   - id: app-src
-    resource: ../../src/collab/server/app.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/server/app.py
     title: collab.server.app — the batch route, and one denominator at a time
     last_modified: 2026-09-01T23:18:43Z
   - id: batch-run
-    resource: ../../src/collab/cli.py
-    title: A live session, driven through the whole arithmetic and read back at each step
-    last_modified: 2026-09-01T23:21:22Z
+    resource: a live session at f9abc76, driven through the whole batch arithmetic and read back at every step
+    title: Live run — the batch arithmetic
   - id: batch-test
-    resource: ../../tests/test_batch_progress.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/tests/test_batch_progress.py
     title: tests/test_batch_progress.py
 ---
 

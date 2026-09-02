@@ -80,14 +80,61 @@ concept of its own — see
 why an absent `stale_after` on a structural fact is a stronger claim than a
 distant one.
 
-# Links
+# Evidence is pinned. Navigation is not.
 
-Links between concepts are bundle-absolute (`/architecture/hub.md`). Links out
-of the bundle into the repository are relative (`../src/collab/batch.py`), and
-so are `sources[].resource` paths, because both are checked: `tests/test_okf_bundle.py`
-resolves every one of them against the filesystem and fails when a target has
-moved. The spec tolerates a broken link as not-yet-written knowledge; this
-bundle does not tolerate one, because every link here points at something that
-already exists.
+Two kinds of outward pointer live in these files, and they are written
+differently on purpose.
+
+**Evidence — `resource` and every `sources[].resource`** — is an absolute URL
+pinned to the commit the claim was checked against:
+
+```
+https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/batch.py
+```
+
+A relative path like `../../src/collab/batch.py` was the first form used here,
+and §6.2 permits it — its own example, `../computations/revenue.md`, climbs out
+of the current directory, and §3 lists "a subdirectory within a larger
+repository" as a distribution form. It was dropped for two reasons anyway.
+
+The first is portability: a bundle is meant to be exchanged, and §3 also lists
+a tarball and a git repository of its own. Lift this directory out of the
+checkout and every `../..` dangles, which leaves each claim's evidence
+uncitable by anybody who does not already have the repository at the right
+depth.
+
+The second is the one that actually decided it, and it is the subject of
+[a fact that was true when it was recorded](/stale-facts.md). A relative path
+says *check this claim against that file* and silently means *against whatever
+that file becomes*. `verified.at` records **when** a claim was checked; only a
+pinned resource records **what** it was checked against. Unpinned, the two
+halves do not compose, and the bundle would be committing its own subject
+matter in its own frontmatter.
+
+Where the evidence is not a file at all — a command that was run, a directory
+that was listed — the entry is a **scope descriptor** (§5.1), which is what
+those always were:
+
+```yaml
+  - id: rooms-run
+    resource: collab rooms, run against a live session at f9abc76
+    title: Live run — the room list
+```
+
+Those carry no `last_modified`, because a run has no mtime.
+
+**Navigation** is different, and stays relative. Links between concepts are
+bundle-absolute (`/architecture/hub.md`); links out of the bundle into the
+repository are relative (`../docs/README.md`). Losing a cross-reference when
+the bundle travels costs a reader a pointer; losing a source would cost a claim
+its evidence. So the bundle is **repo-resident for navigation**: out-of-bundle
+links resolve only while it sits at `knowledge/` in this checkout, and they
+dangle if it is lifted. The spec tolerates that explicitly (§6.1).
+
+`tests/test_okf_bundle.py` holds all three forms in place. Every link resolves
+on disk; every pinned URL carries a full 40-character sha rather than a branch
+name, and its path still exists in the working tree, so a file that moves fails
+the suite and forces the concept to be re-checked and re-pinned rather than
+quietly describing something that is no longer there.
 
 [^okf-spec]: Open Knowledge Format v0.2 specification

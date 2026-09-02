@@ -2,7 +2,7 @@
 type: Trust Model
 title: The trust model
 description: The three parties collab draws a line around, what follows from that, and the things it plainly does not defend against.
-resource: ../../docs/security.md
+resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/docs/security.md
 tags: [security, trust, auth, limits]
 status: stable
 generated: { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
@@ -11,18 +11,18 @@ verified:
   - { by: process:pytest, at: 2026-09-01T23:30:00Z }
 sources:
   - id: security-doc
-    resource: ../../docs/security.md
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/docs/security.md
     title: docs/security.md — the same model, written for a person
   - id: auth-src
-    resource: ../../src/collab/server/auth.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/server/auth.py
     title: collab.server.auth — bearer tokens and the join limiter
     last_modified: 2026-08-31T19:42:12Z
   - id: store-src
-    resource: ../../src/collab/server/store.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/server/store.py
     title: collab.server.store — tokens and invites stored only as hashes
     last_modified: 2026-09-01T23:18:43Z
   - id: daemon-src
-    resource: ../../src/collab/client/daemon.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/client/daemon.py
     title: collab.client.daemon — following a hub that moved
     last_modified: 2026-09-01T23:21:22Z
 ---

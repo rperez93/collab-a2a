@@ -9,19 +9,19 @@ verified:
   - { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
 sources:
   - id: batch-src
-    resource: ../src/collab/batch.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/batch.py
     title: collab.batch — the counted figure and its staleness marker
     last_modified: 2026-09-01T23:18:43Z
   - id: exclusive-src
-    resource: ../src/collab/client/exclusive.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/client/exclusive.py
     title: collab.client.exclusive — why a pid file is not an identity
     last_modified: 2026-09-01T23:21:22Z
   - id: skills-src
-    resource: ../src/collab/skills.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/skills.py
     title: collab.skills — guidance that was right when it was written
     last_modified: 2026-09-01T23:18:43Z
   - id: daemon-src
-    resource: ../src/collab/client/daemon.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/client/daemon.py
     title: collab.client.daemon — what must refresh the snapshot
     last_modified: 2026-09-01T23:21:22Z
 ---

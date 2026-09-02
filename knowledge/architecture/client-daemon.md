@@ -2,7 +2,7 @@
 type: Component
 title: The client daemon
 description: The only thing that talks to the hub continuously, republishing every event locally three ways so an agent never has to know a reconnect happened.
-resource: ../../src/collab/client/daemon.py
+resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/client/daemon.py
 tags: [client, sse, resume, listener]
 status: stable
 generated: { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
@@ -10,17 +10,16 @@ verified:
   - { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
 sources:
   - id: daemon-src
-    resource: ../../src/collab/client/daemon.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/client/daemon.py
     title: collab.client.daemon — the listener
     last_modified: 2026-09-01T23:21:22Z
   - id: inbox-src
-    resource: ../../src/collab/client/inbox.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/client/inbox.py
     title: collab.client.inbox — JSONL and SQLite from one write
     last_modified: 2026-09-01T23:21:22Z
   - id: check-cmd
-    resource: ../../src/collab/cli.py
-    title: collab check, run against a live session with no listener
-    last_modified: 2026-09-01T23:21:22Z
+    resource: collab check, run against a live session at f9abc76 with the listener suppressed
+    title: Live run — collab check with the listener down
 stale_after: 2027-03-01T00:00:00Z
 ---
 

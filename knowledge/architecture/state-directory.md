@@ -9,15 +9,14 @@ verified:
   - { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
 sources:
   - id: config-src
-    resource: ../../src/collab/config.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/config.py
     title: collab.config — where state lives, and ensure_home
     last_modified: 2026-09-01T23:18:43Z
   - id: measured-tree
-    resource: ../../src/collab/cli.py
-    title: A live session hosted against a scratch COLLAB_HOME, then listed with find
-    last_modified: 2026-09-01T23:21:22Z
+    resource: the state directory of a live session at f9abc76, listed with find -printf '%M %p'
+    title: Live run — the state directory, as it exists
   - id: state-dirs-test
-    resource: ../../tests/test_state_dirs.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/tests/test_state_dirs.py
     title: tests/test_state_dirs.py
 stale_after: 2027-03-01T00:00:00Z
 ---

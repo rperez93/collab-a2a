@@ -10,11 +10,11 @@ verified:
   - { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
 sources:
   - id: pyproject
-    resource: ../pyproject.toml
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/pyproject.toml
     title: Package metadata — name, version, entry point, dependencies
     last_modified: 2026-09-01T23:21:22Z
   - id: cli-src
-    resource: ../src/collab/cli.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/cli.py
     title: collab.cli — the whole command surface
     last_modified: 2026-09-01T23:21:22Z
 ---

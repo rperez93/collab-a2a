@@ -2,7 +2,7 @@
 type: Mechanism
 title: The daemon lock
 description: Which process is this session's listener, answered by an advisory flock held for the process's whole life rather than by a pid file that outlives it.
-resource: ../../src/collab/client/exclusive.py
+resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/client/exclusive.py
 tags: [flock, pid, exclusion, identity]
 status: stable
 generated: { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
@@ -11,11 +11,11 @@ verified:
   - { by: process:pytest, at: 2026-09-01T23:30:00Z }
 sources:
   - id: exclusive-src
-    resource: ../../src/collab/client/exclusive.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/client/exclusive.py
     title: collab.client.exclusive — the daemon slot
     last_modified: 2026-09-01T23:21:22Z
   - id: lock-flow-test
-    resource: ../../tests/test_lock_flow.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/tests/test_lock_flow.py
     title: tests/test_lock_flow.py
 stale_after: 2027-09-01T00:00:00Z
 ---

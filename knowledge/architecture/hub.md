@@ -2,7 +2,7 @@
 type: Component
 title: The hub
 description: One FastAPI application serving the A2A surface and collab's extension on a single port, backed by an append-only SQLite log.
-resource: ../../src/collab/server/app.py
+resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/server/app.py
 tags: [server, a2a, fastapi, sqlite]
 status: stable
 generated: { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
@@ -11,23 +11,23 @@ verified:
   - { by: process:pytest, at: 2026-09-01T23:30:00Z }
 sources:
   - id: app-src
-    resource: ../../src/collab/server/app.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/server/app.py
     title: collab.server.app — the routes
     last_modified: 2026-09-01T23:18:43Z
   - id: hub-src
-    resource: ../../src/collab/server/hub.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/server/hub.py
     title: collab.server.hub — fan-out, one queue per participant
     last_modified: 2026-09-01T23:18:43Z
   - id: store-src
-    resource: ../../src/collab/server/store.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/server/store.py
     title: collab.server.store — the append-only event log
     last_modified: 2026-09-01T23:18:43Z
   - id: session-src
-    resource: ../../src/collab/server/session.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/server/session.py
     title: collab.server.session — minting and locating a hosted session
     last_modified: 2026-09-01T23:21:22Z
   - id: hub-test
-    resource: ../../tests/test_hub.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/tests/test_hub.py
     title: tests/test_hub.py
 ---
 

@@ -40,6 +40,23 @@ LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 FOOTNOTE_REF = re.compile(r"(?<!\])\[\^([^\]]+)\]")
 FOOTNOTE_DEF = re.compile(r"^\[\^([^\]]+)\]:", re.MULTILINE)
 
+#: Evidence into this repository, pinned to the revision a claim was checked
+#: against. A branch name in place of the sha would be the unpinned reference
+#: the bundle exists to argue against, so the sha is matched in full.
+REPO_BLOB = re.compile(
+    r"^https://github\.com/rperez93/collab-a2a/blob/([0-9a-f]{40})/(\S+)$")
+
+#: Anything else reaching into this repository. `blob/main/...` resolves today
+#: and says nothing about which tree a claim was checked against, so it is
+#: refused rather than waved through as an ordinary external URL.
+REPO_ANY = re.compile(r"^https://github\.com/rperez93/collab-a2a(/|$)")
+REPO_ROOT = "https://github.com/rperez93/collab-a2a"
+
+#: What a resource must not be: a path out of the bundle. It resolves only
+#: while the bundle sits at this depth in this checkout, which is the form
+#: these fields were moved off.
+LOOKS_LIKE_A_PATH = re.compile(r"^(\.{1,2}/|/|[\w.-]+/)")
+
 
 # --- a frontmatter parser small enough to be obviously right ------------------
 
@@ -169,6 +186,44 @@ def test_every_concept_has_parseable_frontmatter_with_a_type(path: Path) -> None
 
 
 @pytest.mark.parametrize("path", concepts(), ids=lambda p: str(p.name))
+def test_frontmatter_stays_inside_what_every_yaml_reader_accepts(path: Path) -> None:
+    """The parser above is permissive where real YAML is not, and that bit.
+
+    A plain scalar may not contain «: » — YAML reads the second colon as
+    another mapping key and rejects the document. The parser here splits on the
+    FIRST colon and is perfectly happy, so a title written `Live run: the room
+    list` passed every test in this file while PyYAML refused the file outright.
+    Eight concepts were written that way before a real engine was pointed at
+    them.
+
+    A bundle only its own producer's parser can read is not an exchange format,
+    so the subset is asserted rather than assumed.
+    """
+    text = path.read_text(encoding="utf-8")
+    block = text[4:text.find("\n---\n", 3) + 1]
+    for line in block.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("- "):
+            stripped = stripped[2:]
+        if stripped.startswith("{"):
+            continue                       # a flow mapping; colons are structure
+        _, sep, value = stripped.partition(":")
+        value = value.strip()
+        if not sep or not value or value[0] in "\"'{[":
+            continue
+        assert ": " not in value and not value.endswith(":"), (
+            f"{path.name}: {stripped!r} — a plain scalar cannot hold a colon"
+            " and a space; quote it or rewrite it"
+        )
+        assert value[0] not in "*&!%@`>|", (
+            f"{path.name}: {stripped!r} — that leading character is a YAML"
+            " indicator; quote the value"
+        )
+
+
+@pytest.mark.parametrize("path", concepts(), ids=lambda p: str(p.name))
 def test_lifecycle_fields_say_something_a_consumer_can_act_on(path: Path) -> None:
     """`status` and `stale_after` are advisory, so a wrong one is never caught.
 
@@ -217,19 +272,67 @@ def test_no_concept_claims_a_human_verified_it(path: Path) -> None:
         )
 
 
-@pytest.mark.parametrize("path", concepts(), ids=lambda p: str(p.name))
-def test_sources_point_at_something_that_is_still_there(path: Path) -> None:
-    """A provenance field naming a file that has moved is worse than no field."""
+def _resources(path: Path) -> list[str]:
+    """Every path-or-URI-valued field on a concept (§6.2)."""
     front = parse_frontmatter(path.read_text(encoding="utf-8"))
+    found = [front["resource"]] if front.get("resource") else []
     for entry in front.get("sources") or []:
-        resource = entry.get("resource")
-        assert resource, f"{path.name}: a source entry needs a resource (§5.1)"
-        if resource.startswith(("http://", "https://")):
-            continue
-        target = (path.parent / resource).resolve()
-        assert target.exists(), f"{path.name}: source {resource} is gone"
+        assert entry.get("resource"), \
+            f"{path.name}: a source entry needs a resource (§5.1)"
+        found.append(entry["resource"])
         if entry.get("last_modified"):
             _iso(entry["last_modified"])
+    return found
+
+
+@pytest.mark.parametrize("path", concepts(), ids=lambda p: str(p.name))
+def test_evidence_is_pinned_or_is_honestly_a_scope_descriptor(path: Path) -> None:
+    """A resource says what a claim was checked against, so it must not drift.
+
+    These began as relative paths — `../../src/collab/batch.py` — which §6.2
+    permits and which resolve perfectly well while the bundle sits here. Two
+    things were wrong with them. A bundle is meant to be exchanged, and every
+    one of those dangles the moment it is lifted out of the checkout. And a
+    path with no revision on it says «check this against that file» while
+    meaning «against whatever that file becomes», which is the defect the
+    bundle is about, committed in its own frontmatter.
+
+    So evidence into this repository is a URL pinned to a full sha, and
+    evidence that is not a file at all — a command that was run — is a scope
+    descriptor, which §5.1 provides for and which those always were.
+    """
+    for resource in _resources(path):
+        if m := REPO_BLOB.match(resource):
+            assert (ROOT / m.group(2)).exists(), (
+                f"{path.name}: {m.group(2)} is no longer in the tree — the pin"
+                " is still valid, but the concept describes something that has"
+                " moved and needs re-checking"
+            )
+        elif REPO_ANY.match(resource):
+            assert resource == REPO_ROOT, (
+                f"{path.name}: {resource!r} reaches into this repository without"
+                " a revision — pin it to a full sha, so it says which tree the"
+                " claim was checked against"
+            )
+        elif resource.startswith(("http://", "https://")):
+            continue                      # an external source; nothing to check
+        else:
+            assert not LOOKS_LIKE_A_PATH.match(resource), (
+                f"{path.name}: {resource!r} is a path out of the bundle — pin it"
+                " to a revision, or say plainly that it is a scope descriptor"
+            )
+
+
+def test_the_whole_bundle_is_pinned_to_one_revision() -> None:
+    """Half a bundle pinned to one commit and half to another describes neither.
+
+    Nothing in the format forbids it, and nothing downstream would notice: each
+    URL resolves, so a consumer following any single one is satisfied while the
+    document as a whole is an account of two different trees.
+    """
+    shas = {m.group(1) for path in concepts() for r in _resources(path)
+            if (m := REPO_BLOB.match(r))}
+    assert len(shas) == 1, f"pinned to {len(shas)} different revisions: {shas}"
 
 
 @pytest.mark.parametrize("path", concepts(), ids=lambda p: str(p.name))

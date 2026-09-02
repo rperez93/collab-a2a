@@ -2,7 +2,7 @@
 type: Feature
 title: Rooms and direct messages
 description: Where a message goes, who is entitled to see it live and on replay, and why the sender always gets their own message back.
-resource: ../../src/collab/server/hub.py
+resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/server/hub.py
 tags: [rooms, dm, delivery, visibility]
 status: stable
 generated: { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
@@ -11,17 +11,16 @@ verified:
   - { by: process:pytest, at: 2026-09-01T23:30:00Z }
 sources:
   - id: hub-src
-    resource: ../../src/collab/server/hub.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/server/hub.py
     title: collab.server.hub — entitlement and fan-out
     last_modified: 2026-09-01T23:18:43Z
   - id: store-src
-    resource: ../../src/collab/server/store.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/server/store.py
     title: collab.server.store — history filtered by viewer
     last_modified: 2026-09-01T23:18:43Z
   - id: rooms-run
-    resource: ../../src/collab/cli.py
-    title: collab rooms, run against a live session
-    last_modified: 2026-09-01T23:21:22Z
+    resource: collab rooms, run against a live session at f9abc76
+    title: Live run — the room list
 ---
 
 # Rooms

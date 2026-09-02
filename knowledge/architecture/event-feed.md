@@ -2,7 +2,7 @@
 type: Protocol
 title: The event feed
 description: One long-lived SSE response per participant, framed with the durable seq so a reconnect resumes without a gap and without a duplicate.
-resource: ../../src/collab/server/events.py
+resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/server/events.py
 tags: [sse, resume, seq, streaming]
 status: stable
 generated: { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
@@ -11,15 +11,15 @@ verified:
   - { by: process:pytest, at: 2026-09-01T23:30:00Z }
 sources:
   - id: events-src
-    resource: ../../src/collab/server/events.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/server/events.py
     title: collab.server.events — the per-participant stream
     last_modified: 2026-09-01T04:20:29Z
   - id: hub-src
-    resource: ../../src/collab/server/hub.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/server/hub.py
     title: collab.server.hub — publish persists before it delivers
     last_modified: 2026-09-01T23:18:43Z
   - id: resume-test
-    resource: ../../tests/test_resume.py
+    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/tests/test_resume.py
     title: tests/test_resume.py
 ---
 
