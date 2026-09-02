@@ -378,6 +378,30 @@ def set_share_stats(enabled: bool) -> bool:
     return bool(enabled)
 
 
+#: Whether `host` and `join` print collab's own rules of conduct on arrival.
+#: On by default because agents that are not told how to collaborate do it
+#: badly, and the cost of reading them once is nothing against one afternoon
+#: of two agents arguing in rounds.
+#:
+#: This switch covers the SHIPPED rules only. The pointer to the repository's
+#: own `COLLAB.md` that follows them has no setting, on purpose: a repository's
+#: rules are the repository's to make, and an agent that could be configured
+#: not to be told about them is an agent that will not follow them.
+RULES_DEFAULT = True
+
+
+def rules_enabled() -> bool:
+    value = load_config().get("rules")
+    return RULES_DEFAULT if value is None else bool(value)
+
+
+def set_rules(enabled: bool) -> bool:
+    cfg = load_config()
+    cfg["rules"] = bool(enabled)
+    save_config(cfg)
+    return bool(enabled)
+
+
 #: How `collab watch` arranges itself.
 #:
 #: ``split``  one window, roster above the conversation (works anywhere)
@@ -1002,6 +1026,11 @@ def settings() -> tuple[Setting, ...]:
                 SHARE_STATS_DEFAULT, _as_bool,
                 share_stats_enabled,
                 lambda v: set_share_stats(v)),
+        Setting("rules", "print collab's rules of conduct at `host` and `join` "
+                         "(the pointer to the repo's own COLLAB.md always prints)",
+                RULES_DEFAULT, _as_bool,
+                rules_enabled,
+                lambda v: set_rules(v)),
         Setting("stats_command", "a command printing your usage as JSON, for "
                                  "an agent whose host tool cannot report it",
                 "", str,

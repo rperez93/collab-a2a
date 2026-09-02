@@ -17,6 +17,10 @@ from collab.cli import build_parser
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ([ROOT / "README.md", ROOT / "AGENT_INSTALL.md"]
         + sorted((ROOT / "src" / "collab" / "skills").glob("*/SKILL.md"))
+        # The shipped rules are followed even more literally than the skills:
+        # they are printed at every `host` and `join`, to every agent, and cite
+        # the command that proves each rule was kept.
+        + [ROOT / "src" / "collab" / "rules" / "COLLAB.md"]
         # The docs/ guide follows collab literally too, so it is held to the
         # same standard: a flag written here that the parser does not accept is
         # a promise an agent would try to keep and the user would watch fail.

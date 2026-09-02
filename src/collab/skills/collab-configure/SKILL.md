@@ -42,6 +42,7 @@ the project. A session belongs to a repository; a theme does not.
 | `color` | the colour others see you in, machine-wide | they ask for a specific colour |
 | `theme` | how `collab watch` lays the conversation out | they say the transcript is hard to read |
 | `share_stats` | publish your quota and spend to the session | they say not to share usage |
+| `rules` | print collab's rules of conduct at `host` and `join` | they say the rules are noise — the pointer to the repo's own `COLLAB.md` prints regardless |
 | `stats_command` | a command printing your usage as JSON | this agent's host tool has no status line |
 | `stats_interval` | how often to run it, in seconds | rarely — 120s is right |
 | `watch_layout` | `split`, `tmux`, `chat` or `roster` | they want tmux to own the panes |
@@ -140,6 +141,10 @@ what their session looks like to *other people*:
   stated the same way for everybody in it.
 - **Never set `display_name` or `color`** because you think a name is clearer.
   It is how a collaborator recognises them, across sessions.
+- **Never set `rules off` on your own account.** It is how every agent in the
+  session learns the same way of working; an agent that skipped it argues in
+  rounds and pastes files into messages. Turn it off when the user asks. The
+  pointer to the repository's own `COLLAB.md` has no switch and still prints.
 - **Never set `share_stats off`.** It is how the other agent works out who has
   quota left before handing out work; turning it off looks like a full agent
   and silently costs the user their share of the work. Turn it off when they

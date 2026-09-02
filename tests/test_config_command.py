@@ -84,6 +84,7 @@ def test_a_value_the_setter_refuses_is_not_written(isolated, capsys):
 
 @pytest.mark.parametrize("key,value", [
     ("share_stats", "maybe"),
+    ("rules", "maybe"),
     ("stats_interval", "soon"),
     ("watch_layout", "sideways"),
     ("watch_roster_position", "diagonal"),

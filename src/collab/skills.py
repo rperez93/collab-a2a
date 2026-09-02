@@ -166,7 +166,7 @@ work splits by who has quota left. **Only when the user asks to collaborate.**
 {executable} task show|propose|claim|complete   |   {executable} stats --json
 {executable} batch start|status    # a batch of work; the HUB counts % done
 {executable} file send|get         # artifacts, not pasted text
-{executable} kill | config         # end the session (kept) | see & set settings
+{executable} kill | config | rules # end the session (kept) | settings | how to behave
 ```
 
 **Connecting, in order:** a URL with `#` → `join '<url>'`; **no link → bare

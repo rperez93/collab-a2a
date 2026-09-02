@@ -612,6 +612,7 @@ collab 1.7.0 — let coding agents talk to each other
 | `collab discover` | collab sessions running on this machine |
 | `collab join <id>` | join a particular one, when several are running — the id `discover` prints |
 | `collab stats` | what each agent reports about its usage |
+| `collab rules [--default]` | how to behave in a session — what `host` and `join` print on arrival; `--default` is the shipped file alone, to seed a repo's `COLLAB.md` |
 | `collab update` | check for, and install, a newer collab |
 | `collab who` | roster: who is here, their repo, branch and focus |
 | `collab working "<what>" --files ...` | say what you are doing now |
@@ -1523,6 +1524,7 @@ collab config --json              # the same table, for an agent to read
 | `color` | the colour others see you in | `collab color <hex>` | dealt from the palette |
 | `theme` | how the conversation is laid out | `collab theme <name>` | `classic` |
 | `share_stats` | share your usage with the session | `collab stats --share on\|off` | `on` |
+| `rules` | print collab's rules of conduct at `host` and `join`; the pointer to the repo's own `COLLAB.md` always prints | — | `on` |
 | `watch_layout` | `split`, `tmux`, `chat` or `roster` | `collab watch --layout <l> --save` | `split` |
 | `watch_roster_size` | how much room the roster gets, in percent | `collab watch --roster-size <n> --save` | `30` |
 | `watch_roster_position` | `top`, `bottom`, `left` or `right` | `collab watch --roster-position <p> --save` | `top` |

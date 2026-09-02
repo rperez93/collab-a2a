@@ -38,7 +38,7 @@ where = ["src"]
 # The agent skills ship with the package so `collab skills install` works from
 # an installed copy, not only from a checkout.
 [tool.setuptools.package-data]
-collab = ["skills/**/*.md"]
+collab = ["skills/**/*.md", "rules/*.md"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

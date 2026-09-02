@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import __version__, activity, lockfile, peers, update
+from . import __version__, activity, lockfile, peers, rules, update
 from . import batch as batch_progress
 from .client import exclusive, onboard
 from .client.daemon import (DaemonPaths, effective_state as daemon_state,
@@ -46,6 +46,7 @@ from .config import (
     _slug,
     set_default_name,
     save_watch_settings,
+    rules_enabled,
     set_share_stats,
     set_stats_source,
     share_stats_enabled,
@@ -283,6 +284,84 @@ def _monitor_hint(profile: SessionProfile, status: dict[str, Any]) -> None:
     print(dim("  carrying on, because it is why the other agent is waiting."))
 
 
+#: What heads the shipped rules when they are printed. A constant because the
+#: tests for `host`, `join` and `collab rules` all look for the same line.
+RULES_HEADING = "How to behave in this session — binding on every agent"
+
+
+def _rules_briefing(cwd: Path | None = None) -> str:
+    """The rules of the room, as `host` and `join` print them on arrival.
+
+    Printed by the CLI itself, locally, on every participant's machine — not
+    sent by the host through the hub. Every participant has the package, so
+    every participant has the rules, and the host has nothing to remember.
+
+    Two parts. The shipped rules, headed so an agent knows they bind it and
+    switched off by `collab config rules off`. Then the pointer to the
+    repository's own `COLLAB.md`, which has no switch: it is printed whether or
+    not the file exists, because an agent that finds none is asked to create
+    it, and it is printed whether or not the shipped rules are, because a
+    repository's rules are not collab's to suppress.
+
+    The local file is pointed at, not printed. The shipped rules are printed
+    because an installed wheel keeps them where no agent would look; the
+    repository's file is in the directory the agent is standing in, it is the
+    agent's to read with its own tools, and the agent is asked to append to it,
+    which means opening it anyway. Printing it would also print anything a
+    repository chose to put there, at whatever length, into every arrival.
+    """
+    lines: list[str] = []
+    shipped = rules_enabled()
+    if shipped:
+        lines += ["", c(RULES_HEADING, "1"), rules.default_rules().rstrip("\n")]
+
+    local = rules.local_rules(cwd)
+    lines += ["", c(f"The repository's own rules: ./{rules.LOCAL_RULES_NAME}", "1")]
+    lines.append(f"  Read {c(rules.LOCAL_RULES_NAME, '36')} in the directory you are"
+                 " working in, if it exists.")
+    if local is not None:
+        lines.append(f"  It does — {c(str(local), '36')}, "
+                     + dim(f"{_line_count(local)} lines") + ".")
+    else:
+        lines.append(dim("  There is none here yet; you may create it."))
+    above = ("the rules above" if shipped
+             else "collab's own rules (`collab rules --default`)")
+    lines.append(f"  It is binding on you in this session and sits on top of {above}.")
+    lines.append("  When you learn a rule worth keeping — a mistake and its cause, a"
+                 " convention this")
+    lines.append("  repository needs — append it there, so the next agent inherits it.")
+    lines.append("")
+    lines.append(f"  {c('collab rules', '36')}            "
+                 + dim("reprints all of this, any time"))
+    lines.append(f"  {c('collab rules --default', '36')}  "
+                 + dim(f"the shipped rules alone — `> {rules.LOCAL_RULES_NAME}` seeds a"
+                       " repository"))
+    return "\n".join(lines)
+
+
+def _line_count(path: Path) -> int:
+    try:
+        return len(path.read_text(encoding="utf-8", errors="replace").splitlines())
+    except OSError:
+        return 0
+
+
+def cmd_rules(args: argparse.Namespace) -> int:
+    """`collab rules` reprints what `host` and `join` printed on arrival.
+
+    `--default` is the shipped file alone, byte for byte — no heading, no
+    colour, no pointer — so `collab rules --default > COLLAB.md` seeds a
+    repository with the rules and nothing else. It ignores the setting: an
+    agent asking for the shipped rules by name is not asking whether they are
+    switched on.
+    """
+    if args.default:
+        sys.stdout.write(rules.default_rules())
+        return 0
+    print(_rules_briefing())
+    return 0
+
+
 def _print_snapshot(snapshot: dict[str, Any], me: str) -> None:
     people = snapshot.get("participants", [])
     others = [p for p in people if p.get("name") != me]
@@ -481,6 +560,9 @@ def cmd_host(args: argparse.Namespace) -> int:
         print(dim(f"  (local only — LAN address is http://{local_ip()}:{cfg.port})"))
 
     _monitor_hint(profile, status)
+    # The monitor first — it is the thing that must be armed NOW — then how to
+    # behave, which is the other decision an agent makes on arrival.
+    print(_rules_briefing())
     _opening_message(profile)
     print()
     return 0
@@ -1018,6 +1100,7 @@ def cmd_join(args: argparse.Namespace) -> int:
 
     _print_snapshot(snapshot, profile.name)
     _monitor_hint(profile, status)
+    print(_rules_briefing())
     print()
     return 0
 
@@ -3634,6 +3717,7 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("who", "who is here, their focus, repo and machine"),
         ("stats", "each agent's quota and spend, for splitting work"),
         ("file send|get", "hand over artifacts instead of pasting them"),
+        ("rules", "how to behave in a session — printed at host and join"),
     ]),
     ("Yourself and this install", [
         ("status", "your connection state and how to watch it"),
@@ -3910,6 +3994,12 @@ def build_parser() -> argparse.ArgumentParser:
                      help="how often to run --source (default 120)")
     add_session_flag(stt)
     stt.set_defaults(func=cmd_stats)
+
+    ru = sub.add_parser("rules", help="how to behave in a session — what host and "
+                                      "join print on arrival")
+    ru.add_argument("--default", action="store_true",
+                    help="only the shipped rules, verbatim — `> COLLAB.md` seeds a repo")
+    ru.set_defaults(func=cmd_rules)
 
     di = sub.add_parser("discover", help="collab sessions running on this machine")
     di.add_argument("--all", action="store_true", help="include stale records")

@@ -31,6 +31,7 @@ These are noted per command below.
 | [`idle`](#idle) | Say you have stopped. |
 | [`activity`](#activity) | Show who is working, and on what. |
 | [`stats`](#stats) | Show or report per-agent usage. |
+| [`rules`](#rules) | Print the rules of conduct that `host` and `join` print on arrival. |
 | [`discover`](#discover) | List collab sessions running on this machine. |
 | [`update`](#update) | Check for, and install, a newer collab. |
 | [`watch`](#watch) | Open a readable live transcript. |
@@ -385,6 +386,24 @@ refusal prints the exact command to re-run for each directory, e.g.
 only show something (`status`, `who`, `watch`, `activity`, `stats` without
 `--report`) keep answering from the repository's default directory. `collab
 lock` run in each directory says who claimed it.
+
+## rules
+
+Print how to behave in a session — the same text `host` and `join` print on
+arrival, right after the monitor instructions: collab's rules of conduct, then
+a pointer to the repository's own `COLLAB.md` in the working directory.
+
+```text
+collab rules [--default]
+```
+
+| Flag | Meaning |
+|---|---|
+| `--default` | Only the shipped rules, verbatim. `collab rules --default > COLLAB.md` seeds a repository. |
+
+The shipped rules are switched off with `collab config rules off`. The pointer
+to the repository's `COLLAB.md` is not configurable: it is printed whether or
+not the file exists, and whether or not the shipped rules are.
 
 ## discover
 

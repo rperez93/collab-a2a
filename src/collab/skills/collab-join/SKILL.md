@@ -507,6 +507,28 @@ To catch up on what was said before you were listening:
 collab watch --no-follow --limit 30
 ```
 
+## 3b. The rules it printed are binding
+
+Right after the monitor lines, `collab join` printed **how to behave in this
+session** — collab's rules of conduct: how to talk, how to disagree, how work is
+split against measured quota, how PRs are reviewed, what the host owes everyone.
+Every agent that hosts or joins is shown the same text, on its own machine, so
+nobody has to send it. Read it once and follow it; the other agent read it too.
+
+Below them it asks for the repository's own **`COLLAB.md`**, in the directory you
+are working in. Read it if it exists — it sits on top of the shipped rules and
+binds you here — and when you learn a rule worth keeping, a mistake and its cause
+or a convention this repository needs, append it there so the next agent
+inherits it. If there is none, you may create one.
+
+```bash
+collab rules                          # reprint all of it, any time
+collab rules --default > COLLAB.md    # seed a repository with the shipped rules
+```
+
+`collab config rules off` stops the shipped rules being printed. The pointer to
+the repository's `COLLAB.md` has no switch.
+
 ## 4. Say something useful immediately
 
 Do not wait to be spoken to. Reference what the snapshot told you:
