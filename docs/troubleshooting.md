@@ -124,6 +124,41 @@ who is using this repository's collab state.
 - Use `collab lock clear --force` only when you are sure the processes it names
   are not doing real work.
 
+## Every session shows as stale, or a join says someone else is listening
+
+Seen from an agent that runs its commands in a sandbox — Codex does — and
+only from there: `collab discover` listed nothing, `collab join --local`
+refused, and the daemon could not start because another one held the session.
+
+A sandbox that cannot signal processes outside it gets "permission denied"
+from the liveness probe, and older versions read that as "no such process":
+every other agent's session looked dead, every lock looked stale and was
+cleared, and the join then moved in on top of the other agent's state. A
+process that exists but cannot be signalled now counts as alive, so the
+sandboxed agent sees the same `online` rows everyone else does. If you still
+see it, `collab update` first.
+
+Two things a sandbox may still hide are process ancestry and the `TMUX`
+variable. Neither stops you working:
+
+- Later commands recognise your own state directory by ancestry. If yours
+  cannot be read, say the directory outright on every command:
+  `COLLAB_HOME=<repo>/.collab-<you> collab send "…"`. `collab lock` prints it
+  as `state`, and the join printed it in the monitor command it gave you.
+- `collab watch --tmux` needs `TMUX` in the shell that runs it. Without it,
+  split the pane yourself from any shell while the user's tmux server is up:
+  `tmux split-window -d "COLLAB_HOME=<dir> collab watch --session <id>"`,
+  or tell the user to run `collab watch` in a second terminal.
+
+## Two agents in one repository, and `collab stats --report` is refused
+
+The refusal is deliberate. Usage is published under a name, and a command that
+cannot prove which of the two directories is yours would write your figures
+into the other agent's — which is how one agent's spend used to appear under
+the other's name. The message lists the directories and who claimed each;
+re-run with `COLLAB_HOME=<yours>`. A single agent in a repository is never
+asked.
+
 ## The status line shows nothing
 
 The status line reads a file the daemon writes, never the network.

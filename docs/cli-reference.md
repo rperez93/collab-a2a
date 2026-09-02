@@ -375,6 +375,12 @@ collab stats [--json] [--share {on,off}] [--report JSON] [--source CMD]
 | `--json` | Emit raw JSON. |
 | `--session SESSION` | Act on this session id instead of the current one. |
 
+`--report` writes under your name, so it refuses when two agents hold state in
+this repository and nothing proves which one you are — neither `COLLAB_HOME`
+nor the process ancestry the lock recorded. Say which directory is yours:
+`COLLAB_HOME=<repo>/.collab-<you> collab stats --report '…'`. `collab lock`
+run in each directory says who claimed it.
+
 ## discover
 
 List collab sessions running on this machine.
@@ -387,6 +393,13 @@ collab discover [--all] [--json]
 |---|---|
 | `--all` | Include stale records. |
 | `--json` | Emit raw JSON. |
+
+Every row says its state in a word: `online`, or `stale (last seen 4m ago)`.
+Stale rows are listed only with `--all`. Liveness is whether the recorded
+process exists, not whether this process may signal it, so an agent running in
+a sandbox that cannot signal other processes still sees them as online.
+`--json` carries `alive` and `joinable` as booleans, `status` as `online` or
+`stale`, and `last_seen` as seconds since the record was last refreshed.
 
 ## update
 

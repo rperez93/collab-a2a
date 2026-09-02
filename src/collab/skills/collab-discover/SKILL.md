@@ -34,7 +34,7 @@ improvise past it.
 | What you have | What to run |
 |---|---|
 | A URL containing `#` | `collab join '<url>#<invite>'` — **quote it** |
-| **No link at all** | `collab join` — no arguments; it finds the session on this machine and joins it |
+| **No link at all** | `collab discover`, then run the `join` line it prints under the `host` row, verbatim. `collab join` with no arguments does the same when exactly one session is here |
 | More than one session here | `collab discover` to see them, then `collab join --local <session-id>` |
 | `discover` lists nothing, but says *stopped, but kept in this repo* | `collab host` — that session is yours, resume it |
 | `discover` lists nothing at all | nothing is hosting here: either they host and send you a link, or you `collab host` and send them yours |
@@ -53,17 +53,20 @@ collab discover
 
 ```
 collab on RPEREZ (perez)
-  s_bb9c59a3  host  as alice                     <- id, role, the name it answers to
+  s_bb9c59a3  host  as alice  online             <- id, role, the name, its state
       repo   /home/perez/Pycharm/api             <- the checkout it runs in
       hub    http://127.0.0.1:50331              <- where it is listening
       join   collab join --local s_bb9c59a3      <- run this line, verbatim
-  s_7f21aa04  guest  as bob
+  s_7f21aa04  guest  as bob  online
       repo   /home/perez/Pycharm/webapp
       joined alicia — no invite to pass on       <- NOT joinable, see below
 ```
 
 Read it like this:
 
+- **`online`** — its process is running. Every row says its state in a word;
+  the other word is `stale (last seen 4m ago)`, and stale rows are listed only
+  with `--all`. Read the word, never the absence of one.
 - **`host`** — joinable. The `join` line printed under it is the exact command;
   copy it rather than composing your own.
 - **`guest`** — *not* joinable. It is a participant in someone else's session
@@ -88,8 +91,9 @@ the `guest` row is just another participant like you.
       joined alice — no invite to pass on
 ```
 
-`--json` gives the same information machine-readably, with `joinable` and
-`alive` as explicit booleans.
+`--json` gives the same information machine-readably: `joinable` and `alive`
+as explicit booleans, `status` as `online` or `stale`, and `last_seen` as
+seconds since the record was last refreshed.
 
 ## Joining
 
@@ -270,11 +274,52 @@ That is worth acting on:
   tree if you are in the same repo. Say so before you both run a test suite.
 - A local hub is reachable directly, so a dropped tunnel does not separate you.
 
+## Running in a sandbox, or without a tty
+
+Some agents run their commands confined — Codex does — and a sandbox can hide
+two things collab otherwise reads for itself. Neither stops you; each has a
+plain answer.
+
+**Liveness is not one of them.** A process the sandbox will not let you signal
+is still a running process, and `discover`, `join` and the lock all read it as
+such. If every session shows `stale` and `collab lock` says the holder is
+`gone` while the other agent is plainly working, collab is out of date: run
+`collab update`.
+
+**Process ancestry may be.** After a join that gave you `.collab-<you>`, later
+commands recognise that directory by the process they descend from. A sandbox
+that hides your parent processes leaves them nothing to go on, and they fall
+back to the repo's `.collab` — the other agent's. So carry the directory on
+every later command, in so many words:
+
+```bash
+COLLAB_HOME=/home/perez/Pycharm/api/.collab-bob collab send "on it"
+COLLAB_HOME=/home/perez/Pycharm/api/.collab-bob collab stats --report '{"model":"gpt-5"}'
+```
+
+Which directory: the `state` line of `collab lock` (run it in the directory the
+join named), the `state` line of `collab whoami`, or the monitor command the
+join printed — it already carries the `COLLAB_HOME=…` prefix. Three signs you
+need this: your messages arrive under the other agent's name; `collab lock`
+names them and not you; `collab stats --report` refuses with *2 agents hold
+collab state in this repo* — that refusal is collab declining to publish your
+figures under their name, and `COLLAB_HOME` is the answer it asks for.
+
+**`TMUX` may be missing from your environment** even while the user's tmux is
+running. `collab watch --tmux` then says *not inside a tmux session*. Split the
+pane yourself from any shell, carrying the directory, or tell the user to open
+`collab watch` in a second terminal:
+
+```bash
+tmux split-window -d "COLLAB_HOME=/home/perez/Pycharm/api/.collab-bob collab watch --session s_bb9c59a3"
+```
+
 ## Notes
 
 - A session is registered by its **hub**, so it stays discoverable even if its
   listener has stopped — the hub is what makes it reachable.
 - Records are removed when a session stops or its process dies, so `discover`
   shows what is actually running. `--all` includes stale entries when debugging.
+  A process you may not signal counts as running, not dead.
 - The registry lives in the user's home directory and is readable only by them,
   because a host's record contains a live invite.

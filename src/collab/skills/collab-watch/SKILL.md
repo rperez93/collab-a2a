@@ -56,6 +56,22 @@ collab watch --tmux --percent 50    # give it half the window
 You stay in the original pane — the split runs detached, so your own session is
 not interrupted.
 
+`--tmux` reads `$TMUX` from **your** shell, not from the machine. An agent whose
+shell is not the tmux client's — one running its commands in a sandbox, or
+started outside tmux — is told *not inside a tmux session* while the user's
+tmux is plainly running. Do not conclude tmux is absent. Split the pane yourself
+from any shell; it works whenever the user's tmux server is up, and it must
+carry the state directory because a new pane inherits the tmux server's
+environment, not yours:
+
+```bash
+tmux split-window -d "COLLAB_HOME=/home/perez/Pycharm/api/.collab-bob collab watch --session s_bb9c59a3"
+```
+
+`collab lock` prints the directory as `state` and the session id on its first
+line. With more than one tmux session, add `-t <session>` to say which. If that
+too is refused, fall back to the second-terminal instructions below.
+
 ## Letting tmux own the layout
 
 By default the viewer splits itself: roster on top, conversation below. In tmux

@@ -89,13 +89,15 @@ collab discover
 
 ```
 collab on RPEREZ (perez)
-  s_bb9c59a3  host  as alice                     <- id, role, the name it answers to
+  s_bb9c59a3  host  as alice  online             <- id, role, the name, its state
       repo   /home/perez/Pycharm/api             <- the checkout it runs in
       join   collab join --local s_bb9c59a3      <- run this line, verbatim
-  s_7f21aa04  guest  as bob
+  s_7f21aa04  guest  as bob  online
       joined alicia — no invite to pass on       <- NOT joinable
 ```
 
+- Every row says `online` or `stale (last seen …)` in words. Stale rows are
+  shown only with `--all`; a row you can see without it is running.
 - Join a session marked **`host`** — the `join` line under it is the exact
   command. A **`guest`** entry is a participant in someone else's session and
   holds no invite to give you; ask that host for a link instead.
@@ -187,6 +189,24 @@ recognise their own directory by the process they are running under: the claim
 records the agent that made it, and every command you run afterwards is a
 descendant of that same agent. The other agent in the repo is not, so its
 directory is never yours by accident.
+
+**That needs your process ancestry to be readable, and a sandbox may hide it.**
+When it does, a bare command cannot prove which directory is yours and falls
+back to the repo's `.collab` — the other agent's. Nothing warns you except the
+one write that refuses: `collab stats --report` stops with *2 agents hold
+collab state in this repo* rather than publish your figures under their name.
+If you run confined (Codex does), do not rely on the lineage at all: prefix
+**every** later command with the directory the join named, exactly as the
+monitor line it printed does —
+
+```bash
+COLLAB_HOME=/home/perez/Pycharm/api/.collab-bob collab send "on it"
+COLLAB_HOME=/home/perez/Pycharm/api/.collab-bob collab recv --wait 60
+```
+
+`collab lock` (run inside that directory) and `collab whoami` both print it as
+`state`. In the repo's default `.collab` no prefix is needed and none is
+printed.
 
 Two things break that, and both have the same answer:
 
@@ -638,5 +658,14 @@ same CPU and ports.
 ## Showing the user what is happening
 
 `collab watch --tmux` opens a full-screen view beside their work: the roster
-with everyone's quota on top, the conversation below. See the `collab-watch`
-skill.
+with everyone's quota on top, the conversation below. It needs `TMUX` in the
+shell that runs it; an agent whose shell is not the tmux client's — a sandbox,
+a shell started outside tmux — gets *not inside a tmux session* while tmux is
+plainly running. Then split the pane yourself, carrying your directory, or tell
+the user to run `collab watch` in a second terminal:
+
+```bash
+tmux split-window -d "COLLAB_HOME=/home/perez/Pycharm/api/.collab-bob collab watch --session s_bb9c59a3"
+```
+
+See the `collab-watch` skill.
