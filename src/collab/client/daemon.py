@@ -571,6 +571,15 @@ class Daemon:
             # How much of the shared batch is done — the hub's count, with the
             # age of that count attached. See `_batch_figures`.
             "batch": self._batch_figures(),
+            # How much has been SAID in this session, on the same terms and for
+            # the same reason. Every other count in this payload above is
+            # written from the reader's point of view — `others_*` leave the
+            # reader out by id, `unread*` belong to one inbox, `watchers` and
+            # `ws_clients` are this daemon's own subscribers — and none of them
+            # may be offered to a reader as a fact about the session. This one
+            # is the hub's own count of the whole log, identical for everybody
+            # who has fetched it.
+            "messages": self._message_figures(),
             "heartbeat": time.time(),
             "connected_since": self.connected_since,
             "failures": self.failures,
@@ -615,6 +624,27 @@ class Daemon:
         out["fetched_at"] = self.snapshot.get("fetched_at")
         out.update(self._note_batch_change(figures))
         return out
+
+    def _message_figures(self) -> dict[str, Any] | None:
+        """The hub's message count, stamped with when we last actually had it.
+
+        The same stamp `_batch_figures` uses and for the identical reason:
+        `write_status` runs every three seconds whether or not the hub answered
+        anything, so the file's own age is the age of the WRITE and not of the
+        figures in it. A count with no successful fetch behind it is a memory,
+        and a memory drawn plainly is indistinguishable from an observation.
+        See collab.batch.is_stale.
+
+        The total is copied out unparsed. For a guest it arrived over the
+        network from somebody else's hub, so it is a remote party's choice of
+        value; `batch.count_of` is where every such number is turned into an
+        integer, and doing it twice would mean two places that could disagree
+        about what `"lots"` means.
+        """
+        if "messages" not in self.snapshot:
+            return None
+        return {"total": self.snapshot.get("messages"),
+                "fetched_at": self.snapshot.get("fetched_at")}
 
     def _note_batch_change(self, figures: dict[str, Any]) -> dict[str, Any]:
         """Remember that the denominator moved, so the line can say why.

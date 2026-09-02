@@ -409,6 +409,16 @@ def save_watch_settings(*, layout: str | None = None, roster_size: int | None = 
 #: `command` is the user's own; the rest are described in client.statusbar,
 #: which is also where the order is argued for.
 WATCH_STATUS_SEGMENTS = ("batch", "stats", "command", "keys")
+#: What the ROSTER panel's bottom row can carry. A shorter list than the one
+#: above, and the omissions are the design rather than an oversight: this row
+#: speaks for the session, so every figure on it must be one the hub counted
+#: and handed to everybody. `stats` is the reader's own quota and spend and
+#: `command` is a command only the reader ran, so neither can appear here — put
+#: on a row that claims to be everybody's, they would show four participants
+#: four different numbers beside a batch bar that genuinely is shared, lending
+#: them credit they had not earned. `keys` is a legend rather than a figure and
+#: is drawn only where this row is the pane's only one.
+WATCH_ROSTER_SEGMENTS = ("batch", "messages", "keys")
 #: How often to re-run the bottom row's command. Thirty seconds because the row
 #: is glanced at rather than watched: a branch name, a build state or a ticket
 #: count does not change faster than that, and the alternative is a shell every
@@ -468,6 +478,46 @@ def watch_status_settings() -> dict[str, Any]:
         "command": str(cfg.get("watch_status_command") or ""),
         "interval": max(MIN_WATCH_STATUS_INTERVAL, interval),
     }
+
+
+def watch_roster_settings() -> dict[str, Any]:
+    """The roster panel's own bottom row, validated the same way as the other.
+
+    Its own pair of keys rather than more segments on `watch_status`, because
+    the two rows answer different questions: that one is the reader's — their
+    quota, their spend, their command, their keys — and this one is the
+    session's. Somebody who turned the reader's row off has not asked to stop
+    being told how the session as a whole is going, and somebody who put
+    `stats` on the reader's row has not asked to publish their own spend on a
+    row that speaks for everybody.
+    """
+    cfg = load_config()
+    enabled = cfg.get("watch_status_roster")
+    raw = cfg.get("watch_status_roster_segments")
+    if isinstance(raw, (list, tuple)):
+        seen: list[str] = []
+        for item in raw:
+            name = str(item).strip().lower()
+            if name in WATCH_ROSTER_SEGMENTS and name not in seen:
+                seen.append(name)
+        segments = tuple(seen)
+    else:
+        segments = WATCH_ROSTER_SEGMENTS
+    return {
+        "enabled": True if enabled is None else bool(enabled),
+        "segments": segments,
+    }
+
+
+def save_watch_roster(*, enabled: bool | None = None,
+                      segments: Any = None) -> dict[str, Any]:
+    cfg = load_config()
+    if enabled is not None:
+        cfg["watch_status_roster"] = bool(enabled)
+    if segments is not None:
+        cfg["watch_status_roster_segments"] = [str(s) for s in segments]
+    save_config(cfg)
+    return watch_roster_settings()
 
 
 def save_watch_status(*, enabled: bool | None = None,
@@ -804,6 +854,22 @@ def _write_segments(value: list[str]) -> Any:
     return save_watch_status(segments=value)
 
 
+def _write_roster_segments(value: list[str]) -> Any:
+    unknown = [name for name in value if name not in WATCH_ROSTER_SEGMENTS]
+    if unknown:
+        # `stats` and `command` land here, and the message has to say why
+        # rather than only that they are not on the list: they are real
+        # segments one row lower, so «not a segment» alone would read as a
+        # mistake in collab rather than as the rule it is.
+        raise ValueError(
+            "not a segment of the roster row: " + ", ".join(unknown)
+            + " — have " + ", ".join(WATCH_ROSTER_SEGMENTS)
+            + ". That row speaks for the whole session, so it carries only"
+              " figures the hub counted for everybody; your own quota and your"
+              " own command belong on watch_status_segments")
+    return save_watch_roster(segments=value)
+
+
 def _name_fallback() -> str:
     """What `resolve_name` lands on with nothing in the config or the identity.
 
@@ -886,6 +952,17 @@ def settings() -> tuple[Setting, ...]:
                 DEFAULT_WATCH_STATUS_INTERVAL, _as_int,
                 lambda: watch_status_settings()["interval"],
                 lambda v: save_watch_status(interval=v)),
+        Setting("watch_status_roster", "show the roster panel's own row of "
+                                       "session-wide figures",
+                True, _as_bool,
+                lambda: watch_roster_settings()["enabled"],
+                lambda v: save_watch_roster(enabled=v)),
+        Setting("watch_status_roster_segments",
+                "what that row carries; only figures the hub counts for "
+                "everybody are allowed on it",
+                list(WATCH_ROSTER_SEGMENTS), _as_list,
+                lambda: list(watch_roster_settings()["segments"]),
+                _write_roster_segments),
     )
 
 

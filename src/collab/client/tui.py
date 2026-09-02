@@ -41,7 +41,7 @@ from ..protocol import (
 )
 from .. import activity, peers
 from .. import themes
-from ..config import watch_status_settings
+from ..config import watch_roster_settings, watch_status_settings
 from ..stats import read_stats
 from . import statusbar
 from .statusbar import money_text
@@ -1562,6 +1562,10 @@ class Tui:
         #: have traded a useful line for a blank one.
         self._bar = True
         self._settings: dict[str, Any] = watch_status_settings()
+        #: The roster panel's own bottom row. Its own settings rather than more
+        #: segments on the one above: that row is the reader's and this one is
+        #: the session's, and what may go on them differs because of it.
+        self._roster_settings: dict[str, Any] = watch_roster_settings()
 
     # -- cached layout -------------------------------------------------------
 
@@ -1704,6 +1708,7 @@ class Tui:
         # size moves, so this costs a stat and nothing else.
         self._settings = watch_status_settings()
         self._bar = bool(self._settings["enabled"])
+        self._roster_settings = watch_roster_settings()
         if self._bar:
             self._command.poll(self._settings["command"],
                                self._settings["interval"])
@@ -1782,7 +1787,15 @@ class Tui:
         roster_h = min(roster_h, max(body_height - 4, 2))
 
         rows = self._roster(width - 1)
-        self.roster.rows = roster_h - 1
+        # THE ROW IS TAKEN ONLY WHEN IT IS USED, and only where a whole
+        # participant still fits after it. Reserved unconditionally, a session
+        # with nothing to say — no batch, nothing said yet, nobody fetched yet
+        # — would have cost the roster a blank line; and a roster is two rows
+        # per person, so taking one from a three-row pane leaves half a
+        # participant, which is worse than no figures at all.
+        session = self._roster_bar() if self._roster_settings["enabled"] else []
+        session_h = 1 if session and roster_h - 2 >= 2 else 0
+        self.roster.rows = roster_h - 1 - session_h
         self.roster.total = len(rows)
         self.roster.settle()
         hidden = max(len(rows) - self.roster.rows - self.roster.offset, 0)
@@ -1806,6 +1819,15 @@ class Tui:
             self._paint_row(win, body_top + 1 + i, rows[idx], width - 1)
 
         chat_top = body_top + roster_h
+        if session_h:
+            # THE LAST ROW OF THE ROSTER PANEL, mirroring the conversation's
+            # own row at the last row of the window — one bar per panel, each
+            # at the foot of what it describes. Pinned rather than part of
+            # `rows`: the roster scrolls and this does not, and figures about
+            # the whole session that scrolled away the moment somebody looked
+            # down the participant list would be figures you could only read by
+            # not using the pane.
+            self._paint_bar(win, chat_top - 1, width, session)
         self._chat_top = chat_top
         self._hline(win, chat_top, width, self._chat_label())
 
@@ -1839,7 +1861,7 @@ class Tui:
 
     def _hint(self, win, height: int, width: int,
               keys: tuple[str, str] = (CHAT_KEYS, CHAT_KEYS_SHORT),
-              notice: bool = True) -> None:
+              notice: bool = True, roster: bool = False) -> None:
         """The bottom row: what you are missing, then whatever else fits.
 
         Scrolled back, the count is the point — «G to resume following» does not
@@ -1855,26 +1877,80 @@ class Tui:
         kanji is two columns and one character, so a character slice measured
         the row in the wrong unit and over-ran the pane by however many wide
         characters it contained.
+
+        `roster` is set where this row IS the roster panel's row rather than
+        the conversation's — the roster-only view, whose one pane has one
+        bottom row. It carries the session's figures there instead of a second
+        row being stacked above it for them: that pane already has a bar at the
+        foot of the roster, and a second one would cost a participant to say
+        what the first had room for.
         """
-        room = max(width - 1, 0)
-        if not self._bar or not room:
+        if not self._bar:
             return
         behind = 0 if self.chat.follow or not notice else self.behind()
         what = ""
         if notice and not self.chat.follow:
             what = (f"⏸ {behind} new below" if behind else "⏸ scrolled back")
             what += " — End (or G) jumps to the newest"
-        line = statusbar.fit(
-            statusbar.compose(notice=what, keys=keys,
-                              batch=self.model.status.get("batch"),
-                              stats=self.model.own_stats,
-                              command=self._command.text(),
-                              segments=self._settings["segments"]),
-            room, _w, _clip)
+        if roster and self._roster_settings["enabled"]:
+            parts = self._roster_bar(keys=keys)
+        else:
+            parts = statusbar.compose(notice=what, keys=keys,
+                                      batch=self.model.status.get("batch"),
+                                      stats=self.model.own_stats,
+                                      command=self._command.text(),
+                                      segments=self._settings["segments"])
+        self._paint_bar(win, height - 1, width, parts, behind=behind)
+
+    def _roster_bar(self, keys: Any = "") -> list[Any]:
+        """The roster panel's row: what is true for EVERY participant, or nothing.
+
+        Composed by the same function and drawn by the same renderers as the
+        conversation's row — one batch bar and not two that could drift — but
+        out of a different and much shorter list of ingredients. Everything on
+        it comes off the hub's own snapshot, counted once by the hub and copied
+        into `status.json` whole.
+
+        WHAT IS DELIBERATELY ABSENT is the point of the method. Most of what
+        the daemon writes into that file is written from the READER's point of
+        view: `others_connected` and `others_total` filter the reader out by
+        participant id so a daemon does not count itself, `unread` and
+        `unread_messages` are properties of one inbox, `watchers` and
+        `ws_clients` are that daemon's own subscribers. Four participants would
+        read four different numbers off any of them, and they would do it
+        beside a hub-counted batch bar that genuinely is shared, lending them
+        credit they had not earned — the exact failure the batch feature exists
+        to prevent. `config.WATCH_ROSTER_SEGMENTS` is what enforces the rule: a
+        reader cannot put `stats` or `command` on this row even by hand.
+
+        Empty when there is nothing true to say, and `_draw` then leaves the
+        row to the roster. No figure is better than a false zero.
+        """
+        return statusbar.compose(
+            keys=keys,
+            batch=self.model.status.get("batch"),
+            messages=self.model.status.get("messages"),
+            segments=self._roster_settings["segments"])
+
+    def _paint_bar(self, win, y: int, width: int, parts: list[Any], *,
+                   behind: int = 0) -> None:
+        """Fit a composed row to the pane and put it on the screen.
+
+        One painter for both rows, so the column arithmetic is written once and
+        the second row cannot acquire its own version of it. Through
+        `statusbar.fit` with this file's own `_w`/`_clip`: a row holds a block
+        bar, a `⏸`, a `→` and whatever a user's command printed, and cutting
+        CHARACTERS to fit COLUMNS is only ever right for ASCII. A write past
+        the last cell of a pane is what ends the viewer rather than the frame.
+        """
+        room = max(width - 1, 0)
+        if not room:
+            return
+        line = statusbar.fit(parts, room, _w, _clip)
         attr = (curses.color_pair(C_ACCENT) | curses.A_BOLD if behind
                 else curses.color_pair(C_DIM) | curses.A_DIM)
         try:
-            win.addnstr(height - 1, 0, line, room, attr)
+            win.addnstr(y, 0, line, room, attr)
         except curses.error:
             pass
 
@@ -2116,11 +2192,16 @@ class Tui:
 
         if self.view == "roster":
             # Its own keys, and no scrolled-back notice: the roster does not
-            # follow a tail, so there is nothing to be behind. Everything else
-            # on the row — the batch, your usage, your command — is the same
-            # bar, composed the same way, and it went through the same
-            # character slice before.
-            self._hint(win, height, width, notice=False,
+            # follow a tail, so there is nothing to be behind.
+            #
+            # NO SECOND ROW IS SPENT HERE. This pane's one bottom row is the
+            # roster panel's bottom row, so it carries the session's figures
+            # rather than the reader's — the same bar the split view draws at
+            # the foot of its roster, in the only place this view has for it.
+            # A tmux pane showing nothing but the roster is also where those
+            # figures are least otherwise available: the split view's title bar
+            # says «2/3 online» and this one has no title bar to say it in.
+            self._hint(win, height, width, notice=False, roster=True,
                        keys=(ROSTER_KEYS, ROSTER_KEYS_SHORT))
         else:
             self._hint(win, height, width)

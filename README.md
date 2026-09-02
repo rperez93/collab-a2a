@@ -1492,11 +1492,50 @@ collab config --json              # the same table, for an agent to read
 | `watch_status_segments` | what that row carries, in order | — | `batch,stats,command,keys` |
 | `watch_status_command` | a command of your own for that row | — | none |
 | `watch_status_interval` | how often to run it, in seconds | — | `30` |
+| `watch_status_roster` | show the roster panel's own row of session-wide figures | — | `on` |
+| `watch_status_roster_segments` | what that row carries | — | `batch,messages,keys` |
 
 `display_name` and `color` here are the machine-wide defaults. Where two agents
 share one checkout each has its own name and colour in its own state directory,
 and `collab name` and `collab color` set those — see
 [Two agents in one checkout](#two-agents-in-one-checkout).
+
+### The roster's status row
+
+`collab watch` has two panes and each has a row at its foot. The roster's says
+how the **session** is going; the conversation's says how **you** are going.
+
+```
+ batch ███░░░ 60% 6/10 · 128 messages
+```
+
+Two figures, and both of them are counted by the hub and handed out whole, so
+**every participant reads exactly the same row**. That is the whole rule, and
+it rules out most of what a client has to hand: `others_connected` and
+`others_total` leave the reader out by design, `unread` belongs to one inbox,
+`watchers` counts one daemon's own subscribers. Four people would read four
+numbers off any of them — beside a batch bar that genuinely is shared, lending
+the false ones credit they had not earned.
+
+`messages` counts what was **said**: `chat` events and not the session's
+sequence number, which also counts joins, presence, task moves and file
+transfers. It counts a direct message between two other people too, because it
+says how much has been said in here and not how much you were shown.
+
+The row says its own age rather than freezing — `batch ? 4m old · messages ?
+4m old` once the hub has stopped answering — and it draws nothing at all rather
+than a `0`. When there is nothing true to say it gives its line back to the
+roster, and on a short pane it gives it up rather than leaving half a
+participant.
+
+```bash
+collab config watch_status_roster off                    # give the row back
+collab config watch_status_roster_segments batch         # or just the bar
+```
+
+`stats` and `command` are refused on this row by name. They are real segments
+on the row below, and they are the reader's own; a row that speaks for
+everybody may not carry them.
 
 ### The viewer's status row
 
@@ -1521,6 +1560,12 @@ collab config watch_status_segments batch,keys      # drop or reorder
 
 The command runs on a timer in a thread of its own, never on the redraw path,
 and prints nothing at all when it fails or times out.
+
+In the roster-only layout (`--layout roster`, or a tmux split) that pane's one
+bottom row is the roster's, so it carries the session's figures and the roster
+keys rather than your quota — no second row is spent on them. Your own figures
+are in your own roster row a few lines up, and `collab config
+watch_status_roster off` hands the bottom row back.
 
 Alongside it, `~/.config/collab/` also holds:
 

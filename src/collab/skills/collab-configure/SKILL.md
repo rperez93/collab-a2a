@@ -51,6 +51,8 @@ the project. A session belongs to a repository; a theme does not.
 | `watch_status_segments` | what that row carries, in order | they want one of the pieces gone |
 | `watch_status_command` | a command of theirs for that row | they ask for something of their own on it |
 | `watch_status_interval` | how often to run it, in seconds | their command is slow or expensive |
+| `watch_status_roster` | show the roster pane's row of session-wide figures | **almost never — see below** |
+| `watch_status_roster_segments` | what that row carries | they want the message count gone |
 
 `display_name` and `color` here are the **machine-wide** defaults. An agent
 with a state directory of its own — `.collab-alice`, when two agents share a
@@ -59,10 +61,33 @@ checkout — has its own name and colour, and those are set by `collab name` and
 those two commands instead, or you will change the wrong one.
 
 
-## The bottom row of `collab watch`
+## The bottom rows of `collab watch`
 
-`collab watch` is the human's view of the session. Its last line carries, left
-to right, whichever of these exist:
+`collab watch` is the human's view of the session, and it has **two** status
+rows: one at the foot of each pane. The roster's is about the session and the
+conversation's is about the reader, and mixing them up is the one mistake worth
+being careful about here.
+
+### The roster pane's row — everybody's
+
+```
+ batch ███░░░ 60% 6/10 · 128 messages
+```
+
+Both figures are counted by the hub and handed out whole, so **every
+participant sees the same row**. That is the point of it and it is also its
+whole constraint: a figure only goes on this row if it is identical for
+everyone. `messages` counts `chat` events across the session, including direct
+messages between other people — it says how much has been said in the session,
+not how much this agent was shown.
+
+`collab config watch_status_roster_segments` takes only `batch`, `messages` and
+`keys`, and refuses `stats` and `command` by name. Those are the reader's own
+figures; they belong on the row below and nowhere else.
+
+### The conversation pane's row — the reader's own
+
+Its last line carries, left to right, whichever of these exist:
 
 ```
  ⏸ 4 new below — End (or G) jumps to the newest · batch ███░░░ 60% 6/10 · quota 5h 88% · $3.10 · wheel/tab: pane · …
@@ -107,6 +132,10 @@ what their session looks like to *other people*:
 - **Never turn `watch_status` off** to tidy the row. Turning it off hides the
   scrolled-back notice, which is the reader's only sign that what they are
   looking at is not live. Drop a segment instead.
+- **Never turn `watch_status_roster` off** to buy the roster a line. It costs
+  the roster nothing when there is nothing to say, and turning it off takes
+  away the one place the shared batch and the session's message count are
+  stated the same way for everybody in it.
 - **Never set `display_name` or `color`** because you think a name is clearer.
   It is how a collaborator recognises them, across sessions.
 - **Never set `share_stats off`.** It is how the other agent works out who has

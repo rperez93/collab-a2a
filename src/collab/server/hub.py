@@ -15,8 +15,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..batch import DONE_STATE, WITHDRAWN_STATE, percent, tally
-from ..protocol import (DEFAULT_ROOM, Envelope, KIND_HELLO, KIND_PRESENCE,
-                        bounded_meta)
+from ..protocol import (DEFAULT_ROOM, Envelope, KIND_CHAT, KIND_HELLO,
+                        KIND_PRESENCE, bounded_meta)
 from .store import Store
 
 QUEUE_MAXSIZE = 1000
@@ -290,6 +290,18 @@ class Hub:
             # client's status line draws and the roster it draws it beside came
             # out of one read of the board and cannot disagree.
             "batch": self.batch_figures(),
+            # THE SAME ROAD, for the same reason. Counted here, once, and
+            # carried on the snapshot rather than fetched separately, so every
+            # participant's viewer draws one number that came out of one read
+            # of the log — and so that nothing is left for a client to add up
+            # for itself, which is how four readers end up with four answers.
+            #
+            # Chat only, and not `seq` a line below. That is MAX(seq) over
+            # every kind the log carries — joins, presence, task moves, file
+            # transfers — and labelling it «messages» would repeat, one panel
+            # lower, the confusion between activity and conversation that
+            # `unread_messages` had to be split off from `unread` to fix.
+            "messages": self.store.count_kind(KIND_CHAT),
             "recent": [e.to_dict() for e in self.store.history(viewer=viewer, limit=history)],
             "seq": self.store.max_seq(),
             "server_time": time.time(),

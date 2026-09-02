@@ -1,4 +1,4 @@
-"""The bottom line of the roster viewer, composed away from curses.
+"""The bottom lines of the roster viewer, composed away from curses.
 
 The viewer's last row started as a key legend and nothing else, so it lived in
 one method of `Tui` and was written straight into a curses window. Everything
@@ -18,6 +18,14 @@ this module exists to keep:
 * **Nothing here runs a subprocess on the draw path.** `Tui.draw` runs four
   times a second; a command run inside it stops the pane for as long as the
   command takes. See `CommandSegment`.
+
+There are two bars, and the difference between them is whose figures they are.
+The conversation panel's is the READER's — their quota, their spend, their own
+command, their notice that they have scrolled back. The roster panel's speaks
+for the whole session, so every figure on it has to be one the hub counted and
+handed out whole; see `messages_segment` and `config.WATCH_ROSTER_SEGMENTS`.
+They share every renderer here, because two drawings of one figure that
+disagreed would be worse than either — the reader has both on screen at once.
 """
 
 from __future__ import annotations
@@ -125,8 +133,46 @@ def stats_segment(figures: Any) -> str:
     return " · ".join(bits)
 
 
+def messages_segment(figures: Any, *, now: float | None = None) -> str:
+    """How much has been said in this session — or nothing, when nothing is true.
+
+    THE SAME FOR EVERY PARTICIPANT, which is the whole reason this segment may
+    sit on the roster panel's bar at all. The number is `COUNT(*)` over the
+    hub's own log, taken once by the hub and copied out on the snapshot, so
+    nobody's viewer adds anything up for itself. It is not `last_seq`, which is
+    only the highest sequence THIS client was delivered — the hub sequences a
+    direct message and then withholds it from everybody but its two ends, so a
+    third party's local figure skips it and trails until the next room-wide
+    event carries it forward. Two viewers hold different values for that at the
+    same instant, and neither of them is the session's.
+
+    Three refusals, and they are the same three the batch figure makes:
+
+    * Nothing to report is nothing at all, never `0 messages`. A false zero
+      reads as «nobody has said anything», which is a claim, and an empty
+      segment is not.
+    * A remembered count is marked with its age instead of drawn plainly.
+      `write_status` keeps writing every three seconds after the hub has gone
+      quiet, so the alternative is a figure that freezes while looking live —
+      the defect `collab.batch.is_stale` exists for, in the one place on screen
+      that claims to speak for everybody.
+    * A count that is not a count renders nothing rather than raising. For a
+      guest this arrived over the network from somebody else's hub, and this
+      runs on the draw path of a curses program.
+    """
+    if not isinstance(figures, dict):
+        return ""
+    total = batch_progress.count_of(figures, "total")
+    if not total:
+        return ""
+    if batch_progress.is_stale(figures, now=now):
+        seen = batch_progress.age(figures, now=now)
+        return f"messages ? {seen} old" if seen else "messages ?"
+    return f"{total} message" + ("" if total == 1 else "s")
+
+
 def compose(*, notice: str = "", keys: Any = "", batch: Any = None,
-            stats: Any = None, command: str = "",
+            stats: Any = None, command: str = "", messages: Any = None,
             segments: Sequence[str] = DEFAULT_SEGMENTS,
             now: float | None = None) -> list[Any]:
     """The row's pieces, notice first, in the order they were asked for.
@@ -139,6 +185,7 @@ def compose(*, notice: str = "", keys: Any = "", batch: Any = None,
     """
     built = {
         "batch": lambda: batch_segment(batch, now=now),
+        "messages": lambda: messages_segment(messages, now=now),
         "stats": lambda: stats_segment(stats),
         "command": lambda: command,
         "keys": lambda: keys,

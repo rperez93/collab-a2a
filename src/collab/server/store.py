@@ -241,6 +241,32 @@ class Store:
             self._db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_tasks_batch ON tasks(batch)")
 
+        # HOW MANY THINGS HAVE BEEN SAID is one kind out of the fattest table
+        # in the schema, and `events` has no index on `kind`. Without one the
+        # count is a scan of every row — payloads included, because the rows
+        # live in the table b-tree — and it is read on the snapshot path, which
+        # every join and every client's refresh goes through, under the lock
+        # that every append wants.
+        #
+        # Measured on this machine over events sized as this hub writes them,
+        # six chat to four of everything else:
+        #
+        #     10k events (4.3 MB):    1.08 ms median, 1.9 ms worst
+        #                   indexed:  0.18 ms median, 0.3 ms worst  (+0.1 MB)
+        #     100k events (43 MB):   10.57 ms median, 20.8 ms worst
+        #                   indexed:  1.08 ms median, 3.2 ms worst  (+1.4 MB)
+        #
+        # A tenth of the time for three per cent of the file, and that is with
+        # a warm page cache — the scan is 43 MB of reads that a cold hub pays
+        # in full. The write side is one short-TEXT b-tree insert per appended
+        # event, against a row that already carries its whole payload.
+        #
+        # In `_migrate` rather than in SCHEMA so that a session recorded before
+        # this existed gains it on its next open, like `idx_tasks_batch` above.
+        if self._columns("events"):
+            self._db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind)")
+
     def close(self) -> None:
         with self._lock:
             self._db.close()
@@ -318,6 +344,28 @@ class Store:
         with self._lock:
             row = self._db.execute("SELECT COALESCE(MAX(seq), 0) AS m FROM events").fetchone()
         return int(row["m"])
+
+    def count_kind(self, kind: str) -> int:
+        """How many events of ONE kind the session holds.
+
+        `max_seq` above is every kind there is — joins, presence beats, task
+        moves, file transfers and chat, all sequenced through one log — so it
+        is the session's clock and not a count of anything in particular. A
+        figure offered to a reader as «messages» has to mean the thing a person
+        said, or it repeats the confusion between activity and conversation
+        that the unread count had to be split in two to fix.
+
+        Unfiltered by viewer, deliberately. `history` and `since_page` hide a
+        direct message from everybody but its two ends, and a count that did
+        the same would be a different number for each reader — which is the one
+        thing a session-wide figure may not be. It says how much has been said
+        in here, not how much of it you were shown.
+        """
+        with self._lock:
+            row = self._db.execute(
+                "SELECT COUNT(*) AS n FROM events WHERE kind = ?", (kind,),
+            ).fetchone()
+        return int(row["n"])
 
     # --- participants --------------------------------------------------------
 

@@ -638,3 +638,320 @@ def test_turning_the_row_off_returns_its_line_in_a_single_pane_view(
     _draw(viewer, win)
     assert 29 not in win.rows, "the row is gone"
     assert pane.rows == with_row + 1, "and the pane grew into it"
+
+
+# --- the roster panel's own row: figures that are true for everybody ---------
+#
+# The trap this whole section exists for is that MOST of what the daemon writes
+# into `status.json` is written from the VIEWER's point of view.
+# `others_connected` and `others_total` exclude the reader by participant id so
+# a daemon does not count itself; `unread` and `unread_messages` are properties
+# of one inbox; `watchers` and `ws_clients` are that daemon's own subscribers.
+# Four participants would read four different numbers off any of them — and
+# they would read them beside a hub-counted batch bar that genuinely is shared,
+# which lends the false ones credit they have not earned. So this row is built
+# only from figures the hub counted once and handed out whole, and the config
+# refuses the rest by name rather than by convention.
+
+ROSTER = config.WATCH_ROSTER_SEGMENTS
+
+
+def _roster_row(**over):
+    """`status.json` as a viewer holds it, with the hub's own two figures."""
+    now = time.time()
+    payload = {"batch": {"done": 6, "total": 10, "fetched_at": now},
+               "messages": {"total": 128, "fetched_at": now}}
+    payload.update(over)
+    return payload
+
+
+def test_the_roster_row_carries_the_batch_and_the_message_count(cfg):
+    status = _roster_row()
+    parts = sb.compose(batch=status["batch"], messages=status["messages"],
+                       segments=ROSTER)
+    assert any("6/10" in p for p in parts), parts
+    assert "128 messages" in parts, parts
+
+
+def test_a_figure_that_is_only_the_readers_cannot_be_put_on_that_row(cfg):
+    """`stats` and `command` are refused BY NAME, not left to convention.
+
+    They are real segments one row lower, so nothing about the spelling says
+    they do not belong here. Allowed through, they would show each participant
+    their own quota on a row that speaks for all of them.
+    """
+    with pytest.raises(ValueError) as bad:
+        config.setting("watch_status_roster_segments").write(["batch", "stats"])
+    assert "stats" in str(bad.value)
+
+    config.setting("watch_status_roster_segments").write(["batch", "messages"])
+    assert config.watch_roster_settings()["segments"] == ("batch", "messages")
+
+
+def test_a_hand_edited_name_costs_that_segment_and_not_the_row(cfg):
+    """Refused at the command, ignored in the file — the same split the
+    reader's own row already makes, and for the same reason."""
+    cfg.write_text(json.dumps(
+        {"watch_status_roster_segments": ["batch", "stats", "messages"]}))
+    assert config.watch_roster_settings()["segments"] == ("batch", "messages")
+
+
+def test_a_roster_segments_value_that_is_not_a_list_falls_back(cfg):
+    """Read on the draw path of a curses program, like every other reader
+    here: a TypeError out of this is a terminal left broken."""
+    cfg.write_text(json.dumps({"watch_status_roster_segments": "batch"}))
+    assert config.watch_roster_settings()["segments"] == ROSTER
+
+
+@pytest.mark.parametrize("raw", [
+    '{"watch_status_roster": Infinity}',
+    '{"watch_status_roster": NaN}',
+    '{"watch_status_roster_segments": 1e400}',
+    '{"watch_status_roster_segments": {"batch": true}}',
+])
+def test_nothing_in_the_file_can_stop_the_roster_row_being_read(raw, cfg):
+    cfg.write_text(raw)
+    settings = config.watch_roster_settings()
+    assert isinstance(settings["enabled"], bool)
+    assert all(name in ROSTER for name in settings["segments"])
+
+
+def test_both_rows_are_on_by_default(cfg):
+    assert config.watch_roster_settings() == {"enabled": True,
+                                              "segments": ROSTER}
+
+
+# --- what the message count refuses to say ----------------------------------
+
+def test_a_remembered_count_is_never_drawn_as_a_current_one():
+    """`write_status` keeps writing every three seconds after the hub has gone
+    quiet, so a count drawn plainly freezes while looking live.
+
+    The batch figure beside it already says its own age. A count that did not
+    would be the same staleness defect, on the same row, next to the one
+    segment that gets it right."""
+    old = {"total": 128, "fetched_at": time.time() - 600}
+    assert sb.messages_segment(old) == "messages ? 10m old"
+
+
+def test_a_count_with_no_stamp_behind_it_claims_nothing():
+    """No successful fetch is a memory of unknown age, not a fresh read."""
+    assert sb.messages_segment({"total": 128}) == "messages ?"
+    assert sb.messages_segment({"total": 128, "fetched_at": None}) == "messages ?"
+
+
+def test_a_stamp_in_the_future_is_not_a_fresh_one():
+    """A backward clock step — NTP, a VM resuming — is not freshness."""
+    assert "?" in sb.messages_segment({"total": 5, "fetched_at": time.time() + 3600})
+
+
+def test_nothing_said_yet_draws_nothing_rather_than_a_zero():
+    """«0 messages» is a claim; an absent segment is not, and the two are not
+    distinguishable from a count that failed to parse."""
+    assert sb.messages_segment({"total": 0, "fetched_at": time.time()}) == ""
+    assert sb.messages_segment({"fetched_at": time.time()}) == ""
+
+
+def test_a_count_that_is_not_a_count_does_not_take_the_row_with_it():
+    """For a guest this arrived over the network from somebody else's hub."""
+    for junk in ("lots", None, [1], float("nan")):
+        assert sb.messages_segment(
+            {"total": junk, "fetched_at": time.time()}) == "", junk
+    assert sb.messages_segment("not a dict") == ""
+    assert sb.messages_segment(None) == ""
+
+
+def test_one_message_is_not_pluralised():
+    assert sb.messages_segment(
+        {"total": 1, "fetched_at": time.time()}) == "1 message"
+
+
+def test_the_batch_on_the_roster_row_is_the_one_renderer():
+    """Not a second one. Two drawings of one figure that disagreed would be
+    worse than either, and the reader has both rows on screen at once."""
+    figures = {"done": 6, "total": 10, "fetched_at": time.time()}
+    assert sb.batch_segment(figures) in sb.compose(batch=figures,
+                                                   segments=ROSTER)
+
+
+# --- and on a real draw ------------------------------------------------------
+
+def test_the_roster_panel_has_a_row_of_its_own_at_the_foot_of_the_roster(
+        tmp_path, cfg):
+    """On the roster's last row, immediately above the conversation header.
+
+    Asserted as «alone on that row», not merely «present on it»: the fake pane
+    concatenates everything written to a line, so a participant painted over
+    the top of this one would still leave the figures findable there and the
+    test would pass on a genuinely overlapping draw.
+    """
+    viewer, win = _viewer(tmp_path, cfg), _Pane()
+    viewer.model.status = _roster_row()
+    _draw(viewer, win)
+
+    assert "6/10" in win.rows[9] and "128 messages" in win.rows[9]
+    assert not any(name in win.rows[9] for name in ("bob", "alice")), \
+        f"a participant was painted onto this row: {win.rows[9]!r}"
+    assert "CONVERSATION" in win.rows[10], "and the chat header is right below"
+
+
+def test_the_conversation_row_keeps_the_readers_own_figures(tmp_path, cfg):
+    """It is honestly theirs, so it stays. Only the roster's row is everyone's."""
+    viewer, win = _viewer(tmp_path, cfg), _Pane()
+    viewer.model.status = _roster_row()
+    _draw(viewer, win)
+
+    assert "$3.10" in win.rows[29], "the reader's spend is still on their row"
+    assert "128 messages" not in win.rows[29], \
+        "and the session's count did not migrate onto it"
+
+
+def test_turning_it_off_gives_the_row_back_to_the_roster(tmp_path, cfg):
+    viewer = _viewer(tmp_path, cfg)
+    viewer.model.status = _roster_row()
+    win = _Pane()
+    _draw(viewer, win)
+    with_row = viewer.roster.rows
+    assert "6/10" in win.rows[9]
+
+    config.save_watch_roster(enabled=False)
+    win = _Pane()
+    _draw(viewer, win)
+    assert "6/10" not in win.rows.get(9, ""), "the row is gone"
+    assert viewer.roster.rows == with_row + 1, "and the roster grew into it"
+
+
+def test_a_session_with_nothing_to_say_does_not_reserve_the_row(tmp_path, cfg):
+    """Reserved unconditionally, an empty row is a line stolen from the one
+    pane that cannot spare one. No figure is better than a blank."""
+    viewer = _viewer(tmp_path, cfg)
+    viewer.model.status = {}
+    win = _Pane()
+    _draw(viewer, win)
+    empty = viewer.roster.rows
+    assert 9 not in win.rows
+
+    viewer.model.status = _roster_row()
+    win = _Pane()
+    _draw(viewer, win)
+    assert viewer.roster.rows == empty - 1, "the row is taken only when used"
+
+
+def test_a_hub_gone_quiet_takes_the_row_with_it(tmp_path, cfg):
+    """The end of the staleness rule, on the draw.
+
+    A daemon that has stopped fetching goes on writing `status.json` every
+    three seconds, so the figures in it are remembered rather than observed.
+    The batch says its own age; the count says its own age; and nothing on the
+    row is left asserting a current number.
+    """
+    viewer = _viewer(tmp_path, cfg)
+    stopped = time.time() - 600
+    viewer.model.status = {"batch": {"done": 6, "total": 10, "fetched_at": stopped},
+                           "messages": {"total": 128, "fetched_at": stopped}}
+    win = _Pane()
+    _draw(viewer, win)
+
+    assert "6/10" not in win.rows[9] and "128 messages" not in win.rows[9]
+    assert "batch ? 10m old" in win.rows[9] and "messages ? 10m old" in win.rows[9]
+
+
+def test_it_gives_up_its_row_before_squeezing_the_roster(tmp_path, cfg):
+    """The roster is TWO rows per person and is already down to one row at the
+    smallest heights before this row exists — so the rule cannot be «the roster
+    always has N rows», it has to be «this row never makes that worse».
+
+    It takes its line only where at least one whole participant still fits
+    after it. Below that it draws nothing: half a participant is worse than no
+    figures, and the roster is the one pane that cannot spare a line.
+    """
+    viewer = _viewer(tmp_path, cfg)
+    viewer.model.status = _roster_row()
+
+    # SEARCHED FOR WHEREVER IT LANDS, not read off a fixed row number. The
+    # roster's foot moves with the pane, so a sweep that looked only at the row
+    # this draws on at height 30 never visited a single height at which the
+    # rule bites — and the guard survived being deleted with the suite green.
+    #
+    # «128 messages» rather than the batch: the batch legitimately appears on
+    # the reader's own row at the bottom of the window, so `6/10` would find
+    # that one at every height and prove nothing.
+    drawn, refused = 0, 0
+    for height in range(8, 40):
+        win = _Pane(height=height)
+        _draw(viewer, win)
+        if any("128 messages" in row for row in win.rows.values()):
+            drawn += 1
+            assert viewer.roster.rows >= 2, \
+                f"took the row at height {height}, leaving {viewer.roster.rows}"
+        else:
+            refused += 1
+    assert drawn, "never drawn at all, so the rule is untested"
+    assert refused, "never refused either, so the rule is untested"
+
+
+def test_the_painter_measures_columns_and_not_characters(tmp_path, cfg):
+    """Both rows go through one painter, so the arithmetic is proved once.
+
+    A row holds a block bar, a `⏸`, a `→` and whatever a user's command
+    printed. Cutting CHARACTERS to fit COLUMNS is only ever right for ASCII —
+    one kanji is two columns and one slice position — and a write past the last
+    cell of a pane is what ends the viewer rather than the frame.
+    """
+    viewer = _viewer(tmp_path, cfg)
+    wide = "機能追加ブランチ作業中です"
+    for width in (110, 40, 30, 24):
+        win = _Pane(width=width)
+        viewer._paint_bar(win, 9, width, [wide, wide])
+        assert win.rows.get(9), f"nothing drawn at {width}"
+        assert tui._w(win.rows[9]) <= width - 1, f"over-ran at {width}"
+
+
+# --- the single-pane views spend no second row on it ------------------------
+
+def test_the_roster_only_view_puts_the_session_figures_on_its_one_row(
+        tmp_path, cfg):
+    """That pane's bottom row IS the roster panel's bottom row.
+
+    A second row stacked above it for the same figures would cost a
+    participant to say what this one had room for.
+    """
+    viewer = _viewer(tmp_path, cfg, view="roster")
+    viewer.model.status = _roster_row()
+    win = _Pane()
+    _draw(viewer, win)
+
+    assert "6/10" in win.rows[29] and "128 messages" in win.rows[29]
+    assert "$3.10" not in win.rows[29], \
+        "the reader's own spend does not belong on a row that speaks for all"
+    assert "128 messages" not in " ".join(
+        row for y, row in win.rows.items() if y != 29), "and only on that row"
+
+
+def test_the_roster_only_view_spends_no_extra_row_on_it(tmp_path, cfg):
+    viewer = _viewer(tmp_path, cfg, view="roster")
+    viewer.model.status = _roster_row()
+    win = _Pane()
+    _draw(viewer, win)
+    with_figures = viewer.roster.rows
+
+    config.save_watch_roster(enabled=False)
+    win = _Pane()
+    _draw(viewer, win)
+    assert viewer.roster.rows == with_figures, "the row was never an extra one"
+    assert "$3.10" in win.rows[29], "and it goes back to being the reader's"
+
+
+def test_the_chat_only_view_is_untouched(tmp_path, cfg):
+    """It has no roster, so it has no roster row.
+
+    Tested on the message count and not on the batch: the batch legitimately
+    appears in this view, on the reader's own row, so `6/10` proves nothing.
+    """
+    viewer = _viewer(tmp_path, cfg, view="chat")
+    viewer.model.status = _roster_row()
+    win = _Pane()
+    _draw(viewer, win)
+
+    assert "128 messages" not in " ".join(win.rows.values())
+    assert "$3.10" in win.rows[29]

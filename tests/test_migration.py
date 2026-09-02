@@ -310,3 +310,41 @@ def test_an_old_session_still_ends_up_in_wal(old_db):
     finally:
         store.close()
     assert mode == "wal", "a migrated session must get WAL like a fresh one"
+
+
+def _indexes(store, table):
+    return {row["name"] for row in store._db.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=?",
+        (table,)) if row["name"]}
+
+
+def test_an_old_session_gains_the_index_the_message_count_needs(old_db):
+    """The count of what has been said is one kind out of the fattest table.
+
+    `events` was written without an index on `kind`, so the count is a scan of
+    every row and its whole payload — measured at 10.6 ms median and 20.8 ms at
+    the tail over 100k events, against 1.1 ms with the index. It is read on the
+    snapshot path, which every join and every client refresh goes through,
+    under the lock every append wants. A session recorded before this existed
+    has to gain it on its next open rather than paying the scan for ever.
+    """
+    store = Store(old_db)
+    try:
+        assert "idx_events_kind" in _indexes(store, "events")
+        plan = " ".join(str(x) for row in store._db.execute(
+            "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM events WHERE kind = 'chat'"
+        ) for x in row)
+        assert "idx_events_kind" in plan, f"created but not used: {plan}"
+    finally:
+        store.close()
+
+
+def test_the_count_is_right_on_a_migrated_session(old_db):
+    """The rows were written by a collab that had no idea they would be
+    counted, so the count has to be right about them and not only fast."""
+    store = Store(old_db)
+    try:
+        assert store.count_kind("chat") == 3
+        assert store.count_kind("presence") == 0
+    finally:
+        store.close()

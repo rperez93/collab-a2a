@@ -301,10 +301,61 @@ value that is the wrong type there is not an error message but a terminal left
 in a broken state.
 A setting collab does not understand is ignored rather than fatal.
 
+### The roster's status row
+
+There is one status row per pane, at the foot of what it describes.
+The roster's speaks for the session: the shared batch bar and how many messages
+have been sent in it, and for now nothing else.
+
+**A figure on that row has to be identical for every participant**, and that
+one rule is what decides its contents.
+Most of what the daemon records locally is written from the reader's point of
+view — `others_connected` and `others_total` exclude the reader by participant
+id, `unread` and `unread_messages` are properties of one inbox, `watchers` and
+`ws_clients` count that daemon's own subscribers, `last_seq` reaches only as
+far as this client has been delivered — and a row assembled from those would
+show every participant a different number while looking like a shared fact.
+It would do it beside a hub-counted batch bar that genuinely is shared, which
+is what would make it convincing.
+That is the failure the batch feature exists to prevent, so the segment list
+for this row is a shorter list than the one below it, and `stats` and `command`
+are refused on it by name rather than left to convention.
+
+The message count therefore travels the road the batch already travels.
+The hub counts `COUNT(*) FROM events WHERE kind = 'chat'` in the same read that
+produces the roster, puts it on the snapshot beside the batch figures, and the
+daemon copies it into `status.json` stamped with the time of the last
+successful fetch.
+Nothing is added up on the client, because two counters are how two readers end
+up with two answers.
+
+It counts what was **said**, not what was sequenced.
+`seq` is `MAX(seq)` over a log that carries joins, presence, task moves and
+file transfers alongside chat, so a figure taken from it and labelled
+«messages» would repeat one panel lower the confusion between activity and
+conversation that `unread_messages` had to be split off from `unread` to fix.
+It is also unfiltered by viewer, unlike `history` and the event feed: a direct
+message between two other people is counted for everybody, because the row says
+how much has been said in here rather than how much of it you were shown.
+
+`events` has no index on `kind`, so this count is a scan of the fattest table in
+the schema — 10.6 ms median and 20.8 ms at the tail over 100k events, against
+1.1 ms with an index, for 1.4 MB.
+It is read on the snapshot path, which every join and every client refresh goes
+through, under the lock every append wants, so `idx_events_kind` is created in
+the store's migration and an older session gains it on its next open.
+
+The staleness rule is the batch's, unchanged: `write_status` keeps writing every
+three seconds after the hub has gone quiet, so a count with no recent fetch
+behind it says its age — `messages ? 4m old` — rather than freezing while
+looking live.
+A count of zero is drawn as nothing at all, because a false zero reads as
+«nobody has said anything» and an absent segment does not.
+
 ### The viewer's status row
 
-The last line of `collab watch` is composed of segments, and which ones it
-carries is `watch_status_segments`:
+The conversation's row is the reader's own, and which segments it carries is
+`watch_status_segments`:
 
 - `batch` — the share of the shared batch the hub counts as done, refusing to
   draw a bar from figures it could not refresh, exactly as the host agent's
@@ -320,3 +371,12 @@ It is the only thing on that row that says the view is not live, so it goes
 first and is never given up for width; the segments are given up from the
 right until what is left fits, and the batch figure is the last to go because
 it is the one number two agents are both steering by.
+
+Both rows are composed and fitted by the same code in `collab.client.statusbar`
+and painted by the same method, so there is one batch renderer rather than two
+that could drift — the reader has both rows on screen at once, and two drawings
+of one figure that disagreed would be worse than either.
+In the roster-only layout there is one pane and therefore one row: it is the
+roster's, carrying the session's figures and the roster keys, because a second
+row stacked above it would cost a participant to say what the first had room
+for.
