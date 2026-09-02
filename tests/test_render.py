@@ -157,7 +157,10 @@ def test_the_badge_counts_what_was_said_and_not_every_event():
     said, and it is the one the envelope is for."""
     out = r.render(_status(unread=5, unread_messages=2))
     assert "✉ 2" in out
-    assert "5" not in out
+    # The BADGE must not read 5. The digit itself is not banned from the line:
+    # the version beside it — v1.25.0 — has one, and every release from here
+    # may.
+    assert "✉ 5" not in out
 
 
 def test_the_badge_leaves_a_column_after_the_envelope():
