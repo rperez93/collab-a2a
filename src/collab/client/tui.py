@@ -553,7 +553,12 @@ def stat_line(person: dict[str, Any]) -> str:
             pass
     if (ctx := _fmt_pct(stats.get("context_pct"), "ctx")):
         bits.append(ctx)
-    if stats:
+    # A STAMP ALONE IS NOT FIGURES. The hub no longer stamps a report that
+    # sanitised to nothing, but a hub from before that did, and a dict of one
+    # key drawn as «31m ago — old» says «this agent's data is stale» where the
+    # truth is «this agent never told us anything».
+    figures = {k: v for k, v in stats.items() if k != "reported_at"}
+    if figures:
         # THE ROSTER IS NARROW, so a fresh figure carries no date here — the
         # full `collab stats` output dates every row. But a figure that is old,
         # or whose age nobody can say, is marked, because drawn plainly it is

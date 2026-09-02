@@ -369,6 +369,11 @@ def sanitise(reported: dict[str, Any]) -> dict[str, Any]:
 #: difference between «has headroom» and «is about to be throttled».
 STATS_STALE_AFTER = 30 * 60
 
+#: How far ahead of this machine's clock a stamp may sit and still be «now».
+#: The hub stamps on its clock; the reader measures on its own; a few seconds
+#: between two machines is the ordinary case, not a fault.
+CLOCK_SKEW = 5.0
+
 
 def reported_age(stats: Any, *, now: float | None = None) -> str:
     """How long ago these figures were reported, in words — never nothing.
@@ -395,10 +400,16 @@ def reported_age(stats: Any, *, now: float | None = None) -> str:
     if stamp <= 0 or stamp != stamp or stamp in (float("inf"), float("-inf")):
         return "age unknown"
     gap = (now if now is not None else time.time()) - stamp
-    if gap < 0:
-        # A stamp in the future is a clock that disagrees with ours, not a
-        # report from a moment ago.
+    if gap < -CLOCK_SKEW:
+        # A stamp well in the future is a clock that disagrees with ours, not
+        # a report from a moment ago.
         return "age unknown"
+    if gap < 0:
+        # A FEW SECONDS AHEAD IS NOW. The hub stamps on its clock and this
+        # machine reads on its own, and two clocks a couple of seconds apart
+        # are the ordinary case — so the freshest report there is came out as
+        # «age unknown», the same words as a hub that never stamped at all.
+        gap = 0.0
     if gap < 60:
         words = f"{int(gap)}s ago"
     elif gap < 3600:

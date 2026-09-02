@@ -200,8 +200,17 @@ class Hub:
         # and the two call for opposite decisions about who takes the next
         # task. Stamped AFTER the merge so a participant's own `reported_at`,
         # a remote party's choice of value, is overwritten rather than trusted.
-        merged["reported_at"] = time.time()
-        meta["stats"] = merged
+        #
+        # AND ONLY WHEN SOMETHING WAS REPORTED. A body that sanitises to
+        # nothing — all nested junk — is not a report; stamping it grew a stats
+        # dict of one key for a participant who told us nothing usable, which
+        # flipped the «nobody has shared any usage yet» banner and, half an
+        # hour on, put a bare «31m ago — old» on the roster: «this agent's data
+        # is stale», where the truth is «this agent never said anything».
+        if incoming:
+            merged["reported_at"] = time.time()
+        if merged:
+            meta["stats"] = merged
         for key in ("machine", "machine_id", "user"):
             if stats.get(key):
                 meta[key] = stats[key]
