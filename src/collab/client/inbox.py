@@ -11,6 +11,7 @@ import contextlib
 import json
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -23,10 +24,19 @@ CREATE TABLE IF NOT EXISTS inbox (
     kind    TEXT NOT NULL,
     sender  TEXT NOT NULL,
     payload TEXT NOT NULL,
-    read    INTEGER NOT NULL DEFAULT 0
+    read    INTEGER NOT NULL DEFAULT 0,
+    sender_id TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
+
+#: Brings an inbox written by an older collab up to SCHEMA. `sender_id` was
+#: added so that «my own words» is judged by participant id rather than by
+#: display name — see `unread_count`; a database from before it has rows with
+#: no id, which that query judges by name as it always did.
+MIGRATIONS = (
+    "ALTER TABLE inbox ADD COLUMN sender_id TEXT NOT NULL DEFAULT ''",
+)
 
 #: How long a write here may wait for the database, and no longer.
 #:
@@ -83,6 +93,11 @@ class Inbox:
             db.execute("PRAGMA journal_mode=WAL")
         db.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
         db.executescript(SCHEMA)
+        for statement in MIGRATIONS:
+            # Each one is idempotent by construction: a column that is
+            # already there is a «duplicate column» error and nothing else.
+            with contextlib.suppress(sqlite3.OperationalError):
+                db.execute(statement)
         db.commit()
         return db
 
@@ -121,8 +136,10 @@ class Inbox:
                 return False
             try:
                 self._db.execute(
-                    "INSERT INTO inbox (seq, ts, kind, sender, payload) VALUES (?,?,?,?,?)",
-                    (env.seq, env.ts, env.kind, env.sender, json.dumps(env.to_dict())),
+                    "INSERT INTO inbox (seq, ts, kind, sender, sender_id, payload)"
+                    " VALUES (?,?,?,?,?,?)",
+                    (env.seq, env.ts, env.kind, env.sender, env.sender_id,
+                     json.dumps(env.to_dict())),
                 )
                 self._db.execute(
                     "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_seq', ?)",
@@ -261,12 +278,25 @@ class Inbox:
         return int(row["value"]) if row else 0
 
     def unread_count(self, *, exclude_sender: str | None = None,
+                     exclude_sender_id: str | None = None,
                      kinds: tuple[str, ...] = ()) -> int:
-        """How many messages are waiting for you.
+        """How many messages are waiting for you — that is, NOT YET DELIVERED.
+
+        «Read» here means what `mark_read` says it means: the row was drained
+        by `collab recv`, or printed by the monitor the agent is watching. It
+        is not «somebody scrolled past it in `collab watch`», which is a human
+        looking at the transcript and says nothing about whether the agent has
+        seen it.
 
         Your own messages come back down the feed (that is what keeps every
         participant's log identical), but counting them as unread would show a
-        badge for talking to yourself.
+        badge for talking to yourself. Which ones are yours is judged by
+        ``exclude_sender_id`` wherever the row carries a `fromId`, and by
+        ``exclude_sender`` only for rows that do not — a display name is one
+        rename away from being somebody else's, and two agents on one login
+        commonly share one, so by name alone a renamed agent's own history
+        became other people's unread mail and a same-named colleague's words
+        were counted as already read.
 
         ``kinds`` narrows it to what somebody actually SAID. An arrival, a
         rename or a file notice is an event, not something anybody has to act
@@ -275,7 +305,11 @@ class Inbox:
         """
         sql = "SELECT COUNT(*) AS c FROM inbox WHERE read=0"
         args: list[Any] = []
-        if exclude_sender:
+        if exclude_sender_id:
+            sql += (" AND NOT (CASE WHEN sender_id <> '' THEN sender_id = ?"
+                    " ELSE sender = ? END)")
+            args += [exclude_sender_id, exclude_sender or ""]
+        elif exclude_sender:
             sql += " AND sender <> ?"
             args.append(exclude_sender)
         if kinds:
@@ -291,11 +325,51 @@ class Inbox:
                 "SELECT seq, payload FROM inbox WHERE read=0 ORDER BY seq LIMIT ?", (limit,)
             ).fetchall()
             if mark and rows:
-                self._db.executemany(
-                    "UPDATE inbox SET read=1 WHERE seq=?", [(r["seq"],) for r in rows]
-                )
-                self._db.commit()
+                self._mark_read([r["seq"] for r in rows])
         return [Envelope.from_dict(json.loads(r["payload"])) for r in rows]
+
+    def mark_read(self, seqs: list[int]) -> int:
+        """These events have been put in front of the agent. Says how many
+        rows that changed.
+
+        THE ONE PLACE «READ» IS DECIDED, and the definition is DELIVERED: the
+        row was drained by `collab recv`, or printed by the monitor the agent
+        is watching (`collab listen --follow`). Before this only `recv` marked
+        anything, so an agent whose monitor was the line stream —which is what
+        every skill here prescribes— had every message it was shown counted
+        against it for ever, and the status line's envelope grew to the size
+        of the conversation.
+
+        Called from a process that is not the daemon's, against a row the
+        daemon may still be committing: the log line is appended BEFORE the
+        commit (see `record`), so a tail can see the line while the row is a
+        write transaction on another connection. The UPDATE waits on that
+        transaction for `BUSY_TIMEOUT_MS`, which is longer than any commit
+        here takes; if it does time out the row stays unread and `collab recv`
+        clears it later, which is the behaviour this replaces and is loud
+        rather than wrong. Marking must never take the monitor down.
+        """
+        seqs = [int(s) for s in seqs if s is not None]
+        if not seqs:
+            return 0
+        for attempt in range(3):
+            try:
+                with self._lock:
+                    return self._mark_read(seqs)
+            except sqlite3.OperationalError:
+                if attempt == 2:
+                    return 0
+                time.sleep(0.1)
+        return 0
+
+    def _mark_read(self, seqs: list[int]) -> int:
+        """Under the lock. `take_unread` already holds it; `mark_read` takes it."""
+        cur = self._db.execute(
+            f"UPDATE inbox SET read=1 WHERE read=0 AND seq IN ({','.join('?' * len(seqs))})",
+            seqs,
+        )
+        self._db.commit()
+        return int(cur.rowcount if cur.rowcount is not None and cur.rowcount >= 0 else 0)
 
     def all_events(self, limit: int = 100, *,
                    exclude: tuple[str, ...] = ()) -> list[Envelope]:

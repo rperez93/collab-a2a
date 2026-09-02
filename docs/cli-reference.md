@@ -159,6 +159,12 @@ collab send [--room ROOM] [--to TO] [--thread THREAD] [--session SESSION]
 Stream events as lines.
 Arm a background watcher on this.
 
+With `--follow`, every line printed is a message the agent has been shown, and
+is marked read — the same mark `collab recv` makes, and what clears the `✉`
+count on the status line. Lines `--room` or `--mine-too` keep off the stream are
+not marked; without `--follow` this is a look at the transcript and marks
+nothing.
+
 ```text
 collab listen [--follow] [--json] [--room ROOM] [--limit LIMIT]
               [--replay REPLAY] [--mine-too] [--exit-when-idle]
@@ -179,6 +185,11 @@ collab listen [--follow] [--json] [--room ROOM] [--limit LIMIT]
 ## recv
 
 Drain unread messages, optionally waiting.
+
+Unread means not yet delivered: neither drained here nor printed by a
+`collab listen --follow` monitor. Draining marks them read (`--peek` does not),
+and the daemon's next status write — within three seconds — clears the `✉` count
+on the status line.
 
 ```text
 collab recv [--wait WAIT] [--limit LIMIT] [--json] [--peek] [--mine-too]

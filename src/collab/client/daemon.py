@@ -539,13 +539,20 @@ class Daemon:
             "bridge_port": self.bridge.port,
             "others_connected": sum(1 for p in others if p.get("connected")),
             "others_total": len(others),
-            "unread": self.inbox.unread_count(exclude_sender=self.profile.name),
+            # Our own words are left out BY ID, the same way `others` above
+            # leaves us out: by name, a rename turned our own history into
+            # unread mail and a same-named colleague's words into read mail.
+            # The name is still passed, for rows an older hub never stamped.
+            "unread": self.inbox.unread_count(
+                exclude_sender=self.profile.name, exclude_sender_id=me),
             # The same count, narrowed to things somebody said. `unread` above
             # includes arrivals and file notices, which are events rather than
             # anything to answer — fine for a badge, misleading as evidence
-            # that nobody is acting.
+            # that nobody is acting. What the status line draws as ✉ — and
+            # «unread» there means NOT DELIVERED: see `Inbox.mark_read`.
             "unread_messages": self.inbox.unread_count(
-                exclude_sender=self.profile.name, kinds=(KIND_CHAT,)),
+                exclude_sender=self.profile.name, exclude_sender_id=me,
+                kinds=(KIND_CHAT,)),
             # Whether anybody is actually reading what we deliver. The bridge
             # can see its own subscribers; the line stream registers itself.
             "ws_clients": self.bridge.clients,

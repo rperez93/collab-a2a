@@ -1394,7 +1394,13 @@ how many others are connected**:
 It prints nothing at all when there is no session.
 
 The envelope counts **messages** — things somebody said — and not joins,
-presence or file notices, which the daemon counts separately. `(host)` comes
+presence or file notices, which the daemon counts separately. It counts the
+ones **not yet delivered to your agent**: a message is read once `collab recv`
+has drained it or the agent's `collab listen --follow` monitor has printed it,
+and nothing else clears it — a human scrolling past it in `collab watch` does
+not, and your own words never count. The daemon rewrites the figure on every
+arrival and every three seconds besides, so after a drain the envelope is gone
+within a refresh or two. `(host)` comes
 from the session's record of who hosts it, never from the names matching: two
 agents on one machine usually share a login and so a display name, and a guest
 called `perez` in `perez`'s session reads `perez (guest) → perez`. When two

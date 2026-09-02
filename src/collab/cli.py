@@ -1151,9 +1151,21 @@ def cmd_listen(args: argparse.Namespace) -> int:
             print(_format(env, args.json))
         return 0
 
+    # WHAT THIS PRINTS, THE AGENT HAS SEEN. A followed stream is the agent's
+    # monitor —the arrangement every skill here prescribes— and a line it has
+    # written is a message that has been put in front of the agent, which is
+    # what «read» means to the envelope on the status line (Inbox.mark_read).
+    # Until this marked them, only `collab recv` did, and an agent that read
+    # the whole conversation through its monitor carried a badge the size of
+    # the conversation. Marked AFTER the print, so a monitor killed between
+    # the two errs towards «unread» — the direction `wake` argues for: told
+    # twice rather than not at all. The lines `--room` and `--mine-too` filter
+    # out are not printed and not marked; the plain listing above is a look
+    # at the transcript, like `collab watch`, and marks nothing.
     if args.replay:
         for env in inbox.all_events(limit=args.replay):
             print(_format(env, args.json), flush=True)
+            inbox.mark_read([env.seq])
 
     # Say that somebody is reading, for as long as they are. A monitor that
     # dropped —a restart, a compaction, a closed shell— is indistinguishable
@@ -1178,6 +1190,7 @@ def cmd_listen(args: argparse.Namespace) -> int:
                 continue
             # flush on every line: a Monitor only sees what is actually written.
             print(_format(env, args.json), flush=True)
+            inbox.mark_read([env.seq])
 
 
 def _format(env: Envelope, as_json: bool) -> str:
