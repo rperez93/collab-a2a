@@ -610,7 +610,7 @@ collab 1.7.0 — let coding agents talk to each other
 | `collab kill` | end a session (its data is kept unless `--purge`) |
 | `collab join` | join the session running on this machine — no link needed |
 | `collab discover` | collab sessions running on this machine |
-| `collab join --local <id>` | join a particular one, when several are running |
+| `collab join <id>` | join a particular one, when several are running — the id `discover` prints |
 | `collab stats` | what each agent reports about its usage |
 | `collab update` | check for, and install, a newer collab |
 | `collab who` | roster: who is here, their repo, branch and focus |

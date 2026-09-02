@@ -793,6 +793,25 @@ def _publish_global_settings(profile: SessionProfile) -> None:
         pass
 
 
+def _looks_like_a_link(url: str) -> bool:
+    """Is this a join link, or a name for something already on this machine?
+
+    Deliberately generous about what counts as a link: a string carrying a
+    fragment, or a scheme, or a host and a port, is somebody's attempt at a URL
+    and should be reported as a broken URL rather than looked up locally and
+    reported as an unknown session. Everything else — a session id, a repo name
+    — is a name, and names are what the local registry answers.
+    """
+    candidate = url.strip()
+    if not candidate:
+        return False
+    if "#" in candidate or "://" in candidate:
+        return True
+    # `host:port` with no scheme is still plainly an address.
+    head = candidate.split("/", 1)[0]
+    return ":" in head and head.rsplit(":", 1)[-1].isdigit()
+
+
 def cmd_join(args: argparse.Namespace) -> int:
     _warn_outside_venv()
     _preflight_update(args)
@@ -801,7 +820,16 @@ def cmd_join(args: argparse.Namespace) -> int:
     ensure_home()
 
     url = args.url
-    if args.local or not url:
+    if args.local or not url or not _looks_like_a_link(url):
+        # A SESSION ID IS NOT A URL, AND THE USER DID NOT ASK FOR A LESSON.
+        # `collab discover` prints `join --local <id>`, so the id is what gets
+        # copied — and pasted without the flag, because the flag is not part of
+        # what was read out. Answering that with «that URL has no invite code»
+        # is true and useless: the session is running on this machine, its
+        # invite is in the registry discover just read, and the only thing
+        # missing was a word. So anything that is not a link is looked up the
+        # way discover looks it up, and the flag becomes a way to be explicit
+        # rather than a toll.
         peer = peers.find(url or "")
         if peer is None:
             # Several is not none. Saying "nothing is running" when two things
@@ -862,6 +890,21 @@ def cmd_join(args: argparse.Namespace) -> int:
                 print(dim("  that session is down, but this repo still has it:"))
                 _describe_stopped(stopped)
                 print(dim("\n  `collab host` brings it back — the data is kept"))
+        elif (here := [p for p in peers.discover() if p.joinable]):
+            # A LINK THAT NO LONGER REACHES ANYTHING, while a session sits on
+            # this machine. The link is not guessed at — a stale one names a
+            # host and an invite but no session, so there is no way to know it
+            # meant this one, and joining it silently would put somebody in the
+            # wrong room. What can be said honestly is that something is here
+            # and what would join it.
+            exe = Path(sys.argv[0]).name
+            print(dim(f"  {len(here)} session(s) are running on this machine:"))
+            for peer in here:
+                print(dim(f"    {peer.session_id}  {peer.name}"
+                          f"  in {Path(peer.repo).name}"
+                          f"    {exe} join {peer.session_id}"))
+            print(dim("  that link is not one of them, so it is not assumed —"
+                      " join by name if that is what you meant"))
         _hosting_is_not_the_fallback(resumable=resumable)
         return 1
 

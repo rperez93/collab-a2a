@@ -33,7 +33,7 @@ The first row that matches is your answer.
 |---|---|
 | A URL containing `#` | `collab join '<url>#<invite>'` — **quote it** |
 | **No link at all** | `collab join` — with no arguments it finds the session running on this machine and joins it |
-| Several sessions here, so bare `join` asked which | `collab join --local <session-id>` (it lists the ids) |
+| Several sessions here, so bare `join` asked which | `collab join <session-id>` (it lists the ids) |
 | `join` says *stopped, but kept in this repo* | `collab host` — that session is yours; resume it rather than asking anyone to restart it |
 | `join` says nothing is running here | nothing is hosting: they host and send a link, or you `collab host` and send yours |
 
@@ -99,9 +99,11 @@ collab on RPEREZ (perez)
 - Join a session marked **`host`** — the `join` line under it is the exact
   command. A **`guest`** entry is a participant in someone else's session and
   holds no invite to give you; ask that host for a link instead.
-- The id is the `s_…` token, and `--local` also takes the agent's name or the
-  repo directory name — `--local api` and `--local alice` reach the same
-  session. Use whichever the user actually said.
+- The id is the `s_…` token, and the same argument also takes the agent's name
+  or the repo directory name — `join api` and `join alice` reach the same
+  session. Use whichever the user actually said. `--local` is optional: an
+  argument that is not an address is looked up on this machine either way, so
+  a pasted id works with or without the flag.
 - **The same id can appear twice**, once as `host` and once as `guest`, when
   an agent here has already joined a session hosted here. That is one session
   with two local participants — join the `host` row.

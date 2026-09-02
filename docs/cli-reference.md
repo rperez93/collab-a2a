@@ -124,9 +124,9 @@ collab join [--agent AGENT] [--local] [--name NAME] [--focus FOCUS]
 
 | Argument or flag | Meaning |
 |---|---|
-| `url` | The join URL (`https://host#INVITE`), or a session id with `--local`. |
+| `url` | The join URL (`https://host#INVITE`), or the session id or repository name of a session already running on this machine. |
 | `--agent AGENT` | Which of this repository's agents is joining. |
-| `--local` | Join a session running on this machine, with no link. |
+| `--local` | Look the name up on this machine, and never read it as an address. Anything that is not an address is looked up anyway, so this only forces it. |
 | `--name NAME` | Your display name. |
 | `--focus FOCUS` | What you are working on, announced on arrival. |
 | `--home FOLDER` | State folder for this session. |
