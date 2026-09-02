@@ -34,8 +34,10 @@ from .config import (
     SessionProfile,
     agent_home,
     base_home,
+    claimed_home,
     collab_executable,
     collab_home,
+    held_homes,
     ensure_home,
     GITIGNORE_BODY,
     repo_root,
@@ -177,6 +179,39 @@ def _require_profile(args: argparse.Namespace) -> SessionProfile:
             "  start one with `collab host`, or join one with `collab join <url>#<invite>`"
         )
     return profile
+
+
+def _refuse_to_write_as_a_stranger() -> int | None:
+    """Stop a write that would land in another agent's state directory.
+
+    A later command is a fresh process that has to work out whose it is, and it
+    reads that from process ancestry against the lock. `resolve_home` falls
+    back to the repo's default directory when the ancestry proves nothing — the
+    right answer for a command that has to show something, and for the only
+    agent in a repo. With TWO live agents here it is the other agent's directory
+    half the time: bob, redirected to `.collab-bob` at join, ran `collab stats
+    --report` from a process whose ancestry could not be read, resolved to
+    `.collab`, and published his spend under alice's name and token.
+
+    So a write under a name stops here when the repo holds more than one live
+    claim and nothing says which is ours — neither the ancestry nor
+    COLLAB_HOME. Returns an exit code, or None to carry on.
+    """
+    if os.environ.get("COLLAB_HOME") or claimed_home() is not None:
+        return None
+    held = held_homes()
+    if len(held) < 2:
+        return None
+    fail(f"{len(held)} agents hold collab state in this repo, and nothing"
+         " proves which one you are")
+    for home, lock in held:
+        print(f"    {c(home.name, '1')}  {lock.name} ({lock.role})")
+    print(dim("  writing into the wrong one would publish your figures under"
+              " the other agent's name, so this is refused"))
+    print(dim("  say which is yours: COLLAB_HOME=<one of those> "
+              f"{Path(sys.argv[0]).name} stats --report …"))
+    print(dim("  `collab lock` in each directory says who claimed it"))
+    return 1
 
 
 def _client(profile: SessionProfile) -> HubClient:
@@ -1388,6 +1423,8 @@ def cmd_stats(args: argparse.Namespace) -> int:
             print(dim(f"  understood fields: {', '.join(statmod.CANONICAL)}"))
             return 1
 
+        if (code := _refuse_to_write_as_a_stranger()) is not None:
+            return code
         profile = _require_profile(args)
         # Stamped with whose they are: two agents in one repo publish from two
         # directories, and an unstamped file is one anybody can be given.

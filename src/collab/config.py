@@ -147,6 +147,21 @@ def candidate_homes(cwd: Path | None = None) -> list[Path]:
     return found
 
 
+def held_homes(cwd: Path | None = None) -> list[tuple[Path, Any]]:
+    """Every state directory in this repo with a live agent behind it.
+
+    Two of these and no proof of which is ours is the case a write must stop
+    on: `resolve_home` answers with the repo's default then, which is the OTHER
+    agent's directory whenever we are the one that was redirected.
+    """
+    found = []
+    for home in candidate_homes(cwd):
+        lock = _held_by(home)
+        if lock is not None:
+            found.append((home, lock))
+    return found
+
+
 def claimed_home(cwd: Path | None = None) -> Path | None:
     """The state directory this process can PROVE is its own, or None.
 
