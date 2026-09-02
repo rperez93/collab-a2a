@@ -40,12 +40,24 @@ def width(text: str) -> int:
 
 
 def clip(text: str, limit: int) -> str:
-    """Cut to `limit` columns, with « … » when there is more."""
+    """Cut to `limit` columns, with « … » when there is more.
+
+    A budget of nothing gets nothing. The ellipsis is one column, so answering
+    a zero-column budget with «…» is a one-column over-run of exactly the kind
+    this function exists to prevent — and a pane narrow enough to hand out a
+    zero budget is the pane where one extra cell wraps or ends the viewer.
+    """
+    if limit <= 0:
+        return ""
     if width(text) <= limit:
         return text
+    # THE ELLIPSIS IS PAID FOR OUT OF THE BUDGET. `max(1, limit - 1)` kept one
+    # character at a budget of one and then appended the mark, which is two
+    # columns for one — the same over-run again, at the width where it is
+    # surest to matter.
     out = ""
     for c in text:
-        if width(out + c) > max(1, limit - 1):
+        if width(out + c) > limit - 1:
             break
         out += c
     return out + "…"

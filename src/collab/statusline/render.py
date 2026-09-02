@@ -22,8 +22,8 @@ from ..config import SessionProfile, claimed_home
 from ..protocol import scrub
 from ..client.daemon import (DEAD_AFTER, STALE_AFTER, effective_state,
                              is_running, read_status)
-from ..client.statusbar import (daemon_note, hub_note, state_dir_label,
-                                who as _who)
+from ..client.statusbar import (_counted, daemon_note, hub_note,
+                                state_dir_label, who as _who)
 
 RESET = "\033[0m"
 COLORS = {
@@ -170,7 +170,13 @@ def render(status: dict[str, Any] | None = None, *, width: int | None = None,
     # nothing to answer. `unread_messages` is the same inbox narrowed to chat;
     # the daemon writes it for exactly this. Absent (an older daemon) means no
     # badge rather than the wider figure under the same glyph.
-    unread = int(status.get("unread_messages") or 0)
+    #
+    # THROUGH THE SAME GUARD AS `messages`, three lines up in the file that
+    # defines it. This was `int(x or 0)`: `True` became «✉ 1», and `"lots"`
+    # raised — and `main` wraps this whole call in a bare except, so a hub
+    # that sent junk here did not lose the badge, it blanked the entire status
+    # line. A count that is not a count is no badge, and nothing else.
+    unread = _counted(status.get("unread_messages")) or 0
 
     glyph = _paint(GLYPHS[state], state)
     label = _paint("collab", "label")
