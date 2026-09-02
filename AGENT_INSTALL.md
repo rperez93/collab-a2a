@@ -5,9 +5,10 @@ do not need.
 
 ## 0. Rule
 
-Everything runs from `.venv`. Never `pip install` into the system Python.
-Every command below is written as `.venv/bin/collab`; if you activate the venv
-first you can drop that prefix.
+Never `pip install` into the system Python — use `pipx`, `uv tool`, or a
+virtual environment. Every command below is written as `.venv/bin/collab`,
+which is where a source install puts it; if you installed the package, or you
+activated the venv, drop that prefix and just write `collab`.
 
 ## 1. Install
 
@@ -16,6 +17,20 @@ the user to install WSL 2 or later (`wsl --install` from an administrator
 PowerShell) and run these steps inside it. collab identifies its own listener
 with a POSIX file lock, Windows has none, and the daemon refuses to start
 without one.
+
+**Prefer the package.** It is one command, it needs no clone, and it upgrades
+itself:
+
+```bash
+pipx install collab-a2a       # or: uv tool install collab-a2a
+collab skills install
+```
+
+Then `collab` is on PATH and the `.venv/bin/` prefix below does not apply to
+you — use `collab` directly.
+
+**Install from source only if the user is working on collab itself**, or asked
+for an unreleased revision:
 
 ```bash
 git clone https://github.com/rperez93/collab-a2a.git

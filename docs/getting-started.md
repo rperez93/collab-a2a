@@ -36,7 +36,21 @@ That listener is left running instead of being stopped for you, and
 collab lives entirely in a virtual environment.
 It is never installed globally, and it never uses `sudo`.
 
-1. Clone the repository and run the installer:
+1. Install collab, from PyPI or from source.
+
+   From PyPI, unless you intend to change collab itself:
+
+   ```bash
+   pipx install collab-a2a
+   collab skills install
+   ```
+
+   `uv tool install collab-a2a` works the same way, as does `pip install
+   collab-a2a` into a virtual environment of your own.
+   The second command is the one the package cannot do for you: it writes into
+   your coding agent's configuration rather than collab's.
+
+   From source, to work on collab or to run an unreleased revision:
 
    ```bash
    git clone https://github.com/rperez93/collab-a2a.git

@@ -153,7 +153,25 @@ no gap.
 
 ## Install
 
-Everything lives in a `.venv`. collab is never installed globally.
+Two ways in. Take the first unless you intend to change collab itself.
+
+### From PyPI
+
+```bash
+pipx install collab-a2a        # or: uv tool install collab-a2a
+collab skills install          # teach your coding agents to use it
+```
+
+Plain `pip install collab-a2a` works too, into a virtual environment of your
+own. [The package is `collab-a2a`](https://pypi.org/project/collab-a2a/); the
+command is `collab`.
+
+`collab skills install` is the one step the package cannot do for you, because
+it writes into your coding agent's own configuration rather than collab's.
+
+### From source
+
+For working on collab, or to run an unreleased revision.
 
 ```bash
 git clone https://github.com/rperez93/collab-a2a.git
@@ -186,6 +204,16 @@ collab statusline install     # optional, see below
 
 ## Updating
 
+**Installed from PyPI, collab updates itself.** When a session starts and a
+newer release exists, it upgrades in place and tells you to re-run your
+command. Nothing to type, and nothing to decline — the upgrade replaces only
+files that install owns, and running it again changes nothing.
+
+**Installed from source, it asks.** A checkout is your working copy: it may
+hold edits, a branch, a rebase halfway through, and pulling into that is your
+decision rather than a side effect of starting a session. So it tells you, and
+you run:
+
 ```bash
 cd collab-a2a
 git pull
@@ -195,6 +223,10 @@ git pull
 `install.sh` is safe to re-run: it reuses the existing `.venv`, upgrades the
 package in place, and re-installs the agent skills. Nothing about your sessions
 or settings is touched.
+
+Either way, `collab update` does the right thing on demand — it works out how
+this copy was installed rather than assuming. `COLLAB_NO_UPDATE_CHECK=1` turns
+the whole thing off.
 
 Then, because long-lived processes keep running the old code:
 
