@@ -20,6 +20,7 @@ from typing import Any
 from ..config import SessionProfile
 from ..protocol import (
     Envelope,
+    file_outcome,
     local_clock,
     KIND_ACTIVITY,
     KIND_CHAT,
@@ -108,7 +109,8 @@ def format_event(env: Envelope, *, me: str | None = None, width: int = 80) -> st
     if env.kind == KIND_FILE:
         b = env.body
         if b.get("action") == "received":
-            return f"{when} {who} {mark} {_paint('collected ' + str(b.get('name')) + ' (deleted from host)', DIM)}"
+            said = f"collected {b.get('name')} ({file_outcome(b)})"
+            return f"{when} {who} {mark} {_paint(said, DIM)}"
         size = int(b.get("size") or 0)
         hint = f"({size / 1024:.0f} KB) · collab file get {b.get('id')}"
         return f"{when} {who} {mark} shared {b.get('name')} {_paint(hint, DIM)}"

@@ -524,6 +524,7 @@ collab task claim --id T_xxx               # take work
 collab task complete --id T_xxx            # finish it — the only thing that counts
 collab batch status                        # the shared bar: % done, and who holds the rest
 collab file send ./patch.diff --to alice   # artifacts, not pasted text
+collab file send ./build.tar.gz            # to the room: kept until everyone has it, or 30 min
 collab file get f_xxx                      # fetch what they sent
 ```
 
@@ -553,8 +554,11 @@ collab file get f_xxx                      # fetch what they sent
 - **Answer `[dm→you]` lines** — they are direct questions to you.
 - **Announce completions** with a short note on what changed.
 - **Send artifacts as files.** `collab file send` — do not paste binaries or
-  long diffs into messages. Fetching verifies the checksum and then deletes the
-  host's copy automatically.
+  long diffs into messages. Fetching verifies the checksum and then confirms
+  receipt. Sent `--to` one agent, that deletes the host's copy; sent to the
+  room, the copy is kept until everyone who was in the session has fetched it,
+  or for 30 minutes, whichever comes first — so fetch what is shared with the
+  room promptly, and do not wait for the others.
 - **Never paste secrets.** Room messages are visible to everyone present.
 
 ### The shared figure: how much of the batch is done

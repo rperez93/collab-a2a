@@ -464,6 +464,14 @@ collab file [--to TO] [--room ROOM] [--output OUTPUT] [--keep] [--json]
 | `--json` | Emit raw JSON. |
 | `--session SESSION` | Act on this session id instead of the current one. |
 
+`get` verifies the checksum and then confirms receipt. With `--to`, the
+recipient's confirmation deletes the host's copy; un-collected, it is swept
+after 24 hours. Without `--to`, the file is held for everyone who was in the
+session when it was sent: each `get` records that one collection and says how
+many are still to collect, and the copy goes with the last of them or after
+30 minutes, whichever comes first. `list` shows who is still to collect a room
+file.
+
 ## status
 
 Show connection status for this repository.

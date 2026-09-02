@@ -25,7 +25,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from ..protocol import Envelope
 
@@ -86,6 +86,22 @@ CREATE TABLE IF NOT EXISTS files (
     acked_at   REAL,
     acked_by   TEXT,
     state      TEXT NOT NULL DEFAULT 'available'
+);
+
+-- WHO A ROOM FILE IS WAITING FOR. A file addressed to one person has one
+-- collector and `files.acked_by` is enough; a file shared with a room has as
+-- many as were in the session when it was sent, and the blob stays until each
+-- of them has it. One row per awaited participant, written at send time with
+-- `collected_at` NULL and filled in by their ack — so one who acks twice
+-- changes nothing. A participant who joins afterwards may still fetch it and
+-- gets a row when they do, marked `awaited` 0: the history says they have it,
+-- and they hold nothing up and complete nothing.
+CREATE TABLE IF NOT EXISTS file_collections (
+    file_id        TEXT NOT NULL,
+    participant_id TEXT NOT NULL,
+    collected_at   REAL,
+    awaited        INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (file_id, participant_id)
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -266,6 +282,27 @@ class Store:
         if self._columns("events"):
             self._db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind)")
+
+        # A file used to be collected ONCE: the first ack, whoever it came
+        # from, unlinked the blob and wrote the collector into `files.acked_by`.
+        # Collections now live in their own table, one row per awaited
+        # participant, and every reader of «who has this» reads that table —
+        # so the one collector an older session recorded is folded into it,
+        # or the history would say nobody ever collected those files.
+        #
+        # The files still WAITING in an older session get no rows. Their
+        # audience was never written down and cannot be reconstructed
+        # honestly — whoever is in the session now is not who was there when
+        # the file was sent — so they are served to anyone in the room and end
+        # on their clock or by withdrawal, never on somebody's ack. See
+        # `file_progress` for what an empty audience means.
+        if self._columns("files"):
+            self._db.execute(
+                "INSERT OR IGNORE INTO file_collections"
+                " (file_id, participant_id, collected_at)"
+                " SELECT f.id, n.participant_id, f.acked_at"
+                " FROM files f JOIN participant_names n ON n.name = f.acked_by"
+                " WHERE f.acked_by IS NOT NULL")
 
     def close(self) -> None:
         with self._lock:
@@ -804,16 +841,119 @@ class Store:
     # --- shared files -----------------------------------------------------------
 
     def add_file(self, file_id: str, *, name: str, size: int, sha256: str, sender: str,
-                 recipient: str | None, room: str | None) -> dict[str, Any]:
+                 recipient: str | None, room: str | None,
+                 audience: Iterable[str] = ()) -> dict[str, Any]:
+        """Record an upload, and for a room file, who it is waiting for.
+
+        ``audience`` is the participant ids the file is held for — the people in
+        the session at this moment, minus the sender. Written now rather than
+        computed at ack time because the question is «who was there when it was
+        sent», and the roster keeps changing after that.
+        """
+        now = time.time()
         with self._lock:
             self._db.execute(
                 "INSERT INTO files (id,name,size,sha256,sender,recipient,room,created_at)"
                 " VALUES (?,?,?,?,?,?,?,?)",
-                (file_id, name, size, sha256, sender, recipient, room, time.time()),
+                (file_id, name, size, sha256, sender, recipient, room, now),
+            )
+            self._db.executemany(
+                "INSERT OR IGNORE INTO file_collections (file_id, participant_id)"
+                " VALUES (?,?)",
+                [(file_id, pid) for pid in audience],
             )
             self._db.commit()
             row = self._db.execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
         return dict(row)
+
+    def record_collection(self, file_id: str, participant_id: str) -> bool:
+        """Note that ``participant_id`` has the file. True the first time only.
+
+        Idempotent: a second ack from the same participant leaves the row and
+        its timestamp alone. Someone who was not awaited — they joined after the
+        file was sent — gets a row too, so the history says they collected it,
+        but they were never counted among the remaining and so settle nothing.
+        """
+        now = time.time()
+        with self._lock:
+            already = self._db.execute(
+                "SELECT collected_at FROM file_collections"
+                " WHERE file_id=? AND participant_id=?", (file_id, participant_id),
+            ).fetchone()
+            if already is not None and already["collected_at"] is not None:
+                return False
+            # A new row here is somebody who was not awaited; an existing one
+            # keeps its `awaited`, whatever it was.
+            self._db.execute(
+                "INSERT INTO file_collections"
+                " (file_id, participant_id, collected_at, awaited)"
+                " VALUES (?,?,?,0) ON CONFLICT(file_id, participant_id)"
+                " DO UPDATE SET collected_at=excluded.collected_at",
+                (file_id, participant_id, now),
+            )
+            self._db.commit()
+        return True
+
+    def collectors(self, file_id: str) -> list[str]:
+        """Participant ids that have collected the file, in the order they did."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT participant_id FROM file_collections"
+                " WHERE file_id=? AND collected_at IS NOT NULL ORDER BY collected_at",
+                (file_id,),
+            ).fetchall()
+        return [str(r["participant_id"]) for r in rows]
+
+    def file_progress(self, file_id: str) -> dict[str, Any]:
+        """How far a room file is from being everyone's.
+
+        ``collected`` counts every ack recorded; ``remaining`` and ``awaiting``
+        are the awaited participants who have not acked AND are still in the
+        session. Someone removed with `collab kick` is never coming back for
+        it, so they drop out of the count rather than holding the blob until
+        the clock runs out. ``expected`` is how many were awaited to begin
+        with: zero means nobody was there to be counted — a file shared with an
+        empty room, or one recorded before audiences were — and then no ack
+        can complete it; only its clock or a withdrawal ends it.
+        """
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT c.collected_at, c.awaited, p.name, p.revoked"
+                " FROM file_collections c"
+                " LEFT JOIN participants p ON p.id = c.participant_id"
+                " WHERE c.file_id=? ORDER BY p.joined_at",
+                (file_id,),
+            ).fetchall()
+        collected = sum(1 for r in rows if r["collected_at"] is not None)
+        awaiting = [str(r["name"]) for r in rows
+                    if r["awaited"] and r["collected_at"] is None
+                    and r["name"] is not None and not r["revoked"]]
+        return {"expected": sum(1 for r in rows if r["awaited"]),
+                "collected": collected,
+                "remaining": len(awaiting), "awaiting": awaiting}
+
+    def files_nobody_awaits(self) -> list[dict[str, Any]]:
+        """Room files still on disk that every remaining awaited person has.
+
+        The last collector's ack normally settles a file, but the last awaited
+        person may instead have been removed from the session after the others
+        collected — and then no ack is ever coming. These are those files:
+        somebody has collected, and nobody still here is owed a copy. A file
+        with an empty audience, or one nobody at all has collected, is not
+        listed: it waits for its clock like any other.
+        """
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT f.* FROM files f"
+                " WHERE f.state='available' AND f.recipient IS NULL"
+                " AND EXISTS (SELECT 1 FROM file_collections c"
+                "             WHERE c.file_id=f.id AND c.collected_at IS NOT NULL)"
+                " AND NOT EXISTS (SELECT 1 FROM file_collections c"
+                "                 JOIN participants p ON p.id = c.participant_id"
+                "                 WHERE c.file_id=f.id AND c.collected_at IS NULL"
+                "                 AND p.revoked = 0)"
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def get_file(self, file_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -842,11 +982,22 @@ class Store:
             )
             self._db.commit()
 
-    def expired_files(self, ttl_seconds: float) -> list[dict[str, Any]]:
-        cutoff = time.time() - ttl_seconds
+    def expired_files(self, ttl_seconds: float,
+                      room_ttl_seconds: float | None = None) -> list[dict[str, Any]]:
+        """Files still waiting past their clock.
+
+        A file addressed to somebody gets ``ttl_seconds``; one shared with a
+        room gets ``room_ttl_seconds`` — the same clock when none is given.
+        """
+        now = time.time()
+        direct_cutoff = now - ttl_seconds
+        room_cutoff = now - (ttl_seconds if room_ttl_seconds is None else room_ttl_seconds)
         with self._lock:
             rows = self._db.execute(
-                "SELECT * FROM files WHERE state='available' AND created_at < ?", (cutoff,)
+                "SELECT * FROM files WHERE state='available' AND ("
+                " (recipient IS NOT NULL AND created_at < ?)"
+                " OR (recipient IS NULL AND created_at < ?))",
+                (direct_cutoff, room_cutoff),
             ).fetchall()
         return [dict(r) for r in rows]
 

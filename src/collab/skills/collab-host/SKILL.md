@@ -409,7 +409,8 @@ collab task propose "<title>"            # put work on the board (joins the batc
 collab task claim --id T_xxx             # take it
 collab task complete --id T_xxx          # finish it — the only thing that counts
 collab batch status                      # the shared bar: % done, and who holds the rest
-collab file send ./build.tar.gz --to bob # artifacts, not pasted text
+collab file send ./build.tar.gz --to bob # artifacts, not pasted text — gone once bob has it
+collab file send ./build.tar.gz          # to the room: kept until everyone has it, or 30 min
 ```
 
 ### Your first message to them
