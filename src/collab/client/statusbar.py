@@ -297,13 +297,22 @@ class CommandSegment:
             # in the row the keys live on.
             self._text = ""
         finally:
-            # IN A `finally`, because the thread used to die before reaching it.
-            # One undecodable byte left this set for ever, `poll` refused every
-            # subsequent run, and the segment was gone for the rest of the
-            # session — the silent death this class exists to avoid.
+            # LAST, AND IN A `finally` — and the ordering is the whole point, so
+            # do not simplify this back into the `try`.
             #
-            # Last, so `poll` cannot start a second run against a half-written
-            # value. Plain assignment and no lock: CPython publishes an
-            # attribute store atomically, and the reader is a draw that can
-            # happily show the previous line for one more frame.
+            # `_text` is published BEFORE this is cleared, and that order is
+            # what stops `poll` starting a second worker against a half-written
+            # value: while the flag is set, no other run exists to race with.
+            # The UnicodeDecodeError defect destroyed exactly that invariant,
+            # because the thread died BETWEEN the two statements — which is why
+            # the segment stayed dead rather than merely missing one update.
+            # `poll` refuses on a set flag, so a flag nothing ever clears is a
+            # segment nothing can ever restart, silently, for the rest of the
+            # session. The `finally` is not tidiness; it is what guarantees the
+            # ordering holds down every path out of this method, including the
+            # ones `except Exception` deliberately does not catch.
+            #
+            # Plain assignment and no lock: CPython publishes an attribute store
+            # atomically, and the reader is a draw that can happily show the
+            # previous line for one more frame.
             self._running = False
