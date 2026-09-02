@@ -175,6 +175,34 @@ class Lock:
                 return distance
         return None
 
+    def owned_by(self, chain: list[int]) -> bool:
+        """Is the process chain given the agent that made this claim?
+
+        Not «shares an ancestor»: every process on the machine shares one with
+        every other soon enough — the tmux server, the terminal, the login
+        shell — so that answers yes for the other agent too. The chain that
+        claimed a lock reads, nearest first: the collab command that took it
+        (dead by now), whatever shell wrapped it (usually dead), then the
+        AGENT that issued it, then everything the agent shares with the rest
+        of the machine. So the first pid in it that is still alive is the
+        agent, or something the agent runs under — and the claim is ours
+        exactly when that process is above us too.
+
+        The other agent in the repo fails this at once: the first living pid
+        in the claim is the other agent's process, which is not above us,
+        whatever we share further up. An agent that has restarted passes it:
+        its old process is dead and skipped, and the next living pid is the
+        shell or pane it ran from, which the restarted agent shares.
+
+        Nothing recorded, nothing living: not ours. A claim that cannot be
+        matched is not a claim to walk into.
+        """
+        for pid in self.owner_pids:
+            if not process_alive(pid):
+                continue
+            return pid in chain
+        return False
+
     def describe(self) -> str:
         where = f" in {Path(self.state_dir).name}" if self.state_dir else ""
         return f"{self.name} ({self.role}) in {self.session_id}{where}"

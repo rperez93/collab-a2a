@@ -777,6 +777,9 @@ def _own_state_dir(args: argparse.Namespace, name: str) -> int | None:
     # session sees. Guessing it is worse than guessing where to write a colour,
     # because the wrong answer is visible to other people rather than only to
     # you.
+    if os.environ.get("COLLAB_HOME"):
+        return None                       # said outright; nothing to decide
+
     chosen = _which_agent_to_join(args)
     if chosen is False:
         return 2
@@ -789,14 +792,32 @@ def _own_state_dir(args: argparse.Namespace, name: str) -> int | None:
     if lock is None or not lock.held:
         return None                       # free, or nobody is behind it
 
-    if lock.name == name:
-        return None                       # our own claim, under our own name
+    # OURS IS DECIDED BY WHERE WE RUN FROM, NOT BY THE NAME. The name is the
+    # one thing two agents on one machine are guaranteed to share — both
+    # resolve the same global default — so «the lock carries my name» was
+    # true of the other agent's claim too. Under it a second agent joining
+    # with the default name walked into the first agent's `.collab`, wrote
+    # its profile over theirs, and the first agent's status line then
+    # described the second agent as itself.
+    chain = lockfile.ancestry()
+    if lock.owned_by(chain):
+        return None                       # our own claim, whatever it is named
 
+    # `.collab-<name>`, unless a stranger holds that too — the same name from
+    # a third agent — in which case the next free number beside it.
     mine = agent_home(name)
+    taken = 1
+    while (other := lockfile.read(mine)) is not None and other.held \
+            and not other.owned_by(chain):
+        taken += 1
+        mine = mine.with_name(f"{agent_home(name).name}-{taken}")
     os.environ["COLLAB_HOME"] = str(mine)
     ok(f"{lock.name} is using this repo's {c(base.name, '1')}"
        f" — yours is {c(mine.name, '1')}")
     print(dim(f"       the lock says: {lock.describe()}"))
+    if lock.name == name:
+        print(dim("       same name, but it was claimed from another agent's"
+                  " process, so it is not yours"))
     print(dim("       same checkout and same files; only the session state"
               " is separate"))
     return None

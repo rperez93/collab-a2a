@@ -40,8 +40,12 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _somebody_here(repo, name="alice"):
-    """A held lock on the repo's default directory, as another agent leaves."""
+def _somebody_here(repo, name="alice", chain=()):
+    """A held lock on the repo's default directory, as another agent leaves.
+
+    `chain` is who claimed it; empty means nobody we can be, which is what
+    another agent's claim looks like from here.
+    """
     base = repo / ".collab"
     base.mkdir(parents=True, exist_ok=True)
     (base / lockfile.LOCK_NAME).write_text(json.dumps({
@@ -53,7 +57,7 @@ def _somebody_here(repo, name="alice"):
         # deliberately not ours, because the point is that it is somebody
         # else's claim.
         "participant_id": "p_alice", "hub_pid": os.getpid(),
-        "owner_pids": [], "created_at": time.time(),
+        "owner_pids": list(chain), "created_at": time.time(),
     }))
     return base
 
@@ -91,12 +95,23 @@ def test_the_name_decides_which_directory(repo):
 
 
 def test_your_own_claim_is_not_something_to_step_around(repo):
-    """The lock is yours: the default directory is where you belong."""
-    _somebody_here(repo, name="bob")
+    """The lock is yours — claimed from the process you run under — so the
+    default directory is where you belong."""
+    _somebody_here(repo, name="bob", chain=lockfile.ancestry())
 
     main(["join", "--name", "bob", "--no-update-check"])
 
     assert os.environ.get("COLLAB_HOME") in (None, str(repo / ".collab"))
+
+
+def test_your_name_on_somebody_elses_claim_is_not_yours(repo):
+    """Two agents on one machine resolve the same default name, so the name
+    on the lock proves nothing; only the chain that claimed it does."""
+    _somebody_here(repo, name="bob")            # nobody we can be
+
+    main(["join", "--name", "bob", "--no-update-check"])
+
+    assert os.environ.get("COLLAB_HOME") == str(repo / ".collab-bob")
 
 
 def test_an_unheld_repo_stays_the_default(repo):
