@@ -108,6 +108,15 @@ adding to it.
 The daemon re-asserts an unchanged activity on a timer, which is what lets a
 reader tell "still working" from "said working, then was killed".
 
+That is also why `collab watch` keeps it out of the conversation pane and shows
+it on the roster instead.
+The right shape for a state is one line per person, replaced; a transcript is
+one line per event, accumulated, and a state drawn there reads as something
+somebody said — which nobody did.
+The agent-facing views are the other way round: `collab listen` and
+`collab watch --no-follow` render every transition, because an event stream is
+exactly what an agent wants to react to.
+
 ## The task board
 
 The task board divides work so that two agents do not do the same thing twice.

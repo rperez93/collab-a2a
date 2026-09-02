@@ -39,6 +39,22 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 BUSY_TIMEOUT_MS = 1000
 
 
+def _without(kinds: tuple[str, ...]) -> tuple[str, list[Any]]:
+    """A ``kind NOT IN (…)`` clause, or nothing when nothing is excluded.
+
+    IN THE QUERY AND NOT AFTER IT, which is the whole point of taking the kinds
+    this far down. A reader that fetched fifty rows and then dropped the ones it
+    does not show ends up with fewer than fifty; the same subtraction applied to
+    a COUNT gives a number of events that will never appear on screen, which is
+    how a pane comes to say «3 new below» and then show nothing at all when you
+    press End. What the caller does not draw must be out of the page, out of the
+    limit and out of the count.
+    """
+    if not kinds:
+        return "", []
+    return f" AND kind NOT IN ({','.join('?' * len(kinds))})", list(kinds)
+
+
 class Inbox:
     def __init__(self, directory: Path) -> None:
         self.dir = Path(directory)
@@ -281,61 +297,79 @@ class Inbox:
                 self._db.commit()
         return [Envelope.from_dict(json.loads(r["payload"])) for r in rows]
 
-    def all_events(self, limit: int = 100) -> list[Envelope]:
+    def all_events(self, limit: int = 100, *,
+                   exclude: tuple[str, ...] = ()) -> list[Envelope]:
         """The last ``limit`` events, or every one of them when it is 0.
 
         SQLite reads a negative LIMIT as no limit at all, which is how «show me
         the whole conversation» is said without building the query twice.
         """
+        clause, extra = _without(exclude)
         with self._lock:
             rows = self._db.execute(
-                "SELECT payload FROM inbox ORDER BY seq DESC LIMIT ?",
-                (limit if limit > 0 else -1,),
+                f"SELECT payload FROM inbox WHERE 1=1{clause} "
+                "ORDER BY seq DESC LIMIT ?",
+                (*extra, limit if limit > 0 else -1),
             ).fetchall()
         return [Envelope.from_dict(json.loads(r["payload"])) for r in reversed(rows)]
 
-    def before(self, seq: int, limit: int = 200) -> list[Envelope]:
+    def before(self, seq: int, limit: int = 200, *,
+               exclude: tuple[str, ...] = ()) -> list[Envelope]:
         """The ``limit`` events immediately before ``seq``, oldest first.
 
         What the viewer reaches for when somebody scrolls off the top of what
         it opened with: the log is complete on disk, so running out of screen
         is not the same as running out of conversation.
         """
+        clause, extra = _without(exclude)
         with self._lock:
             rows = self._db.execute(
-                "SELECT payload FROM inbox WHERE seq < ? ORDER BY seq DESC LIMIT ?",
-                (seq, limit if limit > 0 else -1),
+                f"SELECT payload FROM inbox WHERE seq < ?{clause} "
+                "ORDER BY seq DESC LIMIT ?",
+                (seq, *extra, limit if limit > 0 else -1),
             ).fetchall()
         return [Envelope.from_dict(json.loads(r["payload"])) for r in reversed(rows)]
 
-    def after(self, seq: int, limit: int = 200) -> list[Envelope]:
+    def after(self, seq: int, limit: int = 200, *,
+              exclude: tuple[str, ...] = ()) -> list[Envelope]:
         """The ``limit`` events immediately after ``seq``, oldest first."""
+        clause, extra = _without(exclude)
         with self._lock:
             rows = self._db.execute(
-                "SELECT payload FROM inbox WHERE seq > ? ORDER BY seq LIMIT ?",
-                (seq, limit if limit > 0 else -1),
+                f"SELECT payload FROM inbox WHERE seq > ?{clause} "
+                "ORDER BY seq LIMIT ?",
+                (seq, *extra, limit if limit > 0 else -1),
             ).fetchall()
         return [Envelope.from_dict(json.loads(r["payload"])) for r in rows]
 
-    def first(self, limit: int = 50) -> list[Envelope]:
+    def first(self, limit: int = 50, *,
+              exclude: tuple[str, ...] = ()) -> list[Envelope]:
         """The oldest ``limit`` events: the beginning of the conversation."""
+        clause, extra = _without(exclude)
         with self._lock:
             rows = self._db.execute(
-                "SELECT payload FROM inbox ORDER BY seq LIMIT ?",
-                (limit if limit > 0 else -1,),
+                f"SELECT payload FROM inbox WHERE 1=1{clause} ORDER BY seq LIMIT ?",
+                (*extra, limit if limit > 0 else -1),
             ).fetchall()
         return [Envelope.from_dict(json.loads(r["payload"])) for r in rows]
 
-    def count_after(self, seq: int) -> int:
+    def count_after(self, seq: int, *, exclude: tuple[str, ...] = ()) -> int:
         """How many events are newer than ``seq``.
 
         A count and not a fetch: the viewer holds a window of the conversation
         and still has to say how much is below it, which is the number and not
         the messages.
+
+        ``exclude`` has to match whatever the caller is going to SHOW. The
+        viewer counts with this to say «N new below», and a count taken over a
+        wider set than the pane draws is a promise of messages that are not
+        there.
         """
+        clause, extra = _without(exclude)
         with self._lock:
             row = self._db.execute(
-                "SELECT COUNT(*) AS c FROM inbox WHERE seq > ?", (seq,)
+                f"SELECT COUNT(*) AS c FROM inbox WHERE seq > ?{clause}",
+                (seq, *extra),
             ).fetchone()
         return int(row["c"])
 

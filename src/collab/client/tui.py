@@ -32,6 +32,7 @@ from ..config import SessionProfile
 from ..protocol import (
     Envelope,
     local_clock,
+    KIND_ACTIVITY,
     KIND_CHAT,
     KIND_FILE,
     KIND_HELLO,
@@ -72,6 +73,34 @@ CHAT_KEYS = ("wheel/tab: pane · ↑↓ pgup/pgdn: scroll · [ ]: roster · "
 CHAT_KEYS_SHORT = "End/G: newest · tab: pane · q: quit"
 ROSTER_KEYS = "wheel · ↑↓ pgup/pgdn: scroll · Home/End: top/end · q: quit"
 ROSTER_KEYS_SHORT = "Home/End: top/end · q: quit"
+
+#: KINDS THAT ARE STATE, NOT CONVERSATION.
+#:
+#: `collab working` and `collab idle` publish KIND_ACTIVITY to the hub and it
+#: reaches everybody, exactly like a message — but it is not one. It is this
+#: agent's state, and the answer to «what is bob doing» is whatever the LAST
+#: one said, not the list of every one he has ever sent.
+#:
+#: The conversation pane had no case for it, so it fell through to the branch
+#: that prints `env.text or str(env.body)`. That landed two ways, and the
+#: quieter one was the worse: the hub copies `what` into the envelope's `text`,
+#: so `collab working "the token refresh"` drew a perfectly ORDINARY BUBBLE
+#: reading «the token refresh» over bob's name — indistinguishable from bob
+#: having said it. Only `collab idle` with no note, where `text` is empty, fell
+#: all the way through to `str(env.body)` and drew a raw Python dict. A dict on
+#: screen is obviously broken and somebody fixes it; a plausible sentence
+#: attributed to a colleague is the one that survives.
+#:
+#: An agent that says what it is working on, which is the thing this project
+#: asks agents to do constantly, was spamming the transcript every human reads.
+#:
+#: Nothing is lost by dropping them here: the roster pane above shows each
+#: participant's current activity, live, which is the right shape for a state —
+#: one line per person, replaced, rather than one line per change, accumulated.
+#: `collab listen` and `collab watch --no-follow` still render them, with the
+#: `◉` mark and `activity.describe`, because an agent's event stream genuinely
+#: wants each transition.
+NOT_CONVERSATION = (KIND_ACTIVITY,)
 
 #: HOW MANY MESSAGES THE PANE HOLDS AT ONCE, and how many it opens with.
 #:
@@ -656,7 +685,8 @@ class Model:
         redraw. Opening on what is on screen and reaching back for the rest is
         the difference between a pane that appears and one that arrives.
         """
-        self.events = self.inbox.all_events(limit=min(limit or WINDOW, WINDOW))
+        self.events = self.inbox.all_events(limit=min(limit or WINDOW, WINDOW),
+                                            exclude=NOT_CONVERSATION)
         self._older = None
         self._sync_seen()
         self.refresh_side()
@@ -704,7 +734,7 @@ class Model:
         if not self.events or not self.more_above():
             return 0
         first = int(getattr(self.events[0], "seq", 0) or 0)
-        older = self.inbox.before(first, limit=count)
+        older = self.inbox.before(first, limit=count, exclude=NOT_CONVERSATION)
         self._older = None
         if not older:
             return 0
@@ -717,7 +747,7 @@ class Model:
         if not self.events or not self.pending():
             return 0
         last = int(getattr(self.events[-1], "seq", 0) or 0)
-        newer = self.inbox.after(last, limit=count)
+        newer = self.inbox.after(last, limit=count, exclude=NOT_CONVERSATION)
         if not newer:
             return 0
         self.events.extend(newer)
@@ -726,13 +756,13 @@ class Model:
 
     def load_tail(self) -> None:
         """Back to the live end, however far away it is."""
-        self.events = self.inbox.all_events(limit=WINDOW)
+        self.events = self.inbox.all_events(limit=WINDOW, exclude=NOT_CONVERSATION)
         self._older = None
         self._sync_seen()
 
     def load_start(self) -> None:
         """To the beginning, in one read rather than a page at a time."""
-        self.events = self.inbox.first(limit=WINDOW)
+        self.events = self.inbox.first(limit=WINDOW, exclude=NOT_CONVERSATION)
         self._older = False
 
     def pending(self) -> int:
@@ -746,7 +776,7 @@ class Model:
         if not self.events:
             return 0
         last = int(getattr(self.events[-1], "seq", 0) or 0)
-        return self.inbox.count_after(last) if last else 0
+        return self.inbox.count_after(last, exclude=NOT_CONVERSATION) if last else 0
 
     def more_above(self) -> bool:
         """Whether anything is left further back.
@@ -852,10 +882,18 @@ class Model:
                     if not line:
                         continue
                     try:
-                        self.events.append(Envelope.from_dict(json.loads(line)))
-                        added += 1
+                        env = Envelope.from_dict(json.loads(line))
                     except ValueError:
                         continue
+                    # The tail is read from the log FILE rather than through
+                    # the queries above, so it needs the same rule applied by
+                    # hand: without it a `collab working` landing while you
+                    # watch put a raw state dict on screen, even though every
+                    # other way into this list filters them out.
+                    if env.kind in NOT_CONVERSATION:
+                        continue
+                    self.events.append(env)
+                    added += 1
                 self._seen = fh.tell()
         except OSError:
             return 0
