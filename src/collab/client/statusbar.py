@@ -33,24 +33,33 @@ from __future__ import annotations
 import subprocess
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
+from .. import __version__
 from .. import batch as batch_progress
+from ..config import candidate_homes
 from ..protocol import scrub
 from ..stats import quota_summary
 
-#: The segments this module knows how to build, in the order they are drawn
-#: when nobody has said otherwise, and the order they are given up in when the
-#: pane is too narrow — from the right, so the rightmost goes first.
+#: The segments this module draws on the conversation's row when nobody has
+#: said otherwise, in the order they are drawn and the order they are given up
+#: in when the pane is too narrow — from the right, so the rightmost goes first.
 #:
 #: The order is a ranking of what a reader loses least by losing. The keys are
 #: the same six words every session and are learnt once, so they go first. The
 #: user's command is next: they asked for it, but they asked for it knowing
 #: what it was. Their own quota outranks both — it is the figure they would
-#: otherwise go hunting for in the roster. The batch survives longest because
-#: it is the only figure on the row that is SHARED: two agents steering by one
-#: number stop sharing it the moment one of their panes is narrow.
-DEFAULT_SEGMENTS = ("batch", "stats", "command", "keys")
+#: otherwise go hunting for in the roster.
+#:
+#: THE BATCH IS NOT HERE BY DEFAULT, and it was. It is on the roster row a few
+#: lines up, where it belongs — that row speaks for the session and the batch
+#: is the session's figure — and on the host agent's own status line, so on
+#: this row it was the third drawing of one number on a screen that had two.
+#: It stays a segment a reader can ask for: `collab config watch_status_segments
+#: batch,stats,keys` puts it back, and when it is on, it is the last to go for
+#: width, for the reason the ranking gives it.
+DEFAULT_SEGMENTS = ("stats", "command", "keys")
 
 #: The ones this module builds from what it is given. `command` is the user's
 #: and is not native to anything.
@@ -148,9 +157,14 @@ def messages_segment(figures: Any, *, now: float | None = None) -> str:
 
     Three refusals, and they are the same three the batch figure makes:
 
-    * Nothing to report is nothing at all, never `0 messages`. A false zero
-      reads as «nobody has said anything», which is a claim, and an empty
-      segment is not.
+    * No count is nothing at all, never `0 messages`. A zero the hub did not
+      give — a snapshot with no count on it, a daemon from before the field
+      existed, a figure that would not parse — is a claim that nobody has said
+      anything, and an empty segment is not. A zero the hub DID give is drawn:
+      `0 messages` is what the hub counted in a fresh session, and the row that
+      hid it left the host of a new session looking at no count at all and
+      asking why the feature did not work. The line between the two is whether
+      `total` parsed, not whether it is truthy.
     * A remembered count is marked with its age instead of drawn plainly.
       `write_status` keeps writing every three seconds after the hub has gone
       quiet, so the alternative is a figure that freezes while looking live —
@@ -162,13 +176,112 @@ def messages_segment(figures: Any, *, now: float | None = None) -> str:
     """
     if not isinstance(figures, dict):
         return ""
-    total = batch_progress.count_of(figures, "total")
-    if not total:
+    total = _counted(figures.get("total"))
+    if total is None:
         return ""
     if batch_progress.is_stale(figures, now=now):
         seen = batch_progress.age(figures, now=now)
         return f"messages ? {seen} old" if seen else "messages ?"
     return f"{total} message" + ("" if total == 1 else "s")
+
+
+def _counted(raw: Any) -> int | None:
+    """A count the hub gave, or None for anything that is not one.
+
+    Not `batch.count_of`, whose answer to junk is 0 — right for a bar, where a
+    zero draws nothing, and wrong here, where a zero is now drawn: `"lots"`
+    off a hostile hub would read as «0 messages». Ints only, and not bools,
+    which are ints to `isinstance`; a negative is not a count of anything.
+    """
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return None
+    return raw if raw >= 0 else None
+
+
+def who(name: str, host: str, *, is_host: Any, where: str = "") -> str:
+    """Who this reader is and who the host is, for a title bar or a status line.
+
+    ONE RULE FOR BOTH SURFACES, and the rule is `is_host`, not a comparison of
+    names. Both surfaces used to decide host-ness by «my name is the host's
+    name», and two agents on one machine resolve the same default display name
+    — the login — so the guest was labelled `(host)` and two windows in two
+    terminals read identically. `status.json` and the profile carry the fact;
+    the name clash is exactly the case the fact exists to decide, so it renders
+    distinctly: `perez (guest) → perez` beside `perez (host)`.
+
+    `is_host=None` is a file from a daemon that never wrote the field, and
+    there the old rule is the only one available.
+
+    `where` is the state directory's name, and it is appended when given. It is
+    given only when the checkout holds more than one agent's claim — see
+    `state_dir_label` — because that is the case where two lines that look
+    alike are about two different agents, and the directory is the one thing
+    about them guaranteed to differ.
+    """
+    if is_host is None:
+        is_host = name == host
+    if is_host:
+        text = f"{name} (host)"
+    elif name == host:
+        text = f"{name} (guest) → {host}"
+    else:
+        text = f"{name} → {host}"
+    return f"{text} [{where}]" if where else text
+
+
+def _claim_held(home: Path) -> bool:
+    """Whether a live agent holds `home`. Split out so a test can say who does."""
+    from .. import lockfile
+
+    lock = lockfile.read(home)
+    return lock is not None and lock.held
+
+
+def state_dir_label(home: str, cwd: Path | None = None) -> str:
+    """The name of this agent's state directory, when it is worth saying.
+
+    Empty for the ordinary case of one agent in the checkout. When the checkout
+    holds two live claims — `.collab` and `.collab-bob`, two agents sharing one
+    repo — every surface that names this agent gets the directory as well, so
+    a status line in the wrong terminal can be recognised as the wrong one: the
+    reader sees `[.collab]` in a window they started as `.collab-bob` and knows
+    the line is not about them. Nothing else about two same-machine agents is
+    guaranteed to differ.
+
+    Never raises: this runs on the draw path of a curses program and in a
+    status line command that must always exit 0.
+    """
+    try:
+        claims = [h for h in candidate_homes(cwd) if _claim_held(h)]
+    except Exception:                                         # noqa: BLE001
+        return ""
+    if len(claims) < 2:
+        return ""
+    return Path(home).name if home else ""
+
+
+def daemon_note(status: Any) -> str:
+    """Names a daemon running a different collab than the one drawing.
+
+    `collab update` with sessions open leaves their daemons on the old code:
+    the process keeps running and keeps writing `status.json` every three
+    seconds, without whatever fields the new version draws. To the viewer that
+    is a file with segments missing, and it drew fewer of them in silence — a
+    host who had just upgraded spent the afternoon with no message count and
+    took it for the new version being broken. The file has always carried the
+    writer's version; comparing it to our own is how the silence becomes a
+    sentence.
+
+    Nothing when the versions agree, and nothing when the file names none — a
+    file with no version is from before the field, and saying `daemon v? —
+    restart it` about it would be a guess dressed as a reading.
+    """
+    if not isinstance(status, dict):
+        return ""
+    version = str(status.get("version") or "")
+    if not version or version == __version__:
+        return ""
+    return f"daemon v{version} — restart it"
 
 
 def compose(*, notice: str = "", keys: Any = "", batch: Any = None,

@@ -1363,14 +1363,32 @@ A compact segment showing whether you are connected, **your name, the host, and
 how many others are connected**:
 
 ```
-●  collab  v1.2.0  bob → alice  +3  ✉2   green  — live, 3 others, 2 unread
+●  collab  v1.2.0  bob → alice  +3  ✉ 2   green  — live, 3 others, 2 unread messages
 ◐  collab  v1.2.0  bob → alice  reconnecting…   yellow — dropped, backing off
 ○  collab  v1.2.0  bob → alice  offline         red    — disconnected or removed
 ●  collab  v1.2.0  alice (host)  +2             the host's own view
 ●  collab  v1.2.0  bob → alice  +3  ↑update     a newer collab is available
+●  collab  daemon v1.1.0 — restart it  bob → alice  +3    the daemon predates this collab
 ```
 
 It prints nothing at all when there is no session.
+
+The envelope counts **messages** — things somebody said — and not joins,
+presence or file notices, which the daemon counts separately. `(host)` comes
+from the session's record of who hosts it, never from the names matching: two
+agents on one machine usually share a login and so a display name, and a guest
+called `perez` in `perez`'s session reads `perez (guest) → perez`. When two
+agents share one checkout, both lines also name their state directory —
+`perez (host) [.collab]` beside `perez (guest) → perez [.collab-bob]` — so a
+line in the wrong terminal can be recognised as the wrong one.
+
+`daemon v1.1.0 — restart it` means the file the line reads is written by a
+daemon on other code than the collab drawing it: `collab update` with a session
+open leaves that session's daemon running the old version, and whatever the new
+version draws that the old one never wrote is simply missing. `collab daemon
+stop` and `collab daemon start` in that repo puts it on the new code; a host
+also has a hub on the old code, and `collab kill` then `collab host --resume`
+replaces both.
 
 ```bash
 collab statusline install                    # every host detected here
@@ -1489,7 +1507,7 @@ collab config --json              # the same table, for an agent to read
 | `stats_command` | a command printing your usage as JSON, re-run on a timer | `collab stats --source <cmd>` | none |
 | `stats_interval` | how often to run it, in seconds | `collab stats --interval <n>` | `120` |
 | `watch_status` | show the viewer's bottom status row | — | `on` |
-| `watch_status_segments` | what that row carries, in order | — | `batch,stats,command,keys` |
+| `watch_status_segments` | what that row carries, in order | — | `stats,command,keys` |
 | `watch_status_command` | a command of your own for that row | — | none |
 | `watch_status_interval` | how often to run it, in seconds | — | `30` |
 | `watch_status_roster` | show the roster panel's own row of session-wide figures | — | `on` |
@@ -1523,10 +1541,12 @@ transfers. It counts a direct message between two other people too, because it
 says how much has been said in here and not how much you were shown.
 
 The row says its own age rather than freezing — `batch ? 4m old · messages ?
-4m old` once the hub has stopped answering — and it draws nothing at all rather
-than a `0`. When there is nothing true to say it gives its line back to the
-roster, and on a short pane it gives it up rather than leaving half a
-participant.
+4m old` once the hub has stopped answering. A count the hub gave is drawn even
+when it is `0 messages`: that is what a fresh session holds. A count the hub
+did *not* give — no snapshot yet, a daemon from before the figure existed, a
+figure that would not parse — draws nothing at all rather than a `0` it made
+up. When there is nothing true to say it gives its line back to the roster, and
+on a short pane it gives it up rather than leaving half a participant.
 
 ```bash
 collab config watch_status_roster off                    # give the row back
@@ -1543,19 +1563,24 @@ The last line of `collab watch` carries, left to right, whichever of these
 there is something to say about:
 
 ```
- ⏸ 4 new below — End (or G) jumps to the newest · batch ███░░░ 60% 6/10 · quota 5h 88% · $3.10 · wheel/tab: pane · …
+ ⏸ 4 new below — End (or G) jumps to the newest · quota 5h 88% · $3.10 · wheel/tab: pane · …
 ```
 
 The **scrolled-back notice** is not a segment and is never dropped: it is the
-only thing on the row that says the view is not live. After it come `batch`,
-the share of the shared batch the hub counts as done; `stats`, your own quota
-and spend; `command`, the first line of whatever `watch_status_command` prints;
-and `keys`, the legend. Narrow the pane and they are given up from the right,
-so the batch — the figure both agents are steering by — is the last to go.
+only thing on the row that says the view is not live. After it come `stats`,
+your own quota and spend; `command`, the first line of whatever
+`watch_status_command` prints; and `keys`, the legend. Narrow the pane and they
+are given up from the right.
+
+The batch is not on this row by default: the roster's row above carries it for
+the session, and the host agent's status line carries it again. A fourth
+segment, `batch`, puts it here too for anyone who wants it, and when it is on
+it is the last thing given up for width — it is the figure both agents are
+steering by.
 
 ```bash
 collab config watch_status_command "git rev-parse --abbrev-ref HEAD"
-collab config watch_status_segments batch,keys      # drop or reorder
+collab config watch_status_segments batch,stats,keys   # add the batch, drop the command
 ```
 
 The command runs on a timer in a thread of its own, never on the redraw path,

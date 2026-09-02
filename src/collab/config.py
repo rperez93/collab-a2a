@@ -405,10 +405,16 @@ def save_watch_settings(*, layout: str | None = None, roster_size: int | None = 
     return watch_settings()
 
 
-#: What the viewer's bottom row can carry, and the order it carries it in.
+#: What the viewer's bottom row CAN carry, and the order it carries it in.
 #: `command` is the user's own; the rest are described in client.statusbar,
 #: which is also where the order is argued for.
 WATCH_STATUS_SEGMENTS = ("batch", "stats", "command", "keys")
+#: And what it carries when nobody has said otherwise. `batch` is permitted
+#: and not default: the roster row below carries it for the session and the
+#: host agent's status line carries it again, so on this row it was a third
+#: copy of one figure. `collab config watch_status_segments batch,stats,keys`
+#: puts it back for anyone who wants all three.
+DEFAULT_WATCH_STATUS_SEGMENTS = ("stats", "command", "keys")
 #: What the ROSTER panel's bottom row can carry. A shorter list than the one
 #: above, and the omissions are the design rather than an oversight: this row
 #: speaks for the session, so every figure on it must be one the hub counted
@@ -455,7 +461,7 @@ def watch_status_settings() -> dict[str, Any]:
                 seen.append(name)
         segments = tuple(seen)
     else:
-        segments = WATCH_STATUS_SEGMENTS
+        segments = DEFAULT_WATCH_STATUS_SEGMENTS
     try:
         interval = int(cfg.get("watch_status_interval")
                        or DEFAULT_WATCH_STATUS_INTERVAL)
@@ -1008,7 +1014,7 @@ def settings() -> tuple[Setting, ...]:
                 lambda: watch_status_settings()["enabled"],
                 lambda v: save_watch_status(enabled=v)),
         Setting("watch_status_segments", "what that row carries, in order",
-                list(WATCH_STATUS_SEGMENTS), _as_list,
+                list(DEFAULT_WATCH_STATUS_SEGMENTS), _as_list,
                 lambda: list(watch_status_settings()["segments"]),
                 _write_segments),
         Setting("watch_status_command", "a command of your own for that row; "

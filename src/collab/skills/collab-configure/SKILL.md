@@ -90,20 +90,22 @@ figures; they belong on the row below and nowhere else.
 Its last line carries, left to right, whichever of these exist:
 
 ```
- ⏸ 4 new below — End (or G) jumps to the newest · batch ███░░░ 60% 6/10 · quota 5h 88% · $3.10 · wheel/tab: pane · …
+ ⏸ 4 new below — End (or G) jumps to the newest · quota 5h 88% · $3.10 · wheel/tab: pane · …
 ```
 
 - **the scrolled-back notice** — not a setting and never dropped. It is the
   only thing on the row saying the view is not live.
-- `batch` — how much of the shared batch is done, counted by the hub. Blank
-  when there is no batch, and `batch ? 4m old` rather than a remembered number
-  when the figures could not be refreshed.
 - `stats` — this agent's own quota and spend.
 - `command` — the first line of `watch_status_command`, if set.
 - `keys` — the key legend.
+- `batch` — how much of the shared batch is done, counted by the hub. Not on
+  the row by default, because the roster's row and the host agent's status
+  line both carry it already; `collab config watch_status_segments
+  batch,stats,keys` adds it. Blank when there is no batch, and `batch ? 4m old`
+  rather than a remembered number when the figures could not be refreshed.
 
-Narrow the pane and they are given up from the right, so the shared batch
-figure is the last thing to go.
+Narrow the pane and they are given up from the right; with the batch on, the
+shared figure is the last thing to go.
 
 To put something of the user's own on it:
 
@@ -117,10 +119,10 @@ nothing at all if it fails or times out. Keep it **cheap and short**: it runs
 every 30 seconds for as long as a pane is open, and only its first line is
 used. A command that needs the network is a poor choice.
 
-To drop a segment or reorder them:
+To drop a segment, add the batch, or reorder them:
 
 ```bash
-collab config watch_status_segments batch,keys
+collab config watch_status_segments batch,stats,keys
 ```
 
 

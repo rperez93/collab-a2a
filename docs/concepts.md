@@ -358,28 +358,40 @@ The staleness rule is the batch's, unchanged: `write_status` keeps writing every
 three seconds after the hub has gone quiet, so a count with no recent fetch
 behind it says its age — `messages ? 4m old` — rather than freezing while
 looking live.
-A count of zero is drawn as nothing at all, because a false zero reads as
-«nobody has said anything» and an absent segment does not.
+A zero the hub counted is drawn — `0 messages` is what a fresh session holds —
+but a zero the hub did not give is not: a snapshot with no count on it, a daemon
+from before the figure existed, a figure that would not parse, all draw nothing
+at all, because a made-up zero reads as «nobody has said anything» and an absent
+segment does not. The line between the two is whether the count parsed, not
+whether it is truthy.
+
+A daemon from before the figure existed is the common way to meet that absence:
+`collab update` with a session open leaves its daemon running the old code and
+writing `status.json` without the field. The file carries the daemon's version,
+and when it differs from the collab drawing the pane, the title bar says so —
+`daemon v1.22.2 — restart it` — instead of drawing fewer segments in silence.
 
 ### The viewer's status row
 
 The conversation's row is the reader's own, and which segments it carries is
 `watch_status_segments`:
 
-- `batch` — the share of the shared batch the hub counts as done, refusing to
-  draw a bar from figures it could not refresh, exactly as the host agent's
-  status line does.
 - `stats` — your own quota and spend, which the roster rows above show for
   everybody but which you would otherwise have to scroll to find.
 - `command` — the first line of `watch_status_command`, run on a timer in a
   background thread and never on the redraw path.
 - `keys` — the key legend.
+- `batch` — the share of the shared batch the hub counts as done, refusing to
+  draw a bar from figures it could not refresh, exactly as the host agent's
+  status line does. Permitted and not default: the roster row above and the
+  host agent's status line both carry it already, and on this row it was a
+  third drawing of one number.
 
 The scrolled-back notice is not a segment.
 It is the only thing on that row that says the view is not live, so it goes
 first and is never given up for width; the segments are given up from the
-right until what is left fits, and the batch figure is the last to go because
-it is the one number two agents are both steering by.
+right until what is left fits, and the batch figure, when it is on, is the last
+to go because it is the one number two agents are both steering by.
 
 Both rows are composed and fitted by the same code in `collab.client.statusbar`
 and painted by the same method, so there is one batch renderer rather than two

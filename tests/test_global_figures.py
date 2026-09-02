@@ -356,3 +356,26 @@ def test_a_status_file_from_an_older_collab_costs_the_segment_only(
     daemon.paths.status.write_text(body)
     status = read_status(daemon.profile)
     assert sb.messages_segment(status.get("messages")) == ""
+
+
+
+@pytest.mark.parametrize("body", ['{"version": "1.22.2"}',
+                                  '{"version": "1.22.2", "messages": null}'])
+def test_a_status_file_from_an_older_collab_is_named_as_such(body, tmp_path):
+    """The segment is lost, and the reader is told why.
+
+    `collab update` with a session running leaves its daemon on the old code:
+    the process keeps writing `status.json`, without the fields the viewer now
+    draws, and the missing row looked like the new version being broken. The
+    file carries the daemon's version, so the viewer can compare it to its own
+    and say what it is reading instead of silently drawing less.
+    """
+    from collab import __version__
+
+    daemon = _bare_daemon(tmp_path)
+    daemon.paths.status.write_text(body)
+    status = read_status(daemon.profile)
+    assert sb.messages_segment(status.get("messages")) == ""
+    assert sb.daemon_note(status) == "daemon v1.22.2 — restart it"
+    assert sb.daemon_note({"version": __version__}) == ""
+    assert sb.daemon_note({}) == "", "no version at all is no claim"

@@ -33,12 +33,19 @@ def _fit(parts, width):
     return sb.fit(parts, width, tui._w, tui._clip)
 
 
+#: Every segment the row can carry, in the order they are given up. The batch
+#: is no longer on the row by default — the roster row and the host's status
+#: line carry it — so the tests about the RANKING ask for the full list, which
+#: is the ranking they are about.
+FULL = config.WATCH_STATUS_SEGMENTS
+
+
 # --- what is on the row, and in what order ----------------------------------
 
 def test_everything_that_has_something_to_say_is_on_it():
     parts = sb.compose(notice="⏸ 4 new below", keys="q: quit",
                        batch={"done": 6, "total": 10, "fetched_at": time.time()},
-                       stats={"cost_usd": 3.1}, command="main")
+                       stats={"cost_usd": 3.1}, command="main", segments=FULL)
     assert parts[0] == "⏸ 4 new below", "the notice comes first"
     assert [p.split()[0] for p in parts[1:]] == ["batch", "$3.10", "main", "q:"]
 
@@ -60,7 +67,7 @@ def test_a_reordered_list_is_honoured():
 def _full():
     return sb.compose(notice="⏸ 4 new below", keys="q: quit · G: newest",
                       batch={"done": 6, "total": 10, "fetched_at": time.time()},
-                      stats={"cost_usd": 3.1}, command="main")
+                      stats={"cost_usd": 3.1}, command="main", segments=FULL)
 
 
 def test_the_keys_are_the_first_thing_given_up():
@@ -77,7 +84,8 @@ def test_a_segment_is_asked_for_a_shorter_form_before_it_is_dropped():
     keys vanished entirely, and the legend is how anybody learns the viewer.
     """
     parts = sb.compose(keys=("the whole legend, at some length", "q: quit"),
-                       batch={"done": 6, "total": 10, "fetched_at": time.time()})
+                       batch={"done": 6, "total": 10, "fetched_at": time.time()},
+                       segments=FULL)
     assert "the whole legend" in _fit(parts, 80)
     narrowed = _fit(parts, 40)
     assert "q: quit" in narrowed and "6/10" in narrowed
@@ -85,7 +93,8 @@ def test_a_segment_is_asked_for_a_shorter_form_before_it_is_dropped():
 
 def test_a_shorter_form_that_still_does_not_fit_is_given_up_anyway():
     parts = sb.compose(keys=("the whole legend, at some length", "q: quit"),
-                       batch={"done": 6, "total": 10, "fetched_at": time.time()})
+                       batch={"done": 6, "total": 10, "fetched_at": time.time()},
+                       segments=FULL)
     line = _fit(parts, 26)
     assert "q: quit" not in line and "6/10" in line
 
@@ -296,7 +305,7 @@ def cfg(tmp_path, monkeypatch):
 def test_everything_is_on_by_default(cfg):
     settings = config.watch_status_settings()
     assert settings["enabled"] is True
-    assert settings["segments"] == config.WATCH_STATUS_SEGMENTS
+    assert settings["segments"] == config.DEFAULT_WATCH_STATUS_SEGMENTS
     assert settings["command"] == ""
     assert settings["interval"] == config.DEFAULT_WATCH_STATUS_INTERVAL
 
@@ -310,7 +319,7 @@ def test_a_segments_value_that_is_not_a_list_falls_back(cfg):
     """Read on the draw path of a curses program: a TypeError out of here is
     not an error message, it is a terminal left in a broken state."""
     cfg.write_text(json.dumps({"watch_status_segments": "batch"}))
-    assert config.watch_status_settings()["segments"] == config.WATCH_STATUS_SEGMENTS
+    assert config.watch_status_settings()["segments"] == config.DEFAULT_WATCH_STATUS_SEGMENTS
 
 
 def test_a_broken_interval_falls_back_and_a_zero_one_is_floored(cfg):
@@ -377,7 +386,11 @@ def _draw(viewer, win):
         pass                       # no real terminal; the text is what matters
 
 
-def test_the_bottom_row_carries_the_batch_and_your_spend(tmp_path, cfg):
+def test_the_bottom_row_carries_the_batch_when_asked_and_your_spend_regardless(
+        tmp_path, cfg):
+    """The batch left the default — the roster row and the host's status line
+    already carry it — but a reader who wants all three copies may have them."""
+    config.save_watch_status(segments=["batch", "stats", "keys"])
     viewer, win = _viewer(tmp_path, cfg), _Pane()
     _draw(viewer, win)
     assert "batch" in win.rows[29] and "6/10" in win.rows[29]
@@ -781,13 +794,6 @@ def test_a_stamp_in_the_future_is_not_a_fresh_one():
     assert "?" in sb.messages_segment({"total": 5, "fetched_at": time.time() + 3600})
 
 
-def test_nothing_said_yet_draws_nothing_rather_than_a_zero():
-    """«0 messages» is a claim; an absent segment is not, and the two are not
-    distinguishable from a count that failed to parse."""
-    assert sb.messages_segment({"total": 0, "fetched_at": time.time()}) == ""
-    assert sb.messages_segment({"fetched_at": time.time()}) == ""
-
-
 def test_a_count_that_is_not_a_count_does_not_take_the_row_with_it():
     """For a guest this arrived over the network from somebody else's hub."""
     for junk in ("lots", None, [1], float("nan")):
@@ -991,3 +997,53 @@ def test_the_chat_only_view_is_untouched(tmp_path, cfg):
 
     assert "128 messages" not in " ".join(win.rows.values())
     assert "$3.10" in win.rows[29]
+
+
+# --- the batch is on the roster row and the host's status line; not here too --
+
+def test_the_conversation_row_does_not_carry_the_batch_by_default(cfg):
+    """The roster row above it carries the batch, and so does the host agent's
+    status line: on this row it was the third copy of one figure, on a screen
+    that had two already. It stays a segment a reader can ask for."""
+    assert "batch" not in config.DEFAULT_WATCH_STATUS_SEGMENTS
+    assert "batch" not in config.watch_status_settings()["segments"]
+    assert "batch" not in sb.DEFAULT_SEGMENTS
+    assert "batch" in config.WATCH_STATUS_SEGMENTS, "still a segment one can add"
+
+
+def test_the_batch_can_be_put_back_on_the_conversation_row(cfg):
+    config.setting("watch_status_segments").write(["batch", "keys"])
+    assert config.watch_status_settings()["segments"] == ("batch", "keys")
+
+
+def test_the_readme_quotes_the_real_default(cfg):
+    """The settings table is what `collab config` prints, in prose."""
+    import re
+    from pathlib import Path
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+    row = re.search(r"^\| `watch_status_segments` \|.*\|\s*`([^`]+)`\s*\|$",
+                    readme, re.M)
+    assert row, "the README has lost its watch_status_segments row"
+    assert row.group(1) == ",".join(config.DEFAULT_WATCH_STATUS_SEGMENTS)
+
+
+def test_the_conversation_row_on_a_real_draw_carries_your_spend_and_not_the_batch(
+        tmp_path, cfg):
+    viewer, win = _viewer(tmp_path, cfg), _Pane()
+    _draw(viewer, win)
+    assert "$3.10" in win.rows[29]
+    assert "batch" not in win.rows[29]
+
+
+# --- zero is a count; nothing is not --------------------------------------------
+
+def test_a_hub_that_counted_zero_says_so_and_a_hub_that_never_answered_says_nothing():
+    """A fresh session has nothing said in it, and «0 messages» is that fact —
+    the hub counted the log and found it empty. What the row must not do is
+    print a zero it did not get: a figure that failed to parse, a snapshot with
+    no count on it, a daemon that predates the field. Those are absences, and an
+    absent segment is the honest drawing of an absence."""
+    assert sb.messages_segment({"total": 0, "fetched_at": time.time()}) \
+        == "0 messages"
+    assert sb.messages_segment({"fetched_at": time.time()}) == ""
+    assert sb.messages_segment({"total": None, "fetched_at": time.time()}) == ""

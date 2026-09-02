@@ -14,7 +14,8 @@ from __future__ import annotations
 import curses
 import random
 import subprocess
-import unicodedata
+
+from ..columns import clip as _columns_clip, width as _columns_width
 
 from ..config import (HEADER_SEPARATOR, default_color, fold_override,
                       parse_color, resolve_name,
@@ -1065,44 +1066,19 @@ def line_pair(line: str) -> int:
     return 0
 
 
-def _w(text: str) -> int:
-    """What it takes on screen, which is not the same as `len()`.
-
-    A kanji or an emoji takes TWO columns. Measured with `len()`, a bubble
-    containing `こんにちは` came out with the body twice as wide as its frame:
-    two different values for the same box. `east_asian_width` marks W and F as
-    wide, and emoji are handled by their ranges — without `wcwidth` installed
-    that part is an approximation, worth knowing before trusting the number.
-    """
-    width = 0
-    for c in text:
-        if unicodedata.east_asian_width(c) in ("W", "F"):
-            width += 2
-        elif 0x1F300 <= ord(c) <= 0x1FAFF or 0x2600 <= ord(c) <= 0x27BF:
-            width += 2
-        elif unicodedata.combining(c):
-            width += 0
-        else:
-            width += 1
-    return width
+#: What text takes on screen, which is not the same as `len()`. The measure
+#: and the cut live in `collab.columns` now, because the host agent's status
+#: line needs the same two and had grown its own count of CHARACTERS instead —
+#: see that module for what a kanji did to it. The names stay: every row in
+#: this file and a good many tests measure through them.
+_w = _columns_width
+_clip = _columns_clip
 
 
 def _pad(text: str, width: int) -> str:
     """Pad to `width` COLUMNS. `f"{x:<n}"` counts characters, which left the
     right-hand border out of line on anything written in kanji."""
     return text + " " * max(0, width - _w(text))
-
-
-def _clip(text: str, width: int) -> str:
-    """Cut to `width` columns, with « … » when there is more."""
-    if _w(text) <= width:
-        return text
-    out = ""
-    for c in text:
-        if _w(out + c) > max(1, width - 1):
-            break
-        out += c
-    return out + "…"
 
 
 def _wrap(text: str, width: int) -> list[str]:
@@ -1756,6 +1732,11 @@ class Tui:
         #: that command printed and runs it on a timer in a thread of its own;
         #: the draw never does more than read the string. See statusbar.
         self._command = statusbar.CommandSegment()
+        #: The state directory's name for the title bar, and when it was last
+        #: asked for. Asking costs a directory listing and a pid check per
+        #: claim, which is nothing once and something four times a second.
+        self._where_label = ""
+        self._where_at = 0.0
         #: Whether the bottom row exists at all, decided once per draw and read
         #: by the geometry: with the row off, the line it reserves belongs to
         #: the panes, and a viewer that hid the row but kept the gap would just
@@ -1945,9 +1926,14 @@ class Tui:
         state_pair = {"live": C_ONLINE, "reconnecting": C_WARN}.get(state, C_OFFLINE)
         title = m.title()
         left = f" {title} "
-        # The host is its own host; saying so twice reads like a mistake.
-        who = (f"{m.profile.name} (host)" if m.profile.name == m.profile.host_name
-               else f"{m.profile.name} → {m.profile.host_name}")
+        # WHO WE ARE IS `is_host`, NOT WHETHER OUR NAME IS THE HOST'S. Two
+        # agents on one machine resolve the same default display name, so the
+        # name comparison this used to be called the guest «(host)» and two
+        # viewers in two terminals read the same. One rule for this bar and
+        # the status line, in statusbar.who; the directory label is what tells
+        # two same-named agents apart when they share a checkout.
+        who = statusbar.who(m.profile.name, m.profile.host_name,
+                            is_host=m.profile.is_host, where=self._where())
         right = f" {who} "
         version = m.status.get("version") or ""
 
@@ -1956,9 +1942,18 @@ class Tui:
         win.addnstr(0, 0, left, max(width - 1, 0))
         win.attroff(curses.color_pair(C_TITLE) | curses.A_BOLD)
         tail = f"{right}"
-        if version:
+        if note := statusbar.daemon_note(m.status):
+            # The file we draw from is written by a daemon on OTHER code. Every
+            # field it never heard of is simply missing, and the pane drew the
+            # fewer segments in silence — an upgrade with a session open left
+            # its host with no message count and no explanation for a whole
+            # afternoon. Said here, where the version already was.
+            tail += f" {note} "
+        elif version:
             tail += f" v{version} "
-        win.addnstr(0, max(width - len(tail) - 1, 0), tail[:max(width - 1, 0)],
+        # Placed by COLUMNS: the tail holds a `→` or a `—`, and a name may be
+        # anything; `len()` put a kanji name one cell past the pane's edge.
+        win.addnstr(0, max(width - _w(tail) - 1, 0), _clip(tail, max(width - 1, 0)),
                     max(width - 1, 0), curses.color_pair(C_TITLE))
         badge = f" {state} "
         win.addnstr(1, 0, badge, max(width - 1, 0),
@@ -1991,10 +1986,12 @@ class Tui:
 
         # THE ROW IS TAKEN ONLY WHEN IT IS USED, and only where a whole
         # participant still fits after it. Reserved unconditionally, a session
-        # with nothing to say — no batch, nothing said yet, nobody fetched yet
-        # — would have cost the roster a blank line; and a roster is two rows
-        # per person, so taking one from a three-row pane leaves half a
-        # participant, which is worse than no figures at all.
+        # with nothing to say — no batch, no count fetched yet, a daemon from
+        # before the count existed — would have cost the roster a blank line;
+        # and a roster is two rows per person, so taking one from a three-row
+        # pane leaves half a participant, which is worse than no figures at all.
+        # (A hub that has counted zero HAS something to say — «0 messages» —
+        # and takes the row; see statusbar.messages_segment.)
         session = self._roster_bar() if self._roster_settings["enabled"] else []
         session_h = 1 if session and roster_h - 2 >= 2 else 0
         self.roster.rows = roster_h - 1 - session_h
@@ -2129,6 +2126,19 @@ class Tui:
             except curses.error:
                 pass
         self._gutters.append(Gutter(x=x, top=top, rows=rows, pane=pane))
+
+    def _where(self) -> str:
+        """The state directory's name, when two agents share this checkout.
+
+        Re-asked every few seconds rather than once: the second agent may join
+        after the pane was opened, and the label exists for the moment there
+        are two. See statusbar.state_dir_label for why it is otherwise empty.
+        """
+        now = time.time()
+        if now - self._where_at > 5.0:
+            self._where_label = statusbar.state_dir_label(self.model.profile.home)
+            self._where_at = now
+        return self._where_label
 
     def _hint(self, win, height: int, width: int,
               keys: tuple[str, str] = (CHAT_KEYS, CHAT_KEYS_SHORT),

@@ -15,11 +15,14 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .. import __version__
 from .. import batch as batch_progress
+from ..columns import width as _columns
 from ..config import SessionProfile, claimed_home
 from ..protocol import scrub
 from ..client.daemon import (DEAD_AFTER, STALE_AFTER, effective_state,
                              is_running, read_status)
+from ..client.statusbar import daemon_note, state_dir_label, who as _who
 
 RESET = "\033[0m"
 COLORS = {
@@ -129,6 +132,7 @@ def cwd_from_session_json(raw: str) -> Path | None:
 def render(status: dict[str, Any] | None = None, *, width: int | None = None,
            cwd: Path | None = None) -> str:
     """Build the segment.  Returns '' when there is nothing worth showing."""
+    where = ""
     if status is None:
         profile = SessionProfile.current(cwd)
         if profile is None:
@@ -142,6 +146,12 @@ def render(status: dict[str, Any] | None = None, *, width: int | None = None,
         status = read_status(profile)
         if not status:
             return ""
+        # Which agent's file this is, when the checkout holds more than one.
+        # `SessionProfile.current` answers with the repo's default directory
+        # when the process tree cannot prove which agent is asking, so in a
+        # two-agent checkout the guest's terminal can carry the host's line;
+        # naming the directory is what lets the reader notice.
+        where = state_dir_label(profile.home, cwd)
     if not status:
         return ""
 
@@ -153,12 +163,20 @@ def render(status: dict[str, Any] | None = None, *, width: int | None = None,
     name = scrub(str(status.get("name") or "?"))
     host = scrub(str(status.get("host") or "?"))
     others = int(status.get("others_connected") or 0)
-    unread = int(status.get("unread") or 0)
+    # THINGS SOMEBODY SAID, not things that happened. `unread` counts joins,
+    # presence and file notices too — the badge drew `✉5` over two messages
+    # and three arrivals, and a reader who opened the pane to answer found
+    # nothing to answer. `unread_messages` is the same inbox narrowed to chat;
+    # the daemon writes it for exactly this. Absent (an older daemon) means no
+    # badge rather than the wider figure under the same glyph.
+    unread = int(status.get("unread_messages") or 0)
 
     glyph = _paint(GLYPHS[state], state)
     label = _paint("collab", "label")
 
-    who = f"{name} → {host}" if name != host else f"{name} (host)"
+    # `is_host` decides host-ness, never a comparison of names — see
+    # statusbar.who for the two-agents-one-login case that rule exists for.
+    who = _who(name, host, is_host=status.get("is_host"), where=where)
 
     if state == "live":
         tail = _paint(f"+{others}", "dim") if others else _paint("alone", "dim")
@@ -168,11 +186,21 @@ def render(status: dict[str, Any] | None = None, *, width: int | None = None,
         tail = _paint("offline", "offline")
 
     parts = [glyph, label]
-    if version:
+    if note := daemon_note(status):
+        # A daemon on other code than this: it writes the file, we draw it, and
+        # whatever fields it never heard of are missing, silently, until it is
+        # restarted. The version is not decoration in that state.
+        parts.append(_paint(note, "reconnecting"))
+    elif version:
         parts.append(_paint(f"v{version}", "dim"))
     parts += [who, tail]
     if unread:
-        parts.append(_paint(f"✉{unread}", "live"))
+        # A SPACE AFTER THE ENVELOPE. U+2709 is one column by every width table
+        # and is drawn two columns wide by a good many terminals — Windows
+        # Terminal among them — and set flush against its count, the wide
+        # drawing painted over the first digit. The space is the column that
+        # drawing spills into; where the glyph is narrow it costs one blank.
+        parts.append(_paint(f"✉ {unread}", "live"))
     if bar := _batch_segment(status):
         parts.append(bar)
     if _update_available():
@@ -210,6 +238,11 @@ def _clip_visible(line: str, limit: int) -> str:
     are copied through and only printable characters are counted against the
     budget. The last column is an ellipsis, so a truncated line reads as
     truncated rather than as a shorter fact.
+
+    Counted in COLUMNS, through the same measure the viewer uses. Counted in
+    characters, a host called `田中太郎` was four columns wider than the budget
+    said: asked for 12 columns the line came out 14, asked for 14 it came out
+    18, and 14 of the 52 widths tried between 12 and 63 over-ran.
     """
     if limit <= 1:
         return ""
@@ -223,10 +256,10 @@ def _clip_visible(line: str, limit: int) -> str:
             out.append(ch)
             in_esc = True
             continue
-        if shown >= limit - 1:
+        if shown + _columns(ch) > limit - 1:
             break
         out.append(ch)
-        shown += 1
+        shown += _columns(ch)
     return "".join(out) + "…" + (RESET if _use_color() else "")
 
 
@@ -300,7 +333,12 @@ def _update_available() -> bool:
 
 
 def _visible_len(s: str) -> int:
-    out, in_esc = 0, False
+    """Columns the line takes once the colour codes are gone.
+
+    Columns and not characters: `collab.columns.width` is the viewer's measure
+    too, so the two surfaces cannot disagree about how wide one name is.
+    """
+    text, in_esc = [], False
     for ch in s:
         if in_esc:
             if ch == "m":
@@ -308,8 +346,8 @@ def _visible_len(s: str) -> int:
         elif ch == "\033":
             in_esc = True
         else:
-            out += 1
-    return out
+            text.append(ch)
+    return _columns("".join(text))
 
 
 def _terminal_width() -> int | None:
@@ -331,13 +369,20 @@ def status_payload(cwd: Path | None = None) -> dict[str, Any]:
     return {
         "active": True,
         "state": _effective_state(status),
+        # The DAEMON's version — the one that wrote the file — and whether it
+        # is the collab answering here. A host formatting its own line has the
+        # same silence to explain when the two differ.
         "version": status.get("version"),
+        "daemon_outdated": bool(daemon_note(status)),
         "update_available": _update_available(),
         "name": status.get("name"),
         "host": status.get("host"),
         "is_host": bool(status.get("is_host")),
         "others_connected": status.get("others_connected", 0),
         "unread": status.get("unread", 0),
+        # The narrower count the rendered line's envelope now draws from; the
+        # wider one above is every event kind and is kept for what it is.
+        "unread_messages": status.get("unread_messages"),
         "session_id": status.get("session_id"),
         # Handed over with `stale` beside it rather than on its own: a host
         # formatting its own line has the same duty not to draw a remembered
