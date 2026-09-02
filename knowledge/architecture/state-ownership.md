@@ -2,7 +2,7 @@
 type: Mechanism
 title: State ownership
 description: Which state directory belongs to which agent when two agents share one checkout, decided by process ancestry rather than by name.
-resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/lockfile.py
+resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/lockfile.py
 tags: [lock, ownership, ancestry, multi-agent]
 status: stable
 generated: { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
@@ -11,19 +11,19 @@ verified:
   - { by: process:pytest, at: 2026-09-01T23:30:00Z }
 sources:
   - id: lockfile-src
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/lockfile.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/lockfile.py
     title: collab.lockfile — the claim on a repository's collab state
     last_modified: 2026-09-01T00:47:47Z
   - id: config-src
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/config.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/config.py
     title: collab.config — resolve_home and claimed_home
     last_modified: 2026-09-01T23:18:43Z
   - id: identity-src
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/identity.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/identity.py
     title: collab.identity — a name and a colour, per directory
     last_modified: 2026-09-01T03:11:31Z
   - id: lock-identity-test
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/tests/test_lock_identity.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/tests/test_lock_identity.py
     title: tests/test_lock_identity.py
 ---
 

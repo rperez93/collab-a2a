@@ -2,21 +2,28 @@
 type: Mechanism
 title: The daemon lock
 description: Which process is this session's listener, answered by an advisory flock held for the process's whole life rather than by a pid file that outlives it.
-resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/client/exclusive.py
+resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/client/exclusive.py
 tags: [flock, pid, exclusion, identity]
 status: stable
-generated: { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-02T00:25:00Z }
 verified:
-  - { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
-  - { by: process:pytest, at: 2026-09-01T23:30:00Z }
+  - { by: claude-code/claude-opus-5, at: 2026-09-02T00:25:00Z }
+  - { by: process:pytest, at: 2026-09-02T00:25:00Z }
 sources:
   - id: exclusive-src
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/client/exclusive.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/client/exclusive.py
     title: collab.client.exclusive — the daemon slot
-    last_modified: 2026-09-01T23:21:22Z
+    last_modified: 2026-09-02T00:17:31Z
+  - id: daemon-src
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/client/daemon.py
+    title: collab.client.daemon — the backstop refusal, and what /proc costs
+    last_modified: 2026-09-02T00:20:53Z
   - id: lock-flow-test
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/tests/test_lock_flow.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/tests/test_lock_flow.py
     title: tests/test_lock_flow.py
+  - id: platform-test
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/tests/test_platform_support.py
+    title: tests/test_platform_support.py
 stale_after: 2027-09-01T00:00:00Z
 ---
 
@@ -91,10 +98,76 @@ second one starts on top of it. There is no way to detect that from inside, and
 the `enforced` flag does not catch it either, because such a filesystem says
 yes.
 
-A filesystem that cannot lock at all is treated differently and deliberately:
-`acquire` returns `True` with `enforced` `False`. Losing the exclusion is bad;
-refusing to run a session because the state directory lives on a share is
-worse.
+# Three ways `acquire` can fail to give you a real lock
+
+Three faults, three answers, and they are not interchangeable. Reading any two
+of them as one is what made this concept wrong at `f9abc76`.
+
+**1. A platform with no locking primitive at all — refuses.** Where `fcntl` is
+absent (Windows), `acquire` raises `UnsupportedPlatform`, and the message says
+to run under WSL 2 or later.[^exclusive-src] There is nothing there to be right
+or wrong about: with no `flock`, two daemons for one session both came up, both
+streamed the feed, and the pid file named whichever wrote it last — while
+`enforced` said `False` and nothing surfaced it.
+
+**2. A filesystem that will not lock — runs.** `flock` raises something outside
+`EACCES`/`EAGAIN`/`EWOULDBLOCK`, so `_flock` answers `None` rather than `True`
+or `False`, and `acquire` returns `True` with `enforced` `False`. Losing the
+exclusion is bad; refusing somebody a session because their state directory
+lives on an unusual mount is worse, and `started_at` is still there as a
+second opinion.
+
+**3. An unwritable state directory — also runs.** `os.open` raises, and
+`acquire` returns `True` with `enforced` `False` without ever reaching the
+lock. Same outcome as case 2, different fault, and worth keeping distinct
+because the remedy is not the same one.
+
+**The order of those checks is deliberate.** The platform test comes first, so
+a machine that is both unlockable *and* unwritable is told to run under WSL 2
+rather than told its directory is read-only. The second message would be true
+and would send somebody after the wrong fault — there is no directory
+permission that makes Windows lockable.
+
+The refusal is enforced twice over, at both ends. `collab` catches it once in
+`main` and only for the commands that actually needed a daemon, so
+`collab --help` and `collab update` are not walled off; and `Daemon.run`
+checks before it creates the state directory, so a daemon started by hand
+leaves nothing behind saying it ran.[^daemon-src]
+
+**This section is the reason the re-pinning rule exists.** Until `23db6d0`
+this concept ran cases 1 and 2 together as one, and described the behaviour
+that was removed when they were split. It was true when it was written and
+false by the time it was read — the subject of [a fact that was true when it
+was recorded](/stale-facts.md), committed here in a document about it. See
+[how to read this bundle](/how-to-read-this-bundle.md) for the rule that caught
+it.
+
+# Three platforms, three answers
+
+Linux has both halves. macOS has the lock and loses everything that reads
+`/proc`: `started_at` drops to `ps` and one-second precision, `is_zombie`
+cannot tell a process that has exited from one still running, and `environ`
+cannot be read at all — so an orphan from before the lock existed is left where
+it is for `collab daemon stop` to clear, rather than being signalled. That is
+the direction to fail in. Windows has neither half, and is refused.
+
+**What happens without `/proc` is simulated, not measured.** The tests patch
+`_HAVE_PROC` to `False` on Linux, which walks the branches macOS would walk on
+a kernel that is not macOS. Nobody has run this on a Mac.[^exclusive-src]
+
+# A pid of zero is not a pid
+
+`parse` rejects anything at or below zero, because every reader of
+`daemon.pid` eventually hands the number to `os.kill`, and there they do not
+mean what they look like: `kill(0, sig)` signals the caller's **entire process
+group** and `kill(-1, sig)` signals every process the user can reach. A
+truncated write is all it takes, and a pid file containing `0` killed a test
+run here — the runner that read it.[^exclusive-src]
+
+It is refused in the parser rather than at each `os.kill`, so a reader written
+later is safe by having been written at all. That is the same move as the lock
+itself: put the guarantee where it cannot be forgotten, rather than at every
+site that would have to remember.
 
 This concept carries a `stale_after` a year out rather than none, because it is
 a platform observation. It decays with the platforms, not with collab.
@@ -106,3 +179,4 @@ a platform observation. It decays with the platforms, not with collab.
 - [The client daemon](/architecture/client-daemon.md).
 
 [^exclusive-src]: collab.client.exclusive — the daemon slot
+[^daemon-src]: collab.client.daemon — the backstop refusal, and what /proc costs

@@ -2,27 +2,31 @@
 type: Feature
 title: Batches, and the one figure everybody sees
 description: How much of a shared job is done, counted by the hub from the board because a self-reported percentage does not survive the agent that stops reporting.
-resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/batch.py
+resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/batch.py
 tags: [batch, progress, counting, staleness]
 status: stable
-generated: { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-02T00:25:00Z }
 verified:
-  - { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
-  - { by: process:pytest, at: 2026-09-01T23:30:00Z }
+  - { by: claude-code/claude-opus-5, at: 2026-09-02T00:25:00Z }
+  - { by: process:pytest, at: 2026-09-02T00:25:00Z }
 sources:
   - id: batch-src
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/batch.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/batch.py
     title: collab.batch — the arithmetic and what it refuses to draw
     last_modified: 2026-09-01T23:18:43Z
   - id: app-src
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/server/app.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/server/app.py
     title: collab.server.app — the batch route, and one denominator at a time
     last_modified: 2026-09-01T23:18:43Z
   - id: batch-run
     resource: a live session at f9abc76, driven through the whole batch arithmetic and read back at every step
     title: Live run — the batch arithmetic
+  - id: daemon-src
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/client/daemon.py
+    title: collab.client.daemon — the scope-change marker, and the rule it does not apply
+    last_modified: 2026-09-02T00:20:53Z
   - id: batch-test
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/tests/test_batch_progress.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/tests/test_batch_progress.py
     title: tests/test_batch_progress.py
 ---
 
@@ -60,6 +64,29 @@ The work genuinely grew, so the honest picture is a bar that falls. This is
 exactly why the counts are printed beside the percentage everywhere: a
 percentage alone cannot tell *we lost ground* from *there is more ground*, and
 the pair can.
+
+The status line carries a `+N` marker beside the counts while the denominator
+has recently moved. It is the **net change over the display window**
+(`DELTA_SHOWN_FOR`, 90 seconds), not the size of the last single change:
+changes inside the window are summed, each one refreshes the window, and one
+arriving after the window has lapsed starts a fresh count. Growth undone inside
+the window sums back to nothing and draws nothing, because the bar is where it
+was.[^daemon-src]
+
+That definition is worth stating exactly, because the marker is what accounts
+for a fall the reader is otherwise likely to doubt — and it was wrong until
+`23db6d0`. Each observation replaced the last, so two tasks proposed a few
+seconds apart landed in different snapshots, were seen as two moves of one, and
+the marker read `+1` beside a bar that had dropped by two tasks' worth. Half an
+explanation is worse than none: it sends the reader looking for a second cause
+that does not exist.
+
+One reading to take correctly: while a batch is first being filled the
+denominator climbs from nothing, so the marker reports that growth too — a
+batch of ten shows `0% 0/10 +10`. That is a true statement about the window and
+not an explanation of a fall, because a bar at 0% has not fallen. The source
+records why the obvious suppression rule was rejected, and what to measure
+before reopening it.[^daemon-src]
 
 **Cancelling moves it forwards**, for the mirror reason. Withdrawn work is not
 outstanding work, so it leaves the denominator — and is counted separately
@@ -167,4 +194,5 @@ new one.[^batch-src]
 
 [^batch-src]: collab.batch — the arithmetic and what it refuses to draw
 [^app-src]: collab.server.app — the batch route, and one denominator at a time
-[^batch-run]: A live session, driven through the whole arithmetic and read back at each step
+[^batch-run]: Live run — the batch arithmetic
+[^daemon-src]: collab.client.daemon — the scope-change marker, and the rule it does not apply

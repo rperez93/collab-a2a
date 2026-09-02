@@ -4,26 +4,26 @@ title: A fact that was true when it was recorded
 description: The one defect collab has spent the most effort removing, and why a knowledge bundle is the ideal machine for committing it at scale.
 tags: [staleness, trust, design]
 status: stable
-generated: { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-02T00:25:00Z }
 verified:
-  - { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
+  - { by: claude-code/claude-opus-5, at: 2026-09-02T00:25:00Z }
 sources:
   - id: batch-src
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/batch.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/batch.py
     title: collab.batch — the counted figure and its staleness marker
     last_modified: 2026-09-01T23:18:43Z
   - id: exclusive-src
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/client/exclusive.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/client/exclusive.py
     title: collab.client.exclusive — why a pid file is not an identity
-    last_modified: 2026-09-01T23:21:22Z
+    last_modified: 2026-09-02T00:17:31Z
   - id: skills-src
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/skills.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/skills.py
     title: collab.skills — guidance that was right when it was written
     last_modified: 2026-09-01T23:18:43Z
   - id: daemon-src
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/client/daemon.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/client/daemon.py
     title: collab.client.daemon — what must refresh the snapshot
-    last_modified: 2026-09-01T23:21:22Z
+    last_modified: 2026-09-02T00:20:53Z
 ---
 
 # The shape of the defect

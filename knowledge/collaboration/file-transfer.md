@@ -2,7 +2,7 @@
 type: Feature
 title: File transfer
 description: Sharing a binary or an artifact out of band rather than pasting it as text, and deleting the host's copy the moment the recipient confirms the checksum.
-resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/server/app.py
+resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/server/app.py
 tags: [files, upload, checksum, ttl]
 status: stable
 generated: { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
@@ -11,15 +11,15 @@ verified:
   - { by: process:pytest, at: 2026-09-01T23:30:00Z }
 sources:
   - id: app-src
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/server/app.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/server/app.py
     title: collab.server.app — the file routes
     last_modified: 2026-09-01T23:18:43Z
   - id: protocol-src
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/protocol.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/protocol.py
     title: collab.protocol — MAX_FILE_BYTES and FILE_TTL_SECONDS
     last_modified: 2026-09-01T23:18:43Z
   - id: files-test
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/tests/test_files.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/tests/test_files.py
     title: tests/test_files.py
 ---
 

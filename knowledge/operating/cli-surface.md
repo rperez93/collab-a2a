@@ -2,22 +2,22 @@
 type: Interface
 title: The command surface
 description: Every subcommand collab accepts at version 1.20.2, read out of the argument parser itself rather than transcribed.
-resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/cli.py
+resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/cli.py
 tags: [cli, commands, reference]
 status: stable
-generated: { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-02T00:25:00Z }
 verified:
-  - { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
-  - { by: process:pytest, at: 2026-09-01T23:30:00Z }
+  - { by: claude-code/claude-opus-5, at: 2026-09-02T00:25:00Z }
+  - { by: process:pytest, at: 2026-09-02T00:25:00Z }
 sources:
   - id: parser-run
-    resource: collab's argument parser at f9abc76, built and asked for --help at the top level and for every subcommand
+    resource: collab's argument parser at 23db6d0, built and asked for --help at the top level and for every subcommand
     title: The argument parser's own help output
   - id: docs-test
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/tests/test_docs_match_cli.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/tests/test_docs_match_cli.py
     title: tests/test_docs_match_cli.py — every documented flag must exist
   - id: cli-ref
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/docs/cli-reference.md
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/docs/cli-reference.md
     title: docs/cli-reference.md — the full flag-by-flag reference for a human
 stale_after: 2026-10-01T00:00:00Z
 ---
@@ -25,7 +25,7 @@ stale_after: 2026-10-01T00:00:00Z
 # How this list was produced
 
 By building the parser and printing `--help` for the top level and for every
-subcommand, at commit `f9abc76`.[^parser-run] The descriptions below are the
+subcommand, at commit `23db6d0`.[^parser-run] The descriptions below are the
 parser's own, verbatim.
 
 It carries the short `stale_after` from the policy in

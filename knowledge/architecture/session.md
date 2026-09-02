@@ -2,7 +2,7 @@
 type: Concept
 title: Sessions
 description: What a session is, what a profile records about one, what resuming keeps, and what resuming deliberately retires.
-resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/server/session.py
+resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/server/session.py
 tags: [session, profile, resume, credentials]
 status: stable
 generated: { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
@@ -11,15 +11,15 @@ verified:
   - { by: process:pytest, at: 2026-09-01T23:30:00Z }
 sources:
   - id: session-src
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/server/session.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/server/session.py
     title: collab.server.session — HubConfig, create, resume, stop
     last_modified: 2026-09-01T23:21:22Z
   - id: config-src
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/config.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/config.py
     title: collab.config — SessionProfile
     last_modified: 2026-09-01T23:18:43Z
   - id: resume-test
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/tests/test_resume.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/tests/test_resume.py
     title: tests/test_resume.py
   - id: host-run
     resource: a collab session hosted with --no-tunnel --no-daemon --fresh at f9abc76, against a scratch COLLAB_HOME

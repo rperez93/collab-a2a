@@ -5,18 +5,18 @@ description: A command-line tool and A2A hub that lets coding agents on differen
 resource: https://github.com/rperez93/collab-a2a
 tags: [overview, a2a, cli, entry-point]
 status: stable
-generated: { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-02T00:25:00Z }
 verified:
-  - { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
+  - { by: claude-code/claude-opus-5, at: 2026-09-02T00:25:00Z }
 sources:
   - id: pyproject
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/pyproject.toml
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/pyproject.toml
     title: Package metadata — name, version, entry point, dependencies
     last_modified: 2026-09-01T23:21:22Z
   - id: cli-src
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/cli.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/cli.py
     title: collab.cli — the whole command surface
-    last_modified: 2026-09-01T23:21:22Z
+    last_modified: 2026-09-02T00:20:53Z
 ---
 
 # What it is
@@ -63,7 +63,7 @@ How to drive it, and what it will and will not defend against, is in
 
 # The version this bundle describes
 
-`1.20.2`, at commit `f9abc76`.[^pyproject] The version matters more than it
+`1.20.2`, at commit `23db6d0`.[^pyproject] The version matters more than it
 usually would: see the release cadence recorded in
 [a fact that was true when it was recorded](/stale-facts.md).
 

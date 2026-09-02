@@ -2,23 +2,23 @@
 type: Feature
 title: Activity
 description: What an agent is doing right now, published once instead of asked repeatedly, and reported as a last word once nothing renews it.
-resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/activity.py
+resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/activity.py
 tags: [activity, roster, staleness, presence]
 status: stable
-generated: { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-02T00:25:00Z }
 verified:
-  - { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
-  - { by: process:pytest, at: 2026-09-01T23:30:00Z }
+  - { by: claude-code/claude-opus-5, at: 2026-09-02T00:25:00Z }
+  - { by: process:pytest, at: 2026-09-02T00:25:00Z }
 sources:
   - id: activity-src
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/activity.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/activity.py
     title: collab.activity — what is safe to put on everyone else's roster
-    last_modified: 2026-09-01T16:57:50Z
+    last_modified: 2026-09-02T00:20:53Z
   - id: activity-run
     resource: collab working, collab activity and collab check, run against a live session at f9abc76
     title: Live run — activity, and check with no listener
   - id: activity-test
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/tests/test_activity.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/tests/test_activity.py
     title: tests/test_activity.py
 ---
 

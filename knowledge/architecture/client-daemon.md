@@ -2,19 +2,19 @@
 type: Component
 title: The client daemon
 description: The only thing that talks to the hub continuously, republishing every event locally three ways so an agent never has to know a reconnect happened.
-resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/client/daemon.py
+resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/client/daemon.py
 tags: [client, sse, resume, listener]
 status: stable
-generated: { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-02T00:25:00Z }
 verified:
-  - { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
+  - { by: claude-code/claude-opus-5, at: 2026-09-02T00:25:00Z }
 sources:
   - id: daemon-src
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/client/daemon.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/client/daemon.py
     title: collab.client.daemon — the listener
-    last_modified: 2026-09-01T23:21:22Z
+    last_modified: 2026-09-02T00:20:53Z
   - id: inbox-src
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/client/inbox.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/client/inbox.py
     title: collab.client.inbox — JSONL and SQLite from one write
     last_modified: 2026-09-01T23:21:22Z
   - id: check-cmd
@@ -105,6 +105,19 @@ the listener suppressed, it printed:[^check-cmd]
 
 That third line is the daemon's role stated from the outside: an activity
 published while nothing is listening exists locally and nowhere else.
+
+# When it will not start at all
+
+`Daemon.run` checks for a locking primitive **before** it creates the state
+directory, and returns having logged the reason if there is none. A daemon that
+is not going to run must leave nothing behind saying it did — the same
+reasoning that takes the lock before touching anything shared. The CLI refuses
+first and in front of the person who typed the command; this is the backstop
+for a daemon started by hand, and it says the same thing into `daemon.log`.
+
+See [the daemon lock](/architecture/daemon-lock.md) for which platforms that
+covers and why a filesystem that merely will not lock is treated as the
+opposite case.
 
 # Related
 

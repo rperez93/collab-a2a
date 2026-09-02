@@ -2,7 +2,7 @@
 type: Protocol
 title: The envelope
 description: The one JSON object every collab event is, the kinds it comes in, and the bounds every field arrives under.
-resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/protocol.py
+resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/protocol.py
 tags: [wire-format, a2a, extension, envelope]
 status: stable
 generated: { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
@@ -10,11 +10,11 @@ verified:
   - { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
 sources:
   - id: protocol-src
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/protocol.py
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/protocol.py
     title: collab.protocol — the collab extension v1 wire format
     last_modified: 2026-09-01T23:18:43Z
   - id: spec
-    resource: https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/SPEC.md
+    resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/SPEC.md
     title: SPEC.md — the collab A2A extension, specified
 ---
 

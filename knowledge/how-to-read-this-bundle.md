@@ -4,9 +4,9 @@ title: How to read this bundle
 description: What the trust and lifecycle frontmatter on every other concept here means, and what it refuses to claim.
 tags: [okf, provenance, trust, meta]
 status: stable
-generated: { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-02T00:25:00Z }
 verified:
-  - { by: claude-code/claude-opus-5, at: 2026-09-01T23:30:00Z }
+  - { by: claude-code/claude-opus-5, at: 2026-09-02T00:25:00Z }
 sources:
   - id: okf-spec
     resource: https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md
@@ -36,8 +36,9 @@ the format's possibilities. The format permits more than was used.
 ## `generated`
 
 Every concept carries `generated: { by: claude-code/claude-opus-5, at: ... }`.
-That is the truth: the prose was written by a coding agent reading the source
-at commit `f9abc76`.
+That is the truth: the prose was written by a coding agent reading the source.
+It was first written against `f9abc76` and re-pinned to `23db6d0` under the
+rule below, which is why the timestamp is later than the writing.
 
 ## `verified`
 
@@ -46,7 +47,7 @@ Two verifier actors appear, and only two:
 | Actor | What it means, exactly |
 |---|---|
 | `claude-code/claude-opus-5` | The claim was checked against the source file named in `sources`, or the command was run and its output read. |
-| `process:pytest` | A named test in [`tests/`](../tests/) asserts the claim, and the suite was green at `f9abc76` (1031 passed). |
+| `process:pytest` | A named test in [`tests/`](../tests/) asserts the claim, and the suite was green at `23db6d0`. |
 
 Both are non-`human:` actors, so a consumer deriving trust tiers reads this
 whole bundle as **machine-confirmed**, never human-reviewed. That is accurate.
@@ -89,7 +90,7 @@ differently on purpose.
 pinned to the commit the claim was checked against:
 
 ```
-https://github.com/rperez93/collab-a2a/blob/f9abc769881e2bd3bbd7d27d3aa5397c6f852cf7/src/collab/batch.py
+https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/batch.py
 ```
 
 A relative path like `../../src/collab/batch.py` was the first form used here,
@@ -136,5 +137,72 @@ on disk; every pinned URL carries a full 40-character sha rather than a branch
 name, and its path still exists in the working tree, so a file that moves fails
 the suite and forces the concept to be re-checked and re-pinned rather than
 quietly describing something that is no longer there.
+
+# How this bundle was re-pinned, and how to do it again
+
+The pin has to move when the code does, or a bundle shipped in a release
+describes a tree that is not the release — a stale fact by construction, which
+is the thing it argues against. But moving it with a find-and-replace would put
+a fresh sha on claims nobody re-checked, which is worse: it launders an
+unverified statement into a verified-looking one.
+
+The rule that resolves it, and the one followed from `f9abc76` to `23db6d0`:
+
+> **A claim checked at one revision is equally true at another when the file it
+> was checked against is byte-identical between them.**
+
+So, concretely:
+
+1. `git diff --name-only <old>..<new>` gives the files that actually moved.
+2. A concept citing only unchanged files is re-pinned outright. Nothing about
+   it was re-checked because nothing needed to be: the evidence is the same
+   bytes under a different name. Its `verified` stamp does **not** move.
+3. A concept citing a changed file is re-read against the new tree, corrected
+   where it is now wrong, and only then re-pinned — and it gets a fresh
+   `verified.at`, because it genuinely was verified again.
+
+Going from `f9abc76` to `23db6d0` that was 8 concepts to re-read and 14 to
+re-pin outright.
+
+**The rule earned its keep on its first real outing, which is the best argument
+for keeping it.** [The daemon lock](/architecture/daemon-lock.md) had become
+false: a later commit split the one case it described into two with different
+answers, so the concept documented behaviour that had been removed. It had been
+on the *re-pin freely* list an hour earlier, before the changed-file set was
+recomputed against the tree that actually shipped. A blanket sha swap would
+have put a fresh stamp on that sentence and shipped one false statement in an
+artefact built to be consumed without checking — which is the precise failure
+this bundle was commissioned against.
+
+## Why the pin names the commit before this one
+
+The bundle cannot cite the commit that contains it: the sha does not exist
+until the commit is made, and making it changes the sha. So the pin names the
+last commit before the re-pin — `23db6d0` here, the parent of the commit you
+are reading.
+
+That is sound rather than a fudge, and by the rule above rather than in spite
+of it: a re-pin commit touches only `knowledge/`, so every source file it cites
+is byte-identical between the commit it names and the commit it lives in. It is
+the byte-identical rule applied to the bundle's own boundary.
+
+Two traps worth knowing before doing this again:
+
+- **A test file counts as cited evidence.** A concept that names a test in its
+  `sources` is re-read when that test changes, even if the source it describes
+  did not move. That is the rule working, not an over-reach: the evidence
+  changed.
+- **A concept can go stale through a file it does not cite.** The rule is
+  file-level and will not catch a behaviour that moved somewhere else — so the
+  diff is worth reading, not just filtering. That is how the daemon's
+  platform refusal reached [the client daemon](/architecture/client-daemon.md),
+  which cites `daemon.py` and would have been caught, and how it would *not*
+  have been caught had it landed only in `cli.py`.
+
+And a third, learned the hard way in this pass: a **scope descriptor names an
+event, not a tree.** Swapping the short sha inside `a live session at f9abc76,
+driven through …` silently rewrote nine provenance statements into claims about
+runs that never happened at that revision. Those were put back. Only the parser
+was genuinely re-run, so only its descriptor names the new sha.
 
 [^okf-spec]: Open Knowledge Format v0.2 specification
