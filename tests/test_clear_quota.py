@@ -219,10 +219,57 @@ def test_a_report_with_a_map_carries_the_map(own, reported):
     assert reported[0]["quotas"] == {"five_hour": {"used_pct": 40.0}}, reported
 
 
-def test_a_flat_figure_alone_is_not_a_map(own, reported):
-    """`--report '{"quota_five_hour": 40}'` sets that figure and says nothing
-    about the other windows: no `quotas` key goes on the wire, so the hub
-    merges it and leaves the map. The documented one-liner is a partial
-    report, as every `--report` is."""
+def test_a_flat_figure_alone_is_a_statement_about_that_window(own, reported):
+    """`--report '{"quota_five_hour": 40}'` — the documented one-liner — IS a
+    map: `normalise` turns the flat figure into `quotas.five_hour`, so the
+    report carries `quotas` and, under the rule, replaces the quota with that
+    one window. One number is a statement about that window and about no
+    others. This test first said the opposite — that a flat figure alone was
+    not a map and left the other windows — which was true of the code and
+    left the one-liner stored but never drawn: the roster and `collab stats`
+    read the map only."""
     assert _run(["stats", "--report", '{"quota_five_hour": 40}']) == 0
-    assert reported == [{"quota_five_hour": 40.0}], reported
+    # `quota_used_pct` rides along: one window is also the single-figure form,
+    # by the map rule that predates this.
+    assert reported == [{"quota_five_hour": 40.0, "quota_used_pct": 40.0,
+                         "quotas": {"five_hour": {"used_pct": 40.0}}}], reported
+
+
+def test_a_flat_report_after_a_map_drops_the_other_windows(
+        tmp_path, monkeypatch, client, session, host_headers):
+    """Through the real endpoint: five-hour and weekly reported as a map, then
+    the one-liner with five-hour only — the weekly window is gone, its flat
+    figure with it, and the roster reads the new five-hour figure."""
+    r_join = client.post("/ext/collab/v1/join",
+                         json={"invite": session["invite"], "name": "bob", "hello": {}})
+    token = r_join.json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    client.post("/ext/collab/v1/stats", headers=headers, json={"stats": {
+        "model": "gpt-5",
+        "quotas": {"five_hour": {"used_pct": 55}, "seven_day": {"used_pct": 20}},
+        "quota_five_hour": 55, "quota_seven_day": 20}})
+
+    class Client:
+        def report_stats(self, figures, **kw):
+            return client.post("/ext/collab/v1/stats", headers=headers,
+                               json={"stats": figures}).json()
+
+    @contextlib.contextmanager
+    def fake_client(profile):
+        yield Client()
+
+    monkeypatch.setattr(cli, "_client", fake_client)
+    home = tmp_path / ".collab"
+    _profile(home, token=token)
+    monkeypatch.setenv("COLLAB_HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+
+    assert _run(["stats", "--report", '{"quota_five_hour": 60}']) == 0
+    people = client.get("/ext/collab/v1/participants",
+                        headers=host_headers).json()["participants"]
+    seen = next(p for p in people if p["name"] == "bob")["stats"]
+    assert seen["quotas"] == {"five_hour": {"used_pct": 60.0}}, seen
+    assert seen["quota_five_hour"] == 60.0
+    assert "quota_seven_day" not in seen
+    assert seen["model"] == "gpt-5"
+    assert stats.quota_summary(seen) == "quota 5h 60%"

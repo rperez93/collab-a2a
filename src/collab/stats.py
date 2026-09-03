@@ -34,7 +34,12 @@ whether the thing rolling over in ten minutes is the five-hour window or the
 weekly one, and that is the difference between waiting and re-assigning.
 
 `quota_five_hour` and `quota_seven_day` are still accepted and still emitted,
-derived from the map, so anything reading the older flat fields keeps working.
+derived from the map, so anything reading the older flat fields keeps working —
+and they are read back INTO the map: `{"quota_five_hour": 42}` is
+`quotas.five_hour.used_pct`, because the roster and `collab stats` draw the map
+and nothing else, and the documented one-liner was stored and never drawn. A
+flat figure alone is therefore a map of one window: a statement about that
+window, and about no others.
 
 Quota is always **percent used**, never percent remaining. Some agents report
 the opposite — Antigravity's status line gives `quota.remaining_fraction` — and
@@ -306,14 +311,28 @@ def normalise(data: Any) -> dict[str, Any]:
                 _take(out, lowered, inner)
 
     # Every window, each with its own reset time.
-    if (windows := collect_quotas(data)):
+    windows = collect_quotas(data)
+    # THE FLAT FIGURE IS A WINDOW. `quota_five_hour: 73` — the one-liner every
+    # document gives as the whole integration — used to stay a flat field, and
+    # the roster and `collab stats` read the map, so it was stored and never
+    # drawn. It is the map now, and under the hub's rule a report carrying it
+    # is a statement about that window and about no others. The map wins
+    # where both are given and disagree: one number per window, and the map
+    # is the statement the flat field is derived from.
+    flat = (("five_hour", "quota_five_hour"), ("seven_day", "quota_seven_day"))
+    for window, field in flat:
+        if field in out and window not in windows and len(windows) < MAX_WINDOWS:
+            windows[window] = {"used_pct": out[field]}
+    # A flat reset names no window, so it can only be the one window's.
+    if len(windows) == 1 and out.get("quota_reset_at"):
+        next(iter(windows.values())).setdefault("resets_at", out["quota_reset_at"])
+    if windows:
         out["quotas"] = windows
         # Keep the older flat fields populated so anything reading them works.
-        for window, field in (("five_hour", "quota_five_hour"),
-                              ("seven_day", "quota_seven_day")):
+        for window, field in flat:
             pct = windows.get(window, {}).get("used_pct")
             if pct is not None:
-                out.setdefault(field, pct)
+                out[field] = pct
         if "quota_used_pct" not in out and len(windows) == 1:
             only = next(iter(windows.values()))
             if only.get("used_pct") is not None:

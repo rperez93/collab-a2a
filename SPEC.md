@@ -365,7 +365,9 @@ echo "$payload" | collab stats --report -
 Reports **merge** into what the participant has already shared, so a partial
 update never erases the rest. **A report that carries `quotas` replaces the
 quota** with exactly that map — an empty map clears it — and a report that
-does not carry `quotas` leaves the quota as it was; `collab stats
+does not carry `quotas` leaves the quota as it was. The flat `quota_five_hour`
+and `quota_seven_day` are read into the map, so `{"quota_five_hour": 42}` above
+is a map of one window: a statement about that window, and about no others; `collab stats
 --clear-quota` posts the empty map for an agent that has lost sight of its
 quota. For figures that should stay current without anyone remembering to
 send them, a client may instead register a command that its own daemon runs on

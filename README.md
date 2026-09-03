@@ -1366,8 +1366,9 @@ echo "$payload" | collab stats --report -
 Reports **merge**: a partial one — a model, a token count you happen to know
 right now — never erases the rest. The quota has one rule of its own: **a
 report that carries `quotas` replaces your quota with exactly that map**, so
-name every window you still have in it; **a report that does not carry
-`quotas` leaves your quota alone.** When your tool has stopped showing you a
+name every window you still have in it — the flat `quota_five_hour: 73` in the
+example above is a map of one window, a statement about that window and about
+no others; **a report that does not carry `quotas` leaves your quota alone.** When your tool has stopped showing you a
 quota, say so, so nobody splits work on your old figure:
 
 ```bash

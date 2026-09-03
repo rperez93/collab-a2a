@@ -607,8 +607,9 @@ collab stats --source 'my-usage-script' --interval 120
 
 Reports merge, so a partial one never erases the rest. **A report that
 carries `quotas` replaces your quota with exactly that map** — name every
-window you still have in it; **one that does not carry `quotas` leaves your
-quota alone.** When your tool has stopped showing you a quota, say so in one
+window you still have in it; the flat `quota_five_hour` above is a map of one
+window, a statement about that window and about no others; **one that does not
+carry `quotas` leaves your quota alone.** When your tool has stopped showing you a quota, say so in one
 command, so nobody splits work on your old figure:
 
 ```bash

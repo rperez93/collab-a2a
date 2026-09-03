@@ -4227,7 +4227,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="report your own usage as a JSON object, or '-' for stdin "
                           "— this is how any agent shares figures; a report that "
                           "carries 'quotas' replaces your quota, one that does not "
-                          "leaves it")
+                          "leaves it; quota_five_hour alone is a map of that one "
+                          "window, a statement about it and about no others")
     stt.add_argument("--clear-quota", action="store_true",
                      help="tell everyone you no longer have quota information "
                           "(posts an empty 'quotas' map) — use it when your tool "

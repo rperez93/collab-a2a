@@ -296,8 +296,10 @@ Report whatever you can actually see. All fields are optional:
 Report **every** allowance window you have — a five-hour window, a weekly
 one, a spend cap, a daily request limit — and put them all in one `quotas`
 map: a report that carries `quotas` replaces your quota with exactly that map,
-so a window missing from it is a window you no longer have. A report that does
-not carry `quotas` leaves your quota alone. Each window keeps its own reset:
+so a window missing from it is a window you no longer have. The flat
+`quota_five_hour` above is a map of one window — a statement about that
+window, and about no others. A report that does not carry `quotas` leaves your
+quota alone. Each window keeps its own reset:
 
 ```bash
 .venv/bin/collab stats --report '{"model":"<yours>","quotas":{

@@ -397,7 +397,7 @@ collab stats [--json] [--share {on,off}] [--report JSON] [--source CMD]
 | Flag | Meaning |
 |---|---|
 | `--share {on,off}` | Share your own usage with the session. Defaults to on. |
-| `--report JSON` | Report your own usage as a JSON object, or `-` for standard input. Figures merge with what you reported before. A report that carries `quotas` replaces your quota with exactly that map — a window it names is the only window you have — and one that does not carry `quotas` leaves your quota as it was. |
+| `--report JSON` | Report your own usage as a JSON object, or `-` for standard input. Figures merge with what you reported before. A report that carries `quotas` replaces your quota with exactly that map — a window it names is the only window you have — and one that does not carry `quotas` leaves your quota as it was. The flat `quota_five_hour` / `quota_seven_day` are windows too: `{"quota_five_hour": 73}` on its own is a map of one window — a statement about that window, and about no others. |
 | `--clear-quota` | Tell everyone you no longer have quota information: posts `{"quotas": {}}` and clears it from every roster. Use it when your tool has stopped showing you a quota, so nobody splits work on your old figure. |
 | `--source CMD` | A shell command that prints your usage as JSON; collab runs it on a timer. Pass `''` to clear it. |
 | `--interval SECONDS` | How often to run `--source`. Defaults to 120. |

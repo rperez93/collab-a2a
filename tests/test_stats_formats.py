@@ -13,10 +13,70 @@ from collab.stats import CANONICAL, normalise, sanitise
 
 
 def test_the_flat_canonical_shape_passes_through():
-    """The whole integration for any agent: emit these keys."""
-    assert normalise({"model": "gpt-5", "quota_five_hour": 42,
-                      "cost_usd": 1.5}) == {
-        "model": "gpt-5", "quota_five_hour": 42.0, "cost_usd": 1.5}
+    """The whole integration for any agent: emit these keys.
+
+    The flat quota figure is also a window now, because the roster and
+    `collab stats` draw the `quotas` map and nothing else — the documented
+    one-liner was stored and never drawn, on both sides of the day the merge
+    rule changed twice. `quota_five_hour: 42` IS `quotas.five_hour.used_pct`.
+    """
+    got = normalise({"model": "gpt-5", "quota_five_hour": 42, "cost_usd": 1.5})
+    assert got["model"] == "gpt-5" and got["cost_usd"] == 1.5
+    assert got["quota_five_hour"] == 42.0
+    assert got["quotas"] == {"five_hour": {"used_pct": 42.0}}
+
+
+def test_the_one_liner_is_drawn_where_the_quota_is_read():
+    """On the roster row and in `collab stats`, which both read the map."""
+    from collab.cli import _stat_bits
+    from collab.client.tui import stat_line
+    from collab.stats import quota_summary
+
+    stats = normalise('{"model":"gpt-5","quota_five_hour":73}')
+    assert quota_summary(stats) == "quota 5h 73%"
+    assert "quota 5h 73%" in stat_line({"name": "bob", "stats": stats})
+    assert any(b.startswith("quota 5h 73%") for b in _stat_bits({"stats": stats}))
+
+
+def test_both_flat_windows_become_windows():
+    got = normalise({"quota_five_hour": 73, "quota_seven_day": 12})
+    assert got["quotas"] == {"five_hour": {"used_pct": 73.0},
+                             "seven_day": {"used_pct": 12.0}}
+
+
+def test_a_reset_alone_attaches_to_the_only_window():
+    """`quota_reset_at` names no window, so it can only be one window's."""
+    got = normalise({"quota_five_hour": 73, "quota_reset_at": "SOON"})
+    assert got["quotas"] == {"five_hour": {"used_pct": 73.0, "resets_at": "SOON"}}
+    two = normalise({"quota_five_hour": 73, "quota_seven_day": 12,
+                     "quota_reset_at": "SOON"})
+    assert not any("resets_at" in w for w in two["quotas"].values()), \
+        "with two windows there is no saying whose reset it is"
+    assert two["quota_reset_at"] == "SOON", "the flat field still travels"
+
+
+def test_a_junk_flat_figure_makes_no_window():
+    got = normalise({"model": "gpt-5", "quota_five_hour": "lots"})
+    assert "quotas" not in got and "quota_five_hour" not in got
+    assert got == {"model": "gpt-5"}
+
+
+def test_the_map_wins_when_the_flat_figure_disagrees():
+    """One number per window: the map is the statement and the flat field is
+    derived from it, in both directions."""
+    got = normalise({"quotas": {"five_hour": {"used_pct": 40}},
+                     "quota_five_hour": 99})
+    assert got["quotas"] == {"five_hour": {"used_pct": 40.0}}
+    assert got["quota_five_hour"] == 40.0
+
+
+def test_flat_to_map_to_flat_is_stable():
+    """What normalise emits, normalise and sanitise both leave alone."""
+    once = normalise({"quota_five_hour": 73, "quota_seven_day": 12,
+                      "model": "gpt-5"})
+    assert normalise(once) == once
+    assert normalise(sanitise(once)) == once
+    assert sanitise(once)["quotas"] == once["quotas"]
 
 
 def test_claude_code_status_line_payload():
@@ -140,7 +200,14 @@ def test_every_canonical_field_survives_a_round_trip():
               "tokens_in": 9, "tokens_out": 10, "lines_added": 11,
               "lines_removed": 12}
     assert set(sample) == set(CANONICAL), "a new field needs a test"
-    assert sanitise(normalise(sample)) == sample
+    got = sanitise(normalise(sample))
+    for key, value in sample.items():
+        assert got[key] == value, key
+    # And the two flat windows came through as windows; the reset stays flat
+    # because two windows leave it nobody's.
+    assert got["quotas"] == {"five_hour": {"used_pct": 6.0},
+                             "seven_day": {"used_pct": 7.0}}
+    assert set(got) == set(sample) | {"quotas"}
 
 
 # --- every quota window, not a fixed two -------------------------------------
