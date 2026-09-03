@@ -265,7 +265,14 @@ def local_datetime(ts: str) -> datetime | None:
             return None
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(_reading_zone())
+    try:
+        return parsed.astimezone(_reading_zone())
+    except (OverflowError, ValueError, OSError):
+        # A stamp at the edge of the calendar: `astimezone` overflows when the
+        # zone's offset would push it past year 1 or 9999. No wire stamp gets
+        # near it; a hostile one can, and this runs on the draw path of a
+        # curses program. Unreadable, like a stamp that does not parse.
+        return None
 
 
 def local_clock(ts: str, fmt: str = "%H:%M") -> str:
@@ -313,14 +320,17 @@ def local_day_clock(ts: str, *, today: date | None = None) -> str:
     clock = local_clock(ts)
     if not clock:
         return ""
-    try:
-        parsed = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(
-            tzinfo=timezone.utc
-        ).astimezone()
-    except ValueError:
+    # THE SAME CONVERSION THE TRANSCRIPT USES, and the same «today». This took
+    # its clock from `local_datetime` and then built the date with a bare
+    # `.astimezone()` — the machine's zone — and judged «today» by the
+    # machine's calendar, so a reader who had pinned a zone with `collab
+    # config timezone` saw the transcript honour it and the stats row ignore
+    # it: one stamp, two days, an hour either side of midnight.
+    parsed = local_datetime(ts)
+    if parsed is None:
         return clock
     day = parsed.date()
-    if day == (today if today is not None else datetime.now().date()):
+    if day == (today if today is not None else local_today()):
         return clock
     return f"{day.day} {MONTHS[day.month - 1]} {clock}"
 

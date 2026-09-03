@@ -1794,6 +1794,17 @@ Work that came from outside this repository, and the release it landed in:
   session migrated from an older collab, which had been falling back to the
   rollback journal in silence.
   [#3](https://github.com/rperez93/collab-a2a/pull/3), in v1.16.0.
+- **Angel Rodriguez** ([@AngelVRodC](https://github.com/AngelVRodC)) — two
+  dependency floors that permitted a broken install, corrected.
+  [#20](https://github.com/rperez93/collab-a2a/pull/20), in v1.21.1.
+- **Juan Diego Rodriguez** ([@Belseck](https://github.com/Belseck)) — the viewer
+  answers the mouse: scrollbars on both panes, click to fold, a click on the
+  scrolled-back notice to jump to the newest, and dates that no longer follow
+  the machine's locale. [#26](https://github.com/rperez93/collab-a2a/pull/26),
+  in v1.24.0.
+- **Juan Diego Rodriguez** ([@Belseck](https://github.com/Belseck)) — the date
+  and the clock of a stamp read in one timezone, and `collab config timezone`
+  to pin it. [#38](https://github.com/rperez93/collab-a2a/pull/38), in v1.28.0.
 
 ## License
 

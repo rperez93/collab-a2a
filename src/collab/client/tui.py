@@ -1211,8 +1211,10 @@ def _body_lines(env: Envelope, width: int) -> list[str]:
 #: be set to — and a transcript two people read together cannot have half its
 #: dates in one language. This is also the only place the month is named, so
 #: `_day_label` and `_stamp` cannot disagree about how to spell it.
-MONTHS = ("jan", "feb", "mar", "apr", "may", "jun",
-          "jul", "aug", "sep", "oct", "nov", "dec")
+# ONE TABLE. The stats row spells months from `protocol.MONTHS`; a second copy
+# here drifted from it once already in wording, and two tables that can differ
+# are two calendars on one screen.
+from ..protocol import MONTHS
 
 
 def _local_date(ts: str) -> _dt.date | None:
