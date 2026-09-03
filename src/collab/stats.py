@@ -434,7 +434,7 @@ def reported_age(stats: Any, *, now: float | None = None) -> str:
     return f"{words} — old" if gap > STATS_STALE_AFTER else words
 
 
-def reported_when(stats: Any) -> str:
+def reported_when(stats: Any, *, now: float | None = None) -> str:
     """The moment these figures were reported, as the reader's own clock.
 
     The age says how fresh a figure is to the one reading it; the time is what
@@ -444,8 +444,13 @@ def reported_when(stats: Any) -> str:
     alone when the stamp fell today, «2 sep 14:05» when it did not. Empty for
     anything `reported_age` would call unknown, so the two never disagree.
     """
+    # THROUGH THE AGE, not merely the stamp. `_stamp_of` accepts a stamp an
+    # hour ahead of this clock; `reported_age` then calls it unknown — a
+    # clock that disagrees with ours, not a report — and a moment printed
+    # beside «age unknown» was a moment for a report the row could not
+    # date. Whatever the age calls unknown has no moment to print.
     stamp = _stamp_of(stats)
-    if stamp is None:
+    if stamp is None or "unknown" in reported_age(stats, now=now):
         return ""
     try:
         wire = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stamp))

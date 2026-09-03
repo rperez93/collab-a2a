@@ -75,15 +75,18 @@ def stash_agent_stats(raw: str, cwd: Path | None) -> None:
     try:
         profile = _own_profile(cwd)
         if profile is None:
-            # NOT PROVEN, BUT NOT AMBIGUOUS EITHER. Ancestry proves nothing
-            # from inside a sandbox, after the agent restarted, or when the
-            # session was joined from a different terminal than the agent's
-            # — and in a repo with one claim there is still only one agent
-            # the figures can belong to.
-            profile = _lone_claim(cwd)
-        if profile is None:
-            # Two claims and no proof: the one case where guessing is the
-            # bug. Say so where the agents will look, rather than nothing.
+            # NO PROOF, NO WRITE — WHATEVER THE COUNT OF CLAIMS. «One claim in
+            # the repo, so it must be ours» was tried here and is wrong: an
+            # agent's own lock is taken only AFTER its join returns, so while
+            # B is joining the repository holds exactly one claim, A's, and
+            # B's status line — unable to prove its directory in that window
+            # from a sandbox, after a restart, or from another terminal —
+            # wrote B's usage into A's file. Stamped with A's own owner, A's
+            # `read_stats` accepted it, and A's daemon published B's spend as
+            # A's on the next heartbeat: the leak `_own_profile` exists to
+            # stop, and one `resolve_home` records having reverted before.
+            # A wrong attribution is silent; an unattributed one is reported,
+            # which is what the marker and `collab check` are for.
             from ..stats import leave_unattributed
             leave_unattributed(cwd, figures, [str(h) for h in _claims(cwd)])
             return
@@ -123,14 +126,6 @@ def _claims(cwd: Path | None) -> list[Path]:
     from ..config import candidate_homes
 
     return [home for home in candidate_homes(cwd) if lockfile.read(home) is not None]
-
-
-def _lone_claim(cwd: Path | None) -> SessionProfile | None:
-    """The one session in this repo, when there is exactly one."""
-    claims = _claims(cwd)
-    if len(claims) != 1:
-        return None
-    return _profile_in(claims[0])
 
 
 def _profile_in(home: Path) -> SessionProfile | None:

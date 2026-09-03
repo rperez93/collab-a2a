@@ -119,6 +119,27 @@ def test_a_stamp_from_today_carries_no_date():
     assert not any(m in bits[-1] for m in statmod.MONTHS), bits
 
 
+def test_a_stamp_from_the_future_has_no_clock_either():
+    """`reported_age` calls a stamp more than CLOCK_SKEW ahead unknown — a
+    clock that disagrees with ours, not a report — and the row read «reported
+    19:12 · age unknown»: a moment printed for a report whose age it could
+    not tell. Whatever the age calls unknown has no moment to print."""
+    ahead = time.time() + statmod.CLOCK_SKEW + 60
+    figures = {"model": "x", "reported_at": ahead}
+    assert statmod.reported_age(figures) == "age unknown"
+    assert statmod.reported_when(figures) == ""
+    assert cli._stat_bits({"stats": figures})[-1] == "age unknown"
+
+
+def test_epoch_zero_is_not_a_report():
+    """A Thursday in 1970 is what an unset field reads as, not a moment
+    anybody reported at."""
+    figures = {"model": "x", "reported_at": 0}
+    assert statmod.reported_age(figures) == "age unknown"
+    assert statmod.reported_when(figures) == ""
+    assert cli._stat_bits({"stats": figures})[-1] == "age unknown"
+
+
 def test_junk_or_missing_stamps_show_no_clock():
     """No stamp, no time — the same words as before, and nothing invented."""
     assert cli._stat_bits(_person(None))[-1] == "age unknown"

@@ -1335,9 +1335,10 @@ fix it — the status line handed collab figures it could attribute to no sessio
 `collab statusline install` with it set, so the hook carries it), the polled
 command failing (with its last line of stderr), sharing switched off, the hub
 refusing the report, or the route simply gone quiet — and `collab stats` prints
-the same line under your own row. A repository with **one** session in it takes
-the status line's figures even when the process tree cannot prove which agent
-sent them; with two, nothing is guessed and the reason is reported instead.
+the same line under your own row. Nothing is ever guessed: when the process tree
+cannot prove which agent the figures came from, they are not written anywhere,
+however many sessions the repository holds, and the reason is reported instead —
+a wrong attribution is silent, an unattributed one is not.
 
 **Push (report at a moment that matters).** For a one-off, or from a plugin
 that already knows when something changed:

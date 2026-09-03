@@ -168,16 +168,27 @@ def repo(tmp_path, monkeypatch):
 PAYLOAD = json.dumps({"model": {"display_name": "Opus 5"}, "cost": {"total_cost_usd": 3.2}})
 
 
-def test_a_lone_claim_gets_the_figures_when_ancestry_proves_nothing(repo):
-    """One agent in the repo is unambiguous, whatever the process tree says."""
-    _claim(repo / ".collab", "bob")
+def test_the_only_claim_in_the_repo_is_not_taken_on_trust(repo):
+    """A's lock, with a chain that is not ours; B's payload arrives.
+
+    «One claim, so it must be ours» reads as safe and is not: B's lock is
+    taken only AFTER `join_session` returns, so during B's own join the
+    repository holds exactly one claim — A's. B's status line, unable to prove
+    its directory in that window, would write B's usage into A's file, stamped
+    with A's own owner, and A's daemon would publish B's spend as A's on the
+    next heartbeat. That is the leak `_own_profile` exists to stop, silently
+    reintroduced. A's file stays untouched and the marker says what happened.
+    """
+    _claim(repo / ".collab", "alice")
     assert config.claimed_home(repo) is None, "the fixture must leave nothing proven"
 
     r.stash_agent_stats(PAYLOAD, repo)
 
-    written = json.loads((repo / ".collab" / "sessions" / "s" / stats.STATS_FILE).read_text())
-    assert written["cost_usd"] == 3.2
-    assert not (repo / ".collab" / stats.UNATTRIBUTED_FILE).exists()
+    assert not (repo / ".collab" / "sessions" / "s" / stats.STATS_FILE).exists(), \
+        "B's figures landed in A's file"
+    marker = stats.unattributed(repo)
+    assert marker["figures"]["cost_usd"] == 3.2
+    assert marker["homes"] == [str(repo / ".collab")]
 
 
 def test_two_claims_and_no_proof_leave_a_marker_not_silence(repo):
@@ -354,6 +365,52 @@ def test_install_carries_collab_home_into_the_hook_when_it_has_one(tmp_path, mon
     assert "COLLAB_HOME=/repo/.collab-bob '/opt/collab' statusline render" in body, body
     assert body.index("COLLAB_HOME=") < body.index("statusline render")
     assert any("COLLAB_HOME" in note for note in result.notes), result.notes
+
+
+# --- junk in status.json never takes the check down ----------------------------------
+
+JUNK = (float("nan"), float("inf"), float("-inf"), 1e400, -5, "lots", True, [], {})
+
+
+def test_junk_timestamps_in_status_json_never_raise(profile, isolated_config, monkeypatch):
+    """`sent_at: NaN` passed `float()` and then reached `_ago_seconds`, which
+    raised — from a value the daemon wrote and nobody types. Every timestamp
+    the check reads is a remote-ish value and is judged the same way."""
+    monkeypatch.setattr(cli, "is_running", lambda p: 4242)
+    stats.write_stats(profile, {"model": "x", "cost_usd": 1})
+    for junk in JUNK:
+        _live_status(profile, file_written_at=time.time() - 2, sent_at=junk,
+                     post_error=None, source_error=None, route="file")
+        verdict, detail, fix = cli._stats_health(profile)     # must not raise
+        assert verdict == cli.CHECK_OK, (junk, detail)
+        assert "nan" not in detail.lower() and "inf" not in detail.lower(), (junk, detail)
+
+        _live_status(profile, file_written_at=time.time() - 2, sent_at=time.time() - 2,
+                     post_error=None, route="command",
+                     source_error={"at": junk, "command": "c", "detail": "boom"})
+        verdict, detail, fix = cli._stats_health(profile)
+        assert verdict == cli.CHECK_WARN and "boom" in detail, (junk, detail)
+
+    for junk in JUNK:
+        marker = config.base_home(profile.dir.parent.parent.parent) / stats.UNATTRIBUTED_FILE
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(
+            json.dumps({"at": junk, "figures": {}, "homes": []}))
+        _live_status(profile, file_written_at=time.time() - 2, sent_at=time.time() - 2,
+                     post_error=None, source_error=None, route="file")
+        verdict, detail, fix = cli._stats_health(profile)
+        assert verdict == cli.CHECK_OK, (junk, detail)
+
+
+# --- the shipped numbers are pinned --------------------------------------------------------
+
+def test_the_reassert_cadence_is_sixty_seconds():
+    """Sixty, because the roster refreshes every nine seconds and a stamp that
+    moves once a minute is enough to tell alive from stalled; re-sending on
+    every beat would be a POST every three seconds from every agent for no new
+    information. Every test above sets its own value; this one reads the
+    shipped one."""
+    assert d.STATS_REASSERT == 60.0
 
 
 def test_install_without_a_home_adds_none(tmp_path, monkeypatch):

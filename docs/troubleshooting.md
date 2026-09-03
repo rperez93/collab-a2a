@@ -182,12 +182,13 @@ rewritten, so a figure that reads `— old` beside an agent that is running mean
 the file itself has stopped moving:
 
 1. **«could not be attributed to you»** — the status line received figures but
-   the repository holds two sessions and the process tree proved which agent
-   sent them to nobody (a sandbox, an agent restarted since it joined, a session
-   joined from another terminal). Start the agent with
+   the process tree could not prove which agent sent them (a sandbox, an agent
+   restarted since it joined, a session joined from another terminal), and
+   nothing is guessed — not even with a single session in the repository, since
+   an agent's own claim exists only after its join returns and a guess made in
+   that window lands in somebody else's file. Start the agent with
    `COLLAB_HOME=<its state dir>` in its environment — the status line inherits
-   it — or run `collab statusline install` with it set. With one session in the
-   repository the figures are taken regardless.
+   it — or run `collab statusline install` with it set.
 2. **«your usage command has been failing»** — the `--source` command exited
    non-zero or printed nothing collab understands; the line shows its last line
    of output. Fix it or clear it with `collab stats --source ''`.

@@ -2386,6 +2386,25 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
     return out
 
 
+def _moment(value: Any) -> float:
+    """A timestamp out of `status.json` or a marker, or 0.0 for anything else.
+
+    Every stamp the health check reads was written by a program, not typed,
+    and still has to be judged: `sent_at: NaN` passed `float()` and then
+    reached `_ago_seconds`, which raised from inside `collab check` over a
+    value nobody could see. Not a number, not finite, not positive: no moment.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return 0.0
+    try:
+        stamp = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if stamp != stamp or stamp in (float("inf"), float("-inf")) or stamp <= 0:
+        return 0.0
+    return stamp
+
+
 def _stats_health(profile: SessionProfile) -> tuple[str, str, str] | None:
     """Why this agent's usage figure is moving, or is not — with the fix.
 
@@ -2415,10 +2434,7 @@ def _stats_health(profile: SessionProfile) -> tuple[str, str, str] | None:
     # Figures the status line received and could give to nobody, more recent
     # than anything this agent owns: the number the room sees stopped here.
     marker = unattributed(Path(profile.home).parent)
-    try:
-        marker_at = float(marker.get("at") or 0)
-    except (TypeError, ValueError):
-        marker_at = 0.0
+    marker_at = _moment(marker.get("at"))
     if marker_at and marker_at > written_at:
         return (CHECK_WARN,
                 f"the status line received usage figures {_ago_seconds(now - marker_at)}"
@@ -2434,10 +2450,8 @@ def _stats_health(profile: SessionProfile) -> tuple[str, str, str] | None:
         return (CHECK_WARN, "your usage is not shared — sharing is off, so the"
                 " room sees nothing of it", f"{exe} stats --share on")
     if error:
-        try:
-            since = _ago_seconds(now - float(error.get("at") or now))
-        except (TypeError, ValueError):
-            since = "just now"
+        failed_at = _moment(error.get("at"))
+        since = _ago_seconds(max(now - failed_at, 0.0)) if failed_at else "just now"
         return (CHECK_WARN,
                 f"your usage command has been failing since {since}: {error.get('detail')}",
                 f"fix `{error.get('command')}` so it prints usage JSON, or clear it:"
@@ -2464,18 +2478,15 @@ def _stats_health(profile: SessionProfile) -> tuple[str, str, str] | None:
                 f"your usage was last produced {_ago_seconds(age)} — the route that"
                 " produced it has stopped, so the room is splitting work on a stale figure",
                 how)
-    try:
-        sent_at = float(block.get("sent_at") or 0)
-    except (TypeError, ValueError):
-        sent_at = 0.0
+    sent_at = _moment(block.get("sent_at"))
     if sent_at and (written_at - sent_at) > STATS_REASSERT + 2 * STATUS_HEARTBEAT:
         return (CHECK_WARN,
                 f"your usage was written {_ago_seconds(age)} but last sent"
-                f" {_ago_seconds(now - sent_at)} — the listener is not carrying it",
+                f" {_ago_seconds(max(now - sent_at, 0.0))} — the listener is not carrying it",
                 f"{exe} daemon stop && {exe} daemon start")
     if sent_at:
         return (CHECK_OK, f"your usage is current — sent to the hub"
-                f" {_ago_seconds(now - sent_at)}", "")
+                f" {_ago_seconds(max(now - sent_at, 0.0))}", "")
     return (CHECK_OK, "your usage is current", "")
 
 
