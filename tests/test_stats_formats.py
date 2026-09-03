@@ -101,6 +101,23 @@ def test_sanitise_keeps_canonical_fields():
     assert sanitise({"model": "Opus 5", "quota_five_hour": 42})["quota_five_hour"] == 42.0
 
 
+def test_sanitise_keeps_an_empty_quotas_map():
+    """`{}` under `quotas` is a statement — «no quota» — and reaches the hub
+    as one, where it clears; see hub.merge_stats."""
+    assert sanitise({"quotas": {}}) == {"quotas": {}}
+    assert sanitise({"quotas": {}, "model": "x"}) == {"quotas": {}, "model": "x"}
+
+
+@pytest.mark.parametrize("junk", ["lots", ["five_hour"], None, 42, True])
+def test_sanitise_drops_a_quotas_that_is_not_a_map(junk):
+    """A non-dict `quotas` used to slip through as an opaque extra field and
+    be published to the whole roster. It is not a quota statement: dropped,
+    and the report is one that does not carry `quotas`."""
+    out = sanitise({"quotas": junk, "model": "x"})
+    assert "quotas" not in out, out
+    assert out == {"model": "x"}
+
+
 def test_sanitise_drops_nested_values():
     """Usage lands on every roster; it stays flat and small."""
     assert "payload" not in sanitise({"payload": {"deep": [1, 2, 3]}})

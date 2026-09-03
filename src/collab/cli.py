@@ -1586,6 +1586,30 @@ def cmd_stats(args: argparse.Namespace) -> int:
     This is what lets you hand the next task to whoever still has quota rather
     than guessing.
     """
+    if getattr(args, "clear_quota", False):
+        from . import stats as statmod
+
+        profile = _require_own_profile(args)
+        # ON DISK FIRST, and not only on the wire: the daemon re-posts the
+        # file whenever it changes, so a file that kept the old windows would
+        # put them straight back on the roster after the hub had cleared
+        # them. Everything that is not quota is kept.
+        kept = {k: v for k, v in statmod.read_stats(profile).items()
+                if k not in statmod.QUOTA_FIELDS}
+        statmod.write_stats(profile, {**kept, "quotas": {}})
+        if not share_stats_enabled():
+            warn("quota cleared locally, but sharing is off (collab stats --share on)")
+            return 0
+        try:
+            with _client(profile) as client:
+                client.report_stats({"quotas": {}})
+        except HubError as exc:
+            warn(f"quota cleared locally, will be shared when the hub is reachable ({exc})")
+            return 0
+        ok("quota cleared for everyone — nobody will be handed work on your old figure")
+        print(dim("  report again when you can see it: collab stats --report '{\"quotas\": {…}}'"))
+        return 0
+
     if args.report is not None:
         from . import stats as statmod
 
@@ -4201,9 +4225,13 @@ def build_parser() -> argparse.ArgumentParser:
                      help="share your own usage with the session (default: on)")
     stt.add_argument("--report", metavar="JSON",
                      help="report your own usage as a JSON object, or '-' for stdin "
-                          "— this is how any agent shares figures; send every "
-                          "quota window you know each time, an omitted one is "
-                          "read as gone")
+                          "— this is how any agent shares figures; a report that "
+                          "carries 'quotas' replaces your quota, one that does not "
+                          "leaves it")
+    stt.add_argument("--clear-quota", action="store_true",
+                     help="tell everyone you no longer have quota information "
+                          "(posts an empty 'quotas' map) — use it when your tool "
+                          "has stopped showing you a quota")
     stt.add_argument("--source", metavar="CMD",
                      help="a shell command printing your usage as JSON; collab runs "
                           "it on a timer so the figures stay current by themselves "

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from collab.config import share_stats_enabled
 
 
@@ -68,32 +70,43 @@ def test_stats_ride_along_with_an_ordinary_message(client, session, host_headers
     assert _person(client, host_headers, "bob")["stats"]["quota_five_hour"] == 88.5
 
 
-def test_later_stats_merge_except_the_quota_which_is_replaced(client, session,
-                                                             host_headers):
-    """Non-quota figures merge; the quota is whatever the last report said.
+def test_later_stats_merge_and_a_report_without_quotas_leaves_the_quota(
+        client, session, host_headers):
+    """Non-quota figures merge; the quota changes only when a report carries it.
 
-    This test used to be `test_later_stats_merge_rather_than_replace`, and it
-    held that an update never drops what it omits. It still does for the
-    model, the spend and the token counts — figures an agent learns one at a
-    time. It stopped being true for the quota, because the merge was the
-    defect: an agent that could no longer see a quota window kept showing its
-    old one to everybody, and work was split on a number nobody had reported
-    for an hour. What an agent reports is now the whole truth about its
-    quota — see `test_a_report_is_the_whole_truth_about_the_quota`.
+    This test has changed twice in one day, and the history is the point.
+
+    It began as `test_later_stats_merge_rather_than_replace`: an update never
+    drops what it omits, quota included. That let an agent which could no
+    longer see a window go on showing its old figure to everybody, and work
+    was split on it.
+
+    It became `…_except_the_quota_which_is_replaced`: a report was the whole
+    truth about the quota, and one with no quota in it cleared it. That closed
+    the first trap and opened a worse one: any tool that reports cost every
+    turn but never sees quota — most of them — would keep everyone's quota
+    wiped, and the agent could do nothing about it short of never reporting.
+
+    It is now this: a report that does not carry `quotas` says nothing about
+    the quota and leaves it; one that does carry `quotas` — even empty — is
+    the agent's whole statement and replaces it. An agent that has lost sight
+    of its quota says so on purpose, with `collab stats --clear-quota`, and
+    the whole-picture routes (the status line, the usage command) carry
+    `quotas: {}` for it when their payload has none.
     """
     bob = _join(client, session, "bob")
     h = _headers(bob)
     client.post("/ext/collab/v1/messages", headers=h,
                 json={"text": "a", "stats": {"model": "Opus 5", "cost_usd": 1.0,
-                                             "quota_five_hour": 40.0}})
+                                             "quotas": {"five_hour": {"used_pct": 40}}}})
     client.post("/ext/collab/v1/messages", headers=h,
                 json={"text": "b", "stats": {"cost_usd": 2.0}})
 
     stats = _person(client, host_headers, "bob")["stats"]
     assert stats["cost_usd"] == 2.0
     assert stats["model"] == "Opus 5", "an update must not drop the model it omits"
-    assert "quota_five_hour" not in stats, \
-        "but a quota it omits is a quota it no longer has"
+    assert stats["quotas"] == {"five_hour": {"used_pct": 40.0}}, \
+        "nor the quota it says nothing about"
 
 
 def test_quota_is_readable_for_balancing_work(client, session, host_headers):
@@ -118,12 +131,13 @@ def test_an_agent_that_shares_nothing_is_not_a_problem(client, session, host_hea
 
 
 def test_a_partial_report_to_the_endpoint_merges(client, session, host_headers):
-    """Non-quota figures merge everywhere, not only on the message path.
+    """Reports merge everywhere, not only on the message path.
 
     The endpoint replaced wholesale, so telling the hub one new figure erased
-    everything else that agent had shared. The quota is the exception, on
-    purpose: a report that says nothing about it is read as «none», not as
-    «unchanged».
+    everything else that agent had shared. For one afternoon the quota was an
+    exception — a report without it cleared it — and that turned every
+    cost-only report into a wipe; see the test above. A report that carries no
+    `quotas` leaves the quota as it was.
     """
     bob = _join(client, session, "bob")
     h = _headers(bob)
@@ -135,7 +149,7 @@ def test_a_partial_report_to_the_endpoint_merges(client, session, host_headers):
     stats = _person(client, host_headers, "bob")["stats"]
     assert stats["tokens_in"] == 184000
     assert stats["model"] == "gpt-5-codex", "a partial update must not erase the rest"
-    assert "quota_five_hour" not in stats, "except the quota, which it omitted"
+    assert stats["quota_five_hour"] == 73.0, "the quota included"
 
 
 def test_the_endpoint_still_records_the_machine(client, session, host_headers):
@@ -153,67 +167,89 @@ def test_the_endpoint_normalises_like_every_other_path(client, session, host_hea
     assert _person(client, host_headers, "bob")["stats"]["quota_used_pct"] == 42.0
 
 
-# --- the quota is the whole truth, every time --------------------------------
+# --- the quota changes only when a report carries `quotas` -------------------
 #
 # Windows used to merge one at a time, so that an agent reporting only its
-# five-hour window did not erase the weekly one. The consequence was the
-# opposite defect, and the worse one: an agent that could no longer see a
-# window kept showing its old figure to everyone, and people split work on it.
-# A report now carries every window the agent knows, and one it leaves out is
-# read as gone. The instructions that tell agents how to report say the same.
+# five-hour window did not erase the weekly one; an agent that could no longer
+# see a window then kept showing its old figure to everyone. For one afternoon
+# the rule was the reverse — a report was the whole truth, and one with no
+# quota cleared it — which meant any tool reporting cost every turn and never
+# seeing quota kept everybody's quota wiped. The rule now: a report that
+# CARRIES `quotas` (even empty) replaces the stored quota with exactly that;
+# one that does not carry it leaves the quota alone. Losing sight of a quota
+# is said on purpose: `collab stats --clear-quota`.
 
-def test_a_report_is_the_whole_truth_about_the_quota(client, session,
-                                                     host_headers):
-    """Report two windows, then one: the other is gone — for a third party too."""
-    bob = _join(client, session, "bob")
-    h = _headers(bob)
-    client.post("/ext/collab/v1/stats", headers=h, json={"stats": {"quotas": {
-        "five_hour": {"used_pct": 55, "resets_at": "SOON"},
-        "seven_day": {"used_pct": 20},
-    }}})
-    client.post("/ext/collab/v1/stats", headers=h, json={"stats": {"quotas": {
-        "five_hour": {"used_pct": 60},
-    }}})
-
-    windows = _person(client, host_headers, "bob")["stats"]["quotas"]
-    assert set(windows) == {"five_hour"}, windows
-    assert windows["five_hour"] == {"used_pct": 60.0}, \
-        "and the window itself is what was said, not the old reset merged in"
-    carol = _join(client, session, "carol")
-    assert set(_person(client, _headers(carol), "bob")["stats"]["quotas"]) == {"five_hour"}
-
-
-def test_an_empty_quotas_map_clears_the_quota(client, session, host_headers):
-    """`quotas: {}` is a statement — «I have no quota to report» — and not a
-    report with nothing in it. Every quota field goes, the flat ones too."""
+def test_a_cost_only_report_leaves_the_quota_for_everyone(client, session,
+                                                          host_headers):
+    """The case that flipped: a report without `quotas` is not about the quota."""
     bob = _join(client, session, "bob")
     h = _headers(bob)
     client.post("/ext/collab/v1/stats", headers=h, json={"stats": {
-        "model": "gpt-5", "quota_five_hour": 73, "quota_seven_day": 12,
+        "quotas": {"five_hour": {"used_pct": 55, "resets_at": "SOON"},
+                   "seven_day": {"used_pct": 20}},
+        "quota_five_hour": 55, "quota_seven_day": 20}})
+    client.post("/ext/collab/v1/stats", headers=h, json={"stats": {"cost_usd": 2.0}})
+    client.post("/ext/collab/v1/stats", headers=h, json={"stats": {"model": "x"}})
+    client.post("/ext/collab/v1/stats", headers=h, json={"stats": {"tokens_in": 10}})
+
+    stats = _person(client, host_headers, "bob")["stats"]
+    assert set(stats["quotas"]) == {"five_hour", "seven_day"}, stats
+    assert stats["quotas"]["five_hour"]["resets_at"] == "SOON"
+    assert stats["quota_five_hour"] == 55.0 and stats["quota_seven_day"] == 20.0
+    assert stats["cost_usd"] == 2.0 and stats["model"] == "x" and stats["tokens_in"] == 10
+    carol = _join(client, session, "carol")
+    assert set(_person(client, _headers(carol), "bob")["stats"]["quotas"]) == \
+        {"five_hour", "seven_day"}
+
+
+def test_an_empty_quotas_map_clears_the_quota(client, session, host_headers):
+    """`quotas: {}` is the statement «I have no quota to report». Every quota
+    field goes — the flat ones too — and nothing else does."""
+    bob = _join(client, session, "bob")
+    h = _headers(bob)
+    client.post("/ext/collab/v1/stats", headers=h, json={"stats": {
+        "model": "gpt-5", "cost_usd": 1.0,
+        "quota_five_hour": 73, "quota_seven_day": 12,
         "quota_used_pct": 73, "quota_reset_at": "SOON",
         "quotas": {"five_hour": {"used_pct": 73}, "seven_day": {"used_pct": 12}}}})
     client.post("/ext/collab/v1/stats", headers=h, json={"stats": {"quotas": {}}})
 
     stats = _person(client, host_headers, "bob")["stats"]
     assert not any(key.startswith("quota") for key in stats), stats
-    assert stats["model"] == "gpt-5", "the model is not quota and stays"
+    assert stats["model"] == "gpt-5" and stats["cost_usd"] == 1.0
+    carol = _join(client, session, "carol")
+    assert "quotas" not in _person(client, _headers(carol), "bob")["stats"]
 
 
-def test_a_report_with_no_quota_at_all_clears_it(client, session, host_headers):
-    """Absent is «gone», not «unchanged»: the stored windows and the flat
-    figures both go, on the message path as on the endpoint."""
+def test_a_map_naming_one_window_is_the_whole_statement(client, session,
+                                                        host_headers):
+    """Report five-hour and weekly, then a map with only five-hour: the weekly
+    window is gone, the flat weekly figure with it, and the five-hour window
+    is what was said — not the old reset merged back in."""
     bob = _join(client, session, "bob")
     h = _headers(bob)
-    client.post("/ext/collab/v1/messages", headers=h, json={
-        "text": "x", "stats": {"quotas": {"five_hour": {"used_pct": 91}},
-                               "quota_five_hour": 91}})
-    assert _person(client, host_headers, "bob")["stats"]["quota_five_hour"] == 91.0
-    client.post("/ext/collab/v1/messages", headers=h, json={
-        "text": "y", "stats": {"cost_usd": 2.0}})
+    client.post("/ext/collab/v1/stats", headers=h, json={"stats": {
+        "quotas": {"five_hour": {"used_pct": 55, "resets_at": "SOON"},
+                   "seven_day": {"used_pct": 20}},
+        "quota_five_hour": 55, "quota_seven_day": 20}})
+    client.post("/ext/collab/v1/stats", headers=h, json={"stats": {
+        "quotas": {"five_hour": {"used_pct": 60}}, "quota_five_hour": 60}})
 
     stats = _person(client, host_headers, "bob")["stats"]
-    assert "quotas" not in stats and "quota_five_hour" not in stats, stats
-    assert stats["cost_usd"] == 2.0
+    assert stats["quotas"] == {"five_hour": {"used_pct": 60.0}}, stats
+    assert stats["quota_five_hour"] == 60.0
+    assert "quota_seven_day" not in stats, "the flat figure goes with its window"
+
+
+def test_a_window_update_refreshes_that_window(client, session, host_headers):
+    bob = _join(client, session, "bob")
+    h = _headers(bob)
+    client.post("/ext/collab/v1/stats", headers=h,
+                json={"stats": {"quotas": {"five_hour": {"used_pct": 10}}}})
+    client.post("/ext/collab/v1/stats", headers=h,
+                json={"stats": {"quotas": {"five_hour": {"used_pct": 90}}}})
+    windows = _person(client, host_headers, "bob")["stats"]["quotas"]
+    assert windows["five_hour"]["used_pct"] == 90.0
 
 
 def test_the_model_survives_a_quota_only_report(client, session, host_headers):
@@ -223,9 +259,10 @@ def test_the_model_survives_a_quota_only_report(client, session, host_headers):
                 json={"stats": {"model": "Opus 5", "cost_usd": 1.0}})
     client.post("/ext/collab/v1/stats", headers=h,
                 json={"stats": {"quotas": {"five_hour": {"used_pct": 10}}}})
+    client.post("/ext/collab/v1/stats", headers=h, json={"stats": {"quotas": {}}})
     stats = _person(client, host_headers, "bob")["stats"]
     assert stats["model"] == "Opus 5" and stats["cost_usd"] == 1.0
-    assert stats["quotas"] == {"five_hour": {"used_pct": 10.0}}
+    assert "quotas" not in stats
 
 
 def test_the_stamp_moves_when_a_report_clears_the_quota(client, session,
@@ -247,7 +284,7 @@ def test_the_stamp_moves_when_a_report_clears_the_quota(client, session,
 def test_an_identity_update_is_not_a_usage_report(client, session, host_headers):
     """`collab color` posts `{"color": …, "stats": {}}`, and a daemon with no
     stats file posts `{"stats": {}}` beside its machine. Neither says a word
-    about usage, so neither may be read as «my quota is gone»."""
+    about usage, so neither moves the stamp or touches the quota."""
     bob = _join(client, session, "bob")
     h = _headers(bob)
     client.post("/ext/collab/v1/stats", headers=h,
@@ -264,15 +301,23 @@ def test_an_identity_update_is_not_a_usage_report(client, session, host_headers)
     assert seen["machine"] == "bobs-laptop" and seen.get("color") == "#008080"
 
 
-def test_a_window_update_refreshes_that_window(client, session, host_headers):
+@pytest.mark.parametrize("junk", ["lots", ["five_hour"], None, 42])
+def test_a_quotas_that_is_not_a_map_is_not_a_quota_statement(client, session,
+                                                              host_headers, junk):
+    """A string, a list, `null` or a number under `quotas` is dropped on the
+    way in: it is not published to the roster as an opaque extra, and the
+    report is read as one that does not carry `quotas` — the stored quota
+    stays, the rest of the report merges."""
     bob = _join(client, session, "bob")
     h = _headers(bob)
     client.post("/ext/collab/v1/stats", headers=h,
-                json={"stats": {"quotas": {"five_hour": {"used_pct": 10}}}})
+                json={"stats": {"quotas": {"five_hour": {"used_pct": 40}}}})
     client.post("/ext/collab/v1/stats", headers=h,
-                json={"stats": {"quotas": {"five_hour": {"used_pct": 90}}}})
-    windows = _person(client, host_headers, "bob")["stats"]["quotas"]
-    assert windows["five_hour"]["used_pct"] == 90.0
+                json={"stats": {"quotas": junk, "cost_usd": 2.0}})
+
+    stats = _person(client, host_headers, "bob")["stats"]
+    assert stats["quotas"] == {"five_hour": {"used_pct": 40.0}}, stats
+    assert stats["cost_usd"] == 2.0
 
 
 # --- when was this true? -------------------------------------------------------

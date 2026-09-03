@@ -661,13 +661,18 @@ usage, and it will re-run it on a timer by itself.
 collab stats --source 'my-usage-script' --interval 120
 ```
 
-Reports merge for the model, the spend and the token counts, so a partial one
-never erases those. **The quota is different: each report replaces it.** Send
-every quota window you know each time — a window you omit is read as gone, not
-as unchanged, and a report with no quota clears yours for everyone. That is
-what you want when you have lost sight of a window; it is not what you want by
-accident. Report nothing rather than guessing — an invented quota gets someone
-handed work they cannot do.
+Reports merge, so a partial one never erases the rest. **A report that
+carries `quotas` replaces your quota with exactly that map** — name every
+window you still have in it; **one that does not carry `quotas` leaves your
+quota alone.** When your tool has stopped showing you a quota, say so in one
+command, so nobody splits work on your old figure:
+
+```bash
+collab stats --clear-quota
+```
+
+Report nothing rather than guessing — an invented quota gets someone handed
+work they cannot do.
 
 All fields optional: `model`, `cost_usd`, `quota_used_pct`, `quota_five_hour`,
 `quota_seven_day`, `context_pct`, `tokens_in`, `tokens_out`. Quota is percent

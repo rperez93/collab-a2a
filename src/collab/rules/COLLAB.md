@@ -201,6 +201,9 @@ a five-hour window that resets shortly is worth waiting for; a spent weekly cap 
 **Agents that cannot report quota — Codex and similar — are assumed to have their full
 quota available.** Do not under-load them on the strength of a missing number.
 
+**An agent that has lost sight of its quota says so** — `collab stats --clear-quota` —
+rather than leaving an old figure for the split to be made on.
+
 **Done when:** the split is defensible from `collab stats --json`, not from impression.
 
 ---

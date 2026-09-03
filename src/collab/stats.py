@@ -43,9 +43,13 @@ backwards when you are deciding who can take on more work. Anything named
 *remaining* is inverted on the way in.
 
 Every field is optional. An agent that knows only its model reports only that,
-and the roster shows what it has. The quota is the one field that is read
-literally: a report carries every window the agent knows, and a window it
-leaves out is gone — see `server.hub.Hub.merge_stats`.
+and the roster shows what it has. The quota has one rule of its own: a report
+that carries `quotas` — even an empty map — replaces the stored quota with
+exactly that, and a report that does not carry it leaves the quota alone. So
+losing sight of a quota is said on purpose (`collab stats --clear-quota`), and
+the routes that hand over a whole picture of the agent — the status line, the
+usage command — carry `quotas: {}` when their payload has none; see
+`whole_picture` and `server.hub.Hub.merge_stats`.
 
 Anything can produce this — `collab stats --report '{"quota_five_hour": 42}'`
 is a whole integration. The nested shapes below are conveniences for agents
@@ -60,6 +64,14 @@ from pathlib import Path
 from typing import Any
 
 from .protocol import MONTHS, local_day_clock  # noqa: F401  MONTHS is read here too
+
+#: The fields that make up the quota, and that a report carrying `quotas`
+#: REPLACES as one: the windows map, the flat five-hour and seven-day figures
+#: derived from it, the single-figure form, and the reset. Everything else in
+#: `CANONICAL` merges. See `server.hub.Hub.merge_stats` for the rule, and
+#: `whole_picture` for the routes that must state the quota every time.
+QUOTA_FIELDS = ("quotas", "quota_five_hour", "quota_seven_day",
+                "quota_used_pct", "quota_reset_at")
 
 #: Fields we understand, and how to coerce them.
 CANONICAL: dict[str, type] = {
@@ -310,6 +322,23 @@ def normalise(data: Any) -> dict[str, Any]:
     return out
 
 
+def whole_picture(figures: dict[str, Any]) -> dict[str, Any]:
+    """Figures from a route that describes the agent in full, with the quota
+    stated either way.
+
+    The hub changes a quota only when a report carries `quotas`, so a route
+    whose payload IS the agent's whole state — Claude Code's status line, the
+    usage command an agent registered — has to say «no quota» in so many words
+    when it sees none, or a tool that stops sending quota would leave the old
+    figure on everybody's roster for as long as the session lasts. `--report`
+    does not come through here: it is the partial route, and a figure it
+    omits is a figure it said nothing about.
+    """
+    if "quotas" in figures:
+        return figures
+    return {**figures, "quotas": {}}
+
+
 def sanitise(reported: dict[str, Any]) -> dict[str, Any]:
     """What is safe to put on everyone else's roster.
 
@@ -319,8 +348,17 @@ def sanitise(reported: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     extras = 0
     for key, value in (reported or {}).items():
-        if key == "quotas" and isinstance(value, dict):
-            # The one nested field we keep, capped and coerced.
+        if key == "quotas":
+            # THE ONE NESTED FIELD WE KEEP, capped and coerced — and kept when
+            # it is EMPTY, because `quotas: {}` is the statement «I have no
+            # quota» and the hub clears on it. Anything under the key that is
+            # not a map — a string, a list, `null`, a number — is not a quota
+            # statement at all: it used to slip through below as an opaque
+            # extra field and be published to the whole roster, and a report
+            # carrying one is treated as a report that does not carry
+            # `quotas`.
+            if not isinstance(value, dict):
+                continue
             windows: dict[str, dict[str, Any]] = {}
             for name, figures in list(value.items())[:MAX_WINDOWS]:
                 if not isinstance(figures, dict):
@@ -333,8 +371,7 @@ def sanitise(reported: dict[str, Any]) -> dict[str, Any]:
                     kept["resets_at"] = str(figures["resets_at"])[:MAX_STRING]
                 if kept:
                     windows[_window_name(name)] = kept
-            if windows:
-                out["quotas"] = windows
+            out["quotas"] = windows
             continue
         if isinstance(value, (dict, list)):
             continue

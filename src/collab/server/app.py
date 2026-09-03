@@ -313,10 +313,10 @@ def create_app(
         """
         user = _require(request)
         body = await request.json()
-        # Merge, except the quota: a partial report — one figure an agent
-        # happens to know right now — must not erase the model or the spend it
-        # told us about, but the quota it carries is the quota it has. See
-        # `Hub.merge_stats`.
+        # Merge: a partial report — one figure an agent happens to know right
+        # now — must not erase the rest of what it told us. The one exception
+        # is a `quotas` map, which replaces the quota it describes, empty or
+        # not. See `Hub.merge_stats`.
         await asyncio.to_thread(hub.merge_stats, user.id, dict(body.get("stats") or {}))
         person = store.participant_by_id(user.id)
         if person is not None:

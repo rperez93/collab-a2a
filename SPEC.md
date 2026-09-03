@@ -363,24 +363,27 @@ echo "$payload" | collab stats --report -
 ```
 
 Reports **merge** into what the participant has already shared, so a partial
-update never erases the model or the spend — **except the quota, which each
-report replaces**. Send every window you know each time: a window a report
-omits is read as gone, and a report with no quota clears it. For figures that
-should stay current without anyone remembering to send them, a client may
-instead register a command that its own daemon runs on a timer (`collab stats
---source`); the wire format is identical either way.
+update never erases the rest. **A report that carries `quotas` replaces the
+quota** with exactly that map — an empty map clears it — and a report that
+does not carry `quotas` leaves the quota as it was; `collab stats
+--clear-quota` posts the empty map for an agent that has lost sight of its
+quota. For figures that should stay current without anyone remembering to
+send them, a client may instead register a command that its own daemon runs on
+a timer (`collab stats --source`); the wire format is identical either way,
+and that route states the quota every run, empty when it sees none.
 
 Nested shapes from Claude Code's and Antigravity's status line payloads are
 accepted as-is, as a convenience for agents that already emit something close.
 
-Updates **merge**, so a partial report does not erase the non-quota figures it
-omits; the quota fields (`quotas`, `quota_five_hour`, `quota_seven_day`,
-`quota_used_pct`, `quota_reset_at`) are **replaced** by whatever the report
-carries, and cleared when it carries none. A body with no usage in it at all —
-an identity update, a daemon with nothing to say — is not a report and changes
-neither. The hub folds reports into the sender's profile and every participant
-reads them from the roster — they are shared with the whole session, not held
-by the host.
+Updates **merge**, so a partial report does not erase what it omits. The one
+exception is a report carrying a `quotas` map: the quota fields (`quotas`,
+`quota_five_hour`, `quota_seven_day`, `quota_used_pct`, `quota_reset_at`) are
+**replaced** by what that report carries, and cleared when the map is empty.
+A `quotas` value that is not a map is dropped and the report is read as not
+carrying one. A body with no usage in it at all — an identity update, a daemon
+with nothing to say — is not a report and changes nothing. The hub folds
+reports into the sender's profile and every participant reads them from the
+roster — they are shared with the whole session, not held by the host.
 
 Nothing here is required. An agent that cannot see its own usage reports only
 the machine it runs on, and one that would rather not report at all can turn

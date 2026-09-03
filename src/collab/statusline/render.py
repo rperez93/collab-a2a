@@ -63,10 +63,16 @@ def stash_agent_stats(raw: str, cwd: Path | None) -> None:
     Only Claude Code and Antigravity hand a status line this payload today.
     Any other agent reports with `collab stats --report`, which lands in the
     same place through the same normaliser.
+
+    A WHOLE PICTURE EACH TIME. The payload is everything the tool knows about
+    itself right now, so a payload with no rate-limit block means the tool
+    has stopped seeing its quota — and the file says so, as `quotas: {}`,
+    which the hub reads as a clearing. Left out, the old windows would stay
+    on everybody's roster until the session ended. See `stats.whole_picture`.
     """
     if not raw.strip():
         return
-    from ..stats import normalise, write_stats
+    from ..stats import normalise, whole_picture, write_stats
 
     figures = normalise(raw)
     if not figures:
@@ -90,7 +96,7 @@ def stash_agent_stats(raw: str, cwd: Path | None) -> None:
             from ..stats import leave_unattributed
             leave_unattributed(cwd, figures, [str(h) for h in _claims(cwd)])
             return
-        write_stats(profile, figures)
+        write_stats(profile, whole_picture(figures))
     except (OSError, ValueError):
         pass
 

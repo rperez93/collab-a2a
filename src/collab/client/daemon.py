@@ -842,6 +842,10 @@ class Daemon:
 
         This is how an agent with no status line stays current without having
         to remember anything: the figures are pulled, not pushed.
+
+        What the command prints is the agent's whole picture, so a run that
+        prints no quota is a quota that has gone: the file carries
+        `quotas: {}` for it and the hub clears. See `stats.whole_picture`.
         """
         command, interval = stats_source()
         if not command or not share_stats_enabled():
@@ -850,7 +854,7 @@ class Daemon:
             return
         self._stats_ran_at = time.time()
 
-        from ..stats import normalise
+        from ..stats import normalise, whole_picture
 
         def run() -> tuple[int, str, str]:
             try:
@@ -878,7 +882,7 @@ class Daemon:
                                         "detail": detail}
             return
         self._stats_source_error = None
-        write_stats(self.profile, figures)
+        write_stats(self.profile, whole_picture(figures))
 
     async def _report_stats(self, client: httpx.AsyncClient) -> None:
         """Tell the hub where we are running, and what we know about our usage.

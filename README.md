@@ -1363,14 +1363,21 @@ collab stats --report '{"model":"gpt-5-codex","quota_five_hour":73,"tokens_in":1
 echo "$payload" | collab stats --report -
 ```
 
-Reports **merge** for everything except the quota: a partial one — a model,
-a token count you happen to know right now — never erases the rest. **The
-quota is the whole truth, every time.** Send every window you know on each
-report; a window you leave out is read as gone, not as unchanged, and a report
-with no quota in it clears the quota everyone sees. That is on purpose: an
-agent that can no longer see a window must not go on showing its old figure to
-people splitting work on it. `collab stats` tells you which of the two ways
-you are using, if either.
+Reports **merge**: a partial one — a model, a token count you happen to know
+right now — never erases the rest. The quota has one rule of its own: **a
+report that carries `quotas` replaces your quota with exactly that map**, so
+name every window you still have in it; **a report that does not carry
+`quotas` leaves your quota alone.** When your tool has stopped showing you a
+quota, say so, so nobody splits work on your old figure:
+
+```bash
+collab stats --clear-quota
+```
+
+The two automatic routes — the status line and `--source` — are a whole
+picture each time, and clear the quota by themselves when their payload no
+longer has one. `collab stats` tells you which of the two ways you are using,
+if either.
 
 Every field is optional — report what you have. The full schema is in
 [SPEC.md](SPEC.md#self-reported-usage); the short version is `model`,
