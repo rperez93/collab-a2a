@@ -378,19 +378,28 @@ def sanitise(reported: dict[str, Any]) -> dict[str, Any]:
             # `quotas`.
             if not isinstance(value, dict):
                 continue
+            # EACH WINDOW READ THE WAY `normalise` READS IT — a bare number is
+            # its `used_pct`, a remaining-style key is inverted, a reset under
+            # any of its names is kept. The wire endpoint runs this and not
+            # `normalise`, and a narrower reader here dropped shapes the other
+            # accepted; every dropped window is a step towards the failure
+            # below.
             windows: dict[str, dict[str, Any]] = {}
             for name, figures in list(value.items())[:MAX_WINDOWS]:
-                if not isinstance(figures, dict):
-                    continue
-                kept: dict[str, Any] = {}
-                if (pct := _coerce("quota_used_pct",
-                                   figures.get("used_pct"))) is not None:
-                    kept["used_pct"] = pct
-                if figures.get("resets_at"):
-                    kept["resets_at"] = str(figures["resets_at"])[:MAX_STRING]
-                if kept:
+                if (kept := _window_figures(figures)):
                     windows[_window_name(name)] = kept
-            out["quotas"] = windows
+            # `{}` IS A STATEMENT; `{"five_hour": "lots"}` IS NOISE, and noise
+            # is never promoted to a statement. Emitting the windows
+            # unconditionally — needed so an explicit empty map survives to
+            # the hub, where it clears — meant a non-empty map whose windows
+            # ALL failed the reader came out as `{}` too, indistinguishable
+            # from an intentional clear, and one junk window posted straight
+            # to the endpoint wiped a participant's quota for everyone. A map
+            # that arrived empty is the clear. A map that arrived with
+            # windows and kept none is not carried at all, so the report
+            # reads as one that says nothing about the quota.
+            if windows or not value:
+                out["quotas"] = windows
             continue
         if isinstance(value, (dict, list)):
             continue

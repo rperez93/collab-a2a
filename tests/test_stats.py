@@ -320,6 +320,92 @@ def test_a_quotas_that_is_not_a_map_is_not_a_quota_statement(client, session,
     assert stats["cost_usd"] == 2.0
 
 
+def _seed_two_windows(client, h):
+    client.post("/ext/collab/v1/stats", headers=h, json={"stats": {
+        "model": "gpt-5",
+        "quotas": {"five_hour": {"used_pct": 55, "resets_at": "SOON"},
+                   "seven_day": {"used_pct": 20}},
+        "quota_five_hour": 55, "quota_seven_day": 20}})
+
+
+def test_a_bare_number_window_is_a_figure_on_the_wire(client, session,
+                                                      host_headers):
+    """The wire endpoint runs `sanitise` only, and `sanitise` used to accept
+    a narrower set of window shapes than `normalise` — a bare number, or a
+    remaining-style key, was dropped. Dropped windows are what turned a
+    meaningful map into an empty one, so the shapes are the same now."""
+    bob = _join(client, session, "bob")
+    h = _headers(bob)
+    _seed_two_windows(client, h)
+    client.post("/ext/collab/v1/stats", headers=h,
+                json={"stats": {"quotas": {"five_hour": 42}}})
+    stats = _person(client, host_headers, "bob")["stats"]
+    assert stats["quotas"] == {"five_hour": {"used_pct": 42.0}}, \
+        "a bare number is that window's used_pct, and the map it came in replaces"
+
+    client.post("/ext/collab/v1/stats", headers=h,
+                json={"stats": {"quotas": {"five_hour": {"remaining_percentage": 58}}}})
+    stats = _person(client, host_headers, "bob")["stats"]
+    assert stats["quotas"] == {"five_hour": {"used_pct": 42.0}}
+
+
+@pytest.mark.parametrize("junk", ["lots", None, {"note": "x"}, [1, 2], {}])
+def test_a_map_of_junk_windows_is_noise_and_not_a_clear(client, session,
+                                                        host_headers, junk):
+    """`{}` is a statement; `{"five_hour": "lots"}` is noise. A non-empty map
+    from which no window survives must not come out as `{}` and wipe the
+    stored quota for everyone — the reviewer's live reproduction. Nothing
+    usable arrived, so the whole body is a non-report: the quota stays, the
+    stamp stays."""
+    bob = _join(client, session, "bob")
+    h = _headers(bob)
+    _seed_two_windows(client, h)
+    before = _person(client, host_headers, "bob")["stats"]
+    client.post("/ext/collab/v1/stats", headers=h,
+                json={"stats": {"quotas": {"five_hour": junk}}})
+
+    after = _person(client, host_headers, "bob")["stats"]
+    assert after["quotas"] == before["quotas"], after
+    assert after["quota_seven_day"] == 20.0 and after["quota_five_hour"] == 55.0
+    assert after["reported_at"] == before["reported_at"], "nothing usable was said"
+    carol = _join(client, session, "carol")
+    assert set(_person(client, _headers(carol), "bob")["stats"]["quotas"]) == \
+        {"five_hour", "seven_day"}
+
+
+def test_a_junk_map_beside_a_real_figure_merges_the_figure_only(
+        client, session, host_headers):
+    """The cost is a report; the junk map is not a quota statement."""
+    bob = _join(client, session, "bob")
+    h = _headers(bob)
+    _seed_two_windows(client, h)
+    before = _person(client, host_headers, "bob")["stats"]
+    time.sleep(0.02)
+    client.post("/ext/collab/v1/stats", headers=h,
+                json={"stats": {"quotas": {"five_hour": "lots"}, "cost_usd": 2.0}})
+
+    after = _person(client, host_headers, "bob")["stats"]
+    assert after["quotas"] == before["quotas"]
+    assert after["cost_usd"] == 2.0
+    assert float(after["reported_at"]) > float(before["reported_at"])
+
+
+def test_one_good_window_beside_junk_is_the_whole_statement(client, session,
+                                                            host_headers):
+    """A map with something usable in it is a real map: the good window is
+    kept, the junk one is dropped, and the map replaces the stored one — the
+    weekly window it did not name usably is gone."""
+    bob = _join(client, session, "bob")
+    h = _headers(bob)
+    _seed_two_windows(client, h)
+    client.post("/ext/collab/v1/stats", headers=h, json={"stats": {
+        "quotas": {"five_hour": {"used_pct": 60}, "seven_day": "lots"}}})
+
+    stats = _person(client, host_headers, "bob")["stats"]
+    assert stats["quotas"] == {"five_hour": {"used_pct": 60.0}}, stats
+    assert "quota_seven_day" not in stats
+
+
 # --- when was this true? -------------------------------------------------------
 #
 # A quota reading is a fact about a moment. `collab stats` printed the number

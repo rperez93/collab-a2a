@@ -178,6 +178,27 @@ def test_sanitise_drops_a_quotas_that_is_not_a_map(junk):
     assert out == {"model": "x"}
 
 
+def test_sanitise_reads_the_window_shapes_normalise_reads():
+    """One reader for a window, not two that disagree about `42`."""
+    assert sanitise({"quotas": {"five_hour": 42}}) == \
+        {"quotas": {"five_hour": {"used_pct": 42.0}}}
+    assert sanitise({"quotas": {"five_hour": {"remaining_percentage": 58}}}) == \
+        {"quotas": {"five_hour": {"used_pct": 42.0}}}
+    assert sanitise({"quotas": {"5h": {"used_percentage": 42, "reset_time": "SOON"}}}) == \
+        {"quotas": {"five_hour": {"used_pct": 42.0, "resets_at": "SOON"}}}
+
+
+@pytest.mark.parametrize("junk", ["lots", None, {"note": "x"}, [1, 2], {}])
+def test_sanitise_does_not_promote_a_junk_map_to_a_clear(junk):
+    """`{}` is a statement; a non-empty map with no usable window is noise,
+    and noise is never promoted to a statement: `quotas` is not emitted at
+    all, so the report reads as one that does not carry it."""
+    assert sanitise({"quotas": {"five_hour": junk}, "model": "x"}) == {"model": "x"}
+    assert sanitise({"quotas": {"five_hour": junk}}) == {}
+    # And the statement itself is untouched by that rule.
+    assert sanitise({"quotas": {}}) == {"quotas": {}}
+
+
 def test_sanitise_drops_nested_values():
     """Usage lands on every roster; it stays flat and small."""
     assert "payload" not in sanitise({"payload": {"deep": [1, 2, 3]}})
