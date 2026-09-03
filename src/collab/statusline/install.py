@@ -54,14 +54,23 @@ def settings_path(scope: str = "global") -> Path:
 from ..config import collab_executable  # noqa: E402  (re-exported)
 
 
-def build_block(executable: str) -> str:
+def build_block(executable: str, home: str = "") -> str:
     """The shell we inject.
 
     It never reads stdin directly — the surrounding script drains that once
     into ``$input``, and a second read would come back empty.  Instead it pipes
     the captured ``$input`` in, which is how the segment finds the per-repo
     .collab/ for the directory this Claude Code session is actually in.
+
+    ``home`` is a COLLAB_HOME to carry into the hook. The segment attributes
+    the usage figures it is handed by process ancestry, and where that proves
+    nothing — a sandbox, a session joined from another terminal — the figures
+    have no owner. An installer run with COLLAB_HOME set is somebody saying
+    which session this hook is for, in so many words, and the hook keeps it.
     """
+    import shlex
+
+    env = f"COLLAB_HOME={shlex.quote(home)} " if home else ""
     # THE SEGMENT ENDS ITS LINE. Claude Code renders a status line of several
     # rows, and we are the first block in the script, so whatever renders after
     # us — Boost, local-tts, anything — starts on the next row instead of
@@ -72,7 +81,7 @@ def build_block(executable: str) -> str:
     return (
         f"{BEGIN}\n"
         f"if [ -x '{executable}' ]; then\n"
-        f"  __collab_seg=\"$(printf '%s' \"${{input:-}}\" | '{executable}' statusline render 2>/dev/null)\"\n"
+        f"  __collab_seg=\"$(printf '%s' \"${{input:-}}\" | {env}'{executable}' statusline render 2>/dev/null)\"\n"
         f"  if [ -n \"$__collab_seg\" ]; then\n"
         f"    printf '%s\\n' \"$__collab_seg\"\n"
         f"  fi\n"
@@ -128,8 +137,14 @@ def _resolve_script(command: str) -> Path | None:
     return None
 
 
-def install_claude_code(scope: str = "global", *, executable: str | None = None) -> InstallResult:
+def install_claude_code(scope: str = "global", *, executable: str | None = None,
+                        home: str | None = None) -> InstallResult:
     exe = executable or collab_executable()
+    # The proof the installer has, and no more: an explicit COLLAB_HOME in its
+    # own environment. Nothing is inferred from the repo — a guessed home is
+    # one agent's figures published under another's name, the bug the whole
+    # attribution exists to stop.
+    home = os.environ.get("COLLAB_HOME", "") if home is None else home
     spath = settings_path(scope)
     settings = _load_settings(spath)
     backups: list[Path] = []
@@ -154,7 +169,7 @@ def install_claude_code(scope: str = "global", *, executable: str | None = None)
         # Other vendors' blocks follow ours, each prefixing its own separator
         # (local-tts ' · ', claude-statusline a newline); they now do so at
         # the start of the second row, since our block ends the first.
-        block = build_block(exe)
+        block = build_block(exe, home)
         script.write_text(_insert_at_top(body, block))
         _make_executable(script)
         notes.append(f"kept every existing segment in {script}")
@@ -170,7 +185,7 @@ def install_claude_code(scope: str = "global", *, executable: str | None = None)
         script.write_text(
             "#!/usr/bin/env bash\n"
             "input=$(cat)\n"
-            f"{build_block(exe)}"
+            f"{build_block(exe, home)}"
             "# >>> migrated by `collab statusline install` from settings.json statusLine.command\n"
             f"printf '%s' \"$input\" | {command}\n"
             "# <<< migrated\n"
@@ -190,11 +205,14 @@ def install_claude_code(scope: str = "global", *, executable: str | None = None)
         script.write_text(
             "#!/usr/bin/env bash\n"
             "input=$(cat)\n"
-            f"{build_block(exe)}"
+            f"{build_block(exe, home)}"
         )
         _make_executable(script)
         settings["statusLine"] = {"type": "command", "command": str(script)}
         notes.append(f"created {script}")
+    if home:
+        notes.append(f"carried COLLAB_HOME={home} into the hook: its usage figures"
+                     " go to that session, whatever the process tree says")
 
     settings.setdefault("statusLine", {})
     settings["statusLine"].setdefault("type", "command")

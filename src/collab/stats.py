@@ -488,6 +488,45 @@ def write_stats(profile: Any, figures: dict[str, Any]) -> bool:
     return True
 
 
+#: Where the status line leaves figures it could attribute to NO session: the
+#: repo's default directory, which every agent in the repo can find. A number
+#: that stops moving must stop with a visible reason, and this is the reason's
+#: file — `collab check` and `collab stats` read it from each agent's side.
+UNATTRIBUTED_FILE = "unattributed_stats.json"
+
+
+def leave_unattributed(cwd: Any, figures: dict[str, Any], homes: list[str]) -> bool:
+    """Record that figures arrived and nobody could say whose they were.
+
+    Written instead of guessing and instead of nothing. Guessing is the bug
+    `_own_profile` exists to prevent — one agent's spend under another's name.
+    Nothing is the bug this exists to prevent: every prompt, the status line
+    dropped a perfectly good payload on the floor, the agent's figures froze
+    for everyone, and no file, no command and no line anywhere said why.
+    """
+    from .config import base_home
+
+    try:
+        path = base_home(cwd) / UNATTRIBUTED_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"at": time.time(), "figures": figures,
+                                    "homes": homes}))
+    except (OSError, TypeError, ValueError):
+        return False
+    return True
+
+
+def unattributed(cwd: Any) -> dict[str, Any]:
+    """The last unattributable delivery in this repo, or nothing."""
+    from .config import base_home
+
+    try:
+        data = json.loads((base_home(cwd) / UNATTRIBUTED_FILE).read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def read_stats(profile: Any) -> dict[str, Any]:
     """This profile's own figures. Somebody else's are not returned at all.
 

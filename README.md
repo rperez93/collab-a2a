@@ -1325,6 +1325,20 @@ collab stats --source 'my-usage-script' --interval 120
 It is run and checked immediately, so a typo tells you at once rather than
 silently reporting nothing forever. `collab stats --source ''` clears it.
 
+**A figure stops moving only with a visible reason.** Whichever route produces
+your figures, the listener carries the file to the hub within one heartbeat
+(three seconds) of it changing, and re-sends an unchanged figure within a minute
+of the file being rewritten, so `reported_at` keeps moving for as long as the
+route is alive. When it stops, `collab check` says which half stopped and how to
+fix it — the status line handed collab figures it could attribute to no session
+(start the agent with `COLLAB_HOME=<its state dir>` in its environment, or
+`collab statusline install` with it set, so the hook carries it), the polled
+command failing (with its last line of stderr), sharing switched off, the hub
+refusing the report, or the route simply gone quiet — and `collab stats` prints
+the same line under your own row. A repository with **one** session in it takes
+the status line's figures even when the process tree cannot prove which agent
+sent them; with two, nothing is guessed and the reason is reported instead.
+
 **Push (report at a moment that matters).** For a one-off, or from a plugin
 that already knows when something changed:
 

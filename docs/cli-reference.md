@@ -334,6 +334,14 @@ collab check [--json] [--verbose] [--session SESSION]
 | `--json` | Emit raw JSON. |
 | `--session SESSION` | Act on this session id instead of the current one. |
 
+The `stats` check says whether your usage figures are reaching the room, and
+when they are not, why: figures the status line could not attribute to you
+(the fix names the `COLLAB_HOME` to start the agent with), your usage command
+failing (with its last line of output), sharing off, the hub refusing the
+report, the route gone quiet, or the listener not carrying a fresh file. It
+says nothing when no route was ever set up. `collab stats` prints the same
+reason under your own row.
+
 ## working
 
 Say what you are doing, so nobody asks.
@@ -712,7 +720,9 @@ collab statusline [--agent {auto,claude-code,tmux,generic}] [--scope {global,pro
 | `--width WIDTH` | Truncate the rendered line. |
 
 `install` puts a `# >>> COLLAB-STATUS-LINE` block at the top of the Claude Code
-status line script and leaves every other segment in it byte for byte. The
+status line script and leaves every other segment in it byte for byte. Run with
+`COLLAB_HOME` set, it carries that into the block, so the usage figures the hook
+receives are attributed to that session whatever the process tree says. The
 block ends its line: collab takes the first row of the status line and every
 segment after it starts on the next, so a long status line no longer runs past
 the terminal. When there is no session it prints nothing, not even the line

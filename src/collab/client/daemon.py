@@ -30,7 +30,7 @@ from ..batch import DELTA_SHOWN_FOR
 from ..config import SessionProfile, share_stats_enabled, stats_source
 from ..protocol import (EXT_PREFIX, KIND_CHAT, KIND_HELLO, KIND_PRESENCE,
                         KIND_SYSTEM, KIND_TASK, Envelope)
-from ..stats import read_stats, write_stats
+from ..stats import STATS_FILE, read_stats, write_stats
 from . import exclusive
 from .bridge import Bridge
 from .inbox import Inbox
@@ -51,6 +51,15 @@ SNAPSHOT_REFRESH = 9.0
 #: means «still true» rather than «last edited». Well inside activity.STALE_AFTER,
 #: so a missed one costs nothing.
 ACTIVITY_REFRESH = 300.0
+#: How often unchanged usage figures are re-sent when the file holding them
+#: has been rewritten since. A status line rewrites the file every refresh
+#: and a polled command every interval; when the numbers themselves stand
+#: still nothing was re-sent, so `reported_at` stood still with them and an
+#: agent reporting on schedule read as «old» within the hour. Re-sending on
+#: every rewrite would be a request every few seconds per participant for
+#: no new information; once a minute keeps the stamp inside any threshold
+#: that calls a figure old, and a CHANGED figure never waits for this.
+STATS_REASSERT = 60.0
 
 #: Event kinds that change what the snapshot says, and so must pull a fresh one
 #: rather than waiting for the timer.
@@ -472,6 +481,14 @@ class Daemon:
         self._last_activity: dict[str, Any] = {}
         self._activity_sent_at = 0.0
         self._stats_ran_at = 0.0
+        #: What became of our usage figures, for `status.json`: when the file
+        #: was last carried to the hub, and the reason if it was not. Every
+        #: route those figures take was silent when it failed; this is what
+        #: `collab check` and `collab stats` read the reason from.
+        self._stats_sent_at = 0.0
+        self._stats_sent_mtime = 0.0
+        self._stats_source_error: dict[str, Any] | None = None
+        self._stats_post_error: str | None = None
         #: The batch and the total we last saw for it, and the last move of
         #: that total. Only a process that watches the figures over time can
         #: tell «the bar fell» from «the bar fell because the work grew».
@@ -570,6 +587,8 @@ class Daemon:
             # is the hub's own count of the whole log, identical for everybody
             # who has fetched it.
             "messages": self._message_figures(),
+            # Where our own usage figures got to. See `_stats_figures`.
+            "stats": self._stats_figures(),
             "heartbeat": time.time(),
             "connected_since": self.connected_since,
             "failures": self.failures,
@@ -602,6 +621,32 @@ class Daemon:
         tmp = self.paths.status.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload))
         tmp.replace(self.paths.status)  # atomic: a reader never sees a half file
+
+    def _stats_file_mtime(self) -> float:
+        try:
+            return (Path(self.profile.dir) / STATS_FILE).stat().st_mtime
+        except OSError:
+            return 0.0
+
+    def _stats_figures(self) -> dict[str, Any]:
+        """What became of this agent's usage figures, for whoever asks why.
+
+        `file_written_at` is the route producing them (a status line, a polled
+        command, a report by hand); `sent_at` is this daemon carrying them to
+        the hub; the two errors are the reasons either half stopped. A number
+        that stops moving has to stop with a visible reason, and this is where
+        the reason is written down.
+        """
+        command, _interval = stats_source()
+        mtime = self._stats_file_mtime()
+        return {
+            "route": "command" if command else ("file" if mtime else None),
+            "file_written_at": mtime or None,
+            "sent_at": self._stats_sent_at or None,
+            "source_error": self._stats_source_error,
+            "post_error": self._stats_post_error,
+            "sharing": share_stats_enabled(),
+        }
 
     def _batch_figures(self) -> dict[str, Any] | None:
         """The hub's batch count, stamped with when we last actually had it.
@@ -807,18 +852,32 @@ class Daemon:
 
         from ..stats import normalise
 
-        def run() -> str:
+        def run() -> tuple[int, str, str]:
             try:
                 done = subprocess.run(command, shell=True, capture_output=True,
                                       text=True, timeout=20)
-                return done.stdout if done.returncode == 0 else ""
-            except (OSError, subprocess.SubprocessError):
-                return ""
+                return done.returncode, done.stdout, done.stderr
+            except (OSError, subprocess.SubprocessError) as exc:
+                return -1, "", f"{type(exc).__name__}: {exc}"
 
-        output = await asyncio.to_thread(run)
-        figures = normalise(output) if output else {}
+        code, output, errors = await asyncio.to_thread(run)
+        figures = normalise(output) if code == 0 and output else {}
         if not figures:
+            # WRITTEN DOWN, NOT SWALLOWED. A command that exits 1 — a quota
+            # endpoint that started answering 401, a script somebody moved —
+            # used to leave the previous figure standing and nothing anywhere
+            # saying the route had stopped; `collab check` called the figure
+            # current for the next half hour, off the file's age. The last
+            # line the command wrote is what a person can act on.
+            said = (errors or output).strip().splitlines()
+            detail = (said[-1].strip()[:200] if said
+                      else "printed nothing collab understands")
+            if code != 0:
+                detail = f"exit {code}: {detail}" if said else f"exit {code}"
+            self._stats_source_error = {"at": time.time(), "command": command,
+                                        "detail": detail}
             return
+        self._stats_source_error = None
         write_stats(self.profile, figures)
 
     async def _report_stats(self, client: httpx.AsyncClient) -> None:
@@ -833,8 +892,15 @@ class Daemon:
         # OURS ONLY. The file is written by whatever the agent runs — a status
         # line, a --report, our own probe — and publishing it unread meant
         # publishing whoever wrote there last, under our name.
+        mtime = self._stats_file_mtime()
         payload = {**peers.identity(), "stats": read_stats(self.profile)}
-        if payload == self._last_stats:
+        changed = payload != self._last_stats
+        # An unchanged figure in a file rewritten since we last sent it is
+        # the route saying «still true», and the hub's stamp has to say so
+        # too — but not on every rewrite. See STATS_REASSERT.
+        reassert = (mtime > self._stats_sent_mtime
+                    and (time.time() - self._stats_sent_at) >= STATS_REASSERT)
+        if not changed and not reassert:
             return
         try:
             r = await client.post(
@@ -844,8 +910,15 @@ class Daemon:
             )
             if r.status_code == 200:
                 self._last_stats = payload
-        except httpx.HTTPError:
-            pass
+                self._stats_sent_at = time.time()
+                self._stats_sent_mtime = mtime
+                self._stats_post_error = None
+            else:
+                self._stats_post_error = f"hub answered {r.status_code}"
+        except httpx.HTTPError as exc:
+            # Kept, not dropped: the file is fresh and the room is not seeing
+            # it, and that is a fact `collab check` has to be able to state.
+            self._stats_post_error = f"{type(exc).__name__}: {exc}"[:200]
 
     async def _report_activity(self, client: httpx.AsyncClient) -> None:
         """Re-assert what this agent is doing, after a drop or a hub restart.
@@ -1232,10 +1305,18 @@ class Daemon:
                         and self.state == "live":
                     if self._http is not None:
                         await self._refresh_snapshot(self._http)
-                        await self._refresh_stats_from_command()
-                        await self._report_stats(self._http)
                         await self._report_activity(self._http)
                     last_refresh = time.time()
+                # EVERY BEAT, NOT EVERY SNAPSHOT. The usage figures rode the
+                # nine-second refresh above, so a file the status line had
+                # just written waited up to nine seconds — measured at 7.6
+                # and 8.6 — to reach the hub, and a polled command ran late
+                # by the same phase. Both gate themselves: the command by its
+                # interval, the report by whether anything changed. Reading a
+                # small file every three seconds is the whole cost.
+                if self.state == "live" and self._http is not None:
+                    await self._refresh_stats_from_command()
+                    await self._report_stats(self._http)
                 self.write_status()
             except asyncio.CancelledError:
                 raise                       # shutdown, not a fault

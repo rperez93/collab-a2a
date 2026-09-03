@@ -172,6 +172,33 @@ says so. Re-running `collab join` from the agent that made the claim still
 keeps its directory, and `COLLAB_HOME` set in the environment is always
 honoured as given.
 
+## My usage figures are not updating
+
+Run `collab check`. Its `stats` line says which half of the route stopped and
+what fixes it; `collab stats` prints the same reason under your own row. The
+listener carries `agent_stats.json` to the hub within one heartbeat of it
+changing and re-sends an unchanged figure within a minute of the file being
+rewritten, so a figure that reads `— old` beside an agent that is running means
+the file itself has stopped moving:
+
+1. **«could not be attributed to you»** — the status line received figures but
+   the repository holds two sessions and the process tree proved which agent
+   sent them to nobody (a sandbox, an agent restarted since it joined, a session
+   joined from another terminal). Start the agent with
+   `COLLAB_HOME=<its state dir>` in its environment — the status line inherits
+   it — or run `collab statusline install` with it set. With one session in the
+   repository the figures are taken regardless.
+2. **«your usage command has been failing»** — the `--source` command exited
+   non-zero or printed nothing collab understands; the line shows its last line
+   of output. Fix it or clear it with `collab stats --source ''`.
+3. **«sharing is off»** — `collab stats --share on`.
+4. **«the hub has not accepted it»** — the listener retries every heartbeat;
+   if it persists, `collab daemon stop && collab daemon start`.
+5. **«the route that produced it has stopped»** — nothing has written the file
+   for longer than its route should take. Reinstall the status line
+   (`collab statusline install`), check the `--source` command, or report by
+   hand with `collab stats --report`.
+
 ## The status line shows nothing
 
 The status line reads a file the daemon writes, never the network.

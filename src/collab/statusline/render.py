@@ -75,6 +75,17 @@ def stash_agent_stats(raw: str, cwd: Path | None) -> None:
     try:
         profile = _own_profile(cwd)
         if profile is None:
+            # NOT PROVEN, BUT NOT AMBIGUOUS EITHER. Ancestry proves nothing
+            # from inside a sandbox, after the agent restarted, or when the
+            # session was joined from a different terminal than the agent's
+            # — and in a repo with one claim there is still only one agent
+            # the figures can belong to.
+            profile = _lone_claim(cwd)
+        if profile is None:
+            # Two claims and no proof: the one case where guessing is the
+            # bug. Say so where the agents will look, rather than nothing.
+            from ..stats import leave_unattributed
+            leave_unattributed(cwd, figures, [str(h) for h in _claims(cwd)])
             return
         write_stats(profile, figures)
     except (OSError, ValueError):
@@ -98,6 +109,31 @@ def _own_profile(cwd: Path | None) -> SessionProfile | None:
     home = os.environ.get("COLLAB_HOME") or claimed_home(cwd)
     if home is None:
         return None
+    return _profile_in(Path(home))
+
+
+def _claims(cwd: Path | None) -> list[Path]:
+    """Every directory in this repo with a session claim in it.
+
+    A claim on record, whether or not its processes can be seen: liveness is
+    judged by signalling pids, and from inside a sandbox every other process
+    reads as dead. The record is what survives that.
+    """
+    from .. import lockfile
+    from ..config import candidate_homes
+
+    return [home for home in candidate_homes(cwd) if lockfile.read(home) is not None]
+
+
+def _lone_claim(cwd: Path | None) -> SessionProfile | None:
+    """The one session in this repo, when there is exactly one."""
+    claims = _claims(cwd)
+    if len(claims) != 1:
+        return None
+    return _profile_in(claims[0])
+
+
+def _profile_in(home: Path) -> SessionProfile | None:
     pointer = Path(home) / "current"
     try:
         session_id = pointer.read_text().strip()

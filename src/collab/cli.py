@@ -1684,6 +1684,16 @@ def cmd_stats(args: argparse.Namespace) -> int:
         if machine:
             details.insert(0, scrub(str(machine)))
         print(f"      {dim(' · '.join(details)) if details else dim('nothing shared')}")
+        # UNDER YOUR OWN ROW, THE REASON. The age above says a figure is old;
+        # only this side knows why — the same answer `collab check` gives, so
+        # the two cannot disagree.
+        mine = (p.get("id") == profile.participant_id if profile.participant_id
+                else p.get("name") == profile.name)
+        if mine and (health := _stats_health(profile)) and health[0] != CHECK_OK:
+            _verdict, detail, fix = health
+            print(f"      {c('!', '33')} {detail}")
+            if fix:
+                print(f"        {dim('→ ' + fix)}")
     print()
     print(dim(f"  you are {'sharing' if share_stats_enabled() else 'NOT sharing'} yours "
               "(collab stats --share on|off)"))
@@ -2305,13 +2315,13 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
     # 3. Has anything been left undrained? ONLY MEANINGFUL WHILE POLLING.
     #
     #    This began as «is anything ACTING on it», and unread was the evidence.
-    #    It is not. Nothing but `recv` ever marks a row read — `listen --follow`
-    #    streams the log and never touches the table — so an agent doing exactly
-    #    what the skills prescribe, an armed watcher it never polls behind,
-    #    accumulates unread for ever and was scolded on every single iteration
-    #    of the loop, told to run `recv`, and thereby invited to act twice on
-    #    messages it had already handled. The instruction and the check
-    #    contradicted each other.
+    #    It is not. For a long time nothing but `recv` marked a row read, so an
+    #    agent doing exactly what the skills prescribe — an armed watcher it
+    #    never polls behind — accumulated unread for ever and was scolded on
+    #    every iteration of the loop, told to run `recv`, and thereby invited
+    #    to act twice on messages it had already handled. A followed stream
+    #    now marks what it prints (Inbox.mark_read), which removes the
+    #    contradiction but not the reason for the guard below.
     #
     #    So it is asked only of an agent that has no watcher, where unread does
     #    mean «arrived, and you have not taken it». And it counts only what
@@ -2367,23 +2377,106 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
     #    loop ignored. Figures that existed and then stopped are the opposite:
     #    something that was working has quietly stopped, which is the whole
     #    family of bug this command exists for.
-    age = _stats_age(profile)
-    if share_stats_enabled() and age is not None:
-        from .stats import read_stats
-
-        source, _interval = stats_source()
-        how = (f"{exe} stats --report '<json>'" if not source
-               else f"check that `{source}` still runs and prints usage JSON")
-        if not read_stats(profile):
-            add("stats", CHECK_WARN, "your usage figures are not readable"
-                " — the file is there but not yours", how)
-        elif age > STATS_ARE_HISTORY:
-            add("stats", CHECK_WARN,
-                f"your usage was last reported {_ago_seconds(age)},"
-                " so the room is splitting work on a stale figure", how)
-        else:
-            add("stats", CHECK_OK, "your usage is current")
+    #    ONE ANSWER, shared with `collab stats`: whatever reason this gives
+    #    for a figure that is not moving is printed under the agent's own row
+    #    there too, so the two never disagree about why.
+    health = _stats_health(profile)
+    if health is not None:
+        add("stats", *health)
     return out
+
+
+def _stats_health(profile: SessionProfile) -> tuple[str, str, str] | None:
+    """Why this agent's usage figure is moving, or is not — with the fix.
+
+    The figures travel three routes — a status line payload stashed to a file,
+    a command the daemon polls, a report by hand — then one more hop from the
+    file to the hub, and every one of them was silent when it stopped. What
+    each leaves behind is read here in the order a reader would want to know:
+    figures that arrived and could not be attributed to anyone; sharing off;
+    the polled command failing; nothing produced; the hub refusing what was
+    sent; the route gone quiet; the daemon not carrying a fresh file. None of
+    it when nothing was ever set up — that is a decision, not a fault, and
+    warning about it every few turns is the noise that gets the loop ignored.
+
+    Returns (verdict, detail, fix), or None when there is nothing to say.
+    """
+    from .client.daemon import STATS_REASSERT, STATUS_HEARTBEAT
+    from .stats import read_stats, unattributed
+
+    exe = Path(sys.argv[0]).name
+    now = time.time()
+    status = read_status(profile)
+    block = status.get("stats") if isinstance(status.get("stats"), dict) else {}
+    age = _stats_age(profile)
+    written_at = now - age if age is not None else 0.0
+    source, interval = stats_source()
+
+    # Figures the status line received and could give to nobody, more recent
+    # than anything this agent owns: the number the room sees stopped here.
+    marker = unattributed(Path(profile.home).parent)
+    try:
+        marker_at = float(marker.get("at") or 0)
+    except (TypeError, ValueError):
+        marker_at = 0.0
+    if marker_at and marker_at > written_at:
+        return (CHECK_WARN,
+                f"the status line received usage figures {_ago_seconds(now - marker_at)}"
+                " that could not be attributed to you — the room sees nothing new",
+                f"start this agent with COLLAB_HOME={profile.home} in its environment"
+                f" (the status line inherits it), or report by hand:"
+                f" {exe} stats --report '<json>'")
+
+    error = block.get("source_error") if isinstance(block.get("source_error"), dict) else None
+    if age is None and not source and not error:
+        return None                             # never set up: not a fault
+    if not share_stats_enabled():
+        return (CHECK_WARN, "your usage is not shared — sharing is off, so the"
+                " room sees nothing of it", f"{exe} stats --share on")
+    if error:
+        try:
+            since = _ago_seconds(now - float(error.get("at") or now))
+        except (TypeError, ValueError):
+            since = "just now"
+        return (CHECK_WARN,
+                f"your usage command has been failing since {since}: {error.get('detail')}",
+                f"fix `{error.get('command')}` so it prints usage JSON, or clear it:"
+                f" {exe} stats --source ''")
+    how = (f"{exe} stats --report '<json>'" if not source
+           else f"check that `{source}` still runs and prints usage JSON")
+    if age is None:
+        return (CHECK_WARN, "your usage command has produced nothing yet", how)
+    if not read_stats(profile):
+        return (CHECK_WARN, "your usage figures are not readable — the file is"
+                " there but not yours", how)
+    if block.get("post_error"):
+        return (CHECK_WARN,
+                f"your usage was written {_ago_seconds(age)} but the hub has not"
+                f" accepted it: {block['post_error']}",
+                "the listener retries every heartbeat; if this persists,"
+                f" {exe} daemon stop && {exe} daemon start")
+    # How fresh the file should be, by the route producing it. A polled
+    # command has a known cadence; a status line's is the host's to choose,
+    # so only history counts against it.
+    expected = (2 * interval + 15) if source else STATS_ARE_HISTORY
+    if age > expected:
+        return (CHECK_WARN,
+                f"your usage was last produced {_ago_seconds(age)} — the route that"
+                " produced it has stopped, so the room is splitting work on a stale figure",
+                how)
+    try:
+        sent_at = float(block.get("sent_at") or 0)
+    except (TypeError, ValueError):
+        sent_at = 0.0
+    if sent_at and (written_at - sent_at) > STATS_REASSERT + 2 * STATUS_HEARTBEAT:
+        return (CHECK_WARN,
+                f"your usage was written {_ago_seconds(age)} but last sent"
+                f" {_ago_seconds(now - sent_at)} — the listener is not carrying it",
+                f"{exe} daemon stop && {exe} daemon start")
+    if sent_at:
+        return (CHECK_OK, f"your usage is current — sent to the hub"
+                f" {_ago_seconds(now - sent_at)}", "")
+    return (CHECK_OK, "your usage is current", "")
 
 
 def wake_module_deferred_limit() -> float:
