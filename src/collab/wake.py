@@ -935,8 +935,18 @@ class Waker:
         if not config.enabled:
             return False, "no wake command configured"
         now = self.now()
-        if now - self.last_attempt < config.min_gap:
-            return False, f"tried {int(now - self.last_attempt)}s ago"
+        # THE MESSAGE CLOCK, not the attempt clock. `min_gap` is how often
+        # other people's messages may start a turn, and reading it off every
+        # delivery meant the standing reminder spent it: a message landing a
+        # second after a reminder-only turn waited out the rest of the gap.
+        #
+        # Still read here rather than skipped for reminders, and that is the
+        # other half of it — a reminder due ten seconds after a message turn
+        # still waits, because the gate is «has a turn just been spent on
+        # messages», which is as true for the reminder as for anything else.
+        # What changed is only who pays into it.
+        if now - self.last_message_attempt < config.min_gap:
+            return False, f"tried {int(now - self.last_message_attempt)}s ago"
         waited = now - self.failed_at
         if self.failed_at and waited < self.retry_pause:
             broken = f" ({self.failures} failures)" if self.broken else ""
@@ -948,11 +958,12 @@ class Waker:
             # — the one thing it must never do. With nothing unread at all
             # there is no message for it to displace.
             #
-            # A message arriving AFTER it has fired does still wait out the
-            # rest of `min_gap`, because a reminder is a turn and every turn
-            # spends one. That is the price of the feature, not a bug in this
-            # placement: what this line buys is that a message never waits
-            # behind a reminder that could have ridden with it.
+            # A message arriving AFTER it has fired does not wait either: a
+            # reminder-only turn leaves the message clock alone, so the next
+            # message is subject to `settle` and to nothing else. What this
+            # line still buys on top of that is that a message never waits
+            # behind a reminder that could have ridden with it — the placement
+            # answers «displaced», the clock answers «delayed».
             #
             # `attended()` is deliberately NOT consulted. That question is «is
             # anybody reading what arrived», and nothing arrived: no watcher
@@ -1204,6 +1215,21 @@ class Waker:
 
     # --- finishing -------------------------------------------------------------
 
+    def _gap_spent_by(self, batch: Batch | None, now: float) -> dict[str, float]:
+        """`min_gap`'s counter — written by a message turn and by nothing else.
+
+        THE ONE PLACE THE CONDITION IS WRITTEN, so that the three ways a turn
+        can end cannot drift apart on it. Everything else the finishers record
+        — the attempt, the failure, the backoff, the run of deferrals — belongs
+        to the ROUTE and is true whatever the turn was carrying. `messaged_at`
+        belongs to the messages: it is the budget `settle` and `min_gap` pace,
+        and a reminder that borrowed this delivery has no business spending it.
+
+        A mixed turn spends it in full. The reminder rode along on a turn the
+        messages had already bought, and nothing about that is free.
+        """
+        return {"messaged_at": now} if batch is not None else {}
+
     def succeeded(self, batch: Batch | None) -> None:
         """A delivery arrived. The counters are the same whatever it carried.
 
@@ -1211,11 +1237,16 @@ class Waker:
         the evidence is the same route reaching the same agent, and pretending
         otherwise would leave a wake reported as broken by a check that had
         just watched it work.
+
+        THE COUNTERS, BUT NOT THE BUDGET. `messaged_at` is the one field a
+        reminder-only turn does not write, because `min_gap` is how often
+        messages may start a turn and this turn started for nobody.
         """
         self.ensure()
         now = self.now()
         self._set(attempted_at=now, delivered_at=now, failed_at=0.0,
-                  failures=0.0, deferred_since=0.0, alarmed=0.0)
+                  failures=0.0, deferred_since=0.0, alarmed=0.0,
+                  **self._gap_spent_by(batch, now))
         if batch is None:
             return                          # nothing to file away
         with contextlib.suppress(OSError):
@@ -1235,7 +1266,8 @@ class Waker:
         """
         now = self.now()
         began = self._state["deferred_since"] or now
-        self._set(attempted_at=now, failed_at=now, deferred_since=began)
+        self._set(attempted_at=now, failed_at=now, deferred_since=began,
+                  **self._gap_spent_by(batch, now))
 
     @property
     def deferred_for(self) -> float:
@@ -1254,10 +1286,21 @@ class Waker:
         the inside it looks exactly like a quiet room. So the failures are
         counted, the retries slow down, and past GIVE_UP_AFTER the count is
         loud enough for `collab check` and the room to be told.
+
+        A REMINDER-ONLY DELIVERY THAT FAILED IS STILL A FAILURE. It is the same
+        command reaching the same agent, and a wake that cannot deliver is
+        broken whatever it was carrying — probing it every ten minutes for free
+        is the cheapest evidence of that there is. The backoff it starts holds
+        messages too, and should: they would fail identically. But the backoff
+        is keyed on `failed_at`, which is not the message budget, so a reminder
+        that fails costs messages the retry pause and NOT the gap on top of it —
+        and the pause is bounded and clears on the first delivery that works,
+        so a failing reminder can slow the wake down and cannot switch it off.
         """
         now = self.now()
         self._set(attempted_at=now, failed_at=now,
-                  failures=float(self.failures + 1))
+                  failures=float(self.failures + 1),
+                  **self._gap_spent_by(batch, now))
 
     @property
     def retry_pause(self) -> float:
@@ -1280,6 +1323,7 @@ class Waker:
     _STATE_FIELDS = {
         "failures": 0.0,        # consecutive failed deliveries
         "attempted_at": 0.0,    # when delivery was last ATTEMPTED, good or bad
+        "messaged_at": 0.0,     # when one carrying MESSAGES was: `min_gap`'s
         "failed_at": 0.0,       # when it last failed, driving the backoff
         "delivered_at": 0.0,    # when a delivery last actually SUCCEEDED
         "deferred_since": 0.0,  # when a run of «not now» answers began
@@ -1318,7 +1362,8 @@ class Waker:
             # It exists and says nothing usable. Hold for one cycle rather than
             # treating damage as permission.
             now = self.now()
-            return {**defaults, "attempted_at": now, "failed_at": now}
+            return {**defaults, "attempted_at": now, "messaged_at": now,
+                    "failed_at": now}
         out = {}
         damaged = False
         for name, default in defaults.items():
@@ -1335,9 +1380,17 @@ class Waker:
             out[name] = value
         if out["failures"] < 0:
             out["failures"], damaged = 0.0, True
+        if "messaged_at" not in stored:
+            # WRITTEN BEFORE THE TWO CLOCKS WERE TOLD APART. Such a file knows
+            # that a turn happened and not what it carried, and reading that
+            # silence as «no message turn, ever» would let one fire the instant
+            # an upgraded daemon came back inside a gap it was already serving.
+            # Carrying the older field across costs at most one held message
+            # for the remainder of one gap, which is the direction to err in.
+            out["messaged_at"] = out["attempted_at"]
         if damaged:
             now = self.now()
-            out["attempted_at"] = out["failed_at"] = now
+            out["attempted_at"] = out["messaged_at"] = out["failed_at"] = now
         return out
 
     def _save_state(self) -> None:
@@ -1358,8 +1411,32 @@ class Waker:
 
     @property
     def last_attempt(self) -> float:
-        """When a delivery was last tried — success or not. Drives `min_gap`."""
+        """When a delivery was last tried — success or not, carrying anything.
+
+        The honest answer to «has this route done anything lately», which is
+        what `collab wake status` prints and what somebody reads to find out
+        whether the wake works at all. It no longer drives `min_gap`; see
+        `last_message_attempt` for the counter that does, and why.
+        """
         return self._state["attempted_at"]
+
+    @property
+    def last_message_attempt(self) -> float:
+        """When a turn carrying MESSAGES last started. Drives `min_gap`.
+
+        SEPARATE FROM THE ATTEMPT ABOVE, and the separation is the point.
+        `settle` and `min_gap` exist to pace how often other people's messages
+        start a turn — they are the message budget. The standing reminder rides
+        the same delivery, and by reading and writing the same counter it began
+        spending that budget: a reminder-only turn stamped the attempt, and a
+        message arriving a second later waited out the remaining eighty-nine
+        seconds of a gap it had not been given a turn for.
+
+        So the write is conditional on what the turn carried, and every gate
+        below is not: one field for «a turn was spent on messages», one for «a
+        delivery was tried», and no `if` at the point of asking.
+        """
+        return self._state["messaged_at"]
 
     @property
     def last_delivery(self) -> float:
