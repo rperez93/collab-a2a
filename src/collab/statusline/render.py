@@ -20,8 +20,13 @@ from .. import batch as batch_progress
 from ..columns import width as _columns
 from ..config import SessionProfile, claimed_home
 from ..protocol import scrub
-from ..client.daemon import (DEAD_AFTER, STALE_AFTER, effective_state,
-                             is_running, read_status)
+# FROM daemon_files, NOT FROM daemon. The five names below read a pid file and
+# `status.json`; `client.daemon` also holds the async Daemon, and importing it
+# for these cost 89 of this module's 115 ms cold start in httpx, websockets,
+# ssl and asyncio — the network stack the rule at the top of this file forbids
+# touching, paid on every prompt the host rendered. See daemon_files.
+from ..client.daemon_files import (DEAD_AFTER, STALE_AFTER, effective_state,
+                                   is_running, read_status)
 from ..client.statusbar import (_counted, daemon_note, hub_note,
                                 state_dir_label, who as _who)
 
@@ -47,7 +52,7 @@ def _paint(text: str, color: str) -> str:
     return f"{COLORS.get(color, '')}{text}{RESET}"
 
 
-#: The judgement now lives beside the file it distrusts, in client.daemon, so
+#: The judgement now lives beside the file it distrusts, in client.daemon_files, so
 #: that everything reading `status.json` reaches the same verdict. It was here
 #: alone, and `collab status` printed the raw field instead: the status line
 #: dropped a dead session correctly while the command called it live.
