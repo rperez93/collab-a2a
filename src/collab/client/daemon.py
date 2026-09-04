@@ -1063,10 +1063,14 @@ class Daemon:
         get it. A monitor is already running and prints a line; a wake spends a
         whole turn.
 
-        AND ONLY WITH SOMETHING READING. A reminder left where no follower will
-        see it is not delivered on time — it is delivered whenever a monitor
-        next starts, which is not «every ten minutes» — and it would take the
-        interval with it, leaving the wake nothing to carry.
+        AND ONLY WITH SOMETHING READING. Dropping a reminder where no follower
+        will see it would take the interval with it and leave the wake nothing
+        to carry, so an agent with neither route would go quiet rather than
+        merely un-reminded. Nothing is stored for later either: a monitor that
+        attaches after an hour of silence starts the interval from where it
+        attached, and the first reminder arrives one interval later. That is
+        deliberate — a stored one would fire the instant a monitor reconnected,
+        which is when an agent is least in need of being told to get on with it.
         """
         if not watchers(self.profile):
             return                        # no followed stream; the wake's job
