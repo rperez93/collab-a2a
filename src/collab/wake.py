@@ -847,7 +847,13 @@ class Waker:
             # something is unread, and a reminder firing there would spend the
             # turn the messages were owed and then hold them behind `min_gap`
             # — the one thing it must never do. With nothing unread at all
-            # there is no message for it to delay or displace.
+            # there is no message for it to displace.
+            #
+            # A message arriving AFTER it has fired does still wait out the
+            # rest of `min_gap`, because a reminder is a turn and every turn
+            # spends one. That is the price of the feature, not a bug in this
+            # placement: what this line buys is that a message never waits
+            # behind a reminder that could have ridden with it.
             #
             # `attended()` is deliberately NOT consulted. That question is «is
             # anybody reading what arrived», and nothing arrived: no watcher

@@ -326,8 +326,14 @@ instructions back in front of its own agent. It has no flags of its own here —
 `collab config remind_every`, `remind_host` and `remind_guest` are the whole of
 it — and it is subject to this command's `--settle`, `--min-gap` and
 `--timeout` like anything else the wake delivers. Messages always take
-precedence: a reminder due at the same moment rides along in their turn and
-never delays or displaces them.
+precedence: a reminder due at the same moment rides along in their turn, beneath
+them, and never displaces one or costs a turn of its own.
+
+It does spend a `--min-gap` slot, like every turn. A message arriving in the
+seconds after a reminder has fired waits out the rest of that gap — ninety
+seconds by default — exactly as it would after any other turn. Lower
+`--min-gap`, or set `remind_every` to `0`, if that wait matters more to you than
+the reminder does.
 
 ## check
 
