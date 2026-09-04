@@ -635,22 +635,75 @@ class Store:
             self._db.commit()
         return cur.rowcount
 
-    def consume_invite(self, code: str) -> tuple[bool, str]:
-        """Validate and spend one use.  Returns ``(ok, reason)``."""
+    def replace_invite(self, code: str, *, ttl_seconds: float | None = None,
+                       max_uses: int = 0) -> int:
+        """Retire every invite and mint this one, as ONE act.
+
+        Clearing and adding as two statements leaves a moment with no way in at
+        all, and lets two rotations racing each other end with two live rows —
+        which is the opposite of what rotating is for. One transaction, and the
+        write lock taken before the delete rather than at it, so a second
+        rotation waits its turn instead of interleaving with this one.
+
+        Returns how many invites were retired.
+        """
+        now = time.time()
         with self._lock:
-            row = self._db.execute(
-                "SELECT * FROM invites WHERE code_hash=?", (token_hash(code),)
-            ).fetchone()
-            if row is None:
-                return False, "unknown invite code"
-            if row["expires_at"] is not None and time.time() > row["expires_at"]:
-                return False, "invite expired"
-            if row["max_uses"] and row["uses"] >= row["max_uses"]:
-                return False, "invite already used the maximum number of times"
-            self._db.execute(
-                "UPDATE invites SET uses=uses+1 WHERE code_hash=?", (token_hash(code),)
-            )
-            self._db.commit()
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                cleared = self._db.execute("DELETE FROM invites").rowcount
+                self._db.execute(
+                    "INSERT INTO invites"
+                    " (code_hash, created_at, expires_at, max_uses, uses)"
+                    " VALUES (?,?,?,?,0)",
+                    (token_hash(code), now,
+                     (now + ttl_seconds) if ttl_seconds else None, max_uses),
+                )
+                self._db.commit()
+            finally:
+                if self._db.in_transaction:
+                    self._db.rollback()
+        return cleared
+
+    def consume_invite(self, code: str) -> tuple[bool, str]:
+        """Validate and spend one use.  Returns ``(ok, reason)``.
+
+        THE SPEND IS WHAT DECIDES, not the read before it. `self._lock` orders
+        threads on one connection and nothing at all between processes, and
+        rotation now runs in a process of its own — so between the SELECT and
+        the UPDATE a host can retire this very invite, the UPDATE then matches
+        no row, and returning success on the strength of the earlier read lets
+        somebody in through a door the host has just locked. Taking the write
+        lock first and believing the row count instead closes it.
+        """
+        with self._lock:
+            # BEGIN IMMEDIATE takes the write lock now rather than at the first
+            # write, so a rotation on another connection waits behind this
+            # rather than landing in the middle of it.
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._db.execute(
+                    "SELECT * FROM invites WHERE code_hash=?", (token_hash(code),)
+                ).fetchone()
+                if row is None:
+                    return False, "unknown invite code"
+                if row["expires_at"] is not None and time.time() > row["expires_at"]:
+                    return False, "invite expired"
+                if row["max_uses"] and row["uses"] >= row["max_uses"]:
+                    return False, "invite already used the maximum number of times"
+                spent = self._db.execute(
+                    "UPDATE invites SET uses=uses+1 WHERE code_hash=?",
+                    (token_hash(code),),
+                )
+                if spent.rowcount != 1:
+                    # Retired between the read and the write. It is the same
+                    # answer an unknown code gets, because that is what it now
+                    # is.
+                    return False, "unknown invite code"
+                self._db.commit()
+            finally:
+                if self._db.in_transaction:
+                    self._db.rollback()
         return True, ""
 
     # --- rooms ---------------------------------------------------------------
