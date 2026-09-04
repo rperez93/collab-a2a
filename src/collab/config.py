@@ -692,6 +692,130 @@ def set_stats_source(command: str | None = None,
     return stats_source()
 
 
+# --- the standing reminder ----------------------------------------------------
+#
+# An agent drifts. Twenty minutes in it has stopped saying what it is doing, the
+# host has stopped looping over the roster, and nothing anywhere is a fault: the
+# daemon is live, the feed is read, the board has simply stopped moving. § 7 of
+# the shipped rules asks the host to loop every ten to fifteen minutes and
+# nothing was making that happen.
+#
+# So each daemon puts the standing instructions back in front of ITS OWN agent,
+# on the wake path. Not a message to the room: a paragraph nobody said, posted
+# by every agent every ten minutes, is N copies of the same text in everybody's
+# transcript, and the transcript is for what people said.
+
+#: How often, in minutes. Ten because that is the lower end of the loop § 7 asks
+#: the host to run, and because an agent that has drifted has usually drifted
+#: within one of them.
+DEFAULT_REMIND_EVERY = 10
+#: And a floor under it, for the same reason `watch_status_interval` has one —
+#: the typo in a hand-edited file. Higher than that row's five seconds, because
+#: this one is not a redraw: every reminder spends a real turn of somebody's
+#: agent, so `"remind_every": 1` would cost sixty turns an hour. `0` is not a
+#: typo. It is off, and it is the one value below the floor that means something.
+MIN_REMIND_EVERY = 5
+#: How much of a reminder is worth carrying, for the same reason `wake.MAX_TEXT`
+#: exists: five of the wake recipes pass the prompt as a single argument and
+#: Linux refuses any argument over 128 KiB, so an unbounded value here is a wake
+#: that fails identically on every retry, for ever.
+MAX_REMIND_TEXT = 8_000
+
+#: What a HOST is reminded of. Drawn from § 5 and § 7 of the shipped rules, and
+#: kept to what fits in a glance: this arrives mid-session in an agent's own
+#: context every few minutes, and a long reminder is a tax paid every time. The
+#: commands are in it because the point is that they get run.
+DEFAULT_REMIND_HOST = """\
+You are the host, so the state of the room is yours:
+  collab who · collab activity   — who is working, who has stalled, who has gone quiet
+  collab stats --json            — quota, before you hand out anything long
+  collab batch status            — the shared figure; it moves only when a task completes
+  collab check                   — what to fix
+An idle agent is your failure, not theirs. Keep one batch open for as long as any
+task is open, keep the board current, and keep the work in subagents — your own
+context is for coordinating it, not for doing it."""
+
+#: And what a GUEST is reminded of: § 4b, and saying so out loud. A guest's
+#: failure mode is the opposite of the host's — not losing sight of the room,
+#: but going quiet in it while chasing something nobody asked for.
+DEFAULT_REMIND_GUEST = """\
+Keep going on what you were asked to do, and keep saying so:
+  collab working "<what>"        — and collab idle the moment you stop
+  collab task complete --id T_x  — a claimed task is not progress until this
+  collab recv                    — anything waiting for you
+Stay on the objective you were given; write down what else you find rather than
+chasing it. If you are blocked, or finished, say so in the room rather than
+going quiet."""
+
+
+def reminder_settings(is_host: bool = False) -> dict[str, Any]:
+    """The standing reminder for this role, as the daemon needs it.
+
+    Validated against what the file could hold rather than what it should, and
+    for the same reason the watch row's reader is: this is read on the
+    heartbeat, where a TypeError is not an error message but a daemon that
+    stops beating.
+
+    `every` is in minutes, and `0` means off. Anything else below the floor is
+    FLOORED here and REFUSED at the command — the split `watch_status_segments`
+    already makes, because a typo in a hand-edited file should cost the setting
+    and a typo typed at a command that answered «ok» should not leave somebody
+    waiting for behaviour that was never going to happen.
+
+    `configured` says whether anybody actually asked for this, which is what
+    entitles `collab check` to complain that it cannot be delivered. At the
+    shipped default nobody has asked for anything, and warning every user who
+    never armed a wake is the noise that gets that loop ignored.
+    """
+    cfg = load_config()
+    raw = cfg.get("remind_every")
+    if raw is None or isinstance(raw, bool):
+        # A bool is not a number somebody meant. `int(True)` is 1, which the
+        # floor would turn into a reminder every five minutes for a file that
+        # says `true`.
+        every = DEFAULT_REMIND_EVERY
+    else:
+        try:
+            every = int(raw)
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError is in that list because `json.load` accepts a bare
+            # `Infinity` token and `int(float("inf"))` raises it; `NaN` raises
+            # ValueError, and a dict or a list raises TypeError.
+            every = DEFAULT_REMIND_EVERY
+    every = 0 if every == 0 else max(MIN_REMIND_EVERY, every)
+    key = "remind_host" if is_host else "remind_guest"
+    shipped = DEFAULT_REMIND_HOST if is_host else DEFAULT_REMIND_GUEST
+    written = cfg.get(key)
+    text = written.strip()[:MAX_REMIND_TEXT] if isinstance(written, str) else ""
+    return {
+        "every": every,
+        # Empty is «I have not written one», not «remind me with nothing».
+        "text": text or shipped,
+        "configured": any(k in cfg for k in
+                          ("remind_every", "remind_host", "remind_guest")),
+    }
+
+
+def save_reminder(*, every: int | None = None, host: str | None = None,
+                  guest: str | None = None) -> dict[str, Any]:
+    # `is not None` and not a bare truth test: 0 is the value that turns this
+    # off, and `if every:` would silently drop the only way to say so.
+    cfg = load_config()
+    if every is not None:
+        cfg["remind_every"] = int(every)
+    for key, value in (("remind_host", host), ("remind_guest", guest)):
+        if value is None:
+            continue
+        if value.strip():
+            cfg[key] = value
+        else:
+            # Emptying it means «go back to the shipped one», and the way to
+            # say that is for the key not to be there.
+            cfg.pop(key, None)
+    save_config(cfg)
+    return reminder_settings()
+
+
 #: The levels of the xterm-256 6x6x6 cube. They are not linear —they jump from
 #: 0 to 95— so the closest 256-colour to a hex has to be searched for, not
 #: arrived at by dividing by 51.
@@ -986,6 +1110,24 @@ def _fold_value(text: str) -> int | None:
         raise ValueError("expected a whole number, off, or auto") from None
 
 
+def _remind_every(text: str) -> int:
+    """Minutes between reminders, or 0 for none.
+
+    Under the floor is refused HERE and floored in `reminder_settings`, the
+    same split `_write_segments` makes and for the same reason: a typo in a
+    file should cost the setting, and a typo at a command that answered «ok»
+    should not leave somebody waiting for a cadence that was never coming.
+    """
+    value = _as_int(text)
+    if value == 0:
+        return 0
+    if value < MIN_REMIND_EVERY:
+        raise ValueError(f"expected 0 to turn it off, or at least"
+                         f" {MIN_REMIND_EVERY} minutes — every reminder spends"
+                         " a real turn of your agent's time")
+    return value
+
+
 def _as_list(text: str) -> list[str]:
     """Commas or spaces, either way. An empty string is an empty list.
 
@@ -1122,6 +1264,27 @@ def settings() -> tuple[Setting, ...]:
                 DEFAULT_STATS_INTERVAL, _as_int,
                 lambda: stats_source()[1],
                 lambda v: set_stats_source(interval=v)),
+        # THE MINUTES, NOT THE TEXT, on the first line. The two reminders are
+        # paragraphs, and a listing that printed both in full would bury every
+        # setting under them — so the value shown for each is what is STORED,
+        # which is empty until somebody writes one of their own.
+        Setting("remind_every",
+                "minutes between the standing reminder your own daemon puts"
+                " back in front of your agent; 0 turns it off",
+                DEFAULT_REMIND_EVERY, _remind_every,
+                lambda: reminder_settings()["every"],
+                lambda v: save_reminder(every=v)),
+        Setting("remind_host",
+                "what that reminder says when you are the host; empty for the"
+                " shipped one",
+                "", str,
+                lambda: str(load_config().get("remind_host") or ""),
+                lambda v: save_reminder(host=v)),
+        Setting("remind_guest",
+                "what it says when you are a guest; empty for the shipped one",
+                "", str,
+                lambda: str(load_config().get("remind_guest") or ""),
+                lambda v: save_reminder(guest=v)),
         Setting("watch_layout", "how `collab watch` arranges its two panes",
                 DEFAULT_WATCH_LAYOUT, _one_of(WATCH_LAYOUTS),
                 lambda: watch_settings()["layout"],

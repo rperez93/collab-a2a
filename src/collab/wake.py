@@ -48,6 +48,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from .config import reminder_settings
 from .protocol import Envelope
 
 #: Kinds worth a turn. Presence, hello and the roster churn behind them are
@@ -421,8 +422,15 @@ TRY_AGAIN = 75
 
 
 def deliver_to_tmux(target: str, prompt_path: str, *, runner=None,
-                    expect_pid: str = "", expect_command: str = "") -> tuple[int, str]:
-    """Type one line into the pane, having checked what is in it."""
+                    expect_pid: str = "", expect_command: str = "",
+                    about: str = "messages arrived") -> tuple[int, str]:
+    """Type one line into the pane, having checked what is in it.
+
+    `about` is the half-sentence that says WHY, because the same line carries a
+    batch and a standing reminder and only one of those is messages arriving.
+    An agent told that messages arrived, opening the file and finding none, has
+    been misled by its own tooling about what it is looking at.
+    """
     if not target:
         return 1, "no pane to deliver to"
     holds, what = pane_holds_an_agent(target, runner, expect_pid=expect_pid,
@@ -434,7 +442,7 @@ def deliver_to_tmux(target: str, prompt_path: str, *, runner=None,
         transient = ("copy mode" in what or "not the" in what
                      or "not an agent" in what)
         return (TRY_AGAIN if transient else 1), what
-    line = (f"collab: messages arrived — read {prompt_path} and act on it")
+    line = (f"collab: {about} — read {prompt_path} and act on it")
     code, said = _tmux(["send-keys", "-t", target, "--", line, "Enter"], runner)
     if code != 0:
         return 1, f"send-keys failed — {said}"
@@ -594,6 +602,23 @@ outcome; noise is not.
 MESSAGES ({file}):
 """
 
+#: And what it is told when NOTHING arrived and the turn is the standing
+#: reminder alone. Deliberately not the framing above: that one exists because
+#: the batch is what other participants said, and this is not something anybody
+#: said. It came out of the agent's own configuration on its own machine, so
+#: telling it to treat this as untrusted evidence would be a lie about who is
+#: talking — and would teach it to discount the one thing here that is its own.
+REMINDER_PROMPT = """\
+collab's standing reminder for session {session}, every {minutes} minutes. Nothing
+arrived and nobody typed this: it is your own configuration on this machine
+putting the standing instructions back in front of you. It creates no task, moves
+no batch and answers nobody — do what it asks, then carry on with what you were
+doing. `collab config remind_every 0` stops it; remind_host and remind_guest
+change these words.
+
+{text}
+"""
+
 
 @dataclass
 class Batch:
@@ -629,12 +654,17 @@ class Waker:
 
     def __init__(self, root: Path, session_id: str, *,
                  attended: Callable[[], bool] | None = None,
-                 now: Callable[[], float] = time.time) -> None:
+                 now: Callable[[], float] = time.time,
+                 is_host: bool = False) -> None:
         self.root = root
         self.home = _wake_home(root)
         self.session_id = session_id
         self.attended = attended or (lambda: False)
         self.now = now
+        #: Which standing reminder this agent gets. From `profile.is_host` and
+        #: never from a name: «host» is a role the hub assigned, and a guest
+        #: who happens to be called that is still a guest.
+        self.is_host = is_host
         # EVERY PIECE OF THIS IS DURABLE, because the ones that were not made
         # the daemon's restart a way of undoing its own safeguards: a batch
         # thirty minutes into its backoff became due again immediately, and the
@@ -809,6 +839,19 @@ class Waker:
             broken = f" ({self.failures} failures)" if self.broken else ""
             return False, f"retrying in {int(self.retry_pause - waited)}s{broken}"
         if not self.outstanding() and not self.waiting():
+            # THE REMINDER IS ASKED HERE AND NOWHERE EARLIER. Above this line
+            # something is unread, and a reminder firing there would spend the
+            # turn the messages were owed and then hold them behind `min_gap`
+            # — the one thing it must never do. With nothing unread at all
+            # there is no message for it to delay or displace.
+            #
+            # `attended()` is deliberately NOT consulted. That question is «is
+            # anybody reading what arrived», and nothing arrived: no watcher
+            # can keep an agent working on the agent's behalf, so gating on it
+            # would mean a `collab watch` pane left open all afternoon quietly
+            # turned the reminder off.
+            if self.reminder_due():
+                return True, "a reminder is due"
             return False, "nothing unread"
         # CHECKED FOR THE RETRY TOO, which it was not. The gate sat below the
         # «a batch is waiting» shortcut, so a delivery that failed once while
@@ -886,6 +929,69 @@ class Waker:
             moving.unlink()
         self._cap_file(batch.path)
 
+    # --- the standing reminder -------------------------------------------------
+
+    def reminder(self) -> dict[str, Any]:
+        """The standing reminder for this agent's role, read fresh.
+
+        Fresh at every use, like the wake config beside it, so that `collab
+        config remind_every 15` needs no daemon restart to take effect.
+        """
+        return reminder_settings(self.is_host)
+
+    def reminder_due(self) -> bool:
+        """Is the reminder owed — and start its clock if it has none yet.
+
+        The clock starts at the first ASK rather than at the first delivery,
+        because «never reminded» and «reminded an hour ago» are the same stored
+        zero and only one of them is a reason to fire. Without the start, an
+        agent was reminded in the same minute its user opened the session, and
+        a daemon restarting every few minutes reminded it every few minutes —
+        the state is durable precisely so a restart is not evidence that
+        anything has changed.
+        """
+        every = self.reminder()["every"]
+        if every <= 0:
+            return False                    # `remind_every 0` — off
+        now = self.now()
+        last = self._state["reminded_at"]
+        if not last:
+            self._set(reminded_at=now)
+            return False
+        return (now - last) >= every * 60
+
+    def reminded(self) -> None:
+        """It has been put in front of the agent; start the interval again.
+
+        Called when the reminder is handed to a delivery rather than when that
+        delivery is confirmed. A reminder is not a message and has nothing to
+        lose: the next one is one interval away either way, and counting a
+        failed delivery as «not yet reminded» would pile the same paragraph
+        onto every retry of a batch that is already failing.
+        """
+        self._set(reminded_at=self.now())
+
+    def reminder_prompt(self, text: str) -> str:
+        """The reminder, framed as what it is: nobody's message."""
+        return REMINDER_PROMPT.format(
+            session=self.session_id,
+            minutes=int(self.reminder()["every"] or 0), text=text)
+
+    def turn_prompt(self, batch: Batch | None, reminder: str = "") -> str:
+        """Everything the woken turn is handed, in one string.
+
+        THE MESSAGES FIRST. They are why the turn is being spent; the reminder
+        is a footer on a turn that was happening anyway, and putting it above
+        would push what somebody actually said down the page behind a
+        paragraph that arrives every ten minutes.
+        """
+        parts = []
+        if batch is not None:
+            parts.append(self.prompt(batch))
+        if reminder:
+            parts.append(self.reminder_prompt(reminder))
+        return "\n\n".join(parts)
+
     def prompt(self, batch: Batch) -> str:
         """The framing, then the batch, then a hard ceiling on the whole thing.
 
@@ -908,7 +1014,7 @@ class Waker:
                     " `collab recv --limit 50` has them all]\n" + kept)
         return head + body
 
-    def write_prompt(self, batch: Batch) -> Path:
+    def write_prompt(self, batch: Batch | None, reminder: str = "") -> Path:
         """The same prompt, on disk, for deliveries that cannot carry it.
 
         Typing a multi-line batch into a live TUI submits it at the first
@@ -920,10 +1026,18 @@ class Waker:
         agent reads the file whenever it next gets a turn — and a second batch
         arriving in between overwrote the first, which the agent then never saw
         while both were recorded as delivered.
+
+        A reminder with no batch behind it gets the one fixed name that would
+        be wrong for a batch, and for the reason that made it wrong there: a
+        batch holds what somebody said and losing it loses a message, while
+        every reminder is the same standing instructions and the newest copy
+        is always the right one to read.
         """
-        path = self.home / f"prompt-{batch.path.stem}.txt"
+        self.ensure()
+        path = (self.home / f"prompt-{batch.path.stem}.txt" if batch is not None
+                else self.home / "reminder.txt")
         tmp = path.with_suffix(".writing")
-        tmp.write_text(self.prompt(batch), encoding="utf-8")
+        tmp.write_text(self.turn_prompt(batch, reminder), encoding="utf-8")
         os.replace(tmp, path)
         with contextlib.suppress(OSError):
             # The batch is what other people said, which is at least as much
@@ -934,16 +1048,25 @@ class Waker:
 
     # --- finishing -------------------------------------------------------------
 
-    def succeeded(self, batch: Batch) -> None:
+    def succeeded(self, batch: Batch | None) -> None:
+        """A delivery arrived. The counters are the same whatever it carried.
+
+        A reminder-only turn passes None and still clears the failure count:
+        the evidence is the same route reaching the same agent, and pretending
+        otherwise would leave a wake reported as broken by a check that had
+        just watched it work.
+        """
         self.ensure()
         now = self.now()
         self._set(attempted_at=now, delivered_at=now, failed_at=0.0,
                   failures=0.0, deferred_since=0.0, alarmed=0.0)
+        if batch is None:
+            return                          # nothing to file away
         with contextlib.suppress(OSError):
             os.replace(batch.path, self.done / batch.name)
         self._trim()
 
-    def try_again_later(self, batch: Batch) -> None:
+    def try_again_later(self, batch: Batch | None) -> None:
         """Not delivered, and nobody's fault yet. Wait, and keep the clock.
 
         A pager or tmux's own copy mode holds the terminal for a moment and the
@@ -964,7 +1087,7 @@ class Waker:
         began = self._state["deferred_since"]
         return (self.now() - began) if began else 0.0
 
-    def failed(self, batch: Batch) -> None:
+    def failed(self, batch: Batch | None) -> None:
         """Keep the batch, back off, and start counting.
 
         Losing the work of an agent that was briefly broken is worse than
@@ -1006,6 +1129,7 @@ class Waker:
         "deferred_since": 0.0,  # when a run of «not now» answers began
         "turn_ended": 0.0,      # when the last woken turn finished
         "alarmed": 0.0,         # whether the room has been told already
+        "reminded_at": 0.0,     # when the standing reminder last went out
     }
 
     def _load_state(self) -> dict[str, float]:

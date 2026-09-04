@@ -394,7 +394,44 @@ $ collab wake show
   waiting   0 unread, 0 undelivered
   last woke 4m ago
   reading   nobody is
+  reminder  every 10m, as the guest
 ```
+
+### The standing reminder
+
+An agent drifts. Twenty minutes in it has stopped saying what it is doing, the
+host has stopped looping over the roster, and nothing anywhere is a fault: the
+daemon is live, the feed is read, the board has simply stopped moving.
+
+So the same daemon puts the standing instructions back in front of **its own
+agent**, every ten minutes, on the same wake it uses for messages. It is not a
+message to the room — a paragraph nobody said, posted by every agent every ten
+minutes, would be one copy per participant in everybody's transcript — and it
+creates no task, moves no batch, publishes no activity and never reaches the
+hub. It rides the wake so that it inherits the whole gate: it does not
+interrupt a turn in flight, it respects `--min-gap` and `--settle`, and where a
+reminder and real messages fall due together the **messages win** and the
+reminder rides along in the same turn rather than costing a second one.
+
+The host and the guests are reminded of different things, decided by the role
+the hub assigned rather than by any name. Both are drawn from [the shipped
+rules](src/collab/rules/COLLAB.md): the host's is § 5 and § 7 — who is idle,
+what the board says, keep a batch open, keep the work in subagents — and the
+guest's is § 4b — keep going on the objective you were given, say when you
+stop, say when you are blocked.
+
+```bash
+collab config remind_every 15        # or 0 to turn it off
+collab config remind_host "<what your host agent should be told>"
+collab config remind_guest "<and your guests>"
+collab config remind_host --unset    # back to the shipped one
+```
+
+**No wake armed, no reminder.** The wake is the only route to an agent between
+turns, so an agent with none gets nothing — Claude Code included, which holds
+its own monitor and normally arms no wake at all. That is a real limitation
+rather than a hidden one: once you have configured a reminder, `collab check`
+says it cannot be delivered and names `collab wake agents`.
 
 `--settle`, `--min-gap` and `--timeout` move those three limits. This is not a
 system service and does not survive a reboot — an agent that is not running has
@@ -1598,6 +1635,9 @@ collab config --json              # the same table, for an agent to read
 | `watch_roster_position` | `top`, `bottom`, `left` or `right` | `collab watch --roster-position <p> --save` | `top` |
 | `stats_command` | a command printing your usage as JSON, re-run on a timer | `collab stats --source <cmd>` | none |
 | `stats_interval` | how often to run it, in seconds | `collab stats --interval <n>` | `120` |
+| `remind_every` | minutes between the standing reminder your daemon puts back in front of your agent; `0` turns it off | — | `10` |
+| `remind_host` | what that reminder says when you are the host; empty for the shipped one | — | none |
+| `remind_guest` | what it says when you are a guest; empty for the shipped one | — | none |
 | `watch_status` | show the viewer's bottom status row | — | `on` |
 | `watch_status_segments` | what that row carries, in order | — | `stats,command,keys` |
 | `watch_status_command` | a command of your own for that row | — | none |

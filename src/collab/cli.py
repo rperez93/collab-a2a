@@ -9,6 +9,7 @@ back a connection and a list of follow-up steps.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -40,6 +41,7 @@ from .config import (
     held_homes,
     ensure_home,
     GITIGNORE_BODY,
+    reminder_settings,
     repo_root,
     resolve_name,
     sibling_homes,
@@ -2336,6 +2338,24 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
         else:
             add("wake", CHECK_OK, "a wake is armed; nothing has needed it yet")
 
+    # 2c. The standing reminder RIDES THE WAKE, so a reminder somebody
+    #     configured with no wake armed is a feature that will never once fire.
+    #     Nothing else says so: the daemon is live, the reminder is in the
+    #     config file where they put it, and the only symptom is an agent that
+    #     drifts exactly as it did before.
+    #
+    #     Said ONLY when somebody actually configured it. At its shipped
+    #     default nobody has asked for anything, and warning every user who
+    #     never armed a wake is the noise that gets this loop ignored — the
+    #     same rule the stats check below follows for a route never set up.
+    remind = reminder_settings(bool(profile.is_host))
+    if remind["configured"] and remind["every"] and not woken.get("armed"):
+        add("reminder", CHECK_WARN,
+            f"your {remind['every']}-minute reminder cannot be delivered —"
+            " no wake is armed, and the wake is the only way it reaches you",
+            f"{exe} wake agents, then {exe} wake set --agent <name>"
+            f" — or turn it off with {exe} config remind_every 0")
+
     # 3. Has anything been left undrained? ONLY MEANINGFUL WHILE POLLING.
     #
     #    This began as «is anything ACTING on it», and unread was the evidence.
@@ -2620,9 +2640,14 @@ def _wake_deliver(args: argparse.Namespace, wk) -> int:
     target = args.target or ""
     if args.to == "tmux":
         where = os.environ.get("COLLAB_WAKE_PROMPT") or "the batch"
+        # Why the line is being typed. The daemon says which of the two this
+        # is; anything else defaults to the older wording rather than guessing.
+        about = ("your standing reminder"
+                 if os.environ.get("COLLAB_WAKE_KIND") == "reminder"
+                 else "messages arrived")
         code, detail = wk.deliver_to_tmux(
             target, where, expect_pid=args.expect_pid or "",
-            expect_command=args.expect_command or "")
+            expect_command=args.expect_command or "", about=about)
     elif args.to == "codex":
         code, detail = wk.deliver_to_codex(target, prompt)
     else:
@@ -2792,6 +2817,7 @@ def cmd_wake(args: argparse.Namespace) -> int:
     # show
     status = read_status(profile)
     live = status.get("wake") or {}
+    remind = reminder_settings(bool(profile.is_host))
     reading = bool(watchers(profile)) or (
         time.time() - last_poll(profile)) < wk.POLL_COUNTS_AS_LISTENING
     if args.json:
@@ -2803,6 +2829,7 @@ def cmd_wake(args: argparse.Namespace) -> int:
             "min_gap": config.min_gap,
             "timeout": config.timeout,
             "attended": reading,
+            "remind_every": remind["every"],
             **{k: live.get(k) for k in ("pending", "batches", "last_wake", "note")},
         }, indent=2))
         return 0
@@ -2811,6 +2838,13 @@ def cmd_wake(args: argparse.Namespace) -> int:
         print(f"  {c('disarmed', '33')} — nothing starts a turn for you")
         print(dim("  Claude Code needs none of this; it holds its own monitor."))
         print(dim("  For agents that cannot: collab wake set '<command>'"))
+        if remind["every"]:
+            # SAID HERE TOO, not only in `collab check`. This is the page
+            # somebody opens to ask why nothing is happening, and a reminder
+            # that cannot be delivered is invisible everywhere else: the
+            # setting is present, correct, and certain never to fire.
+            print(dim(f"  your {remind['every']}-minute reminder needs one"
+                      " too — it is delivered on the wake"))
         return 0
     print(f"  command   {shlex.join(config.command)}")
     if config.notify:
@@ -2826,6 +2860,13 @@ def cmd_wake(args: argparse.Namespace) -> int:
     last = live.get("last_wake")
     print(f"  last woke {activity.elapsed(last) if last else 'never'}")
     print(f"  reading   {'somebody is' if reading else c('nobody is', '33')}")
+    # The standing reminder rides this same wake, so this is where somebody
+    # asking «what does the daemon do to my agent» should find it. The role is
+    # named because it decides which text arrives, and it is the session's, not
+    # the agent's name.
+    print("  reminder  " + (f"every {remind['every']}m, as the "
+                            + ("host" if profile.is_host else "guest")
+                            if remind["every"] else dim("off")))
     if live.get("note"):
         print(dim(f"  {live['note']}"))
     if not status:
