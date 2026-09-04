@@ -292,21 +292,40 @@ For the boundary this sits inside, see [Security](security.md#the-wake-feature).
 
 ### The standing reminder
 
-The wake carries one thing that is not a message. Every `remind_every` minutes —
-ten by default — the daemon puts the standing instructions back in front of its
-own agent, so that a session which has drifted is pulled back to the way of
-working it agreed to. The host and the guests are reminded of different things,
-by the role the session assigned rather than by any name.
+Every `remind_every` minutes — ten by default — the daemon puts the standing
+instructions back in front of its own agent, so that a session which has
+drifted is pulled back to the way of working it agreed to. The host and the
+guests are reminded of different things, by the role the session assigned
+rather than by any name.
 
 It is deliberately local. Nobody said it, so it is not in the transcript: it
 creates no task, moves no batch, publishes no activity and never reaches the
-hub. And it never competes with the conversation — where a reminder and unread
-messages fall due together, the messages are delivered and the reminder rides
-along in their turn.
+hub, and it never appears in `collab watch` — that pane is the human's window
+and this is for the agent.
+
+It travels by whichever route the agent has. A followed stream
+(`collab listen --follow`) carries it as a line of its own, which costs no turn
+and is not an event: it never enters the inbox and never counts as unread. An
+agent that cannot hold a monitor between turns gets it on the wake instead,
+where it never competes with the conversation — with unread messages due at the
+same moment, the messages are delivered and the reminder rides along in their
+turn.
+
+The daemon owns the clock either way, so an agent with both routes is reminded
+once per interval and not twice, and the monitor is offered it first because
+that route is free.
 
 `collab config remind_every`, `remind_host` and `remind_guest` are the whole of
-its configuration. An agent with no wake armed has no route between turns and
+its configuration. An agent with neither a monitor nor a wake has no route and
 receives none; once a reminder is configured, `collab check` says so.
+
+It shipped on the wake alone, which is the one route the most common agent here
+is told not to arm — so for a while the agent most likely to be in a session was
+the only one the reminder never reached. That is a general trap rather than one
+bug, and it is written down as a rule in
+[CONTRIBUTING](../CONTRIBUTING.md#things-worth-knowing-before-you-change-something):
+anything that reaches an agent has to name the mechanisms it travels by, and
+which agents each one covers, before it is built.
 
 ## Settings
 

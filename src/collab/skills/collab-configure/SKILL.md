@@ -148,10 +148,13 @@ collab config remind_host --unset    # back to the shipped one
 
 Three things worth knowing before you change any of it:
 
-- **It is delivered on the wake.** An agent with no wake armed never receives
-  one. If the user asks why the reminder is not arriving, run `collab check`:
-  once a reminder is configured, it says exactly that and names
-  `collab wake agents`.
+- **It travels by the monitor, or by the wake.** A followed stream
+  (`collab listen --follow`) carries it as a line of its own for no turn at
+  all; an agent that cannot hold one between turns gets it on the wake
+  instead. With both, the daemon delivers one per interval and not two. With
+  neither, nothing arrives — if the user asks why the reminder is not coming,
+  run `collab check`: once a reminder is configured, it says exactly that and
+  names both routes.
 - **The role decides the text**, and the role is host or guest as the session
   assigned it — not the agent's name. Setting `remind_host` on a guest's
   machine changes nothing that machine will ever see.
