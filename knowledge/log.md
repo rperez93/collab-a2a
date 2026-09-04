@@ -1,6 +1,8 @@
 # Bundle Update Log
 
 ## 2026-09-04
+* **Update**: Corrected [the client daemon](architecture/client-daemon.md) for commit `3f2c50a`, which moved the readers of the daemon's files — the pid file, `status.json`, the watchers — out of `daemon.py` into `client/daemon_files.py` so that the status line imports no networking. The move is dated to the pin, with the measured cost before and after; the pin stays at `23db6d0` and the new claims carry no `verified` stamp until the bundle is re-pinned.
+* **Update**: Extended [the trust model](operating/security-model.md) for commit `3ea97f1`: the join limiter now forgets a caller once every attempt of theirs has aged past the window, so a tunnelled `/join` no longer keeps an entry for every address that ever knocked. Same provenance note.
 * **Update**: Corrected [the envelope](architecture/envelope.md) for commit `a310d77`, which changed the file it cites. The sentence saying `ALL_KINDS` named six of the seven kinds is now dated to the pin rather than left to read as the present; a section says which kinds a client may send (one — `chat`), that both the message route and A2A `SendMessage` refuse the rest by name, and that `ts` and `toId` are the hub's on both. The pin itself stays at `23db6d0`, because the bundle is pinned to one revision and most of what it cites has moved since; the bundle-wide re-pin is a separate act under the rule in [how to read this bundle](how-to-read-this-bundle.md), and the new claims carry no `verified` stamp until it happens.
 
 ## 2026-09-02

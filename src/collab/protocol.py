@@ -58,6 +58,11 @@ ALL_KINDS = frozenset({KIND_CHAT, KIND_TASK, KIND_HELLO, KIND_PRESENCE,
 CLIENT_KINDS = frozenset({KIND_CHAT})
 
 
+#: How much of a refused kind the refusal repeats back. The longest kind a
+#: client could plausibly mean is eight characters; forty shows any typo whole.
+KIND_SHOWN = 40
+
+
 def client_kind_refusal(kind: str) -> str | None:
     """Why a client may not send an envelope of this `kind`, or None if it may.
 
@@ -71,7 +76,15 @@ def client_kind_refusal(kind: str) -> str | None:
     """
     if kind in CLIENT_KINDS:
         return None
-    return f"kind {kind!r} refused: chat is the only kind a client may send"
+    # NAMED, BUT BRIEFLY. The `!r` neutralises control bytes; it does nothing
+    # about length, and a ten-megabyte kind went straight back in the response
+    # and into the host's own log through the A2A layer's traceback. No real
+    # kind is longer than eight characters, so a cap this size loses nothing
+    # anyone would recognise and stops the log paying for the sender's
+    # imagination. Refusal never publishes, so this was only ever the host's
+    # cost — which is still a cost.
+    shown = kind if len(kind) <= KIND_SHOWN else kind[:KIND_SHOWN] + "…"
+    return f"kind {shown!r} refused: chat is the only kind a client may send"
 
 
 def short_state(state: str) -> str:
