@@ -258,11 +258,16 @@ agent has — a followed stream, or the wake.
 4. **On the wake, it will not interrupt a turn and never displaces a message**:
    if messages are due at the same moment they go first and the reminder rides
    along beneath them, in the same turn. So a busy agent sees it less often than
-   a stalled one, which is the intent. It does spend a `--min-gap` slot like any
-   turn, so a message arriving in the seconds after a reminder fires waits out
-   the rest of that gap — ninety seconds by default — as it would after any
-   other turn. On a monitor none of that applies: it is a printed line, not a
-   turn, so it costs nothing and delays nothing.
+   a stalled one, which is the intent. It does not delay one either: a
+   reminder-only turn spends no `--min-gap` slot, so a message arriving a second
+   after a reminder fires starts its turn at once, held only by `--settle`. Be
+   precise about what that does *not* say. A reminder still waits for the gap
+   when a message turn has just run; a turn carrying both is a message turn and
+   spends the gap in full; and a reminder-only delivery that **fails** still
+   counts as a failure and starts the retry backoff, which does hold messages —
+   boundedly, and only until one delivery works. On a monitor none of that
+   applies: it is a printed line, not a turn, so it costs nothing and delays
+   nothing.
 
 A reminder is not a message. It creates no task, moves no batch, publishes no
 activity and never reaches the hub, so it will not appear in `collab watch` or

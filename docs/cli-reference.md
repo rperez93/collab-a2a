@@ -321,7 +321,7 @@ collab wake [--to KIND] [--expect-command NAME] [--expect-pid PID]
 | `--target ID` | Which live session to reach — a Codex thread id or a tmux pane. Taken from your own environment if unset. |
 | `--notify NOTIFY` | Optional command told after each turn. |
 | `--settle SECONDS` | How long to let a burst finish before waking. |
-| `--min-gap SECONDS` | Never start two turns closer together than this. |
+| `--min-gap SECONDS` | Never start two turns for messages closer together than this. The standing reminder waits on it without spending it. |
 | `--timeout SECONDS` | Kill a woken turn that runs longer than this. |
 | `--yes` | Arm a command that is not one of the reviewed recipes. It runs unattended. |
 | `--to KIND` | With `deliver`, how to reach the session. Run by the daemon, not meant to be typed. |
@@ -334,8 +334,9 @@ The wake is one of the two routes for the **standing reminder**: with nothing
 unread, the daemon spends a turn every `remind_every` minutes putting the
 standing instructions back in front of its own agent. It has no flags of its
 own here — `collab config remind_every`, `remind_host` and `remind_guest` are
-the whole of it — and it is subject to this command's `--settle`, `--min-gap`
-and `--timeout` like anything else the wake delivers. Messages always take
+the whole of it — and it waits on this command's `--settle` and `--min-gap` and
+is killed by its `--timeout` like anything else the wake delivers, though it
+does not spend the gap it waits on. Messages always take
 precedence: a reminder due at the same moment rides along in their turn, beneath
 them, and never displaces one or costs a turn of its own.
 
@@ -345,11 +346,21 @@ for both and offers the monitor first, so an agent with a monitor **and** an
 armed wake is reminded once per interval, on the monitor, and the wake carries
 nothing extra.
 
-It does spend a `--min-gap` slot, like every turn. A message arriving in the
-seconds after a reminder has fired waits out the rest of that gap — ninety
-seconds by default — exactly as it would after any other turn. Lower
-`--min-gap`, or set `remind_every` to `0`, if that wait matters more to you than
-the reminder does.
+**It spends no `--min-gap` slot of its own.** That gap is the budget for how
+often other people's messages may start a turn, and a reminder-only turn does
+not draw on it: a message arriving a second after a reminder has fired starts
+its turn at once, subject to `--settle` and to nothing else. Two things are
+still true and are not the same claim. A reminder *observes* the gap — one due
+ten seconds after a message turn waits for the gap to pass, because a turn was
+just spent. And a turn that carries **both** is a message turn and spends the
+gap in full; the reminder riding along in it changes nothing about that.
+
+A reminder-only delivery that **fails** does count as a failure, because the
+failing thing is the wake and not the reminder: it increments the failure count
+and starts the retry backoff, which holds messages too — for the backoff, never
+for the gap on top of it. The backoff is bounded and clears on the first
+delivery that works, so a reminder that cannot be delivered can slow the wake
+down and cannot switch it off. `collab check` reads the same count.
 
 ## check
 

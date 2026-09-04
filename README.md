@@ -428,10 +428,11 @@ publishes no activity and never reaches the hub.
   turn, it is not an event, and it does not touch the unread count.
 - **Your wake.** For an agent that cannot hold a monitor between turns, the
   reminder rides the wake instead, and inherits the whole gate that comes with
-  it: it does not interrupt a turn in flight, it respects `--min-gap` and
+  it: it does not interrupt a turn in flight, it waits on `--min-gap` and
   `--settle`, and where a reminder and real messages fall due together the
   **messages win** and the reminder rides along in the same turn rather than
-  costing a second one.
+  costing a second one. It waits on that gap without spending it — a message
+  landing behind a reminder-only turn is not held back by it.
 
 **One clock, one reminder.** The daemon decides when one is due, not the
 monitor, so an agent holding both a monitor and an armed wake gets one every

@@ -88,6 +88,13 @@ wake's state, and the collab version.
 both meant a wake that had never once succeeded still reported *last woke 2m
 ago*.
 
+The waker keeps a third clock behind them, `messaged_at`, which is the one
+`--min-gap` reads: it records when a turn carrying *messages* last started.
+`last_attempt` answers *did this route try anything* and is what the status
+line shows; the gap is the budget for how often other people's messages start a
+turn, and the standing reminder — which borrows the same delivery — does not
+pay into it.
+
 # When it is not running
 
 `collab check` says so, and says what to do. Run against a live session with
