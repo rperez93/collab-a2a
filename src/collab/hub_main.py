@@ -134,7 +134,6 @@ def main() -> int:
         session_id=cfg.session_id,
         host_name=cfg.host_name,
         public_url=cfg.public_url or cfg.local_url,
-        invite_code=cfg.invite,
         title=cfg.title,
         supervisor=supervisor,
         on_url_change=remember_url,

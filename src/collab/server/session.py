@@ -15,6 +15,14 @@ from .auth import new_secret
 from .store import Store
 
 
+#: How long an invite stays good for, and how many times it may be spent.
+#: Named here so creating a session, resuming one and rotating the link all
+#: mint the same kind of invite: a rotated link is not a lesser link, and a
+#: host who rotates should not silently get a shorter-lived one.
+INVITE_TTL = 24 * 3600
+INVITE_MAX_USES = 0  # unlimited; the host can always mint another
+
+
 @dataclass
 class HubConfig:
     """What the detached hub process needs in order to come up."""
@@ -124,8 +132,9 @@ def create_session(host_name: str, port: int, bind: str = "127.0.0.1",
     cfg.save()
 
     store = Store(cfg.db_path)
-    # An unlimited-use invite, valid for a day; the host can always mint another.
-    store.add_invite(cfg.invite, ttl_seconds=24 * 3600, max_uses=0)
+    # An unlimited-use invite, valid for a day; the host can always mint another
+    # with `collab url --rotate`, without ending the session.
+    store.add_invite(cfg.invite, ttl_seconds=INVITE_TTL, max_uses=INVITE_MAX_USES)
     store.add_participant(cfg.host_name, cfg.host_token, is_host=True)
     store.add_room("general", cfg.host_name)
     store.close()
@@ -191,14 +200,35 @@ def resume_session(cfg: HubConfig, port: int, bind: str = "127.0.0.1",
     cfg.public_url = ""
     cfg.tunnel = "none"
 
+    return rotate_invite(cfg)
+
+
+def rotate_invite(cfg: HubConfig) -> HubConfig:
+    """Retire every invite issued so far and mint a new one, in place.
+
+    This is the whole of what a resume does to the way in, lifted out of it,
+    because the two halves were only ever bundled together by accident. The
+    invite is the credential for JOINING and for nothing else: everyone already
+    here holds their own bearer token, which this does not touch, and the hub
+    checks the invite against the database on every join. So the new link is
+    live on a hub that is already running, the old one stops opening the door
+    for anybody who has not walked through it yet, and nobody is disconnected.
+
+    Ending the session to change the lock — `kill`, then `host --resume` — was
+    the only way to do this before, and it charged every participant for a leak
+    that had cost them nothing.
+    """
     store = Store(cfg.db_path)
     try:
         store.clear_invites()
         cfg.invite = new_secret()
-        store.add_invite(cfg.invite, ttl_seconds=24 * 3600, max_uses=0)
+        store.add_invite(cfg.invite, ttl_seconds=INVITE_TTL,
+                         max_uses=INVITE_MAX_USES)
     finally:
         store.close()
 
+    # Written before anything is announced: hub.json is what `collab url`
+    # reprints and what the hub's own heartbeat re-reads.
     cfg.save()
     return cfg
 
