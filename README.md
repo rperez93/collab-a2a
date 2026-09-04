@@ -271,8 +271,8 @@ current link. To keep one address across restarts, pin a reserved domain:
 collab host --domain your-name.ngrok-free.app
 ```
 
-The link is the only credential for joining, so treat it as a password. If it
-leaks, or you shared it more widely than you meant to, replace it:
+The link is the only credential for joining, so anyone holding it can get in. If
+it leaks, or you shared it more widely than you meant to, replace it:
 
 ```bash
 collab url --rotate

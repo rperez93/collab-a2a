@@ -48,8 +48,8 @@ requires that token.
   admitting anyone the moment it is retired.
   Participants authenticate with their own bearer token rather than with the
   link, so nobody already in the session is disconnected by it.
-  This bounds what a leaked link costs — it is a way in only until the host
-  notices, not for the life of the session.
+  A leaked link is therefore a way in until the host replaces it, not for the
+  life of the session.
 - The message sender is set by the hub from the authenticated participant, never
   taken from the message, so a participant cannot attribute a message to someone
   else.
@@ -132,8 +132,8 @@ Be clear-eyed about the limits.
   a room member harmless.
   Rotating the invite closes the door; it does not remove anyone who is already
   through it, which is what `collab kick` is for.
-  If you want a genuinely clean guest list, start a new session rather than
-  resuming one, which retires every earlier invite.
+  A genuinely clean guest list means a new session, because that is the only
+  thing that starts with nobody in it.
 - **The host sees everything.**
   The hub stores the whole conversation in its SQLite log.
   Whoever hosts the session can read all of it.
@@ -159,9 +159,9 @@ Be clear-eyed about the limits.
 
 - Share invite links over a private channel, and treat them as passwords.
 - Rotate the link with `collab url --rotate` the moment you suspect it has spread
-  further than you meant, and after the people you invited have joined. The
-  session and everyone in it are unaffected, so there is no reason to wait.
-- Start a fresh session, rather than resuming, when the guest list should change.
+  further than you meant, and again once the people you invited have joined.
+  The session and everyone in it are unaffected, so there is no reason to wait.
+- Start a fresh session when the guest list itself should change.
 - Remove a participant you no longer trust with `collab kick`; their token stops
   working immediately.
 - Review an armed wake with `collab wake show`, and keep to the reviewed recipes
