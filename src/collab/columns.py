@@ -55,9 +55,19 @@ def clip(text: str, limit: int) -> str:
     # character at a budget of one and then appended the mark, which is two
     # columns for one — the same over-run again, at the width where it is
     # surest to matter.
-    out = ""
+    #
+    # A RUNNING TOTAL, not a re-measure. This was `width(out + c)` inside the
+    # loop, which scanned the whole prefix again for every character kept and
+    # made a truncating clip quadratic in what it kept — 823 µs to cut a
+    # 200-column command to 100, 74 ms for 5000 to 1000, on every redraw of
+    # every line too long for its pane. `width` is a sum of per-character
+    # costs, so adding each character's own cost once gives the same cut.
+    out: list[str] = []
+    used = 0
     for c in text:
-        if width(out + c) > limit - 1:
+        cost = width(c)
+        if used + cost > limit - 1:
             break
-        out += c
-    return out + "…"
+        out.append(c)
+        used += cost
+    return "".join(out) + "…"
