@@ -308,7 +308,11 @@ def test_a_dead_watcher_costs_no_start_time_read(profile, monkeypatch):
     (directory / str(proc.pid)).write_text("a start time from whenever")
 
     asked: list[int] = []
-    monkeypatch.setattr(d, "_started_at", lambda pid: asked.append(pid) or "")
+    # Patched where `watchers` looks it up. The daemon module re-exports both
+    # names, so patching them there would leave the real one in use here and
+    # this assertion passing whatever the code did.
+    from collab.client import daemon_files
+    monkeypatch.setattr(daemon_files, "_started_at", lambda pid: asked.append(pid) or "")
     assert d.watchers(profile) == []
     assert asked == [], "asked a dead pid when it had already been ruled out"
     assert not (directory / str(proc.pid)).exists(), "the stale file stayed"

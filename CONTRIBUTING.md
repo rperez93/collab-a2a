@@ -70,6 +70,7 @@ src/collab/
   update.py        release checks
   client/
     daemon.py      holds the feed, reconnects, writes the local inbox
+    daemon_files.py  the pid, status and readers it writes down, read without it
     tui.py         the full-screen viewer
     onboard.py     the one-step join
     watch.py       the human-readable transcript
