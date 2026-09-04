@@ -160,8 +160,11 @@ def test_agents_on_other_api_ports_are_found(monkeypatch):
         if url.endswith("4041/api/tunnels"):
             return R({"tunnels": [{"public_url": "https://found.ngrok-free.app",
                                    "config": {"addr": "http://localhost:9000"}}]})
-        raise t.httpx.HTTPError("nothing here")
+        raise httpx.HTTPError("nothing here")
 
-    monkeypatch.setattr(t.httpx, "get", fake_get)
+    # On the httpx module, not `t.httpx`: the tunnel module imports httpx
+    # where it probes, so cli.py can import it without importing httpx.
+    import httpx
+    monkeypatch.setattr(httpx, "get", fake_get)
     assert t._existing_tunnel(9000) == "https://found.ngrok-free.app"
     assert "https://found.ngrok-free.app" in t._tunnel_urls()

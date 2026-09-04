@@ -24,10 +24,13 @@ from typing import Any
 from . import __version__, activity, lockfile, peers, rules, update, wake
 from . import batch as batch_progress
 from .client import exclusive, onboard
-from .client.daemon import (DaemonPaths, effective_state as daemon_state,
-                            is_running, last_poll, polled, read_status,
-                            stop as stop_daemon, stop_orphans,
-                            watchers, watching)
+# FROM daemon_files, NOT daemon: these read the daemon's files, and the module
+# that also holds the daemon imports httpx, websockets and asyncio at the top.
+# Every command paid that — `recv`, `send`, `status`, `watch` — for a pid
+# check. The two that SIGNAL a daemon are below, imported when called.
+from .client.daemon_files import (DaemonPaths, effective_state as daemon_state,
+                                  is_running, last_poll, polled, read_status,
+                                  watchers, watching)
 from .client.hub_client import HubClient, HubError
 from .client.inbox import Inbox
 from .config import (
@@ -163,6 +166,25 @@ def _preflight_update(args: argparse.Namespace) -> None:
         return
     if info.available:
         update.prompt_and_maybe_update(info, assume_yes=getattr(args, "update", False))
+
+
+def stop_daemon(profile: SessionProfile) -> bool:
+    """`client.daemon.stop`, imported when a daemon is actually to be stopped.
+
+    The two signals live in the daemon module beside the class they signal,
+    and that module imports the network stack at the top. `host`, `join` and
+    `daemon stop` are the commands that reach for them, and those start or
+    stop a daemon anyway; every other command is spared the import.
+    """
+    from .client.daemon import stop
+
+    return stop(profile)
+
+
+def stop_orphans(home: Path | str, keep: str | None = None) -> list[str]:
+    from .client.daemon import stop_orphans as _stop_orphans
+
+    return _stop_orphans(home, keep=keep)
 
 
 def _warn_outside_venv() -> None:

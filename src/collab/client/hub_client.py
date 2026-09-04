@@ -12,9 +12,14 @@ import re
 from pathlib import Path
 from typing import Any
 
-import httpx
-
 from ..protocol import EXT_PREFIX, Envelope, RPC_PATH, new_id
+
+# httpx IS IMPORTED WHERE IT IS CALLED, not here. cli.py imports this module
+# for every command so that `except HubError` can be written, and httpx at the
+# top of it — with its own CLI's rich and click behind it — was 80 ms of a
+# 180 ms `import collab.cli`, paid by `recv`, `send` and `status`, which never
+# construct a client. A second `import httpx` inside a method is a dictionary
+# lookup once the first has run.
 
 #: The 1.0 dispatcher assumes 0.3 unless told otherwise, so this header is
 #: required on every JSON-RPC call, not optional.
@@ -32,6 +37,8 @@ class HubClient:
                  *, timeout: float = DEFAULT_TIMEOUT) -> None:
         self.base_url = base_url.rstrip("/")
         self.token = token
+        import httpx
+
         self._client = httpx.Client(timeout=timeout, follow_redirects=True)
 
     def close(self) -> None:
@@ -52,6 +59,8 @@ class HubClient:
         return h
 
     def _request(self, method: str, path: str, **kw: Any) -> Any:
+        import httpx
+
         try:
             r = self._client.request(
                 method, f"{self.base_url}{path}", headers=self._headers(kw.pop("headers", None)), **kw
@@ -186,6 +195,8 @@ class HubClient:
 
     def upload_file(self, path: Path, *, to: str | None = None,
                     room: str | None = None) -> dict[str, Any]:
+        import httpx
+
         params: dict[str, Any] = {}
         if to:
             params["to"] = to
@@ -212,6 +223,8 @@ class HubClient:
 
     def download_file(self, file_id: str, dest_dir: Path) -> tuple[Path, str]:
         """Stream a file to disk and return its path plus the server's checksum."""
+        import httpx
+
         url = f"{self.base_url}{EXT_PREFIX}/files/{file_id}/content"
         try:
             with self._client.stream("GET", url, headers=self._headers(),

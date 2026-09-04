@@ -16,8 +16,6 @@ import subprocess
 import time
 from dataclasses import dataclass
 
-import httpx
-
 #: ngrok's local API is on 4040 only if that port was free. A second agent —
 #: and users often already have one running — moves to 4041, 4042, ... so
 #: polling 4040 alone reads someone else's agent and concludes we have no
@@ -90,6 +88,11 @@ class Tunnel:
 
 def _all_tunnels() -> list[dict]:
     """Every tunnel from every ngrok agent running on this machine."""
+    # Imported where it is used: cli.py imports this module for `free_port`
+    # and `local_ip`, and the only thing here that speaks HTTP is this probe
+    # of ngrok's local API. See update.check for the cost being avoided.
+    import httpx
+
     found: list[dict] = []
     for api_port in NGROK_API_PORTS:
         try:

@@ -59,7 +59,7 @@ from ..config import watch_roster_settings, watch_status_settings
 from ..stats import read_stats
 from . import statusbar
 from .statusbar import money_text
-from .daemon import DaemonPaths, effective_state, is_running, read_status
+from .daemon_files import DaemonPaths, effective_state, is_running, read_status
 from .inbox import Inbox
 
 #: How much of the window the roster gets. The conversation is the thing you

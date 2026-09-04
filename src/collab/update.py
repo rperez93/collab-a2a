@@ -17,8 +17,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-import httpx
-
 from . import __version__
 from .config import global_config_path
 
@@ -121,6 +119,13 @@ def check(*, force: bool = False, timeout: float = TIMEOUT) -> UpdateInfo:
         return cached
 
     info = UpdateInfo(current=__version__, checked_at=time.time())
+    # IMPORTED HERE, ON THE ONE PATH THAT GOES TO GITHUB. cli.py imports this
+    # module for every command, and httpx at the top of it was 80 ms of a
+    # 180 ms `import collab.cli` — paid by `recv`, `send`, `status` and every
+    # other command that never opens a connection. The cache and the version
+    # arithmetic above need none of it.
+    import httpx
+
     try:
         r = httpx.get(RELEASES_API, timeout=timeout,
                       headers={"Accept": "application/vnd.github+json"})

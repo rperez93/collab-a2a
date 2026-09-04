@@ -20,8 +20,8 @@ from ..config import SessionProfile, resolve_name
 from ..protocol import DEFAULT_ROOM
 from . import context as ctx
 from . import exclusive
-from .daemon import (DaemonPaths, effective_state, is_running,
-                     read_status)
+from .daemon_files import (DaemonPaths, effective_state, is_running,
+                           read_status)
 from .hub_client import HubClient, HubError
 
 DAEMON_READY_TIMEOUT = 20.0
