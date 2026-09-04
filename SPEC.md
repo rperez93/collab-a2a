@@ -32,7 +32,7 @@ Every collab payload travels inside a standard A2A `Message` as a structured
 ```jsonc
 {
   "collab": "v1",
-  "kind":   "chat" | "task" | "file" | "hello" | "presence" | "system",
+  "kind":   "chat" | "task" | "file" | "hello" | "presence" | "system" | "activity",
   "from":   "bob",                    // display name, set by the hub
   "fromId": "p_9f31ac0b21d4",         // stable identity — what routing uses
   "room":   "auth-refactor",          // omitted for direct messages
@@ -49,6 +49,20 @@ Every collab payload travels inside a standard A2A `Message` as a structured
 
 `from` is **never** taken from the client. The hub sets it from the
 authenticated participant, so a message cannot be attributed to someone else.
+
+`kind` is **`chat`, or refused**, when a client sends it — on the message route
+and over `SendMessage` alike. Every other kind is stamped by the hub on the
+route that performs it: `/join` writes `hello` and `presence`, the task routes
+write `task`, the file routes write `file`, the activity route writes
+`activity`, and `system` is the hub speaking for itself. A client that sends
+any of them gets a `400` (or an `InvalidParams` error over JSON-RPC) naming the
+kind, and nothing lands. The one exception is the host's own `hello`
+announcement over `SendMessage`, which is how `collab host` puts its repo and
+focus on the roster; the host never passes through `/join`. A missing `kind`
+is `chat`.
+
+`ts` and `toId` are the hub's as well: a timestamp in the part is replaced on
+arrival, and the recipient id is resolved from `to`, never read from the part.
 
 **Identity is `fromId`/`toId`, not the name.** A display name is a label its
 owner can change at any time; delivery, direct-message visibility and history
@@ -75,6 +89,7 @@ arrives. Names are unique among live participants, so this is never ambiguous.
 | `task` | `{action, id, title, state, owner}` — `state` is a real A2A `TaskState` |
 | `file` | `{action: "shared"\|"received", id, name, size, sha256, url}` |
 | `system` | free-form |
+| `activity` | `{state, since, updated_at, what?, files?, task?}` — what the sender is doing right now, replaced rather than merged |
 
 ## 3. Transport
 
@@ -103,7 +118,7 @@ All of these require `Authorization: Bearer <participant token>` except `/join`.
 |---|---|---|
 | `POST` | `/ext/collab/v1/join` | invite + `hello` → token, id **+ session snapshot**. `409` if the name is taken |
 | `GET` | `/ext/collab/v1/events` | **SSE feed**, honours `Last-Event-ID` |
-| `POST` | `/ext/collab/v1/messages` | post an envelope (convenience; `SendMessage` does the same) |
+| `POST` | `/ext/collab/v1/messages` | post a `chat` envelope (convenience; `SendMessage` does the same). Any other `kind` is `400` |
 | `GET` | `/ext/collab/v1/history` | backfill, `?room=&limit=` |
 | `GET`/`POST` | `/ext/collab/v1/rooms` | list / create rooms |
 | `GET` | `/ext/collab/v1/participants` | roster |

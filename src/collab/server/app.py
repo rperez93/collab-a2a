@@ -34,8 +34,9 @@ from ..protocol import (
     FILE_TTL_SECONDS,
     MAX_FILE_BYTES,
     Envelope,
-    KIND_FILE,
     KIND_ACTIVITY,
+    KIND_CHAT,
+    KIND_FILE,
     KIND_HELLO,
     KIND_PRESENCE,
     KIND_SYSTEM,
@@ -48,6 +49,7 @@ from ..protocol import (
     ROOM_FILE_TTL_SECONDS,
     RPC_PATH,
     bounded_meta,
+    client_kind_refusal,
     clip,
     new_id,
     short_state,
@@ -247,9 +249,16 @@ def create_app(
         """Convenience path — the same fan-out A2A SendMessage performs."""
         user = _require(request)
         body = await request.json()
+        # A missing kind is chat — that is what every client here sends. Any
+        # OTHER kind is refused, and by name, so the client can see which of
+        # its assumptions the hub did not share. See protocol.CLIENT_KINDS for
+        # what a client could do with the kinds the hub stamps itself.
+        kind = str(body.get("kind") or KIND_CHAT)
+        if reason := client_kind_refusal(kind):
+            raise HTTPException(status_code=400, detail=reason)
         to_name, to_id = resolve_target(body.get("to"))
         env = Envelope(
-            kind=str(body.get("kind") or "chat"),
+            kind=kind,
             text=str(body.get("text") or ""),
             room=body.get("room") or (None if to_id else DEFAULT_ROOM),
             to=to_name or None,
