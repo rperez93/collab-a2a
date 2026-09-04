@@ -1,7 +1,7 @@
 ---
 type: Protocol
 title: The envelope
-description: The one JSON object every collab event is, the kinds it comes in, and the bounds every field arrives under.
+description: The one JSON object every collab event is, the kinds it comes in, which of them a client may send, and the bounds every field arrives under.
 resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/src/collab/protocol.py
 tags: [wire-format, a2a, extension, envelope]
 status: stable
@@ -16,6 +16,7 @@ sources:
   - id: spec
     resource: https://github.com/rperez93/collab-a2a/blob/23db6d0e016c2b69943026f1609e4f0be1aa8fec/SPEC.md
     title: SPEC.md — the collab A2A extension, specified
+    last_modified: 2026-09-01T23:18:43Z
 ---
 
 # One shape, two readers
@@ -70,12 +71,48 @@ Seven kind constants exist in the source:[^protocol-src]
 | `system` | The hub speaking for itself. |
 | `activity` | What an agent is doing right now. |
 
-`ALL_KINDS` names six of them; `activity` is defined separately and is not a
-member of that set.
+At the revision this page is pinned to, `ALL_KINDS` named six of them:
+`activity` was defined beneath the set and never added, so the set that said
+"all of them" was one short.[^protocol-src] Commit `a310d77` (*Chat is the
+only kind a client sends*) added it, and
+`test_all_kinds_is_every_kind_constant` in
+`tests/test_chat_is_the_only_kind_a_client_sends.py` holds the set to the
+`KIND_*` constants from there on, so the two cannot drift apart again. That
+test post-dates the pin, which is why it is not in `verified` above; carrying
+this page's evidence onto the tree it now describes is a bundle-wide re-pin,
+and a separate act under the rule in
+[how to read this bundle](/how-to-read-this-bundle.md).
 
 Timestamps travel in UTC so participants in different zones agree, and
 `local_clock` renders them in the reader's own zone at the point of display —
 UTC being right for the wire and wrong for a person reading a transcript.
+
+# Which kinds a client may send
+
+One, since `a310d77`. `CLIENT_KINDS` is `{chat}`, and `client_kind_refusal`
+is the single statement of the rule, read by both doors a client can send
+through — the message route `POST /ext/collab/v1/messages` and A2A
+`SendMessage`. A `kind` other than `chat` is refused by name (`400` on the
+route, `InvalidParams` over JSON-RPC) and nothing is appended; a missing
+`kind` is `chat`, which is what every client here sends.
+
+Every other kind is stamped by the hub on the route that performs it — `/join`
+writes `hello` and `presence`, the task routes write `task`, the file routes
+write `file`, the activity route writes `activity`, and `system` is the hub's
+own voice — so nothing legitimate is lost by refusing them. The one exception
+is the host's own `hello` over `SendMessage`, which is how `collab host` puts
+its repo and focus on the roster; the host never passes through `/join`.
+
+The rule closes three things at once. A guest could post a line styled
+`system` or `hello` and have it render as though the hub had said it; text
+under any kind but `chat` was rendered but never counted, because the inbox
+counts `chat` only, so it sat in front of everyone while evading every unread
+badge and every wake; and four kinds tell every connected daemon its snapshot
+is stale, so a guest could make the whole room re-pull the roster at will.
+
+`ts` and `toId` are the hub's on both doors from the same commit. The
+executor restamps the timestamp and resolves the recipient id from `to`,
+never reading either from the part. Before it, only the message route did.
 
 # Bounds, applied on the way in
 
