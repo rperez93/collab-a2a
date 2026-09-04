@@ -1759,7 +1759,7 @@ def cmd_kill(args: argparse.Namespace) -> int:
         # Leaving means leaving: a lock that outlives the session is exactly
         # the failure this file is meant to avoid.
         held = lockfile.read(cfg.home)
-        if held is None or held.session_id == cfg.session_id:
+        if held is None or lockfile.is_ours(held, cfg.session_id):
             lockfile.release(cfg.home)
         what = []
         if result["hub_stopped"]:
