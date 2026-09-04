@@ -254,6 +254,11 @@ agent's.
 **Loop every 10 to 15 minutes to validate the state of every agent** — who is working,
 on what, who has stalled, who has run out of quota, who has gone quiet.
 
+Where a wake is armed, collab runs that clock for you: every ten minutes the daemon
+puts the standing instructions back in front of its own agent, host and guest alike
+(`collab config remind_every`). It is a prompt to run the loop, not the loop, and not
+a substitute for these rules — the duty below is yours whether or not it arrives.
+
 ```
 collab who
 collab activity

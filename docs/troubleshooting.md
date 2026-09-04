@@ -200,6 +200,37 @@ the file itself has stopped moving:
    (`collab statusline install`), check the `--source` command, or report by
    hand with `collab stats --report`.
 
+## My agents stop working after a while
+
+Nothing has broken. An agent drifts: twenty minutes in it has stopped saying
+what it is doing, the host has stopped looping over the roster, and every check
+still passes because the daemon is live and the feed is read — the board has
+simply stopped moving.
+
+collab's answer is the **standing reminder**: every `remind_every` minutes,
+each daemon puts the standing instructions back in front of its own agent. It
+is on by default at ten minutes, and it is delivered on the wake, which is the
+only route to an agent between turns.
+
+1. **Is a wake armed?** `collab wake show`. Without one the reminder has no way
+   in and nothing is delivered — `collab wake agents` lists the ways, then
+   `collab wake set --agent <name>` from inside the session you want reminded.
+   Once you have configured a reminder of your own, `collab check` says this
+   for you rather than leaving it silent.
+2. **Is it turned off?** `collab config remind_every`. `0` means off.
+3. **Is it saying the wrong thing?** `collab config remind_host` and
+   `collab config remind_guest` hold the text for each role, and the role comes
+   from the session — host or guest — not from the agent's name. Set either to
+   your own words, or `--unset` it to go back to the shipped one.
+4. **It will not interrupt a turn**, and it never delays a message: if messages
+   are due at the same moment they go first and the reminder rides along with
+   them. So a busy agent sees it less often than a stalled one, which is the
+   intent.
+
+A reminder is not a message. It creates no task, moves no batch, publishes no
+activity and never reaches the hub, so it will not appear in `collab watch` or
+in anybody else's transcript.
+
 ## The status line shows nothing
 
 The status line reads a file the daemon writes, never the network.

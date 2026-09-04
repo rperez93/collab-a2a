@@ -27,10 +27,24 @@ import time
 
 import pytest
 
-from collab import cli, wake
+from collab import cli, config as cfg, wake
 from collab.client import daemon as d
 from collab.config import SessionProfile
 from collab.protocol import Envelope
+
+
+@pytest.fixture(autouse=True)
+def _own_config(tmp_path, monkeypatch):
+    """A throwaway global config, never the machine's own.
+
+    The wake reads it: the standing reminder's interval and text live there, so
+    without this whether these tests pass would depend on what the person
+    running them happens to have in `~/.config/collab/config.json`.
+    """
+    monkeypatch.setenv("COLLAB_CONFIG", str(tmp_path / "global-config.json"))
+    cfg._CACHE.clear()
+    yield
+    cfg._CACHE.clear()
 
 
 def waker(tmp_path, *, attended=False, clock=None, armed=True, **config):

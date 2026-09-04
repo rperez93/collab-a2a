@@ -290,6 +290,24 @@ target from anything a participant said.
 Arming a command that is not one of the reviewed recipes requires `--yes`.
 For the boundary this sits inside, see [Security](security.md#the-wake-feature).
 
+### The standing reminder
+
+The wake carries one thing that is not a message. Every `remind_every` minutes —
+ten by default — the daemon puts the standing instructions back in front of its
+own agent, so that a session which has drifted is pulled back to the way of
+working it agreed to. The host and the guests are reminded of different things,
+by the role the session assigned rather than by any name.
+
+It is deliberately local. Nobody said it, so it is not in the transcript: it
+creates no task, moves no batch, publishes no activity and never reaches the
+hub. And it never competes with the conversation — where a reminder and unread
+messages fall due together, the messages are delivered and the reminder rides
+along in their turn.
+
+`collab config remind_every`, `remind_host` and `remind_guest` are the whole of
+its configuration. An agent with no wake armed has no route between turns and
+receives none; once a reminder is configured, `collab check` says so.
+
 ## Settings
 
 Two kinds of state, split on purpose.

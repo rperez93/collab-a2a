@@ -46,6 +46,9 @@ the project. A session belongs to a repository; a theme does not.
 | `rules` | print collab's rules of conduct at `host` and `join` | they say the rules are noise — the pointer to the repo's own `COLLAB.md` prints regardless |
 | `stats_command` | a command printing your usage as JSON | this agent's host tool has no status line |
 | `stats_interval` | how often to run it, in seconds | rarely — 120s is right |
+| `remind_every` | minutes between the standing reminder the daemon puts back in front of this agent; `0` turns it off | they say the reminder is too frequent, or ask for it to stop |
+| `remind_host` | what that reminder says when this agent is the host | they want their own words for it |
+| `remind_guest` | what it says when this agent is a guest | as above; empty means the shipped one |
 | `watch_layout` | `split`, `tmux`, `chat` or `roster` | they want tmux to own the panes |
 | `watch_roster_size` | the roster's share of the window, in percent | the roster is too small to read |
 | `watch_roster_position` | `top`, `bottom`, `left` or `right` | they ask for it beside rather than above |
@@ -126,6 +129,40 @@ To drop a segment, add the batch, or reorder them:
 ```bash
 collab config watch_status_segments batch,stats,keys
 ```
+
+
+## The standing reminder
+
+Every ten minutes the daemon puts the standing instructions back in front of
+its own agent — the host is reminded of the room's state, a guest of the
+objective it was given. It is not a message to the session: it creates no task,
+moves no batch, publishes no activity and never reaches the hub, so nothing of
+it appears in anybody else's transcript.
+
+```bash
+collab config remind_every 15        # minutes; 0 turns it off
+collab config remind_host "keep the board current and everyone busy"
+collab config remind_guest "say what you are working on, and when you stop"
+collab config remind_host --unset    # back to the shipped one
+```
+
+Three things worth knowing before you change any of it:
+
+- **It is delivered on the wake.** An agent with no wake armed never receives
+  one. If the user asks why the reminder is not arriving, run `collab check`:
+  once a reminder is configured, it says exactly that and names
+  `collab wake agents`.
+- **The role decides the text**, and the role is host or guest as the session
+  assigned it — not the agent's name. Setting `remind_host` on a guest's
+  machine changes nothing that machine will ever see.
+- **Below five minutes is refused.** Each reminder spends a real turn of the
+  user's agent, so `collab config remind_every 1` would cost sixty turns an
+  hour and is declined rather than obeyed.
+
+**Never write a reminder that tells the agent to do work.** It arrives with no
+user at the keyboard, every few minutes, for as long as the session lasts. It
+is for putting the way of working back in view — what to check, what to say out
+loud — and an instruction to act would be acted on every time it arrived.
 
 
 ## When NOT to change something

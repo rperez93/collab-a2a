@@ -320,6 +320,15 @@ collab wake [--to KIND] [--expect-command NAME] [--expect-pid PID]
 | `--json` | Emit raw JSON. |
 | `--session SESSION` | Act on this session id instead of the current one. |
 
+The wake also carries the **standing reminder**: with nothing unread, the
+daemon spends a turn every `remind_every` minutes putting the standing
+instructions back in front of its own agent. It has no flags of its own here —
+`collab config remind_every`, `remind_host` and `remind_guest` are the whole of
+it — and it is subject to this command's `--settle`, `--min-gap` and
+`--timeout` like anything else the wake delivers. Messages always take
+precedence: a reminder due at the same moment rides along in their turn and
+never delays or displaces them.
+
 ## check
 
 Run on a loop: stay silent when all is well, and say what to fix when it is not.
@@ -341,6 +350,12 @@ failing (with its last line of output), sharing off, the hub refusing the
 report, the route gone quiet, or the listener not carrying a fresh file. It
 says nothing when no route was ever set up. `collab stats` prints the same
 reason under your own row.
+
+The `reminder` check appears only when you have configured a standing reminder
+and no wake is armed to deliver it, which is the one state in which that
+setting is present, correct and certain never to fire. Its fix names
+`collab wake agents`, and `collab config remind_every 0` if you would rather
+decline it.
 
 ## working
 
@@ -656,6 +671,23 @@ collab config theme --unset         put it back to its default
 The settings are listed in the README under
 [Global settings](../README.md#global-settings). The commands that predate this
 one still work and still write the same keys.
+
+Three of them have no older command of their own and are set only here — the
+standing reminder your own daemon puts back in front of your agent:
+
+```text
+collab config remind_every 15       minutes between reminders; 0 turns it off
+collab config remind_host "..."     what it says when you are the host
+collab config remind_guest "..."    and when you are a guest
+collab config remind_host --unset   back to the shipped one
+```
+
+`remind_every` takes `0`, or a whole number of minutes not below five: every
+reminder spends a real turn of your agent's time, so a typo of `1` is refused
+here rather than obeyed. An empty `remind_host` or `remind_guest` means the
+shipped text for that role, not a reminder with nothing in it. The reminder is
+delivered on the wake, so an agent with no wake armed never receives one — see
+[the standing reminder](../README.md#the-standing-reminder).
 
 ## color
 

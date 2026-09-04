@@ -500,8 +500,12 @@ class Daemon:
         # the only thing that can start one. Agents that hold their own watcher
         # never arm this; for the rest it is the difference between a message
         # arriving and a message being read.
+        # `is_host` decides which standing reminder this agent gets, and it is
+        # read from the profile rather than from the name: «host» is a role the
+        # hub assigned, and a guest called `host` is still a guest.
         self.waker = wake.Waker(
-            self.paths.root, profile.session_id, attended=self._somebody_reads)
+            self.paths.root, profile.session_id, attended=self._somebody_reads,
+            is_host=bool(profile.is_host))
         self._waking: asyncio.Task | None = None
         self._waking_batch: wake.Batch | None = None
         self._notifying: set[asyncio.Task] = set()
@@ -1053,17 +1057,26 @@ class Daemon:
         if not due:
             return
         batch = self.waker.take()
-        if batch is None:
+        # THE MESSAGES ARE CUT FIRST, ALWAYS. The standing reminder rides along
+        # with a turn that is being spent anyway and goes on its own only when
+        # nothing else is going — asked here, after `take()`, precisely so that
+        # nothing unread can be displaced by it.
+        reminder = ""
+        if self.waker.reminder_due():
+            reminder = self.waker.reminder()["text"]
+            self.waker.reminded()
+        if batch is None and not reminder:
             return
         # Held alongside the task, so shutdown can defer the batch this turn is
         # actually working on rather than whatever `take()` would cut next.
         self._waking_batch = batch
-        self._waking = asyncio.create_task(self._wake(batch))
+        self._waking = asyncio.create_task(self._wake(batch, reminder))
 
-    async def _wake(self, batch: wake.Batch) -> None:
+    async def _wake(self, batch: wake.Batch | None, reminder: str = "") -> None:
         try:
-            await self._say_it_is_working(batch)
-            await self._wake_once(batch)
+            if batch is not None:
+                await self._say_it_is_working(batch)
+            await self._wake_once(batch, reminder)
         finally:
             with contextlib.suppress(Exception):
                 await self._say_the_turn_is_over()
@@ -1072,11 +1085,17 @@ class Daemon:
             # timer would get there eventually; sampling now means the next
             # person deciding who has quota left is not reading what was true
             # before the turn ran.
-            with contextlib.suppress(Exception):
-                self._stats_ran_at = 0.0
-                await self._refresh_stats_from_command()
-                if self._http is not None:
-                    await self._report_stats(self._http)
+            #
+            # A REMINDER-ONLY TURN TOUCHES NOTHING SHARED. Nobody sent it, it
+            # answers nobody, and it must not reach the hub at all — so it
+            # publishes no activity above and posts no figures here. The room's
+            # record is for what the room did.
+            if batch is not None:
+                with contextlib.suppress(Exception):
+                    self._stats_ran_at = 0.0
+                    await self._refresh_stats_from_command()
+                    if self._http is not None:
+                        await self._report_stats(self._http)
             # Set however the turn ended, including a crash: every poll up to
             # this instant may have been the woken turn reading its own batch.
             self.waker.turn_finished(time.time())
@@ -1148,15 +1167,23 @@ class Daemon:
         except (httpx.HTTPError, AttributeError, TypeError) as exc:
             logger.debug("could not publish the woken turn's activity (%r)", exc)
 
-    async def _wake_once(self, batch: wake.Batch) -> None:
+    async def _wake_once(self, batch: wake.Batch | None,
+                         reminder: str = "") -> None:
         config = self.waker.config()
-        logger.info("waking the agent with %s", batch.name)
+        carrying = batch.name if batch is not None else "the standing reminder"
+        logger.info("waking the agent with %s", carrying)
         # Both are given, because the two ways of delivering want different
         # things: a fresh run reads the prompt off stdin, while a keystroke into
         # a live session can only carry a pointer to it.
+        #
+        # `COLLAB_WAKE_KIND` is what the keystroke route reads to say why it is
+        # typing: «messages arrived» is a lie when nothing did, and an agent
+        # that opens the file expecting a message and finds a reminder has been
+        # misled by its own tooling.
         env = {**os.environ,
-               "COLLAB_WAKE_PROMPT": str(self.waker.write_prompt(batch)),
-               "COLLAB_WAKE_BATCH": str(batch.path),
+               "COLLAB_WAKE_PROMPT": str(self.waker.write_prompt(batch, reminder)),
+               "COLLAB_WAKE_BATCH": str(batch.path) if batch is not None else "",
+               "COLLAB_WAKE_KIND": "messages" if batch is not None else "reminder",
                "COLLAB_SESSION": self.profile.session_id}
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -1176,7 +1203,7 @@ class Daemon:
             return
         try:
             out, _ = await asyncio.wait_for(
-                proc.communicate(self.waker.prompt(batch).encode()),
+                proc.communicate(self.waker.turn_prompt(batch, reminder).encode()),
                 timeout=config.timeout)
         except asyncio.TimeoutError:
             # THE WHOLE GROUP, not the direct child. Five of the recipes are
@@ -1199,8 +1226,11 @@ class Daemon:
             return
         if proc.returncode == 0:
             self.waker.succeeded(batch)
-            self._wake_note = f"woke the agent with {wake.summarise(batch.events())}"
-            if config.notify:
+            self._wake_note = (
+                f"woke the agent with {wake.summarise(batch.events())}"
+                if batch is not None
+                else "put the standing reminder in front of the agent")
+            if config.notify and batch is not None:
                 # NOT AWAITED HERE. The delivery is already complete and this
                 # command's outcome is ignored, so it is not part of the turn
                 # and should not be able to spend the turn's shutdown budget —
@@ -1224,7 +1254,15 @@ class Daemon:
             logger.warning("wake failed (exit %s) %s", proc.returncode, tail)
             self._wake_note = (f"the wake command exited {proc.returncode}"
                                f" ({self.waker.failures}x); will retry")
-            await self._wake_is_broken(tail)
+            # THE ALARM STAYS TIED TO MESSAGES. A reminder that could not be
+            # delivered is counted like any other failure — it is the same
+            # route to the same agent, and probing it every ten minutes is the
+            # cheapest evidence there is that the wake has died — but it does
+            # not put a line in the room saying messages are going unread when
+            # no message was involved. `collab check` reads the same counter
+            # and says so locally, which is where a reminder belongs.
+            if batch is not None:
+                await self._wake_is_broken(tail)
 
     async def _wake_is_broken(self, detail: str) -> None:
         """Say once, in the room, that messages are landing nowhere.
