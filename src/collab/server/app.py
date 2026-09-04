@@ -104,7 +104,6 @@ def create_app(
     session_id: str,
     host_name: str,
     public_url: str,
-    invite_code: str | None = None,
     title: str = "",
     supervisor: Any | None = None,
     on_url_change: Any | None = None,
@@ -130,7 +129,6 @@ def create_app(
     app.state.store = store
     app.state.live_url = live_url
     app.state.session_id = session_id
-    app.state.invite_code = invite_code
     app.state.started_at = time.time()
 
     handler = DefaultRequestHandler(

@@ -70,8 +70,8 @@ from .protocol import (DEFAULT_ROOM, MAX_FILE_BYTES, ROOM_FILE_TTL_SECONDS,
                        Envelope, KIND_CHAT, KIND_HELLO, file_outcome, scrub,
                        scrub_block, short_state)
 from .server.session import (HubConfig, create_session, hosted_sessions,
-                             join_line, resume_session, session_summary,
-                             stop_session)
+                             join_line, resume_session, rotate_invite,
+                             session_summary, stop_session)
 from .server.tunnel import NO_NGROK_HELP, free_port, local_ip, ngrok_version
 
 # --- output helpers ----------------------------------------------------------
@@ -3144,16 +3144,52 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _readvertise(cfg: HubConfig) -> None:
+    """Put a rotated invite into the machine registry now, not in 30 seconds.
+
+    The record is how `collab join --local` gets in without a link, and it
+    carries the invite. The hub's heartbeat re-reads hub.json and would catch
+    up on its own, but until it did, a neighbour joining locally would be
+    handed the link that was just retired.
+
+    Written under the HUB's pid, which is the key the hub's own record uses —
+    so this overwrites that record rather than adding a second one. Announcing
+    under our pid would leave a phantom host behind the moment this command
+    exits.
+    """
+    if not cfg.pid or not lockfile.process_alive(cfg.pid):
+        return  # nothing is serving; the next `host` will announce afresh
+    try:
+        peers.announce(
+            session_id=cfg.session_id, name=cfg.host_name, role="host",
+            url=cfg.public_url or cfg.local_url, local_url=cfg.local_url,
+            repo=str(Path(cfg.home).parent), home=cfg.home,
+            invite=cfg.invite, host_name=cfg.host_name, pid=cfg.pid,
+        )
+    except OSError:
+        pass
+
+
 def cmd_url(args: argparse.Namespace) -> int:
+    rotate = getattr(args, "rotate", False)
     profile = _require_profile(args)
     cfg = HubConfig.load(profile.session_id, profile.home)
     if cfg is None:
-        fail("only the host can print the invite line for a session")
+        fail("only the host can rotate the invite for a session" if rotate else
+             "only the host can print the invite line for a session")
         return 1
+    if rotate:
+        cfg = rotate_invite(cfg)
+        _readvertise(cfg)
+        ok("new link — the old link no longer lets anyone in, and everyone "
+           "already here stays connected")
     print(join_line(cfg))
     if cfg.tunnel == "ngrok" and not cfg.domain:
         print(dim("  (a free tunnel gets a new address if it restarts — re-run this to "
                   "get the current link, or use `collab host --domain` to pin one)"))
+    if not rotate:
+        print(dim("  (leaked, or shared too widely? `collab url --rotate` retires it and "
+                  "prints a new one without ending the session)"))
     return 0
 
 
@@ -4430,6 +4466,10 @@ def build_parser() -> argparse.ArgumentParser:
     st.set_defaults(func=cmd_status)
 
     u = sub.add_parser("url", help="reprint the join line (host only)")
+    u.add_argument("--rotate", action="store_true",
+                   help="retire every invite issued so far, mint a new one and "
+                        "print it — the session stays up and nobody already in "
+                        "it is disconnected")
     add_session_flag(u)
     u.set_defaults(func=cmd_url)
 
