@@ -37,6 +37,7 @@ agent that is not running has nothing to be woken.
 from __future__ import annotations
 
 import contextlib
+import itertools
 import json
 import math
 import os
@@ -47,6 +48,9 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable
+
+#: Tells two writers in one process apart; the pid tells the processes apart.
+_WRITES = itertools.count()
 
 from .config import reminder_settings
 from .protocol import Envelope
@@ -1036,9 +1040,21 @@ class Waker:
         self.ensure()
         path = (self.home / f"prompt-{batch.path.stem}.txt" if batch is not None
                 else self.home / "reminder.txt")
-        tmp = path.with_suffix(".writing")
-        tmp.write_text(self.turn_prompt(batch, reminder), encoding="utf-8")
-        os.replace(tmp, path)
+        # A TEMPORARY NAME NOBODY ELSE HOLDS. `path.with_suffix(".writing")`
+        # was derived from the destination, which is unique for a batch and
+        # fixed for the reminder — so two writers of the reminder shared one
+        # temporary file, and the first to `os.replace` it left the second
+        # renaming a path that no longer existed. Two daemons overlapping for
+        # one session across a restart is the ordinary way to get two, and this
+        # codebase guards that case everywhere else.
+        tmp = path.with_suffix(f".writing.{os.getpid()}.{next(_WRITES)}")
+        try:
+            tmp.write_text(self.turn_prompt(batch, reminder), encoding="utf-8")
+            os.replace(tmp, path)
+        except OSError:
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+            raise
         with contextlib.suppress(OSError):
             # The batch is what other people said, which is at least as much
             # nobody else's business as the command line beside it — and that
