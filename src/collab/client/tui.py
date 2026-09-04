@@ -307,6 +307,30 @@ def record_colours(personas) -> None:
             _CHOSEN.pop(name, None)
 
 
+def forget_departed(present) -> None:
+    """Drop every name from both colour tables that nothing on screen is wearing.
+
+    Neither table forgot anything: `record_colours` only touched the names in
+    the roster it was handed, so a name that LEFT the roster was never visited
+    again, and `_dealt_slot` only ever added. Measured: 2,000 join/leave cycles
+    under distinct names left 2,000 entries in each table, for the life of the
+    viewer, in a process meant to stay open for hours.
+
+    `present` is not the roster. Somebody who has left the session is still on
+    screen while their messages are in the window, and a colour that changed
+    under them the moment they left would make one speaker read as two people.
+    So the caller passes everyone still drawn — the roster, the senders in the
+    window and my own names — and only what is on none of those goes. A name
+    whose messages have scrolled out is released; if they scroll back in, the
+    name is dealt again, which may be a different colour: colours are already
+    shuffled per run, never promised across a departure.
+    """
+    keep = set(present)
+    for table in (_CHOSEN, _SLOTS):
+        for name in [n for n in table if n not in keep]:
+            del table[name]
+
+
 #: Indices we have redefined to serve an exact hex. Taken from the top —255
 #: downwards— so as not to tread on the 216 of the cube, which is what
 #: everything else in the terminal uses.
@@ -411,7 +435,18 @@ def _dealt_slot(name: str) -> int:
     differ from the one the person picked for their text.
     """
     if name not in _SLOTS:
-        _SLOTS[name] = C_SPEAKER_BASE + _ORDER[len(_SLOTS) % len(_ORDER)]
+        # THE FIRST COLOUR NOBODY HOLDS, in the shuffled order. This was
+        # `_ORDER[len(_SLOTS) % len(_ORDER)]`, which is the same deal for as
+        # long as nobody is ever removed — and `forget_departed` removes. With
+        # a name released the count drops, and the next arrival would have
+        # been dealt the colour of whoever sits at that position, somebody
+        # still here, while the freed colour sat unused: the exact failure the
+        # shuffle replaced `hash(name) % 6` to end. Once every colour is held
+        # the deal wraps by count, as it always did.
+        held = set(_SLOTS.values())
+        free = [c for c in _ORDER if C_SPEAKER_BASE + c not in held]
+        pick = free[0] if free else _ORDER[len(_SLOTS) % len(_ORDER)]
+        _SLOTS[name] = C_SPEAKER_BASE + pick
     return _SLOTS[name]
 
 
@@ -724,6 +759,16 @@ class Model:
         record_colours([{"name": n, "color": mine}
                         for n in my_names(self.profile.name)
                         if n not in published])
+
+        # AND WHOEVER IS ON NONE OF THESE IS FORGOTTEN. The roster is who is
+        # here; the window is who is still on screen, here or not; my names
+        # were just seeded above. Here rather than in record_colours because
+        # that is called with partial lists — my names alone, two lines up —
+        # and pruning to any one of them would forget everybody else.
+        present = {p.get("name") for p in people}
+        present.update(env.sender for env in self.events)
+        present.update(my_names(self.profile.name))
+        forget_departed(present)
         return people
 
     def load_initial(self, limit: int = OPEN_WITH) -> None:

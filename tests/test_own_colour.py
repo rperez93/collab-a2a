@@ -83,6 +83,7 @@ def _participants(session_name, roster=()):
     model = types.SimpleNamespace(
         snapshot={"participants": list(roster)},
         profile=types.SimpleNamespace(name=session_name),
+        events=[],
     )
     return tui.Model.participants.__get__(model, tui.Model)
 
