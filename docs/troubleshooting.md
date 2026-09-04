@@ -37,6 +37,32 @@ invalidates a link you already shared.
 The session, its history, and every issued token survive a tunnel restart; only
 the public address changes.
 
+## Someone I did not invite has the link
+
+The invite is the only credential for joining, so a link that has been forwarded,
+pasted into a shared channel, or simply shared too widely is a way in for whoever
+holds it.
+The host replaces it:
+
+```bash
+collab url --rotate
+```
+
+That retires every invite issued so far, mints a new one, and prints the join
+line to share.
+It reaches the hub that is already running, so nothing restarts.
+
+What it costs, plainly:
+
+- Anyone holding the old link can no longer join, invited or not.
+- Anyone already in the session stays in and can keep sending. Participants
+  authenticate with their own bearer token, not with the link, and rotating does
+  not touch tokens.
+
+To remove someone who has **already joined**, use `collab kick <name>` — rotating
+the invite does not eject them.
+Rotate and kick together when a link leaked and the holder got in.
+
 ## I was told my name is already taken
 
 A join is refused when a participant who is currently present already holds the

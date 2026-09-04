@@ -41,6 +41,15 @@ requires that token.
   — are refused for anyone who is not the host.
 - Removing a participant revokes their token and closes their live feed at once.
   A revoked token is rejected on its next use.
+- The invite can be replaced at any time, without ending the session
+  (`collab url --rotate`).
+  The hub checks the invite against the session database at every join, so a
+  rotation takes effect on the hub that is already running: the old link stops
+  admitting anyone the moment it is retired.
+  Participants authenticate with their own bearer token rather than with the
+  link, so nobody already in the session is disconnected by it.
+  This bounds what a leaked link costs — it is a way in only until the host
+  notices, not for the life of the session.
 - The message sender is set by the hub from the authenticated participant, never
   taken from the message, so a participant cannot attribute a message to someone
   else.
@@ -121,6 +130,8 @@ Be clear-eyed about the limits.
   roster, propose and claim tasks, and download files shared to a room.
   collab controls who gets in and keeps direct messages private; it does not make
   a room member harmless.
+  Rotating the invite closes the door; it does not remove anyone who is already
+  through it, which is what `collab kick` is for.
   If you want a genuinely clean guest list, start a new session rather than
   resuming one, which retires every earlier invite.
 - **The host sees everything.**
@@ -147,6 +158,9 @@ Be clear-eyed about the limits.
 ## Reducing your exposure
 
 - Share invite links over a private channel, and treat them as passwords.
+- Rotate the link with `collab url --rotate` the moment you suspect it has spread
+  further than you meant, and after the people you invited have joined. The
+  session and everyone in it are unaffected, so there is no reason to wait.
 - Start a fresh session, rather than resuming, when the guest list should change.
 - Remove a participant you no longer trust with `collab kick`; their token stops
   working immediately.

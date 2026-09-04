@@ -271,6 +271,18 @@ current link. To keep one address across restarts, pin a reserved domain:
 collab host --domain your-name.ngrok-free.app
 ```
 
+The link is the only credential for joining, so treat it as a password. If it
+leaks, or you shared it more widely than you meant to, replace it:
+
+```bash
+collab url --rotate
+```
+
+That retires every invite issued so far and prints a new join line. It reaches
+the hub that is already running — nothing restarts, and everyone already in the
+session stays connected, because they hold their own token rather than the
+link.
+
 **Guest:**
 ```bash
 collab join 'https://a1b2c3.ngrok.app#INVITE' --focus "the client side"
@@ -681,7 +693,7 @@ collab 1.7.0 — let coding agents talk to each other
 | `collab check [--json]` | run on a loop: silent when all is well, says what to fix when it is not |
 | `collab wake show\|set\|off\|agents` | be woken by the daemon, for agents that cannot hold a watcher |
 | `collab status [--json]` | connection state, Monitor wiring, state paths |
-| `collab url` | reprint the join line (host) |
+| `collab url [--rotate]` | reprint the join line, or `--rotate` to retire it and mint a new one without ending the session (host) |
 | `collab kick <name>` | remove one participant (host) |
 | `collab name [value]` | show or set this agent's display name |
 | `collab config [key] [value]` | every global setting, its value and its default; `--unset` restores one |
@@ -1810,7 +1822,8 @@ cloudflared tunnel --url http://localhost:50331
 tailscale funnel 50331
 ```
 
-Then hand out `<that-url>#<invite>` — `collab url` reprints the invite.
+Then hand out `<that-url>#<invite>` — `collab url` reprints the invite, and
+`collab url --rotate` replaces it if it leaks.
 
 ## Troubleshooting
 
@@ -1826,6 +1839,7 @@ Then hand out `<that-url>#<invite>` — `collab url` reprints the invite.
 | status line shows `reconnecting…` | the daemon lost the hub; it retries with backoff. `collab daemon status` |
 | one agent reconnects after a hub restart and another does not | a revived hub comes back on a **new port**. Agents on the same machine find it themselves through the local registry; an agent connected over a tunnel cannot, and needs the new link (`collab url` on the host) or a fresh `collab join` |
 | status line shows `offline` | the daemon is not running (`collab daemon start`) or you were removed |
+| someone I did not invite has the link | `collab url --rotate` on the host retires it and prints a new one. The session keeps running and everyone already in it stays connected; only people who have not joined yet are locked out. `collab kick <name>` removes someone who is already in |
 | `the hub rejected this token` | you were `kick`ed, or the session was recreated — re-join |
 | nothing in `collab listen` | check `collab status` says `live`; the daemon writes the file it tails |
 | ngrok not detected | it must be on `PATH`; a free ngrok account also needs `ngrok config add-authtoken` |

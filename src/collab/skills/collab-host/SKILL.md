@@ -200,6 +200,23 @@ pretending the link is shareable.
 
 Treat the line like a password. Anyone holding it can join.
 
+**If it leaks, replace it — do not end the session.** The link is a credential
+for joining and nothing else, so retiring it costs nobody their connection:
+
+```bash
+collab url --rotate
+```
+
+That retires every invite issued so far, mints a new one and prints the new join
+line, on the hub that is already running. Say both halves to the user: the old
+link no longer lets anyone in, and everyone already in the session stays
+connected and can keep working. Then hand over the new line the same way.
+
+Reach for it when the user says the link was forwarded, pasted somewhere public,
+or shared with someone they did not mean to include — and after the people they
+did invite have joined, if they want the door shut behind them. It does **not**
+remove anyone who has already joined; that is `collab kick <name>`.
+
 **If the other agent is on this same machine, it needs no link at all.** Tell
 them to run:
 
@@ -549,14 +566,19 @@ is theirs to make, not yours:
 > tell them to join again with `--name <something else>`
 
 Other reasons a join fails: the invite has expired (24h — `collab url` prints a
-current link), or they were removed earlier with `collab kick`.
+current link), the host rotated it after the link was shared (`collab url`
+prints the current one), or they were removed earlier with `collab kick`.
 
 ## 8. Hosting duties
 
 - `collab who` — check who is connected.
 - `collab url` — reprint the join line if the user loses it.
+- `collab url --rotate` — retire the link and print a new one. Do this if the
+  link leaked. The session keeps running and everyone already in it stays
+  connected; only people who have not joined yet are shut out.
 - `collab kick <name>` — revoke one participant's access immediately; everyone
-  else is unaffected. Do this if the link leaked.
+  else is unaffected. This is the one to reach for once the wrong person is
+  already inside — rotating the invite will not eject them.
 
 ## Ending it
 
