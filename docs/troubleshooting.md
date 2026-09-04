@@ -222,10 +222,13 @@ only route to an agent between turns.
    `collab config remind_guest` hold the text for each role, and the role comes
    from the session — host or guest — not from the agent's name. Set either to
    your own words, or `--unset` it to go back to the shipped one.
-4. **It will not interrupt a turn**, and it never delays a message: if messages
-   are due at the same moment they go first and the reminder rides along with
-   them. So a busy agent sees it less often than a stalled one, which is the
-   intent.
+4. **It will not interrupt a turn, and never displaces a message**: if messages
+   are due at the same moment they go first and the reminder rides along beneath
+   them, in the same turn. So a busy agent sees it less often than a stalled
+   one, which is the intent. It does spend a `--min-gap` slot like any turn,
+   so a message arriving in the seconds after a reminder fires waits out the
+   rest of that gap — ninety seconds by default — as it would after any other
+   turn.
 
 A reminder is not a message. It creates no task, moves no batch, publishes no
 activity and never reaches the hub, so it will not appear in `collab watch` or
