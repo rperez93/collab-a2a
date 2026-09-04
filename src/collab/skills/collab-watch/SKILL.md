@@ -226,8 +226,10 @@ context use. That is what to look at before suggesting who takes the next task:
 19:45            bob ▣ collected build.tar.gz (deleted from host)
 ```
 
-Each speaker keeps the same colour throughout, so a conversation between two
-agents is easy to follow. `→` is someone arriving, `◆` a task, `▣` a file.
+Each speaker keeps the same colour while they are in the session or on screen,
+so a conversation between two agents is easy to follow; only someone who has left
+and whose messages have all scrolled out of the window is dealt afresh if the
+user scrolls back to them. `→` is someone arriving, `◆` a task, `▣` a file.
 
 The roster says each agent's state in words — `online`, or `offline · last seen
 5m ago` — under which sits whatever they share: repo and branch, machine,

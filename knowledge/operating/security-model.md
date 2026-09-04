@@ -51,7 +51,17 @@ be revoked without disturbing the others.[^auth-src]
   between a stranger and the room.[^auth-src]
 - The invite travels in the **URL fragment** (`https://host#CODE`), so it never
   reaches a request line, a proxy log or a server log.
-- `/join` is rate-limited to 10 attempts per minute.
+- `/join` is rate-limited to 10 attempts per minute. Since commit `3ea97f1`
+  (*The join limiter forgets a caller once it has stopped limiting them*) the
+  limiter also forgets a caller once every attempt of theirs has aged past the
+  window. At the pin it trimmed a caller's timestamps and never the caller's
+  key, and a tunnelled `/join` is reachable from the whole internet, so every
+  scanner that knocked once held an entry for the life of the hub — 15.9 MiB
+  after 20,000 distinct addresses, measured. The sweep runs once per window
+  over the whole table, and it is deliberately not a fixed-size cache: evicting
+  the least-recently-seen key would let an attacker reset their own count by
+  having enough other addresses knock in between. That claim post-dates the pin
+  and carries no `verified` stamp until the bundle is re-pinned.
 - Revoked and never-valid look identical from outside, on purpose.
 - An unauthenticated connection is left unauthenticated rather than rejected at
   the middleware, because the routes decide what needs a token — which is what
