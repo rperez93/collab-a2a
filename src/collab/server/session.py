@@ -220,10 +220,13 @@ def rotate_invite(cfg: HubConfig) -> HubConfig:
     """
     store = Store(cfg.db_path)
     try:
-        store.clear_invites()
+        # ONE ACT, not a clear and then an add: between the two there is no way
+        # into the session at all, and two hosts rotating at once could each
+        # add after the other had cleared and leave two live links — the exact
+        # opposite of what rotating is for.
         cfg.invite = new_secret()
-        store.add_invite(cfg.invite, ttl_seconds=INVITE_TTL,
-                         max_uses=INVITE_MAX_USES)
+        store.replace_invite(cfg.invite, ttl_seconds=INVITE_TTL,
+                             max_uses=INVITE_MAX_USES)
     finally:
         store.close()
 
