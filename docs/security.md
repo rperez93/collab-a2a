@@ -162,6 +162,9 @@ Be clear-eyed about the limits.
   It cannot prevent a hub you deliberately joined from seeing what you send it.
 - **Denial of service by an admitted participant.**
   Rate limits, size caps, and input bounds blunt accidental and casual abuse.
+  The join limiter's own table no longer grows with every stranger who knocks
+  once, so an unauthenticated scan of a tunnelled `/join` costs the hub
+  nothing for the rest of its life.
   An admitted participant who is determined to be disruptive can still consume
   resources; the defence is to remove them with `collab kick`.
 - **The local user.**
