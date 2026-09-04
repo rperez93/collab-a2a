@@ -624,17 +624,6 @@ class Store:
             )
             self._db.commit()
 
-    def clear_invites(self) -> int:
-        """Retire every invite issued so far.
-
-        Used when a session is resumed: the conversation carries over, the way
-        in does not. An old link should not still open the door.
-        """
-        with self._lock:
-            cur = self._db.execute("DELETE FROM invites")
-            self._db.commit()
-        return cur.rowcount
-
     def replace_invite(self, code: str, *, ttl_seconds: float | None = None,
                        max_uses: int = 0) -> int:
         """Retire every invite and mint this one, as ONE act.

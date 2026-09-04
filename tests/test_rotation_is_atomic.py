@@ -7,8 +7,8 @@ is the whole change. Two gaps followed from that:
 * `consume_invite` reads the row, then updates it. Between the two a rotation
   can delete it; the UPDATE matches nothing, the function returns success
   anyway, and a link the host has just retired lets somebody in.
-* `clear_invites` and `add_invite` are two statements. Between them the table
-  holds no invite at all, and two rotations racing can leave two live rows —
+* Rotation as a DELETE and then an INSERT is two statements. Between them the
+  table holds no invite at all, and two rotations racing can leave two live rows —
   which is exactly the «exactly one way in» the feature is sold on.
 
 Neither is reachable by ordinary timing today. Both are reachable, and this is
