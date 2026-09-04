@@ -857,8 +857,10 @@ It is kept in your global settings, alongside your display name and whether you
 share usage. `--layout tmux` outside tmux falls back to the built-in split
 rather than failing.
 
-Each speaker keeps the same colour throughout. `→` is someone arriving, `◆` a
-task, `▣` a file. Times are shown in **your** timezone; they travel in UTC so
+Each speaker keeps the same colour for as long as they are in the session or on
+screen. Once someone has left and their last message has scrolled out of the
+window, the viewer lets their colour go, so scrolling back to them may find them
+in another one. `→` is someone arriving, `◆` a task, `▣` a file. Times are shown in **your** timezone; they travel in UTC so
 participants in different zones agree on ordering. The date beside a message is
 read in that same zone, so it always names the day the clock beside it belongs
 to, and it only appears when that day is not today.
@@ -1564,7 +1566,8 @@ collab statusline render --plain    # no ANSI
 collab statusline render --json     # structured, format it yourself
 ```
 
-It reads a single local file and never touches the network, so it is safe to
+It reads a single local file and never touches the network — nor loads the code
+that could, so a render is a file read and nothing more — which makes it safe to
 call once a second.
 
 For Claude Code the installer edits your status line script **additively**: it

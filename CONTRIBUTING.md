@@ -157,6 +157,29 @@ status line script when the next update fires, so a network call there can stall
 someone's whole status bar. It reads one local file and exits 0 — including when
 collab is not running at all.
 
+That goes for imports as well as calls. Everything that reads what the daemon
+writes down — the pid file, `status.json`, the watchers directory — lives in
+`client/daemon_files.py`, which imports nothing that opens a socket, and the
+status line reads it from there rather than from `client/daemon.py`, which
+carries httpx, websockets and asyncio for the daemon's own use. Reaching those
+five helpers through the daemon module cost 89 of a 115 ms cold start, on every
+prompt the host rendered, for a file read.
+`tests/test_statusline_imports_no_networking.py` holds the renderer's import
+graph off the network stack in a fresh interpreter, so it stays that way.
+
+**Importing the CLI imports no networking either.** Only `host`, `join` and
+`update` open a connection from the CLI process; `recv`, `send`, `status`,
+`watch` and the rest read and write local files and ask the daemon. httpx is
+imported where it is called — in `update.check`, `tunnel._all_tunnels` and the
+`HubClient` methods that use it — and never at the top of a module `cli.py`
+imports, because at the top of one it came to 80 ms of a 180 ms
+`import collab.cli`, paid by every command that never went out. The two daemon
+signals the CLI needs, `stop` and `stop_orphans`, are imported when `host`,
+`join` or `daemon stop` actually reach for them.
+`tests/test_cli_imports_no_httpx.py` asserts on the whole graph in a fresh
+interpreter, so moving the import to the next module instead of out of the path
+fails it too.
+
 **The status line installers are additive, always.** A status line script is
 shared ground; a typical one already hosts several other tools' segments. Insert
 a marker block, keep every other byte, back up first, and make `uninstall`

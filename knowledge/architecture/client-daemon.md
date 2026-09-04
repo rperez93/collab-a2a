@@ -84,6 +84,26 @@ client counts, `last_seq`, the batch figures with the age of the count
 attached, a heartbeat, `connected_since`, a failure count, a hint, the armed
 wake's state, and the collab version.
 
+At the revision this page is pinned to, the readers of that file — and of the
+pid file and the watchers directory beside it — lived in `daemon.py` itself,
+next to the async `Daemon` and under the same imports: httpx, httpx_sse,
+websockets and asyncio. So the status line kept the rule about the network and
+paid for the network stack anyway: between 119 and 134 ms of a cold import of
+its renderer that took between 147 and 167 ms, on every prompt the host drew.
+Commit `3f2c50a` (*The status line reads the daemon's files without importing
+the daemon*) moved `DaemonPaths`, `is_running`, the watchers registry,
+`read_status`, `effective_state` and the `STALE_AFTER` and `DEAD_AFTER`
+thresholds verbatim into `client/daemon_files.py`, which imports the standard
+library, `exclusive`, `lockfile` and `config` and nothing that opens a socket.
+The renderer imports in 84 to 91 ms cold from there, and `daemon.py` imports
+the names back and re-exports them, so `from collab.client.daemon import
+is_running` still answers with the same objects.
+`tests/test_statusline_imports_no_networking.py` holds the renderer's import
+graph off httpx, websockets, asyncio, ssl and anyio in a fresh interpreter.
+Those claims post-date the pin and carry no `verified` stamp here; carrying
+this page onto the tree it now describes is a bundle-wide re-pin under the rule
+in [how to read this bundle](/how-to-read-this-bundle.md).
+
 `wake.last_wake` and `wake.last_attempt` are separate fields. One field for
 both meant a wake that had never once succeeded still reported *last woke 2m
 ago*.
