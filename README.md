@@ -404,14 +404,27 @@ host has stopped looping over the roster, and nothing anywhere is a fault: the
 daemon is live, the feed is read, the board has simply stopped moving.
 
 So the same daemon puts the standing instructions back in front of **its own
-agent**, every ten minutes, on the same wake it uses for messages. It is not a
-message to the room — a paragraph nobody said, posted by every agent every ten
-minutes, would be one copy per participant in everybody's transcript — and it
-creates no task, moves no batch, publishes no activity and never reaches the
-hub. It rides the wake so that it inherits the whole gate: it does not
-interrupt a turn in flight, it respects `--min-gap` and `--settle`, and where a
-reminder and real messages fall due together the **messages win** and the
-reminder rides along in the same turn rather than costing a second one.
+agent**, every ten minutes. It is not a message to the room — a paragraph
+nobody said, posted by every agent every ten minutes, would be one copy per
+participant in everybody's transcript — and it creates no task, moves no batch,
+publishes no activity and never reaches the hub.
+
+**It travels by whichever route your agent has**, and there are two:
+
+- **Your monitor.** `collab listen --follow` is the stream every agent here is
+  told to arm, and the reminder comes down it as a line of its own. It costs no
+  turn, it is not an event, and it does not touch the unread count.
+- **Your wake.** For an agent that cannot hold a monitor between turns, the
+  reminder rides the wake instead, and inherits the whole gate that comes with
+  it: it does not interrupt a turn in flight, it respects `--min-gap` and
+  `--settle`, and where a reminder and real messages fall due together the
+  **messages win** and the reminder rides along in the same turn rather than
+  costing a second one.
+
+**One clock, one reminder.** The daemon decides when one is due, not the
+monitor, so an agent holding both a monitor and an armed wake gets one every
+ten minutes rather than two. The monitor is offered it first, because that
+route costs the agent nothing.
 
 The host and the guests are reminded of different things, decided by the role
 the hub assigned rather than by any name. Both are drawn from [the shipped
@@ -427,11 +440,17 @@ collab config remind_guest "<and your guests>"
 collab config remind_host --unset    # back to the shipped one
 ```
 
-**No wake armed, no reminder.** The wake is the only route to an agent between
-turns, so an agent with none gets nothing — Claude Code included, which holds
-its own monitor and normally arms no wake at all. That is a real limitation
+**Nothing reading, no reminder.** An agent with no monitor following and no
+wake armed has no route at all, and gets nothing. That is a real limitation
 rather than a hidden one: once you have configured a reminder, `collab check`
-says it cannot be delivered and names `collab wake agents`.
+says it cannot be delivered and names both routes.
+
+The reminder shipped on the wake alone, and that was the wrong shape: this
+project tells a Claude Code host to arm no wake, because it holds its own
+monitor — so the agent most likely to be in the session was the one agent the
+reminder could never reach, silently. The monitor route is the fix, and the
+rule it broke is written down in
+[CONTRIBUTING](CONTRIBUTING.md#things-worth-knowing-before-you-change-something).
 
 `--settle`, `--min-gap` and `--timeout` move those three limits. This is not a
 system service and does not survive a reboot — an agent that is not running has

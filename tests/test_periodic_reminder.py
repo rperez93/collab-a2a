@@ -130,8 +130,16 @@ def test_zero_turns_it_off_entirely(tmp_path, isolated):
     assert not due and why == "nothing unread"
 
 
-def test_a_disarmed_wake_reminds_nobody(tmp_path):
-    """No wake, no route to the agent. The check is where that gets said."""
+def test_a_disarmed_wake_carries_no_reminder_of_its_own(tmp_path):
+    """This route refuses at its first line, and always did.
+
+    That refusal was the whole gap: for a long time the wake was the ONLY
+    route, so an agent that arms none — which is what this project tells a
+    Claude Code host to do — could not be reminded at all. The monitor is the
+    other route now (`tests/test_reminder_on_the_monitor.py`), and it is asked
+    first, so nothing about this line changes: the wake still reminds nobody
+    when there is no wake.
+    """
     w, clock = waker(tmp_path, armed=False)
     w.due()
     clock[0] += 60 * MINUTE
@@ -616,9 +624,13 @@ def test_wake_show_says_the_reminder_is_riding_on_it(profile, monkeypatch):
     assert "guest" in out, "and which of the two texts arrives"
 
 
-def test_wake_show_says_a_disarmed_wake_takes_the_reminder_with_it(profile,
-                                                                   monkeypatch):
+def test_wake_show_says_where_a_disarmed_wakes_reminder_goes_instead(profile,
+                                                                     monkeypatch):
     """And says it only to somebody who asked for a reminder.
+
+    It used to say a disarmed wake took the reminder with it. That is no longer
+    true — it rides a followed stream too — so this page names the other route
+    rather than sending the reader off to arm a wake it does not need.
 
     This asserted the warning on an UNCONFIGURED profile, which contradicted
     the test below it: `remind_every` is ten by default, so a disarmed wake
@@ -629,7 +641,8 @@ def test_wake_show_says_a_disarmed_wake_takes_the_reminder_with_it(profile,
     config.setting("remind_every").write(15)
     code, out = _wake_show(profile, monkeypatch)
     assert code == 0 and "disarmed" in out
-    assert "reminder" in out, "the reminder needs a wake and nothing said so"
+    assert "reminder" in out, "the reminder has no route here and nothing said so"
+    assert "listen --follow" in out, "and the route that does not need a wake"
 
 
 def test_a_reminder_nobody_asked_for_is_not_a_fault(profile, monkeypatch):

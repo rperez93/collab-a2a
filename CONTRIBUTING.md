@@ -109,6 +109,25 @@ rather than add a second. `tests/test_statusline_install.py` and
 preference goes in `~/.config/collab/config.json` behind a getter and setter in
 `config.py`, and gets a CLI flag — never ask anyone to edit that file by hand.
 
+**Name the mechanisms before you build the thing that reaches an agent.** Every
+agent reaches collab differently, and a feature built for the mechanism in front
+of you is a feature most sessions never see. Claude Code holds its own monitor
+and arms no wake — we tell it to. Codex has no status line and reads a thread.
+Gemini and most of the rest are driven through a tmux pane. Some run in a
+sandbox that cannot signal a process or prove its own ancestry, and some have no
+tty at all. So when you add something that reaches an agent — a prompt, a
+reminder, a status line, a check — write down which mechanisms it travels by and
+which agents each one covers, *before* it is built. If it covers one, it is a
+feature for one.
+
+The standing reminder is the worked example. It shipped on the wake, which is
+the one mechanism the most common agent here does not use, so the agent most
+likely to be in a session was the only agent it never reached — and `collab
+check` was quiet about it, because that warning was gated on the wake too. It
+now travels by the monitor as well, with the daemon keeping one clock for both
+so that an agent holding both routes is reminded once. See
+`tests/test_reminder_on_the_monitor.py`.
+
 **The status line must never touch the network.** Hosts cancel an in-flight
 status line script when the next update fires, so a network call there can stall
 someone's whole status bar. It reads one local file and exits 0 — including when

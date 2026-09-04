@@ -1041,6 +1041,40 @@ class Daemon:
             return False                    # our own woken turn, reading
         return (time.time() - polled_at) < wake.POLL_COUNTS_AS_LISTENING
 
+    def _remind_the_monitor(self) -> None:
+        """Put the standing reminder down the stream the agent is watching.
+
+        THE ROUTE MOST AGENTS ACTUALLY HAVE. The reminder shipped on the wake
+        alone, and `Waker.due` refuses at its first line when no wake command
+        is configured — so the agent this project explicitly tells to arm no
+        wake, because it holds its own monitor, was the one agent the reminder
+        could never reach. It worked for Codex, for Gemini and for anything
+        driven through a tmux pane, and did nothing at all for the agent most
+        likely to be in the session.
+
+        ONE CLOCK, and it is the wake's. `reminder_due` is asked here exactly
+        as it is asked below, and `reminded` starts the interval again the
+        moment the reminder is handed to a route; a follower keeping its own
+        clock would drift from this one and an agent holding both a monitor and
+        an armed wake would be reminded twice.
+
+        ASKED HERE FIRST, before the wake, for the same reason the wake asks it
+        after cutting a batch: whichever route is cheapest for the agent should
+        get it. A monitor is already running and prints a line; a wake spends a
+        whole turn.
+
+        AND ONLY WITH SOMETHING READING. A reminder left where no follower will
+        see it is not delivered on time — it is delivered whenever a monitor
+        next starts, which is not «every ten minutes» — and it would take the
+        interval with it, leaving the wake nothing to carry.
+        """
+        if not watchers(self.profile):
+            return                        # no followed stream; the wake's job
+        if not self.waker.reminder_due():
+            return
+        if self.waker.offer_reminder(self.waker.reminder()["text"]):
+            self.waker.reminded()
+
     async def _maybe_wake(self) -> None:
         """Start a turn in an agent that cannot start one for itself.
 
@@ -1338,6 +1372,11 @@ class Daemon:
                 # outer guard alone kept the task alive and still left
                 # status.json stale for as long as the fault lasted.
                 try:
+                    # The monitor first: it is the route that costs the agent
+                    # nothing, and asking it here is what keeps the two routes
+                    # to one clock. Whichever takes the reminder resets the
+                    # interval, so the other finds nothing due.
+                    self._remind_the_monitor()
                     await self._maybe_wake()
                 except asyncio.CancelledError:
                     raise

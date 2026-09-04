@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import __version__, activity, lockfile, peers, rules, update
+from . import __version__, activity, lockfile, peers, rules, update, wake
 from . import batch as batch_progress
 from .client import exclusive, onboard
 from .client.daemon import (DaemonPaths, effective_state as daemon_state,
@@ -1169,6 +1169,21 @@ def cmd_listen(args: argparse.Namespace) -> int:
             print(_format(env, args.json), flush=True)
             inbox.mark_read([env.seq])
 
+    # AND THE STANDING REMINDER COMES DOWN HERE TOO. It shipped on the wake
+    # alone, which is the one route the agent reading this stream is told not
+    # to arm — so the reminder reached Codex and tmux-driven agents and never
+    # once reached a Claude Code host. The daemon decides when one is due and
+    # leaves it in a file beside its own state; this only prints what is there.
+    #
+    # SEEDED WITH WHATEVER IS ALREADY WAITING, so a reminder dropped before
+    # this process started is not printed at it. Replaying one would make a
+    # restarted monitor a reminder, and a monitor that keeps dropping a flood —
+    # the same reason the daemon's own reminder clock is durable.
+    root = DaemonPaths(profile.dir).root
+    waiting = wake.reminder_waiting(root)
+    reminded_at = waiting["at"] if waiting else 0.0
+    looked = 0.0
+
     # Say that somebody is reading, for as long as they are. A monitor that
     # dropped —a restart, a compaction, a closed shell— is indistinguishable
     # from a quiet conversation until something can be asked; `collab status`
@@ -1176,6 +1191,15 @@ def cmd_listen(args: argparse.Namespace) -> int:
     with watching(profile), path.open("r", encoding="utf-8") as fh:
         fh.seek(0, os.SEEK_END)
         while True:
+            # Throttled, because a busy stream would otherwise stat and read
+            # this file once per line for something that changes every ten
+            # minutes. A second's lateness on a ten-minute reminder is nothing.
+            if (time.time() - looked) >= REMINDER_POLL:
+                looked = time.time()
+                fresh = wake.reminder_waiting(root)
+                if fresh is not None and fresh["at"] > reminded_at:
+                    reminded_at = fresh["at"]
+                    print(_format_reminder(fresh, args.json), flush=True)
             line = fh.readline()
             if not line:
                 if args.exit_when_idle and is_running(profile) is None:
@@ -1197,6 +1221,25 @@ def cmd_listen(args: argparse.Namespace) -> int:
 
 def _format(env: Envelope, as_json: bool) -> str:
     return json.dumps(env.to_dict(), ensure_ascii=False) if as_json else env.render_line()
+
+
+#: How often a followed stream looks for a reminder the daemon has left. Not
+#: how often one arrives — that is `remind_every`, and the daemon owns it.
+REMINDER_POLL = 1.0
+
+
+def _format_reminder(drop: dict[str, Any], as_json: bool) -> str:
+    """The reminder as this stream prints it — never as an envelope.
+
+    A `--json` monitor is still a monitor and gets one, but every other line in
+    that stream is an event, so this one says what it is on its face: a kind no
+    hub event has, `local` set, and no `seq` to be read as a position in the
+    feed. Anything filtering that stream by kind skips it; nothing reading it
+    with `Envelope.from_dict` gets a message that nobody sent.
+    """
+    if as_json:
+        return json.dumps(wake.reminder_row(drop), ensure_ascii=False)
+    return wake.reminder_line(drop)
 
 
 def cmd_recv(args: argparse.Namespace) -> int:
@@ -2338,22 +2381,36 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
         else:
             add("wake", CHECK_OK, "a wake is armed; nothing has needed it yet")
 
-    # 2c. The standing reminder RIDES THE WAKE, so a reminder somebody
-    #     configured with no wake armed is a feature that will never once fire.
-    #     Nothing else says so: the daemon is live, the reminder is in the
-    #     config file where they put it, and the only symptom is an agent that
-    #     drifts exactly as it did before.
+    # 2c. The standing reminder has TWO routes to this agent, and a reminder
+    #     somebody configured with neither of them is a feature that will never
+    #     once fire. Nothing else says so: the daemon is live, the reminder is
+    #     in the config file where they put it, and the only symptom is an
+    #     agent that drifts exactly as it did before.
+    #
+    #     A FOLLOWED STREAM COUNTS, and it is named first, because it is the
+    #     route every agent has and the one that costs no turn. This warning
+    #     used to be gated on the wake alone — which meant it fired at a Claude
+    #     Code host whose monitor was carrying the reminder perfectly well, and
+    #     told it to arm a wake this project elsewhere tells it not to arm.
+    #
+    #     `watchers` and not `armed` above: that count folds in the bridge's
+    #     websocket clients, which is `collab watch` — a human's window, not a
+    #     route to an agent.
     #
     #     Said ONLY when somebody actually configured it. At its shipped
     #     default nobody has asked for anything, and warning every user who
     #     never armed a wake is the noise that gets this loop ignored — the
     #     same rule the stats check below follows for a route never set up.
     remind = reminder_settings(bool(profile.is_host))
-    if remind["configured"] and remind["every"] and not woken.get("armed"):
+    monitored = bool(watchers(profile))
+    if remind["configured"] and remind["every"] and not monitored \
+            and not woken.get("armed"):
         add("reminder", CHECK_WARN,
             f"your {remind['every']}-minute reminder cannot be delivered —"
-            " no wake is armed, and the wake is the only way it reaches you",
-            f"{exe} wake agents, then {exe} wake set --agent <name>"
+            " nothing is following the stream and no wake is armed, and those"
+            " are the only two ways it reaches you",
+            f"{exe} listen --follow, or {exe} wake agents then"
+            f" {exe} wake set --agent <name>"
             f" — or turn it off with {exe} config remind_every 0")
 
     # 3. Has anything been left undrained? ONLY MEANINGFUL WHILE POLLING.
@@ -2849,8 +2906,16 @@ def cmd_wake(args: argparse.Namespace) -> int:
             # every reader who never armed a wake about a reminder they never
             # configured — the noise that gets a diagnostic ignored, and the
             # rule this project already follows for the usage figures.
-            print(dim(f"  your {remind['every']}-minute reminder needs one"
-                      " too — it is delivered on the wake"))
+            #
+            # A DISARMED WAKE NO LONGER TAKES THE REMINDER WITH IT. It rides a
+            # followed stream too, which is what the sentence above tells this
+            # reader to use instead of a wake — so this page has to agree with
+            # `collab check`, which counts the same two routes.
+            print(dim(f"  your {remind['every']}-minute reminder "
+                      + ("is riding your followed stream instead"
+                         if watchers(profile) else
+                         "needs this or a `listen --follow` stream;"
+                         " neither is running")))
         return 0
     print(f"  command   {shlex.join(config.command)}")
     if config.notify:

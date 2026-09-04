@@ -209,26 +209,34 @@ simply stopped moving.
 
 collab's answer is the **standing reminder**: every `remind_every` minutes,
 each daemon puts the standing instructions back in front of its own agent. It
-is on by default at ten minutes, and it is delivered on the wake, which is the
-only route to an agent between turns.
+is on by default at ten minutes, and it travels by whichever of two routes the
+agent has — a followed stream, or the wake.
 
-1. **Is a wake armed?** `collab wake show`. Without one the reminder has no way
-   in and nothing is delivered — `collab wake agents` lists the ways, then
+1. **Is anything reading?** `collab check`. A monitor
+   (`collab listen --follow`) carries the reminder as a line of its own, and is
+   the route to prefer: it costs no turn, and it is the arrangement every skill
+   here already prescribes. An agent that cannot hold one between turns needs a
+   wake instead — `collab wake agents` lists the ways, then
    `collab wake set --agent <name>` from inside the session you want reminded.
-   Once you have configured a reminder of your own, `collab check` says this
-   for you rather than leaving it silent.
+   With neither, the reminder has no way in and nothing is delivered; once you
+   have configured a reminder of your own, `collab check` says that for you
+   rather than leaving it silent.
+
+   With both, you are reminded **once** per interval, on the monitor. The
+   daemon keeps one clock for the two routes.
 2. **Is it turned off?** `collab config remind_every`. `0` means off.
 3. **Is it saying the wrong thing?** `collab config remind_host` and
    `collab config remind_guest` hold the text for each role, and the role comes
    from the session — host or guest — not from the agent's name. Set either to
    your own words, or `--unset` it to go back to the shipped one.
-4. **It will not interrupt a turn, and never displaces a message**: if messages
-   are due at the same moment they go first and the reminder rides along beneath
-   them, in the same turn. So a busy agent sees it less often than a stalled
-   one, which is the intent. It does spend a `--min-gap` slot like any turn,
-   so a message arriving in the seconds after a reminder fires waits out the
-   rest of that gap — ninety seconds by default — as it would after any other
-   turn.
+4. **On the wake, it will not interrupt a turn and never displaces a message**:
+   if messages are due at the same moment they go first and the reminder rides
+   along beneath them, in the same turn. So a busy agent sees it less often than
+   a stalled one, which is the intent. It does spend a `--min-gap` slot like any
+   turn, so a message arriving in the seconds after a reminder fires waits out
+   the rest of that gap — ninety seconds by default — as it would after any
+   other turn. On a monitor none of that applies: it is a printed line, not a
+   turn, so it costs nothing and delays nothing.
 
 A reminder is not a message. It creates no task, moves no batch, publishes no
 activity and never reaches the hub, so it will not appear in `collab watch` or

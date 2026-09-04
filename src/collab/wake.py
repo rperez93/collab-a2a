@@ -53,7 +53,7 @@ from typing import Any, Callable, Iterable
 _WRITES = itertools.count()
 
 from .config import reminder_settings
-from .protocol import Envelope
+from .protocol import Envelope, scrub_block
 
 #: Kinds worth a turn. Presence, hello and the roster churn behind them are
 #: bookkeeping — waking an agent to be told that somebody's name is now shown in
@@ -623,6 +623,105 @@ change these words.
 {text}
 """
 
+#: THE OTHER ROUTE, and the one most agents actually have. The wake reaches an
+#: agent that cannot start its own turn; a followed stream (`collab listen
+#: --follow`) reaches the agent that can, which is every agent this project
+#: tells to arm no wake at all. The daemon leaves the reminder here and the
+#: follower prints it — the daemon keeps the clock, so the two routes cannot
+#: drift apart or deliver twice to an agent that holds both.
+#:
+#: Beside the wake's own state rather than in the inbox, because it is not an
+#: event: nothing about it belongs in the transcript, in the unread count, or
+#: in the feed anybody else reads.
+REMINDER_DROP = "reminder-waiting.json"
+
+#: The one line of framing a monitor gets, kept to one line because this lands
+#: mid-stream every few minutes and the wake's six-line preamble would be six
+#: lines of tax. It carries the same three facts that preamble does: nobody
+#: said this, it is this machine's own configuration, and here is how to stop
+#: it. The text follows, indented, so a stream being scanned by eye or by a
+#: pattern never reads it as somebody's message.
+REMINDER_BANNER = ("[reminder] every {minutes}m, as the {role} — nobody sent this,"
+                   " it is your own config on this machine."
+                   " `collab config remind_every 0` stops it")
+
+
+def reminder_drop_path(root: Path) -> Path:
+    return _wake_home(root) / REMINDER_DROP
+
+
+def reminder_waiting(root: Path) -> dict[str, Any] | None:
+    """The reminder the daemon left for a followed stream, or None.
+
+    NEVER RAISES, and validates what the file could hold rather than what it
+    should — the same standard `reminder_settings` is held to, and for a
+    stronger version of the same reason. This is read on a timer inside the one
+    process the agent is watching, so an exception here is not an error message
+    but a monitor that stopped, in a session where a monitor that stopped looks
+    exactly like a quiet conversation.
+    """
+    try:
+        stored = json.loads(reminder_drop_path(root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(stored, dict):
+        return None
+    try:
+        at = float(stored.get("at"))
+    except (TypeError, ValueError):
+        return None
+    # NaN and Infinity are both accepted by `json.loads` and both defeat the
+    # «is this newer than the last one» comparison the follower makes with it:
+    # every comparison against NaN is False, so the reminder would never print,
+    # and an infinite stamp would make every later one look older.
+    if not math.isfinite(at) or at <= 0:
+        return None
+    text = stored.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    try:
+        every = int(stored.get("every", 0))
+    except (TypeError, ValueError):
+        every = 0
+    role = stored.get("role")
+    return {
+        "at": at,
+        "every": every if every > 0 else 0,
+        "role": role if role in ("host", "guest") else "guest",
+        # Somebody's own config, but still printed straight to a terminal: an
+        # ESC in a hand-edited file is a command, not text. `scrub_block`
+        # rather than `scrub` because a reminder is several lines and the line
+        # breaks are the shape of it.
+        "text": scrub_block(text)[:MAX_REMINDER_TEXT],
+    }
+
+
+#: A ceiling on what a monitor prints, for the reason `MAX_PROMPT_BYTES` exists
+#: on the other route: the value is a string somebody can put anything in, and
+#: this one is printed into a live stream the agent is reading.
+MAX_REMINDER_TEXT = 8_000
+
+
+def reminder_line(drop: dict[str, Any]) -> str:
+    """The reminder as a followed stream prints it."""
+    banner = REMINDER_BANNER.format(minutes=drop["every"], role=drop["role"])
+    body = "\n".join(f"  {line}" for line in drop["text"].splitlines())
+    return f"{banner}\n{body}"
+
+
+def reminder_row(drop: dict[str, Any]) -> dict[str, Any]:
+    """And as `collab listen --json --follow` prints it.
+
+    A `--json` monitor is still a monitor, so it gets one — but every other
+    line in that stream is an envelope, and this one must not be readable as a
+    message. `Envelope.from_dict` defaults a missing `kind` to `chat`, so
+    omitting the field would have made this the loudest chat in the session;
+    instead it carries a kind no hub event has, says `local` out loud, and has
+    no `seq` to be mistaken for a position in the feed.
+    """
+    return {"kind": "reminder", "local": True, "every": drop["every"],
+            "role": drop["role"], "text": drop["text"]}
+
 
 @dataclass
 class Batch:
@@ -969,6 +1068,41 @@ class Waker:
             self._set(reminded_at=now)
             return False
         return (now - last) >= every * 60
+
+    @property
+    def reminder_drop(self) -> Path:
+        return reminder_drop_path(self.root)
+
+    def offer_reminder(self, text: str) -> bool:
+        """Leave the reminder where a followed stream will pick it up.
+
+        THE DAEMON STILL DECIDES. This writes; it never asks whether anything
+        is due, because `reminder_due` is the one place that question is
+        answered and a second copy of it in the follower would drift from this
+        one and remind an agent with both routes twice.
+
+        Written atomically, and only ever one of them: a reminder is not a
+        message and has nothing to lose, so the newest copy is always the right
+        one to read — the same reasoning that gives the wake's reminder prompt
+        one fixed filename where a batch needs a name of its own.
+        """
+        self.ensure()
+        path = self.reminder_drop
+        tmp = path.with_suffix(f".writing.{os.getpid()}.{next(_WRITES)}")
+        payload = {
+            "at": self.now(),
+            "every": int(self.reminder()["every"] or 0),
+            "role": "host" if self.is_host else "guest",
+            "text": text,
+        }
+        try:
+            tmp.write_text(json.dumps(payload), encoding="utf-8")
+            os.replace(tmp, path)
+        except OSError:
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+            return False
+        return True
 
     def reminded(self) -> None:
         """It has been put in front of the agent; start the interval again.
