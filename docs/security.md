@@ -62,6 +62,19 @@ A direct message reaches only its sender and its recipient, including when the
 feed is replayed after a reconnect, so renaming yourself never exposes another
 person's private messages.
 
+A participant can put exactly one kind of event on the wire: a chat message.
+Every other kind — a join, a presence change, a task action, a file offer, an
+activity report, the hub speaking for itself — is written by the hub on the
+route that performs it, and a message that arrives from a participant under any
+of those kinds is refused with a `400` rather than relayed.
+So a participant cannot forge a line that reads as though the hub or the board
+said it, cannot place text in front of everyone under a kind that no unread
+count includes and no wake fires for, and cannot make every other participant's
+daemon re-fetch the roster at will.
+The timestamp and the recipient id on a message are the hub's for the same
+reason: a participant chooses what to say and whom to say it to by name, and
+nothing else about how the message is stamped.
+
 ### The wake feature
 
 The wake runs a command unattended whenever a message arrives, which means

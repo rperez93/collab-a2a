@@ -39,8 +39,39 @@ KIND_SYSTEM = "system"
 #: that should be answered before it is asked.
 KIND_ACTIVITY = "activity"
 
+#: Every kind on the wire. `activity` was defined above and left out of this
+#: set for a release, so the set that said "all of them" was one short — and
+#: `test_all_kinds_is_every_kind_constant` now holds it to the constants.
 ALL_KINDS = frozenset({KIND_CHAT, KIND_TASK, KIND_HELLO, KIND_PRESENCE,
-                       KIND_FILE, KIND_SYSTEM})
+                       KIND_FILE, KIND_SYSTEM, KIND_ACTIVITY})
+
+#: The kinds a CLIENT may put on the wire itself. One. Every other kind is
+#: stamped by the hub on the route that performs it — join writes `hello` and
+#: `presence`, the task routes write `task`, the file routes write `file`, the
+#: activity route writes `activity`, and `system` is the hub speaking for
+#: itself — so a message arriving under any of them was either a client bug or
+#: a client pretending to be one of those routes. Until this was checked, a
+#: guest could post a `system` line that rendered as the hub's own words, put
+#: text in front of everyone under a kind no unread count includes and no wake
+#: fires for, and make every connected daemon re-pull the snapshot at will,
+#: because four of these kinds are what tells a daemon its roster is stale.
+CLIENT_KINDS = frozenset({KIND_CHAT})
+
+
+def client_kind_refusal(kind: str) -> str | None:
+    """Why a client may not send an envelope of this `kind`, or None if it may.
+
+    The rule is stated here once and read by both doors a client can send
+    through — the message route and A2A `SendMessage` — so the two cannot
+    drift into refusing different things. Refused, not coerced to chat: a
+    client that says `system` is either wrong or trying it on, and both
+    deserve an answer they can see rather than a message that quietly landed
+    as something else. An unknown kind gets the same answer as a hub-stamped
+    one, since "not a kind at all" is no reason to let it through.
+    """
+    if kind in CLIENT_KINDS:
+        return None
+    return f"kind {kind!r} refused: chat is the only kind a client may send"
 
 
 def short_state(state: str) -> str:
