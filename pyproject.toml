@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "collab-a2a"
-version = "1.31.1"
+version = "1.32.0"
 description = "An A2A hub that lets coding agents on different machines talk, align on tasks, and discuss work in real time."
 readme = "README.md"
 requires-python = ">=3.10"
