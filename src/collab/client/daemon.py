@@ -1689,7 +1689,7 @@ class Daemon:
             # pid and nothing here read it, so a daemon shutting down released
             # a claim that another one was standing behind.
             held = lockfile.read(self.profile.home)
-            if held is not None and held.session_id == self.profile.session_id \
+            if lockfile.is_ours(held, self.profile.session_id) \
                     and held.listener_pid == os.getpid() \
                     and not self.profile.is_host:
                 lockfile.release(self.profile.home)
