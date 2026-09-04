@@ -2838,11 +2838,17 @@ def cmd_wake(args: argparse.Namespace) -> int:
         print(f"  {c('disarmed', '33')} — nothing starts a turn for you")
         print(dim("  Claude Code needs none of this; it holds its own monitor."))
         print(dim("  For agents that cannot: collab wake set '<command>'"))
-        if remind["every"]:
+        if remind["configured"] and remind["every"]:
             # SAID HERE TOO, not only in `collab check`. This is the page
             # somebody opens to ask why nothing is happening, and a reminder
             # that cannot be delivered is invisible everywhere else: the
             # setting is present, correct, and certain never to fire.
+            #
+            # AND ONLY WHEN SOMEBODY ASKED FOR ONE, which is what `_checks`
+            # gates on. `every` is ten by default, so gating on it alone told
+            # every reader who never armed a wake about a reminder they never
+            # configured — the noise that gets a diagnostic ignored, and the
+            # rule this project already follows for the usage figures.
             print(dim(f"  your {remind['every']}-minute reminder needs one"
                       " too — it is delivered on the wake"))
         return 0

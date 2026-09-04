@@ -618,6 +618,15 @@ def test_wake_show_says_the_reminder_is_riding_on_it(profile, monkeypatch):
 
 def test_wake_show_says_a_disarmed_wake_takes_the_reminder_with_it(profile,
                                                                    monkeypatch):
+    """And says it only to somebody who asked for a reminder.
+
+    This asserted the warning on an UNCONFIGURED profile, which contradicted
+    the test below it: `remind_every` is ten by default, so a disarmed wake
+    told every reader about a feature they had never touched. The rule is the
+    one `collab check` already follows — nothing configured is a decision, not
+    a fault — and the two pages have to agree or the quieter one is wrong.
+    """
+    config.setting("remind_every").write(15)
     code, out = _wake_show(profile, monkeypatch)
     assert code == 0 and "disarmed" in out
     assert "reminder" in out, "the reminder needs a wake and nothing said so"
