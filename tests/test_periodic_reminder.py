@@ -201,6 +201,150 @@ def test_it_waits_for_the_gap_like_everything_else(tmp_path):
     clock[0] -= 10 * MINUTE - 10              # ten seconds after the turn
     assert w.due()[0] is False
 
+# --- the reminder's clock is its own -------------------------------------------
+#
+# `settle` and `min_gap` were written to pace how often OTHER PEOPLE'S MESSAGES
+# start a turn. The reminder borrowed the wake's delivery and, with it, the
+# counter that gate reads — so a reminder-only turn spent a budget that was
+# never its, and a message landing a second later waited out the rest of ninety
+# seconds behind a turn nobody had asked for. The two clocks are separate now:
+# `last_attempt` is «did this route try anything», `last_message_attempt` is
+# «did a turn carrying messages start», and only the second one is the budget.
+
+def test_a_reminder_only_turn_does_not_spend_the_message_gap(tmp_path):
+    """The bug, in one test. A message a second behind a reminder is not held."""
+    w, clock = waker(tmp_path, settle=0, min_gap=90)
+    w.due()                                   # starts the reminder's clock
+    clock[0] += 10 * MINUTE
+    due, why = w.due()
+    assert due and "reminder" in why, why
+    w.reminded()
+    w.succeeded(None)                         # delivered, carrying nothing else
+    assert w.last_message_attempt == 0.0, "the reminder spent the message budget"
+    clock[0] += 1
+    w.note(chat("the build is red"))
+    due, why = w.due()
+    assert due and "unread" in why, f"a message waited behind a reminder: {why}"
+
+
+def test_the_wake_still_records_that_it_tried(tmp_path):
+    """Separating the clocks must not make `collab wake status` go quiet.
+
+    A reminder that went out is a delivery this route made, and the line that
+    reports the last attempt is read by somebody asking whether the wake works
+    at all. It is the GATE that stops reading that field, not the status.
+    """
+    w, clock = waker(tmp_path, settle=0, min_gap=90)
+    w.due()
+    clock[0] += 10 * MINUTE
+    w.reminded()
+    w.succeeded(None)
+    assert w.last_attempt == clock[0], "the attempt was not recorded"
+    assert w.last_delivery == clock[0], "a delivery that arrived was not one"
+    assert w.last_message_attempt == 0.0
+
+
+def test_a_turn_carrying_both_spends_the_gap(tmp_path):
+    """A mixed turn is a message turn. The reminder riding along changes nothing."""
+    w, clock = waker(tmp_path, settle=0, min_gap=90)
+    w.due()
+    clock[0] += 10 * MINUTE
+    w.note(chat("first"))
+    clock[0] += 1
+    batch = w.take()
+    assert batch is not None and w.reminder_due() is True
+    w.reminded()
+    w.succeeded(batch)
+    assert w.last_message_attempt == clock[0]
+    clock[0] += 1
+    w.note(chat("second"))
+    due, why = w.due()
+    assert not due and "ago" in why, f"the mixed turn did not spend the gap: {why}"
+
+
+def test_the_reminders_own_interval_still_advances(tmp_path):
+    """Two reminders are `remind_every` apart, whatever the message clock does."""
+    w, clock = waker(tmp_path, settle=0, min_gap=0)
+    w.due()
+    clock[0] += 10 * MINUTE
+    assert w.reminder_due() is True
+    w.reminded()
+    w.succeeded(None)
+    clock[0] += 9 * MINUTE
+    assert w.reminder_due() is False, "sooner than the interval"
+    clock[0] += 1 * MINUTE
+    assert w.reminder_due() is True, "the interval did not come round again"
+
+
+def test_a_failed_reminder_backs_off_without_spending_the_message_gap(tmp_path):
+    """A delivery that failed is a failure whatever it was carrying — but the
+    backoff is the route's health and the gap is the message budget, and only
+    the first of those is a reminder's to spend."""
+    w, clock = waker(tmp_path, settle=0, min_gap=10 * MINUTE)
+    w.due()
+    clock[0] += 10 * MINUTE
+    w.reminded()
+    w.failed(None)
+    assert w.failures == 1, "a failed delivery was not counted"
+    assert w.last_message_attempt == 0.0, "the reminder spent the message budget"
+    clock[0] += 1
+    w.note(chat("still there?"))
+    due, why = w.due()
+    assert not due and "retrying" in why, f"held by the gap, not the backoff: {why}"
+    clock[0] += wake.RETRY_PAUSE
+    due, why = w.due()
+    assert due and "unread" in why, f"the message never came due: {why}"
+
+
+def test_a_failing_reminder_cannot_silence_the_wake_for_messages(tmp_path):
+    """The one thing worse than a reminder spending a gap: a reminder failing
+    every interval and walking the backoff up past every message there is."""
+    w, clock = waker(tmp_path, settle=0, min_gap=0)
+    w.due()
+    for _ in range(wake.GIVE_UP_AFTER + 2):
+        clock[0] += 10 * MINUTE
+        w.reminded()
+        w.failed(None)
+    w.note(chat("anybody there"))
+    clock[0] += w.retry_pause + 1
+    due, why = w.due()
+    assert due and "unread" in why, f"messages were locked out: {why}"
+
+
+def test_remind_every_zero_still_means_off(tmp_path, isolated):
+    """The reminder that never fires spends nothing and is nothing to gate on."""
+    write_config(isolated, remind_every=0)
+    w, clock = waker(tmp_path, settle=0, min_gap=90)
+    w.due()
+    clock[0] += 60 * MINUTE
+    assert w.reminder_due() is False
+    due, why = w.due()
+    assert not due and why == "nothing unread"
+    assert w.last_message_attempt == 0.0
+
+
+def test_an_older_state_file_does_not_read_as_no_message_turn(tmp_path):
+    """Upgrading mid-gap must not let a message jump a gap already being served.
+
+    A state file written before the two clocks were separated knows only that a
+    turn happened, not what it carried. Reading that silence as «no message turn
+    ever» would fire one the instant the daemon came back.
+    """
+    home = wake._wake_home(tmp_path)
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "state.json").write_text(json.dumps(
+        {"failures": 0.0, "attempted_at": 10_000.0, "failed_at": 0.0,
+         "delivered_at": 10_000.0, "deferred_since": 0.0, "turn_ended": 0.0,
+         "alarmed": 0.0, "reminded_at": 10_000.0}), encoding="utf-8")
+    clock = [10_010.0]
+    wake.write_config(tmp_path, wake.WakeConfig(command=["true"],
+                                                settle=0, min_gap=90))
+    w = wake.Waker(tmp_path, "s_test", attended=lambda: False,
+                   now=lambda: clock[0])
+    assert w.last_message_attempt == 10_000.0, "the older field was not carried"
+    w.note(chat())
+    due, why = w.due()
+    assert not due and "ago" in why, f"jumped a gap it was already serving: {why}"
 
 # --- who is being reminded -----------------------------------------------------
 
@@ -512,6 +656,42 @@ def test_a_woken_turn_carries_both_when_both_are_due(profile, tmp_path):
     assert "remind_every" in body, "the reminder did not ride along"
     assert daemon.waker.reminder_due() is False, "its clock was not reset"
 
+
+def test_a_message_a_second_behind_a_reminder_is_not_held(profile, tmp_path):
+    """The bug end to end, at the default gap and through the real delivery.
+
+    A reminder-only turn used to stamp the same counter `min_gap` reads, so the
+    next message waited out the remainder of ninety seconds for a turn nobody
+    had asked for. It now waits for `settle` and for nothing else.
+    """
+    landed = tmp_path / "landed.txt"
+    clock = [10_000.0]
+    daemon = a_daemon(profile, clock=clock)
+    wake.write_config(daemon.paths.root, wake.WakeConfig(
+        command=[sys.executable, "-c",
+                 f"import sys; open({str(landed)!r}, 'a')"
+                 ".write(sys.stdin.read() + '\\n=== turn ===\\n')"],
+        settle=0, min_gap=90))
+    daemon.waker.due()
+    clock[0] += 10 * MINUTE
+    asyncio.run(_wake_once(daemon))
+    turns = landed.read_text().split("=== turn ===")
+    assert len(turns) == 2 and "remind_every" in turns[0], "no reminder turn"
+
+    clock[0] += 1
+    daemon.waker.note(chat("the build is red"))
+    asyncio.run(_wake_once(daemon))
+    turns = landed.read_text().split("=== turn ===")
+    assert len(turns) == 3, "the message waited out the reminder's gap"
+    assert "the build is red" in turns[1]
+
+    # And the gap the messages just spent is theirs to spend: a second message
+    # a second later waits, exactly as it did before any of this.
+    clock[0] += 1
+    daemon.waker.note(chat("and the deploy"))
+    asyncio.run(_wake_once(daemon))
+    assert len(landed.read_text().split("=== turn ===")) == 3, \
+        "a message turn stopped paying the gap"
 
 # --- no wake armed, and the check that says so ---------------------------------
 

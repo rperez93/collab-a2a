@@ -2866,7 +2866,7 @@ def cmd_wake(args: argparse.Namespace) -> int:
         ok(f"armed: {shlex.join(config.command)}")
         print(dim(f"  fires when messages are unread for {int(config.settle)}s"
                   " and nothing is reading them"))
-        print(dim(f"  at most one turn every {int(config.min_gap)}s,"
+        print(dim(f"  at most one message turn every {int(config.min_gap)}s,"
                   f" killed after {int(config.timeout)}s"))
         print(dim("  the daemon picks this up within seconds; no restart needed"))
         return 0
@@ -4330,7 +4330,8 @@ def build_parser() -> argparse.ArgumentParser:
     wa.add_argument("--settle", type=float, metavar="SECONDS",
                     help="how long to let a burst finish before waking")
     wa.add_argument("--min-gap", dest="min_gap", type=float, metavar="SECONDS",
-                    help="never start two turns closer together than this")
+                    help="never start two turns for messages closer together"
+                         " than this")
     wa.add_argument("--timeout", type=float, metavar="SECONDS",
                     help="kill a woken turn that runs longer than this")
     wa.add_argument("--yes", action="store_true",
