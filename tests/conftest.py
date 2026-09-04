@@ -28,6 +28,23 @@ def _no_terminal(monkeypatch):
     monkeypatch.setattr(curses, "ACS_HLINE", ord("-"), raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _forget_own_name():
+    """The viewer remembers its own name for two seconds; a test must not.
+
+    `tui.my_names` reads `resolve_name` through a module-level cache with a
+    short TTL, so a file that patches `resolve_name` to «alice» can still be
+    answered with whatever the previous file resolved — and the assertion
+    that alice's old name is still hers failed only when `test_status_bar.py`
+    happened to run first. Here and autouse, for the reason the stub above
+    is: the cache is process-wide, so its reset has to be too, or the next
+    file to patch `resolve_name` inherits the same order dependency.
+    """
+    tui._OWN_NAME.clear()
+    yield
+    tui._OWN_NAME.clear()
+
+
 @pytest.fixture()
 def profile(tmp_path, monkeypatch):
     """A saved session profile in a home of its own.
