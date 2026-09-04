@@ -594,12 +594,29 @@ collab status [--json]
 
 ## url
 
-Reprint the join line.
+Reprint the join line, or replace it.
 This is host only.
 
 ```text
-collab url [--session SESSION]
+collab url [--rotate] [--session SESSION]
 ```
+
+| Argument or flag | Meaning |
+|---|---|
+| `--rotate` | Retire every invite issued so far, mint a new one, and print it. |
+| `--session SESSION` | Act on this session id instead of the current one. |
+
+`--rotate` takes effect on the hub that is already running: the invite is
+checked against the session database at every join, so there is nothing to
+restart. Everyone already in the session holds their own bearer token and is
+unaffected — they stay connected and can keep sending. Only the link changes,
+so anyone holding the old one, invited or not, can no longer join. The new
+invite is good for 24 hours and any number of joins, exactly like the one a
+new session is created with.
+
+Use it when a link has leaked, has been forwarded further than you meant, or
+has simply gone stale. Before this, the only way to invalidate a link was to
+stop the session and resume it, which disconnected everyone.
 
 ## kick
 
