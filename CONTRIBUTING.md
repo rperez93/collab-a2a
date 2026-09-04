@@ -128,6 +128,13 @@ now travels by the monitor as well, with the daemon keeping one clock for both
 so that an agent holding both routes is reminded once. See
 `tests/test_reminder_on_the_monitor.py`.
 
+The documentation version of the same mistake is a hand-written second copy of a
+registry: `collab-configure`'s table of settings was copied out of
+`config.settings()` once and was a setting short by the next release. If a list
+of what something reaches is worth writing down twice, hold the copy to the
+original with a test — `tests/test_docs_match_cli.py` and
+`tests/test_skill_settings_match_the_registry.py` are the two that do it here.
+
 **The status line must never touch the network.** Hosts cancel an in-flight
 status line script when the next update fires, so a network call there can stall
 someone's whole status bar. It reads one local file and exits 0 — including when

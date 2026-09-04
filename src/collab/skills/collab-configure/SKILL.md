@@ -21,6 +21,21 @@ would be if nobody had touched it — so you never have to guess at a default or
 invent a key name.
 
 
+## When the user asks what there is, run it and show them
+
+Do not recite the table below at them. Run the command and put its output in
+front of them — it is generated from the registry, so it cannot be out of date,
+and a recital can be.
+
+```bash
+collab config                       # show the user: every setting, value, default
+collab config --json                # the same, for you to parse
+```
+
+The table below is for **your** judgement about when to touch something. The
+command is for the facts.
+
+
 ## Running collab
 
 Examples here say `collab`. Use whichever of these resolves — check once, at
@@ -41,6 +56,7 @@ the project. A session belongs to a repository; a theme does not.
 | `display_name` | the name others see you as, machine-wide | the user says what they want to be called |
 | `color` | the colour others see you in, machine-wide | they ask for a specific colour |
 | `theme` | how `collab watch` lays the conversation out | they say the transcript is hard to read |
+| `fold` | how many lines of a long message show before «show more», whichever theme is on; `auto` gives the decision back to the theme and `0` never folds | they say long messages are cut off, or that the transcript is one wall of text — `collab fold <n>`, `collab fold off` and `collab fold auto` write the same key |
 | `timezone` | the zone dates and times are read in — an IANA name, or `auto` for the computer's own | the machine's clock is not the zone they read in, or timestamps look shifted |
 | `share_stats` | publish your quota and spend to the session | they say not to share usage |
 | `rules` | print collab's rules of conduct at `host` and `join` | they say the rules are noise — the pointer to the repo's own `COLLAB.md` prints regardless |
