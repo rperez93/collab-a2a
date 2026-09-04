@@ -135,6 +135,22 @@ of what something reaches is worth writing down twice, hold the copy to the
 original with a test — `tests/test_docs_match_cli.py` and
 `tests/test_skill_settings_match_the_registry.py` are the two that do it here.
 
+**A budget belongs to the thing it was created to pace.** `settle` and
+`min_gap` were written to pace how often other people's *messages* start a
+turn. The standing reminder borrowed the same delivery, and by borrowing it
+borrowed the counter behind that gate — so it quietly began spending a budget
+that was never its, and a message landing a second after a reminder waited out
+the remaining eighty-nine seconds of a gap it had not been given a turn for. So
+when a new caller reuses an existing path, ask what state that path owns and on
+whose behalf it is spent. If the answer is *somebody else's*, give the new
+caller its own.
+
+That is the worked example: the fix is `reminded_at` beside `last_attempt` —
+one clock for the reminder's interval, one for the route's last attempt, and a
+third, `messaged_at`, for the only turn `min_gap` is entitled to charge for. The
+condition lives at the write, in `Waker._gap_spent_by`, so the gates stay
+unconditional. See `tests/test_periodic_reminder.py`.
+
 **The status line must never touch the network.** Hosts cancel an in-flight
 status line script when the next update fires, so a network call there can stall
 someone's whole status bar. It reads one local file and exits 0 — including when

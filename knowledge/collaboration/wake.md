@@ -70,7 +70,11 @@ than each holding a private opinion.
 
 **Once, not once per message.** Five messages in a burst are one batch and one
 turn. `SETTLE` is 20 s, held so the burst can finish arriving; `MIN_GAP` is
-90 s, and no two turns start closer together than that however much arrives.
+90 s, and no two turns *for messages* start closer together than that however
+much arrives. The qualifier is load-bearing: the standing reminder rides this
+same delivery and waits on the gap without spending it, so a message can start
+a turn a second after a reminder-only one. The gap paces how often other
+people's messages start a turn, and the reminder is nobody's message.
 `MAX_BATCH` is 40 arrivals and `MAX_TEXT` 2 000 characters of any one message:
 a batch is a turn's worth of *what did I miss*, not an archive, and the
 conversation is still in the inbox.
