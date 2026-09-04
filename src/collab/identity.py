@@ -24,14 +24,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-from . import peers
-
-#: What lives in the file. Anything else in there is somebody else's business —
-#: this module leaves unknown keys alone rather than dropping them on write.
-#: The id is not here: it is derived, and a derived value in a file is a second
-#: copy waiting to disagree with the first.
-FIELDS = ("name", "color")
-
 IDENTITY_FILE = "identity.json"
 
 #: `.collab-alice` → `alice`. The plain `.collab` has no agent in its name.

@@ -1498,11 +1498,3 @@ class SessionProfile:
             return None
         sid = pointer.read_text().strip()
         return cls.load(sid, cwd) if sid else None
-
-    @classmethod
-    def list_all(cls, cwd: Path | None = None) -> list[SessionProfile]:
-        d = sessions_dir(cwd)
-        if not d.exists():
-            return []
-        return [p for child in sorted(d.iterdir())
-                if (p := cls.load(child.name, cwd)) is not None]

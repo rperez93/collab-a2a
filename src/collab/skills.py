@@ -37,7 +37,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import collab_executable, short_executable
+from .config import short_executable
 
 SKILL_NAMES = ("collab-host", "collab-join", "collab-watch",
                "collab-discover", "collab-activity", "collab-configure")

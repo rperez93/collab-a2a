@@ -61,10 +61,6 @@ from ..stats import quota_summary
 #: width, for the reason the ranking gives it.
 DEFAULT_SEGMENTS = ("stats", "command", "keys")
 
-#: The ones this module builds from what it is given. `command` is the user's
-#: and is not native to anything.
-NATIVE_SEGMENTS = ("batch", "stats", "keys")
-
 SEPARATOR = " · "
 
 #: How much of a user command's line is kept. The width fit trims it to the
