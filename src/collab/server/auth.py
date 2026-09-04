@@ -22,7 +22,6 @@ from starlette.requests import HTTPConnection
 from .store import Store
 
 TOKEN_BYTES = 32
-INVITE_TTL_SECONDS = 24 * 3600
 
 
 def new_secret() -> str:

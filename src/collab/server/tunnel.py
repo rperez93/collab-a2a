@@ -23,7 +23,6 @@ import httpx
 #: polling 4040 alone reads someone else's agent and concludes we have no
 #: tunnel while ours is up and serving.
 NGROK_API_PORTS = range(4040, 4046)
-NGROK_API = "http://127.0.0.1:4040/api/tunnels"
 START_TIMEOUT = 25.0
 
 #: ngrok prints this once the tunnel is live; our own log is the authoritative

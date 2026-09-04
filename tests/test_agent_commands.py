@@ -11,7 +11,7 @@ import argparse
 
 import pytest
 
-from collab import cli, config, identity
+from collab import cli, config, identity, peers
 
 
 @pytest.fixture
@@ -20,8 +20,8 @@ def repo(tmp_path, monkeypatch):
     (tmp_path / ".collab").mkdir()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(config, "repo_root", lambda cwd=None: tmp_path)
-    monkeypatch.setattr(identity.peers, "current_user", lambda: "alice")
-    monkeypatch.setattr(identity.peers, "machine_name", lambda: "workstation")
+    monkeypatch.setattr(peers, "current_user", lambda: "alice")
+    monkeypatch.setattr(peers, "machine_name", lambda: "workstation")
     monkeypatch.delenv("COLLAB_HOME", raising=False)
     identity._CACHE.clear()
     config._CACHE.clear()

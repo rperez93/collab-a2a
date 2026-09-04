@@ -36,13 +36,11 @@ from .config import (
     agent_home,
     base_home,
     claimed_home,
-    collab_executable,
     collab_home,
     held_homes,
     ensure_home,
     GITIGNORE_BODY,
     reminder_settings,
-    repo_root,
     resolve_name,
     sibling_homes,
     _slug,
@@ -706,45 +704,6 @@ def _is_listening(profile: SessionProfile, status: dict[str, Any]) -> bool:
     return _effective(profile, status) == "live"
 
 
-def _lock_says_here_but_nothing_answers(lock: "lockfile.Lock") -> bool:
-    """A held lock whose session cannot be reached. Ask; do not decide.
-
-    Every mechanical check says the repo is occupied — the lock is there and
-    its processes are alive — and yet the session does not answer. That can be
-    a hub still starting, a hub wedged, a port taken by something else, or a
-    lock left by a crash whose pid has since been reused by an unrelated
-    program. Nothing here can tell those apart, and each wants a different
-    answer, so this is the one place that stops and asks rather than choosing.
-
-    Hosting is otherwise never the answer to a failed join: it opens a
-    different session with nobody in it. With the user's say-so it is a
-    decision; without it, it is a silent split.
-    """
-    fail(f"the lock says {lock.describe()}, but that session does not answer")
-    print(dim(f"  lock  {lockfile.lock_path()}"))
-    print(dim(f"  pids  {', '.join(str(p) for p in lock.pids) or 'none recorded'}"
-              " — still alive, so this is not simply a leftover"))
-    print()
-    print("  Ask the user which they want:")
-    print(dim("    · the other agent is still working — wait, or ask them for a link"))
-    print(dim("    · it is not — clear the lock and host a session here:"))
-    # --force because the lock is held: its pids are alive, which is precisely
-    # why this is a question and not a cleanup.
-    print(dim("        collab lock clear --force && collab host"))
-    print(dim("  this is the exception to \"never host as a fallback\" printed"
-              " above: with the user's answer it is a decision, not a retry"))
-
-    if not (sys.stdin.isatty() and sys.stdout.isatty()):
-        # An agent is running this. It has a user to ask; we do not.
-        return False
-    try:
-        answer = input("\n  Clear the lock and host here? [y/N] ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        return False
-    return answer in ("y", "yes")
-
-
 def cmd_lock(args: argparse.Namespace) -> int:
     """Show or clear the record of who is using this repo's collab state."""
     if args.action == "clear":
@@ -788,31 +747,6 @@ def cmd_lock(args: argparse.Namespace) -> int:
     if lock.stale:
         print(dim("\n  stale — the next host or join will clear it by itself"))
     return 0
-
-
-def _reachable(url: str, timeout: float = 3.0) -> bool:
-    """Does anything answer at this session's address?"""
-    if not url:
-        return False
-    import httpx
-
-    try:
-        with httpx.Client(timeout=timeout) as client:
-            reply = client.get(url.split("#", 1)[0].rstrip("/")
-                               + "/.well-known/agent-card.json")
-        return reply.status_code < 500
-    except Exception:
-        return False
-
-
-def _host_args_from(args: argparse.Namespace) -> argparse.Namespace:
-    """The host command's arguments, carrying over what the join gave us."""
-    parser = build_parser()
-    hosted = parser.parse_args(["host"])
-    hosted.name = getattr(args, "name", "") or ""
-    hosted.focus = getattr(args, "focus", "") or ""
-    hosted.home = os.environ.get("COLLAB_HOME", "")
-    return hosted
 
 
 def _home_from(given: str) -> Path:

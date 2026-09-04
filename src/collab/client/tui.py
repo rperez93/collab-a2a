@@ -26,7 +26,6 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from ..config import SessionProfile
@@ -176,7 +175,10 @@ BUBBLE_SHARE = 0.90
 #: shrink the pane, which is exactly when there is least room. Against the
 #: screen the cap is the same however you look at it: a bigger window gives more
 #: room, dragging the border does not change the reading width.
-BUBBLE_MAX_SHARE = 0.40
+#:
+#: The share itself is the theme's `bubble_max_share` — READ FROM themes.py,
+#: like the fold, and for the same reason: a copy of the number here looked
+#: live and did nothing.
 
 #: And a floor, because 40 % of a small window comes to nothing. Below this,
 #: BUBBLE_SHARE over the pane decides and this cap does not apply.
