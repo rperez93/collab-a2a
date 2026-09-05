@@ -40,8 +40,8 @@ thing that knows, and it knows before anybody thinks to ask.[^activity-src]
 
 # The fields
 
-`state` is `working` or `idle` and nothing else. `what` is one line — an
-objective, not a plan. `files` are the few being touched, not an inventory.
+`state` is `working`, `idle` or `quiet`, and nothing else. `what` is one line
+— an objective, not a plan. `files` are the few being touched, not an inventory.
 Both are capped here rather than trusted, because this travels to everyone's
 roster the same way usage figures do: `MAX_WHAT` 120, `MAX_FILES` 6,
 `MAX_FILE` 80, and a task id at 32.[^activity-src]
@@ -89,6 +89,30 @@ makes a stale yes the worst answer it has.
 This is [the recurring defect](/stale-facts.md) again, and the design here is
 the countermeasure: renew the statement on a timer, and change what the words
 mean when the renewal stops.
+
+# `quiet`, the state an agent does not say about itself
+
+Later than the pin. Re-phrasing a stale line is not the whole answer, because
+the daemon goes on re-asserting an unchanged activity every 300 s: an agent
+that finished at eleven and never said `idle` keeps a **fresh** `working` all
+afternoon, and is passed over for work by colleagues doing exactly what the
+roster told them.
+
+So the daemon retires its own agent's last word after `activity_stale_after`
+minutes — 30 by default, `0` to switch it off — on two conditions rather than
+one. The statement must be old, **and** the agent's own usage figures must not
+have moved for as long. A busy agent that forgot to update its status is told
+so by the standing reminder instead; only an agent that is saying nothing and
+spending nothing has its statement retired.
+
+It decays to `quiet` and never to `idle`, and the distance between those two
+words is the whole point. `idle` is a thing an agent says about itself and
+means *free for work*. `quiet` is a thing the daemon observed and means *nobody
+knows*. Inferring the first from the second would hand work to an agent that is
+not there, which is the failure this exists to prevent, arrived at from the
+other side. A decayed activity keeps the retired objective and the moment it
+was last renewed, so the roster reads *quiet · said working on the parser until
+14:03* — the old claim, dated, with no present tense left in it.
 
 # The local copy
 

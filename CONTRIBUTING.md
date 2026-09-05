@@ -68,7 +68,10 @@ src/collab/
     tunnel.py      ngrok detection
   peers.py         the machine-wide registry: local discovery, co-location
   update.py        release checks
-  learnings.py     a fact one agent found, kept where the next one reads it
+  learnings.py     a fact one agent found, kept in the agent's own store
+                   outside any checkout and grouped by repository
+  hosttool.py      which coding tool is running this command, and whether
+                   it can hold a watcher between turns
   compaction.py    typing an agent's own /compact into the pane its wake holds
   diagnostics.py   the optional local record of what the daemon and hub did
   client/

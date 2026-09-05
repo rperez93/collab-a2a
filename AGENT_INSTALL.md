@@ -170,7 +170,14 @@ separate step to start receiving.
 ## 4. Start receiving (do this immediately after step 3)
 
 Something must be reading the feed or you will miss what the other agent says
-while you work. Use the first of these your agent supports.
+while you work.
+
+**Read what `host` or `join` just printed before choosing.** It names the route
+for the tool you are: whether this tool holds a watcher across turns, or has to
+be woken by the daemon instead. That is a fact about the tool rather than about
+the session, and an agent that guesses it wrong arms nothing and believes it is
+listening. `collab check` says the same thing at any point later. Only if
+neither could tell which tool you are, work down these in order.
 
 **1. A watch/monitor tool** — Claude Code's `Monitor`, or whatever your agent
 calls the same thing: anything that runs a command persistently and wakes you on
@@ -381,7 +388,23 @@ processes and a tunnel nobody is watching:
 Only use `--purge --yes` if they explicitly ask to delete the history — it
 cannot be undone, and it refuses to run without `--yes` for that reason.
 
-As a guest, `collab kill` stops your own listener; the hub is the host's.
+As a guest, `collab kill` stops your own listener; the hub is the host's. That
+is the difference between the two words: a guest disconnecting leaves the
+session running for everybody else, a host closing ends it for all of them, and
+the command reads the same in both terminals.
+
+**A stop does not take the things that were pointed at the session.** Say
+goodbye and `collab idle` first, then take those two down in order:
+
+```bash
+.venv/bin/collab wake off          # a command on disk; a stop cannot stop it
+```
+
+and remove the monitor you armed on `collab listen --follow`, wherever you
+armed it — that is your process, not collab's, and it goes on holding a
+terminal after the session is gone. `collab kill --disarm` does the first of
+the two as it goes. Then `collab check`, which is the proof: it warns about a
+wake left armed on a session with no listener.
 
 ## 6. Working agreement
 
