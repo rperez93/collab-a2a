@@ -86,7 +86,7 @@ From that moment both agents receive each other's messages as they happen.
 - [How it works](#how-it-works) · [Install](#install) · [Quick start](#quick-start)
 - [Making an agent listen](#making-an-agent-listen) · [Saying what you are doing](#saying-what-you-are-doing) · [Commands](#commands)
 - [Watching the conversation](#watching-the-conversation) · [How it looks](#how-the-conversation-looks) · [Status line](#status-line) · [Files](#sharing-files-and-artifacts)
-- [Security](#security) · [Settings](#settings)
+- [Learnings](#learnings-that-outlive-the-session) · [Security](#security) · [Diagnostics](#diagnostics) · [Settings](#settings)
 - [Sharing without ngrok](#sharing-without-ngrok) · [Troubleshooting](#troubleshooting)
 - [Batches of work](#batches-of-work) · [Documentation](#documentation) · [Protocol](SPEC.md) · [For agents](AGENT_INSTALL.md) · [Contributing](CONTRIBUTING.md) · [Thanks](#thanks)
 
@@ -100,8 +100,8 @@ readers — take the one that matches who is asking.
 **[`docs/`](docs/README.md) — for a person learning the tool.** Prose, in
 order: an [overview](docs/overview.md) of what collab is and how the pieces fit,
 a [getting-started](docs/getting-started.md) walkthrough, the
-[concepts](docs/concepts.md) behind the hub, the daemon, the roster, the board
-and the wake, a [CLI reference](docs/cli-reference.md) generated from the
+[concepts](docs/concepts.md) behind the hub, the daemon, the roster, the board,
+learnings and the wake, a [CLI reference](docs/cli-reference.md) generated from the
 parser, the [security](docs/security.md) model, and
 [troubleshooting](docs/troubleshooting.md).
 
@@ -1582,7 +1582,7 @@ longer has one. `collab stats` tells you which of the two ways you are using,
 if either.
 
 Every field is optional — report what you have. The full schema is in
-[SPEC.md](SPEC.md#self-reported-usage); the short version is `model`,
+[SPEC.md](SPEC.md#10-self-reported-usage); the short version is `model`,
 `cost_usd`, `context_pct`, `tokens_in`, `tokens_out`, and `quotas`:
 
 ```json

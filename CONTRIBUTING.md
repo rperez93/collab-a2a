@@ -68,6 +68,9 @@ src/collab/
     tunnel.py      ngrok detection
   peers.py         the machine-wide registry: local discovery, co-location
   update.py        release checks
+  learnings.py     a fact one agent found, kept where the next one reads it
+  compaction.py    typing an agent's own /compact into the pane its wake holds
+  diagnostics.py   the optional local record of what the daemon and hub did
   client/
     daemon.py      holds the feed, reconnects, writes the local inbox
     daemon_files.py  the pid, status and readers it writes down, read without it
@@ -129,6 +132,16 @@ now travels by the monitor as well, with the daemon keeping one clock for both
 so that an agent holding both routes is reminded once. See
 `tests/test_reminder_on_the_monitor.py`.
 
+Writing the list down is not enough on its own; every entry on it needs a test.
+`tests/test_the_reminder_reaches_every_agent.py` asks the same question of each
+route separately — with nothing unread at all, does the reminder's own text
+reach what the agent actually reads? For a tmux pane that is the file the typed
+line points at; for a Codex thread it is the queued message; for a fresh run it
+is standard input, read directly or spliced into a shell argument. It also
+holds the generalisation those last two rest on: the two shapes are asserted to
+be every fresh-run recipe there is, so one added in a third shape fails a test
+rather than quietly going uncovered.
+
 The documentation version of the same mistake is a hand-written second copy of a
 registry: `collab-configure`'s table of settings was copied out of
 `config.settings()` once and was a setting short by the next release. If a list
@@ -151,6 +164,18 @@ one clock for the reminder's interval, one for the route's last attempt, and a
 third, `messaged_at`, for the only turn `min_gap` is entitled to charge for. The
 condition lives at the write, in `Waker._gap_spent_by`, so the gates stay
 unconditional. See `tests/test_periodic_reminder.py`.
+
+**The diagnostic log records events and never content.** `diagnostics.log` is
+written to be pasted into a public issue, so nothing that reaches it may be a
+line of a message, a participant's name, an invite, a token, an address, or a
+path under the reader's home. The rule is kept at both ends and both ends
+matter: callers pass classifications rather than free text, and `_safe` scrubs
+whatever arrives anyway. Two places it costs something and is paid regardless —
+a dropped feed records the exception's *type* and not its message, because an
+httpx error carries the URL it was talking to; a failed wake records the exit
+code and not the output, because a woken agent prints what it was woken about.
+When you add an event, decide which of those two it is before you decide what
+to put in it.
 
 **The status line must never touch the network.** Hosts cancel an in-flight
 status line script when the next update fires, so a network call there can stall

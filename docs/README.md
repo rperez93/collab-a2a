@@ -13,7 +13,7 @@ the reference pages as you need them.
 |---|---|
 | [Overview](overview.md) | What collab is, the problem it solves, and how the pieces fit together. |
 | [Get started](getting-started.md) | Install collab, host a session, and join one, step by step. |
-| [Concepts](concepts.md) | The hub, the daemon, sessions, the roster, activity, the task board, batches of work, and the wake. |
+| [Concepts](concepts.md) | The hub, the daemon, sessions, the roster, activity, the task board, batches of work, learnings, and the wake. |
 | [CLI reference](cli-reference.md) | Every command and flag, generated from the parser. |
 | [Security](security.md) | The trust model, and what the tool does and does not protect against. |
 | [Troubleshooting](troubleshooting.md) | Common problems and how to resolve them. |

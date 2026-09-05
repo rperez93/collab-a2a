@@ -73,6 +73,26 @@ the live parser by `tests/test_okf_bundle.py`, which extends the same list the
 | `skills` | teach your coding agents to use collab |
 | `statusline` | the Claude Code status line segment |
 
+## Added since the pin
+
+Four commands are not in the table above, because that table is the parser's
+own output at `23db6d0` and these arrived after it. They are listed apart
+rather than merged in, so that nothing here claims to have been read off the
+pinned tree when it was not.
+
+| Command | What the parser says it does |
+|---|---|
+| `learn` | say something the next agent in this repo will need, and write it down where they will find it |
+| `context` | compact or clear this agent's own context window, through the pane its wake is armed on |
+| `remind` | make the standing reminder due now instead of at the end of its interval |
+| `issue` | write a bug report from this machine's own records, and print the command that posts it |
+
+`learn` takes the text as a positional and `--list` to read them back; `context`
+takes `compact` or `clear`; `remind` takes `now`; `issue` takes `draft` and
+`--out FILE`. None of them posts anything anywhere: `issue` prints a
+`gh issue create` line for a person to run, and `learn` sends an ordinary chat
+message like `send` does.
+
 # The sub-verbs
 
 Several commands take a positional verb rather than a flag:

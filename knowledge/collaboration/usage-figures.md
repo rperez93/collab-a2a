@@ -110,6 +110,24 @@ This is the same guard [activity](/collaboration/activity.md) keeps, for the
 same reason: two agents sharing a directory must not publish each other's
 numbers.
 
+# One of these figures now acts
+
+Later than the pin: `context_pct` stopped being only a thing to look at.
+With `context_compact_at` set to a percentage, the daemon compacts its own
+agent's context once the agent's own reported share reaches it, by typing the
+agent's compaction command into the pane its tmux wake is armed on.
+
+Which makes the owner stamp above load-bearing in a second way. `read_stats`
+gives back only figures stamped as this agent's, so two agents in one checkout
+cannot compact each other on the strength of a file one of them wrote.
+
+It ships off, takes nothing below 50 or above 95, and waits for two things
+before a second one: the share must have fallen back under the line **and** ten
+minutes must have passed. Either condition alone fires forever — a figure that
+stops being reported keeps its last value, and a compaction that freed very
+little leaves the share hovering on the line. `collab context compact` is the
+same act asked for once, by hand.
+
 # Why this concept goes stale sooner than most
 
 `KNOWN_WINDOWS`, `WINDOW_ALIASES` and `INVERTED` are lists of what other
