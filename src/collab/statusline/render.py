@@ -16,7 +16,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .. import __version__
+#: Not used in this file. It is here so `render.__version__` answers, which is
+#: how the status line's own tests stamp the version into a status payload —
+#: through the module they are already holding, rather than by importing the
+#: package a second time to say the same thing.
+from .. import __version__            # noqa: F401
 from .. import batch as batch_progress
 from ..columns import width as _columns
 from ..config import SessionProfile, claimed_home, statusline_settings
@@ -26,8 +30,7 @@ from ..protocol import scrub
 # for these cost 89 of this module's 115 ms cold start in httpx, websockets,
 # ssl and asyncio — the network stack the rule at the top of this file forbids
 # touching, paid on every prompt the host rendered. See daemon_files.
-from ..client.daemon_files import (DEAD_AFTER, STALE_AFTER, effective_state,
-                                   is_running, read_status)
+from ..client.daemon_files import effective_state, is_running, read_status
 from ..client.statusbar import (_counted, daemon_note, hub_note,
                                 state_dir_label, who as _who)
 

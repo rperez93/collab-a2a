@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import curses
 import datetime as _dt
-import re
 import time
 from dataclasses import dataclass
 from typing import Any

@@ -62,9 +62,6 @@ from .statusbar import money_text
 from .daemon_files import DaemonPaths, effective_state, is_running, read_status
 from .inbox import Inbox
 
-#: How much of the window the roster gets when nothing says otherwise. The
-#: conversation is the thing you read continuously, so it keeps the majority.
-ROSTER_SHARE = 0.30
 #: A share fixed by `--roster-size` on the command line. That is the reader
 #: saying «this pane, this size», and the saved setting does not overrule it.
 #: None, the ordinary case, follows `watch_roster_size` as it changes.
