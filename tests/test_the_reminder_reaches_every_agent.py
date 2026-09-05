@@ -451,6 +451,27 @@ def test_check_names_the_route_and_when_the_last_one_went(profile, monkeypatch):
     assert "via monitor" in said["detail"]
 
 
+def test_check_and_remind_agree_about_whether_a_wake_is_armed(profile, monkeypatch):
+    """They read different files, and they disagreed. `status.json` is what a
+    daemon reports and is absent when none is running; the config on disk is
+    what is armed either way. Taking only the first told somebody with a wake
+    armed and no daemon that no wake was armed, while `collab remind now` said
+    the opposite in the same minute."""
+    root = d.DaemonPaths(profile.dir).root
+    wake.write_config(root, wake.WakeConfig(command=["true"]))
+    (profile.dir / "status.json").write_text(json.dumps(
+        {"state": "live", "heartbeat": time.time(), "unread_messages": 0}))
+    cfg.setting("remind_every").write(10)
+    monkeypatch.setattr(cli, "is_running", lambda p: 4242)
+    monkeypatch.setattr(cli, "watchers", lambda p: [])
+
+    said = {r["check"]: r for r in cli._checks(profile)}["reminder"]
+    assert said["verdict"] == cli.CHECK_OK
+    assert "via your wake" in said["detail"]
+    code, out = _remind(profile, monkeypatch)
+    assert code == 0 and "via your wake" in out
+
+
 def test_wake_show_says_the_route_the_last_one_took(profile, monkeypatch):
     root = d.DaemonPaths(profile.dir).root
     wake.write_config(root, wake.WakeConfig(command=["true"]))
