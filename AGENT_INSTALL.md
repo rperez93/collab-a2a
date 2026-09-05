@@ -511,12 +511,19 @@ on a free tunnel.
 per repository, in `<repo>/.collab/`.
 
 If your own context window is filling up and you cannot compact yourself, ask
-collab to type it for you — it needs the tmux wake armed against your pane:
+collab to type it for you. It needs two things: the user to have turned it on,
+because this presses keys at their prompt, and the tmux wake armed against your
+pane.
 
 ```bash
+.venv/bin/collab config compact on        # the user's decision, not yours
 .venv/bin/collab wake set --agent tmux    # from inside your own pane
-.venv/bin/collab context compact
+.venv/bin/collab compact
 ```
+
+`collab new` starts you a fresh session instead, keeps nothing, and has a
+switch of its own. Reach for `compact` — a fresh session mid-task comes back
+not knowing there was a task.
 
 If something in collab itself is misbehaving, turn on the local record,
 reproduce it, and write the report. It never posts anything; it prints the

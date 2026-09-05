@@ -167,6 +167,32 @@ what does not belong in one: a secret, a token, a customer name, anything
 personal.
 Nothing enforces that, and nothing could.
 
+### Asking the room to start fresh
+
+`collab new --all` proposes that every agent discards its session, which makes
+it worth being precise about who may cause that to happen.
+
+**Proposals and votes are matched by participant id, never by name.** A name is
+a display string anybody may take, and a vote counted under one would let a
+joiner agree on somebody else's behalf by renaming themselves. The id is what
+the hub stamps on the envelope.
+
+**Nobody's proposal acts on its own.** A proposal is a message; what acts is
+each daemon's own reading of the votes against `new_consensus`, and under the
+default every other participant that was connected has to have agreed. A single
+decline ends it.
+
+**A daemon only ever acts on its own agent.** There is no mechanism here for one
+participant to type into another's terminal: each daemon reaches the pane its
+own wake is armed on and no other.
+
+**`collab config new off` opts out entirely**, and a daemon that has it off says
+so in the room rather than going quiet — a room that agreed to start fresh and
+has one agent that did not is a room where nobody can tell which.
+
+Rate limits bound the nuisance rather than the risk: one proposal open at a
+time per session, and one proposal per participant per five minutes.
+
 ### The diagnostic log
 
 `collab config diagnostics` is off by default, and what it writes when it is on

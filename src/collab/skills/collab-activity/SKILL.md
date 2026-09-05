@@ -211,18 +211,34 @@ You cannot compact yourself: the command is a slash command at your tool's own
 prompt, and you cannot type at your own prompt from inside a turn. Collab can,
 through the tmux pane your wake is armed on.
 
+**It has to be enabled first, and that is the user's decision, not yours.**
+This is collab pressing keys at their prompt, so it ships off; until they turn
+it on the command refuses in one line and does nothing else.
+
 ```bash
-collab context compact       # summarise this session, keep working in it
-collab context clear         # start again, keep nothing
+collab config compact on   # THEIRS to run, not yours to assume
+collab compact             # summarise this session, keep working in it
+collab config new on       # a second switch, for a second act
+collab new                 # start again, keeping nothing
 ```
 
-Say what you are doing first — `collab working "…"` — and finish the piece of
-work you are on. A compaction lands as a turn, so anything you were part-way
-through is what gets summarised. If it refuses, read the line: it says whether
-the wake is armed against something with no prompt to type at, or whether the
-pane has changed under it. `collab config context_compact_at <percent>` makes
-the user's own daemon do this without being asked; that is theirs to set, not
-yours.
+If you meet that refusal, say what the setting does and let them decide — do not
+turn it on for them. It is the one setting here that lets this program type into
+the window they are working in.
+
+Reach for `compact` and not `new`. Compacting keeps a summary of what you were
+doing; `collab new` keeps nothing at all, and an agent that starts itself a
+fresh session mid-task comes back not knowing there was a task. If the work
+really is finished and the window is still full, say so and let them decide.
+
+Once it is on: say what you are doing first — `collab working "…"` — and finish
+the piece of work you are on. A compaction lands as a turn, so anything you were
+part-way through is what gets summarised. If it refuses for another reason, read
+the line: it says whether the wake is armed against something with no prompt to
+type at, or whether the pane has changed under it.
+`collab config compact_at <percent>` and `collab config new_at <percent>` make
+the user's own daemon do these without being asked; those are theirs to set
+too.
 
 
 ## Closing the session, or leaving it

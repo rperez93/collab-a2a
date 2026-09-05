@@ -523,20 +523,35 @@ rule it broke is written down in
 system service and does not survive a reboot — an agent that is not running has
 nothing to be woken.
 
-### Compacting a context that is filling up
+### A context window that is filling up
 
-An agent watching its own context window fill up can do nothing about it.
-Compaction is a slash command typed at the tool's own prompt, and a model in the
-middle of a turn cannot type at its own prompt — so it runs out of window mid-
-task and comes back having forgotten what it was doing.
+An agent watching its own context window fill up can do nothing about it. Both
+answers are slash commands typed at the tool's own prompt, and a model in the
+middle of a turn cannot type at its own prompt — so it runs out of window
+mid-task and comes back having forgotten what it was doing.
 
-Something outside the turn can type it, and collab already has that something:
-the tmux wake holds a pane, the process in it and the program that was running.
+Something outside the turn can type them, and collab already has that
+something: the tmux wake holds a pane, the process in it and the program that
+was running.
+
+There are two answers because there are two situations, and they cost different
+things:
+
+```bash
+collab compact     # summarise this session and keep working in it
+collab new         # start again, keeping nothing
+```
+
+**Both are on**, and neither does anything you did not ask for. On demand is
+the regular mode: these are things you or your agent run at a moment you chose.
+What is off is the *unprompted* half, and it is off because no percentage has
+been set rather than because a switch forbids it — `collab config compact off`
+and `collab config new off` are how you keep this program from ever typing at
+your prompt at all, by either route.
 
 ```bash
 collab wake set --agent tmux    # from inside the pane your agent runs in
-collab context compact          # summarise the session, keep working in it
-collab context clear            # start again, keep nothing
+collab compact                  # and that is the whole of it
 ```
 
 What is typed depends on what is listening, and there is no universal spelling:
@@ -552,25 +567,91 @@ typed into. A wake armed against a Codex thread or one of the headless recipes
 is refused too, and says which it is — a thread has no prompt to type at, and a
 fresh run has no context to compact.
 
-**And the daemon can do it for you.** `context_compact_at` is a percentage of
-the context window; past it, the daemon compacts once, and not again until the
-agent's reported share has fallen back under the threshold **and** ten minutes
-have passed. Both conditions, because either alone fires forever: a figure that
-stops being reported keeps its last value, and a compaction that freed very
-little leaves the share hovering on the line.
+#### And the daemon can do either for you, at the right moment
+
+Set a percentage and the daemon acts on it. Two things decide when: how full
+the window is, and what the agent is doing.
 
 ```bash
-collab config context_compact_at 85    # 50 to 95, or 0 for never
+collab config compact_at 80     # summarise at 80% of the window...
+collab config compact_when task # ...but only as a new task starts
+collab config new_at 92         # start over at 92%...
+collab config new_when idle     # ...and only while this agent is idle
 ```
 
-It is **off unless you ask**, and takes nothing below 50 or above 95.
-Compacting is not undoable: it replaces what the agent was holding with a
-summary of it, so a threshold nobody chose, firing mid-task, hands somebody a
-shorter version of the reasoning they were relying on. Under 50 is a session
-that spends its life being compacted; over 95 there may not be room left to
-write the summary in. It uses the agent's own reported figure, which means it
-works only where that figure is reported — a status line, or a
-[`stats_command`](#where-the-figures-come-from).
+**The moment matters more than the number.** A summary taken mid-turn throws
+away the reasoning the agent is holding *right now* to finish what it is doing;
+a summary taken at a task boundary loses nothing still needed, because the work
+that context was for is done. So `compact_when` is `task` by default, and a
+boundary is any of three things: this agent publishing a working state
+(`collab working`, `collab task claim`, anything else that says so), a task on
+the board moving to working with this agent as its owner, or a woken turn about
+to be delivered — where the summary is taken **before** the wake line is typed,
+so the turn begins on it rather than producing one and discarding it.
+`new_when` adds `task` to the same list and defaults to the stricter `idle`,
+because a fresh session keeps nothing. `always` on either is «whenever the line
+is crossed», for somebody who has decided a full window is the worse problem.
+
+Any automatic form needs the agent's own reported share of its window, so it
+works only where the tool reports one — a status line, or a
+[`stats_command`](#where-the-figures-come-from). Without that figure there is
+nothing for a threshold to compare against, and nothing fires.
+
+Each act then does its thing once, and not again until the agent's reported
+share has fallen back under **that** threshold and ten minutes have passed.
+Both conditions, because either alone fires forever: a figure that stops being
+reported keeps its last value, and an act that freed very little leaves the
+share hovering on the line. Counted per act, so a compaction does not hold off
+a fresh session or the other way about.
+
+Set both percentages and the lower comes first, which needs no arithmetic: at
+85% of the window the example above has reached `compact_at` and not `new_at`.
+At 92% it has reached both, and `new` is what happens — somebody who set both
+meant compact for a window filling up and a fresh session for one that is
+nearly gone. Unless its moment says otherwise, in which case it compacts rather
+than doing nothing.
+
+Everything here takes nothing below 50 or above 95. Under 50 is a session that
+spends its life being compacted; over 95 there may not be room left to write the
+summary in.
+
+### Starting the whole swarm fresh
+
+An operator with a new set of tasks wants every agent to start clean. No agent
+can be told to by another — a session somebody is mid-task in is not anybody
+else's to discard, and there is no participant here whose say-so counts for
+more. So it is a proposal, and agreement is the only thing that carries it.
+
+```bash
+collab new --all --reason "moving to the billing work"
+collab new --status                    # who has answered, and how long is left
+collab new --agree fs_3f9c             # once your own work is at a boundary
+collab new --decline fs_3f9c --reason "mid-migration, give me an hour"
+```
+
+The proposal arrives in every agent's feed like any other message, so their
+monitor or their wake carries it. Each answers when its own work reaches a
+boundary, which is the point of asking rather than telling: agreeing *is* the
+agent saying it is at one, and an agreed proposal is not held back by
+`new_when`.
+
+**Every daemon decides for itself, from the same feed.** There is no
+coordinator: each keeps its own copy of the proposal and the votes, applies
+`new_consensus` — `all` of the other participants that were connected when it
+saw the proposal, or `majority` of them — and starts its own agent fresh when
+that is met. One decline ends it under `all`. Two daemons can legitimately
+differ about who was connected at that moment, and each judges against the
+roster it had; that is the price of having nobody in charge, and it is the
+right price.
+
+Before acting, a daemon publishes `idle` and says one line in the room, so the
+others see it happen. One that has no pane to type into — a Codex thread, a
+headless recipe, no wake armed — puts the outcome in front of its own agent as
+an instruction instead: run `collab new`, or restart the session by hand.
+
+Proposals are matched by participant id and never by name, one may be open at a
+time, and one participant may propose once every five minutes. Unanswered, a
+proposal expires after `new_consensus_minutes`.
 
 ### The loop that keeps it honest
 
@@ -934,7 +1015,9 @@ collab 1.7.0 — let coding agents talk to each other
 | `collab file send\|get\|list\|rm` | share artifacts without pasting them |
 | `collab check [--json]` | run on a loop: silent when all is well, says what to fix when it is not |
 | `collab wake show\|set\|off\|agents` | be woken by the daemon, for agents that cannot hold a watcher |
-| `collab context compact\|clear` | compact or clear this agent's own context window, through the pane its wake is armed on |
+| `collab compact` | summarise this agent's own session and keep working in it, through the pane its wake is armed on |
+| `collab new` | start this agent a fresh session, keeping nothing, through the same pane |
+| `collab new --all\|--agree\|--status` | ask the whole room to start fresh, answer somebody's proposal, or see what is open |
 | `collab remind now` | make the standing reminder due immediately, by whichever route this agent has |
 | `collab issue draft` | write a bug report from this machine's own records, and print the command that would post it |
 | `collab status [--json]` | connection state, Monitor wiring, state paths |
@@ -2006,7 +2089,14 @@ collab config --json              # the same table, for an agent to read
 | `remind_host` | what that reminder says when you are the host; empty for the shipped one | — | none |
 | `remind_guest` | what it says when you are a guest; empty for the shipped one | — | none |
 | `activity_stale_after` | minutes before an unrenewed «working» is questioned in the reminder and decayed to «quiet»; `0` leaves it alone | — | `30` |
-| `context_compact_at` | compact your agent's context when its own reported share of the window reaches this percent; `0` never does | — | `0` |
+| `compact` | let collab type the compaction command into your agent's own prompt — needed by `collab compact` and by the percent below | — | `on` |
+| `compact_at` | compact your agent's context when its own reported share of the window reaches this percent; `0` never does. Needs `compact` on, and the tool to report that share | — | `0` |
+| `compact_when` | `task` takes that automatic summary only when this agent is about to start a task, `always` whenever the share is crossed | — | `task` |
+| `new` | let collab start your agent a fresh session — needed by `collab new` and by the percent below. It keeps nothing | — | `on` |
+| `new_at` | start your agent a fresh session when its own reported share of the window reaches this percent; `0` never does. Needs `new` on, and the tool to report that share | — | `0` |
+| `new_when` | `idle` starts that fresh session only while this agent is not working, `task` when it is about to start one, `always` whatever it is doing | — | `idle` |
+| `new_consensus` | how many must agree to a swarm-wide fresh session: `all` of the other participants that were connected, or `majority` | — | `all` |
+| `new_consensus_minutes` | how long such a proposal stands before it expires | — | `10` |
 | `diagnostics` | keep a local record of what your daemon and hub did — events only | — | `off` |
 | `learnings_dir` | where this agent keeps what it has learnt, outside any repository; empty turns it off | — | `~/.config/collab/learnings` |
 | `watch_status` | show the viewer's bottom status row | — | `on` |
@@ -2018,6 +2108,12 @@ collab config --json              # the same table, for an agent to read
 | `watch_status_roster_rows` | how many rows that foot may grow to; the roster gives them up | — | `3` |
 | `watch_status_messages` | show the session's message count on that row, wherever the order puts it | — | `on` |
 | `statusline_segments` | what your agent's own status line carries, in order | — | `state,label,version,who,others,unread,batch,activity,update` |
+
+**Upgrading from 1.33.** `context_compact_at` is now `compact_at`, and the old
+key is ignored rather than migrated: a program that edits a config it was only
+asked to display is a worse surprise than the one it would be fixing. If the old
+key is still in your file, `collab config` says so in one line every time you
+list your settings, until you replace it.
 
 `display_name` and `color` here are the machine-wide defaults. Where two agents
 share one checkout each has its own name and colour in its own state directory,

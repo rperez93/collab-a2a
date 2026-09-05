@@ -442,36 +442,40 @@ for the gap on top of it. The backoff is bounded and clears on the first
 delivery that works, so a reminder that cannot be delivered can slow the wake
 down and cannot switch it off. `collab check` reads the same count.
 
-## context
+## compact
 
-Compact or clear this agent's own context window, from outside its turn.
+Summarise this agent's own session and keep working in it.
 
 ```text
-collab context [--agent NAME] [--session SESSION] {compact,clear}
+collab compact [--agent NAME] [--session SESSION]
 ```
 
 | Argument or flag | Meaning |
 |---|---|
-| `{compact,clear}` | `compact` summarises the session and keeps working in it; `clear` starts a new one and keeps nothing. |
 | `--agent NAME` | Which agent in this checkout, when it holds more than one. |
 | `--session SESSION` | Act on this session id instead of the current one. |
 
 Compaction is a slash command typed at the agent tool's own prompt, and a model
 inside a turn cannot type at its own prompt. This types it for you, into the
-same tmux pane the wake delivers messages to — so it needs the **tmux recipe**
-armed:
+same tmux pane the wake delivers messages to.
+
+On by default: this is a thing you run at a moment you chose, and asking you
+to enable it before every use would teach nothing. What it needs is the **tmux
+recipe** armed, so there is a prompt to type at.
 
 ```bash
 collab wake set --agent tmux     # from inside the pane your agent runs in
-collab context compact
+collab compact
 ```
 
+`collab config compact off` shuts it down entirely, by the command and by the
+daemon alike, and the command then refuses in one line saying so.
+
 What is typed depends on the program that was in the pane when the wake was
-armed. `claude` gets `/compact` and `/clear`; `codex` gets `/compact` and
-`/new`, because Codex's own `/clear` empties the terminal and leaves the
-conversation where it was; `gemini` gets `/compress` and `/clear`. Any other
-program is refused by name rather than guessed at — a wrong slash command is
-not a failed compaction, it is a line of prose submitted as a turn.
+armed. `claude` gets `/compact`; `codex` gets `/compact`; `gemini` gets
+`/compress`. Any other program is refused by name rather than guessed at — a
+wrong slash command is not a failed compaction, it is a line of prose submitted
+as a turn.
 
 It refuses, and says which case it is, when the wake is armed against a Codex
 thread (there is no prompt to type at) or against one of the headless recipes
@@ -479,9 +483,101 @@ thread (there is no prompt to type at) or against one of the headless recipes
 has had its agent exit, or is sitting in tmux's copy mode. Those are the wake's
 own checks, not a second set.
 
-`collab config context_compact_at <percent>` has the daemon do this on its own
-when the agent's own reported share of its window reaches that percent. It is
-`0` — off — unless you ask, because compacting is not undoable.
+`collab config compact_at <percent>` has the daemon do this on its own when the
+agent's own reported share of its window reaches that percent. It is `0` — off
+— unless you ask, and it needs the tool to report that share at all: without
+one there is nothing for a threshold to compare against.
+
+`collab config compact_when` decides *when* it acts on that percentage, and it
+matters more than the number. `task`, the default, waits for a boundary — the
+agent about to start something — because a summary taken mid-turn throws away
+the reasoning the agent is using to finish what it is doing, while one taken
+between tasks loses nothing still needed. A boundary is this agent publishing a
+working state, a task on the board moving to working under its name, or a woken
+turn about to be delivered; on that last one the summary is taken **before** the
+wake line is typed, so the turn begins on it. `always` acts whenever the line is
+crossed.
+
+## new
+
+Start this agent a fresh session, keeping nothing.
+
+```text
+collab new [--agent NAME] [--session SESSION]
+collab new --all [--reason TEXT]
+collab new --agree ID | --decline ID [--reason TEXT]
+collab new --status [--json]
+```
+
+| Argument or flag | Meaning |
+|---|---|
+| `--agent NAME` | Which agent in this checkout, when it holds more than one. |
+| `--session SESSION` | Act on this session id instead of the current one. |
+| `--all` | Ask everyone to start a fresh session. A proposal, not an order. |
+| `--agree ID` | Agree with an open proposal, once your own work is at a boundary. |
+| `--decline ID` | Decline one; say why with `--reason`. |
+| `--reason TEXT` | Why, on a proposal or a decline. |
+| `--status` | What is open, who has answered, and how long it has left. |
+| `--json` | With `--status`, emit raw JSON. |
+
+The same mechanism as `compact` and a different act. Compacting is lossy and
+continuous — the work goes on with less behind it — while this keeps nothing at
+all, and the agent comes back not knowing what it was doing. A separate command
+rather than a flag, because a flag is too small a thing to stand between
+somebody and that.
+
+On by default, with a switch of its own, so shutting compaction off does not
+shut this off and the other way about:
+
+```bash
+collab wake set --agent tmux     # from inside the pane your agent runs in
+collab new
+collab config new off            # never, by either route
+```
+
+`claude` gets `/clear`; `codex` gets `/new`, because Codex's own `/clear`
+empties the terminal and leaves the conversation where it was; `gemini` gets
+`/clear`. The refusals are the same as `compact`'s and come from the same
+checks.
+
+`collab config new_at <percent>` has the daemon do this on its own, and
+`collab config new_when` decides when. It is `idle` by default, which means the
+daemon waits for the agent to say it is not working: a fresh session discards
+the task in hand, so firing one at an agent that just said it is working on the
+parser throws that work away and leaves it not knowing there was any. `task` is
+the same boundary `compact_when` uses — a fresh session right before a new task
+starts — and `always` removes the guard for somebody who has decided the full
+window is the worse problem. Like `compact_at`, it needs the tool to report its
+share of the window.
+
+Set both `compact_at` and `new_at` and the lower comes first. At a share that
+has reached both, `new` is what happens, unless its moment holds it off — in
+which case the daemon compacts rather than doing nothing.
+
+### Asking the whole room
+
+`collab new --all` publishes a proposal. It is not an order and there is no
+participant whose say-so counts for more: a session somebody is mid-task in is
+not anybody else's to discard.
+
+It reaches every agent as an ordinary message, so their monitor or their wake
+carries it, and each answers when its own work is at a boundary — agreeing *is*
+the agent saying it is at one, which is why an agreed proposal is not held back
+by `new_when`.
+
+Every daemon then decides for itself from the same feed. Each keeps its own copy
+of the proposal and the votes, applies `new_consensus` (`all` of the other
+participants that were connected when it saw the proposal, or `majority` of
+them) and starts its own agent fresh when that is met; one decline ends it under
+`all`. There is no coordinator, so two daemons can legitimately differ about who
+was connected at that moment — each judges against the roster it had.
+
+Before acting, a daemon publishes `idle` and says one line in the room. One with
+no pane to type into puts the outcome in front of its own agent as an
+instruction instead. Proposals and votes are matched by participant id and never
+by name, one proposal may be open at a time, one participant may propose once
+every five minutes, and an unanswered proposal expires after
+`new_consensus_minutes`.
 
 ## remind
 

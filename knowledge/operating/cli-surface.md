@@ -83,14 +83,18 @@ pinned tree when it was not.
 | Command | What the parser says it does |
 |---|---|
 | `learn` | write down a fact worth keeping, and search, read and share what has been written |
-| `context` | compact or clear this agent's own context window, through the pane its wake is armed on |
+| `compact` | summarise this agent's own session and keep working in it, through the pane its wake is armed on |
+| `new` | start this agent a fresh session, keeping nothing, through the same pane |
 | `remind` | make the standing reminder due now instead of at the end of its interval |
 | `issue` | write a bug report from this machine's own records, and print the command that posts it |
 
 `learn` takes sub-verbs of its own — `add`, `list`, `search`, `read`, `used`
 and `sync` — over a store that lives beside the global config rather than in
-the checkout, grouped by the repository the learning is about; `context` takes
-`compact` or `clear`; `remind` takes `now`; `issue` takes `draft` and
+the checkout, grouped by the repository the learning is about; `compact` takes
+no verb, being one act with a switch, a percent and a moment of its own, and
+`new` takes the same three plus `--all`, `--agree`, `--decline` and `--status`
+for the form of it that asks the whole room; `remind` takes `now`; `issue` takes
+`draft` and
 `--out FILE`. None of them posts anything anywhere on its own: `issue` prints a
 `gh issue create` line for a person to run, and `learn add` and `learn sync`
 send ordinary chat messages like `send` does, by way of a spool the daemon

@@ -317,21 +317,37 @@ own prompt, and a model inside a turn cannot type at its own prompt. Something
 outside the turn can, and the tmux wake is that something.
 
 ```bash
-collab wake set --agent tmux    # from inside the pane your agent runs in
-collab context compact
+collab config compact on           # required; off unless you turn it on
+collab wake set --agent tmux       # from inside the pane your agent runs in
+collab compact
 ```
 
-If it refuses, the line says which case it is. A wake armed against a Codex
-thread has no prompt to type at; a headless recipe starts a fresh run, which
-has no context to compact; and a pane that has been recycled, has had its agent
-exit, or is sitting in tmux's copy mode is not typed into at all. A program
-collab does not recognise is refused by name rather than guessed at, because a
-wrong slash command is a line of prose submitted as a turn.
+The first line is the one people miss. This is collab pressing keys in a window
+somebody is working in, so it is a decision rather than a default, and until it
+is made the command refuses in one line saying exactly that.
 
-`collab config context_compact_at 85` has the daemon do it without being asked,
-once the agent's own reported share of its window reaches that percent. It
-needs that figure to be reported at all — a status line, or a `stats_command` —
-and it ships off, because compacting is not undoable.
+`collab new` is the other half of the same mechanism and starts a fresh session
+instead of summarising this one. It keeps nothing, so it has a switch of its
+own — `collab config new on` — and neither switch turns the other on.
+
+If it refuses for another reason, the line says which case it is. A wake armed
+against a Codex thread has no prompt to type at; a headless recipe starts a
+fresh run, which has no context to compact; and a pane that has been recycled,
+has had its agent exit, or is sitting in tmux's copy mode is not typed into at
+all. A program collab does not recognise is refused by name rather than guessed
+at, because a wrong slash command is a line of prose submitted as a turn.
+
+`collab config compact_at 85` has the daemon do it without being asked, once
+the agent's own reported share of its window reaches that percent, and
+`collab config new_at 92` does the same for a fresh session. Each needs its own
+switch on as well — the percent is when, the switch is whether — and both need
+that figure to be reported at all, which means a status line or a
+`stats_command`. Everything here ships off, because neither act can be undone.
+
+Set both percents and the lower comes first. `collab config new_when` decides
+whether a fresh session may start while the agent is busy; it is `idle` by
+default, so the daemon waits for the agent to say it has stopped rather than
+throwing away the task in hand.
 
 ## The status line shows nothing
 

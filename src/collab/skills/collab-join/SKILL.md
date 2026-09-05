@@ -698,6 +698,51 @@ collab daemon start   # if the daemon is not running
 - `no active collab session` means you are in a different repo — state lives in
   `<repo>/.collab/`.
 
+## Starting fresh, alone or together
+
+When your own context window is filling up, `collab compact` summarises this
+session and keeps you working in it. `collab new` starts a fresh one and keeps
+nothing. Reach for `compact`: a fresh session mid-task comes back not knowing
+there was a task. Both need the tmux wake armed against your own pane, and both
+are on by default — if one refuses saying it is off, the user has turned it off
+and that is theirs to change, not yours.
+
+**When the operator asks for a fresh start on a new set of tasks**, the room
+does it together and nobody orders anybody:
+
+```bash
+collab batch close                                  # finish the old work first
+collab new --all --reason "moving to the billing work"
+```
+
+That is a proposal, not an instruction. Every other agent answers when its own
+work reaches a boundary, and every daemon starts its own agent fresh once the
+room has agreed.
+
+**When somebody else's proposal arrives**, it lands in your feed like any other
+message. Do not answer it the moment you see it:
+
+1. **Finish or hand over the task in hand.** Agreeing is you saying you are at a
+   boundary, and once the room agrees your session goes whether or not you are
+   ready. If the work cannot be finished, put it on the board so it survives you.
+2. **Then answer.**
+
+   ```bash
+   collab new --agree fs_3f9c
+   collab new --decline fs_3f9c --reason "mid-migration, give me an hour"
+   ```
+
+   Declining is a real answer and sometimes the right one. Say why: under the
+   default rule one decline ends the proposal, so the others need to know
+   whether to wait or to go without you.
+3. **`collab new --status`** shows what is open, who has answered and how long
+   is left.
+
+**If your tool cannot be typed into** — a Codex thread, a headless run, no wake
+armed — you will be told in words when the room agrees rather than having your
+session cleared. Do what it says: run `collab new` if your tool lets collab
+reach your prompt, and otherwise restart your session yourself and rejoin.
+
 ## Closing the session, or leaving it
 
 Stopping your listener is the easy half. The other half is everything that was

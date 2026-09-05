@@ -13,11 +13,13 @@ import contextlib
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +48,7 @@ from .config import (
     layout_view,
     reminder_settings,
     resolve_name,
+    new_consensus_minutes as config_new_consensus_minutes,
     sibling_homes,
     _slug,
     set_default_name,
@@ -4618,6 +4621,24 @@ def _shown(value: Any) -> str:
     return str(value)
 
 
+def _say_if_a_retired_key_is_still_there() -> None:
+    """One line for a key that was renamed, if the file still holds it.
+
+    A renamed setting is the quiet kind of breakage: the file still parses, the
+    listing still prints, and the behaviour somebody configured months ago has
+    simply stopped happening. Nothing here rewrites their file — a program that
+    edits a config it was only asked to display is a worse surprise than the
+    one it would be fixing — so it says so, once, where they are already
+    looking.
+    """
+    from .config import RETIRED_COMPACT_AT, load_config
+
+    if RETIRED_COMPACT_AT in load_config():
+        print(c(f"  {RETIRED_COMPACT_AT} is now compact_at;"
+                " the old key is ignored", "33"))
+        print()
+
+
 def cmd_config(args: argparse.Namespace) -> int:
     """Every global setting in one place — see them, and change them.
 
@@ -4644,6 +4665,7 @@ def cmd_config(args: argparse.Namespace) -> int:
             print(line)
             print(dim(f"      {item.about}"))
         print()
+        _say_if_a_retired_key_is_still_there()
         print(dim(f"  they live in {global_config_path()}"))
         print(dim("  collab config <key> <value>   set one"))
         print(dim("  collab config <key> --unset   put it back to its default"))
@@ -4756,11 +4778,45 @@ def _profile_in_home(home: Path) -> SessionProfile | None:
     return SessionProfile.load_from(Path(home) / "sessions" / session_id)
 
 
-def cmd_context(args: argparse.Namespace) -> int:
-    """Compact or clear the agent's own context, from outside its turn.
+#: The two acts, what each is called on the wire, and the switch and threshold
+#: that govern it. One table rather than two nearly-identical commands: every
+#: difference between them that is not the words is a difference this program
+#: has invented rather than one the acts have.
+ACTS = {
+    "compact": ("compact", "compaction",
+                "summarise this session and keep working in it"),
+    "new": ("clear", "a fresh session",
+            "start again, keeping nothing"),
+}
+
+
+def _may_type(act: str) -> bool:
+    """Whether the user has allowed this act, and one line if they have not.
+
+    BEFORE ANYTHING ELSE, and before the session is even looked for. Typing
+    into somebody's agent is what the setting governs, and a refusal that first
+    reported no active session would be answering a question nobody asked. The
+    line says what to type: an agent told only that a thing is off improvises,
+    and improvising here means editing a config file by hand.
+    """
+    from .config import compact_enabled, new_enabled
+
+    allowed = compact_enabled() if act == "compact" else new_enabled()
+    if allowed:
+        return True
+    _name, what, _does = ACTS[act]
+    exe = Path(sys.argv[0]).name
+    fail(f"{what} is off")
+    print(dim(f"  {exe} config {act} on turns it on;"
+              " it lets collab type into your agent's own prompt"))
+    return False
+
+
+def _type_into_the_agent(args: argparse.Namespace, act: str) -> int:
+    """Type one of the two acts at the agent's own prompt.
 
     The command an agent runs when it can see its context filling up and has no
-    way to do anything about it: compaction is a slash command typed at the
+    way to do anything about it: both of these are slash commands typed at the
     tool's own prompt, and a model inside a turn cannot type at its own prompt.
     Something outside the turn can, and the wake already is that something —
     it holds a pane, a process and the program that was in it.
@@ -4772,8 +4828,11 @@ def cmd_context(args: argparse.Namespace) -> int:
     """
     from . import compaction
 
+    if not _may_type(act):
+        return 1
+    action, _what, _does = ACTS[act]
     if getattr(args, "agent", ""):
-        home = _which_agent(args, "the wake", "context")
+        home = _which_agent(args, "the wake", act)
         if home is None:
             return 1
         profile = _profile_in_home(home)
@@ -4784,7 +4843,7 @@ def cmd_context(args: argparse.Namespace) -> int:
         fail("no active session — `collab join` or `collab host` first")
         return 1
     root = DaemonPaths(profile.dir).root
-    code, detail = compaction.apply(root, args.action)
+    code, detail = compaction.apply(root, action)
     if code != 0:
         fail(detail)
         if not wake.read_config(root).command:
@@ -4795,6 +4854,212 @@ def cmd_context(args: argparse.Namespace) -> int:
     print(dim("  the agent sees it as though you had typed it; it takes a"
               " moment and costs a turn"))
     return 0
+
+
+def cmd_compact(args: argparse.Namespace) -> int:
+    """Summarise this agent's session and keep working in it."""
+    return _type_into_the_agent(args, "compact")
+
+
+def cmd_new(args: argparse.Namespace) -> int:
+    """Start this agent a fresh session, keeping nothing.
+
+    A separate command from `compact` rather than a flag on it, because they
+    are separate acts with separate costs. Compacting is lossy and continuous:
+    the work goes on with less behind it. This keeps nothing at all — the agent
+    comes back not knowing what it was doing — and a flag is too small a thing
+    to stand between somebody and that.
+
+    `--all` and its answers are the same act asked of the whole room, and it is
+    a PROPOSAL rather than an instruction: see `_propose_a_fresh_session`.
+    """
+    if getattr(args, "status", False):
+        return _show_the_proposal(args)
+    if getattr(args, "agree", "") or getattr(args, "decline", ""):
+        return _vote_on_a_fresh_session(args)
+    if getattr(args, "all", False):
+        return _propose_a_fresh_session(args)
+    return _type_into_the_agent(args, "new")
+
+
+def _new_proposal_id() -> str:
+    """Short, and unique enough for one session's worth of proposals."""
+    return "fs_" + secrets.token_hex(4)
+
+
+def _send_body(profile: SessionProfile, text: str,
+               body: dict[str, Any]) -> bool:
+    """Say something in the room with a body on it. False if the hub refused.
+
+    Chat is the only kind a client may send, so everything that is not a
+    message rides in a chat's body — the same door learnings use. Nothing
+    hub-side reads it; the exchange is between daemons.
+    """
+    env = Envelope(kind=KIND_CHAT, text=text, sender=profile.name,
+                   room=profile.room, body=body,
+                   stats=_current_stats(profile))
+    try:
+        with _client(profile) as client:
+            client.send(env)
+    except HubError as exc:
+        fail(str(exc))
+        return False
+    return True
+
+
+def _open_proposal(profile: SessionProfile) -> dict[str, Any] | None:
+    """The proposal this session has open, read off the local inbox.
+
+    READ RATHER THAN REMEMBERED. The command is a process that lives for a
+    second; the feed is the record. So «is one open» is answered by looking at
+    what has arrived, which is also what every daemon does — and it means two
+    commands run in two terminals cannot disagree about it.
+    """
+    from .client.daemon import FRESH_SESSION, FRESH_SESSION_VOTE
+
+    profile_dir = Path(profile.dir)
+    if not (profile_dir / "inbox.db").exists():
+        return None
+    inbox = Inbox(profile_dir)
+    try:
+        events = inbox.all_events(limit=500)
+    finally:
+        inbox.close()
+    minutes = config_new_consensus_minutes()
+    now = time.time()
+    open_one: dict[str, Any] | None = None
+    for env in events:
+        body = env.body if isinstance(env.body, dict) else {}
+        said = body.get(FRESH_SESSION)
+        if isinstance(said, dict) and said.get("proposal"):
+            seen = _stamp_seconds(env.ts)
+            if seen and (now - seen) > minutes * 60:
+                continue
+            open_one = {"id": str(said["proposal"]), "by": str(env.sender or ""),
+                        "by_id": str(env.sender_id or ""),
+                        "reason": str(said.get("reason") or ""),
+                        "at": seen, "votes": {}}
+    if open_one is None:
+        return None
+    for env in events:
+        body = env.body if isinstance(env.body, dict) else {}
+        vote = body.get(FRESH_SESSION_VOTE)
+        if isinstance(vote, dict) and str(vote.get("proposal")) == open_one["id"]:
+            who = str(env.sender_id or "")
+            if who:
+                open_one["votes"][who] = (str(vote.get("vote") or ""),
+                                          str(env.sender or ""))
+    return open_one
+
+
+def _stamp_seconds(ts: str) -> float:
+    with contextlib.suppress(ValueError, TypeError, AttributeError):
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+    return 0.0
+
+
+def _propose_a_fresh_session(args: argparse.Namespace) -> int:
+    """Ask the room to start fresh, and let the room decide.
+
+    NOT AN INSTRUCTION, and not the host's to give. A session somebody is
+    mid-task in is not anybody else's to discard, so this proposes and every
+    other participant answers; the daemons agree among themselves and each acts
+    on its own agent. There is no coordinator and no privileged participant.
+    """
+    profile = _require_own_profile(args)
+    standing = _open_proposal(profile)
+    if standing:
+        fail(f"a fresh-session proposal is already open ({standing['id']})")
+        print(dim(f"  {Path(sys.argv[0]).name} new --status shows who has"
+                  " answered; one at a time, so nobody is asked twice"))
+        return 1
+    proposal = _new_proposal_id()
+    reason = (getattr(args, "reason", "") or "").strip()
+    text = (f"{profile.name} proposes that everyone starts a fresh session"
+            + (f": {reason}" if reason else ""))
+    body = {"fresh_session": {"proposal": proposal,
+                              "by": profile.participant_id,
+                              "reason": reason}}
+    if not _send_body(profile, text, body):
+        return 1
+    exe = Path(sys.argv[0]).name
+    ok(f"proposed to the room — {proposal}")
+    print(dim(f"  they answer with `{exe} new --agree {proposal}`;"
+              f" `{exe} new --status` shows who has"))
+    print(dim("  your own agreement is implied, and every daemon that agrees"
+              " starts fresh when the room has"))
+    return 0
+
+
+def _vote_on_a_fresh_session(args: argparse.Namespace) -> int:
+    """Agree with a proposal, or decline it with a reason.
+
+    An agent agrees when its work is at a boundary, which is why agreeing is a
+    separate act from being asked: the proposal arrives mid-task as often as
+    not, and the answer is «yes, once I have finished this» expressed by
+    answering later.
+    """
+    profile = _require_own_profile(args)
+    agreeing = bool(getattr(args, "agree", ""))
+    proposal = str(getattr(args, "agree", "") or getattr(args, "decline", ""))
+    reason = (getattr(args, "reason", "") or "").strip()
+    standing = _open_proposal(profile)
+    if standing is None or standing["id"] != proposal:
+        fail(f"no open proposal {proposal}")
+        print(dim(f"  {Path(sys.argv[0]).name} new --status says what is open"))
+        return 1
+    word = "agree" if agreeing else "decline"
+    text = (f"{profile.name} {'agrees' if agreeing else 'declines'}:"
+            f" {'a fresh session for everyone' if agreeing else (reason or 'not now')}")
+    body = {"fresh_session_vote": {"proposal": proposal, "vote": word,
+                                   "reason": reason}}
+    if not _send_body(profile, text, body):
+        return 1
+    ok(f"{word}d {proposal}")
+    if agreeing:
+        print(dim("  your session starts fresh when the room has agreed, not"
+                  " when you answer"))
+    return 0
+
+
+def _show_the_proposal(args: argparse.Namespace) -> int:
+    """What is open, who has answered, and how long it has left."""
+    profile = _require_own_profile(args)
+    standing = _open_proposal(profile)
+    if getattr(args, "json", False):
+        print(json.dumps(standing or {"open": False}, indent=2))
+        return 0
+    if standing is None:
+        print("no fresh-session proposal is open")
+        return 0
+    minutes = config_new_consensus_minutes()
+    left = max(0.0, (standing["at"] or 0) + minutes * 60 - time.time())
+    heading(f"fresh session · {standing['id']}")
+    print(f"  proposed by      {said(standing['by'])}")
+    if standing["reason"]:
+        print(f"  reason           {said(standing['reason'])}")
+    print(f"  time left        {_ago_seconds(left)}" if left
+          else "  time left        expired")
+    # EVERYBODY WHO IS HERE, and what each has said. The ones who have not
+    # answered are the point of the listing: a proposal waits on them.
+    people = _roster_now(profile)
+    for person in people:
+        who = str(person.get("id") or "")
+        name = said(str(person.get("name") or ""))
+        if who == standing["by_id"]:
+            print(f"  {name:<16} proposed it")
+            continue
+        vote = standing["votes"].get(who)
+        print(f"  {name:<16} {vote[0] if vote else c('has not answered', '33')}")
+    return 0
+
+
+def _roster_now(profile: SessionProfile) -> list[dict[str, Any]]:
+    """Who the daemon last saw connected, off its own snapshot file."""
+    with contextlib.suppress(OSError, ValueError):
+        data = json.loads((Path(profile.dir) / "snapshot.json").read_text())
+        return [p for p in data.get("participants", []) if p.get("connected")]
+    return []
 
 
 #: Where a report goes. Named here rather than built into the command's output
@@ -4849,15 +5114,25 @@ def _issue_header(profile: SessionProfile) -> list[str]:
         f"- state: {daemon_state(status, running=pid is not None)}",
         f"- wake: {armed}",
         f"- reminder: {f'every {every} min' if every else 'off'}",
-        f"- context compaction: {_shown_threshold()}",
+        f"- compact: {_shown_threshold('compact')}",
+        f"- new: {_shown_threshold('new')}",
     ]
 
 
-def _shown_threshold() -> str:
-    from .config import context_compact_at
+def _shown_threshold(act: str) -> str:
+    """What a bug report says about one of the two acts.
 
-    at = context_compact_at()
-    return f"at {at}%" if at else "off"
+    Both halves, because either alone is misleading: a threshold with the
+    switch off never fires, and a switch on with no threshold only ever fires
+    when somebody types the command.
+    """
+    from .config import compact_at, compact_enabled, new_at, new_enabled
+
+    on = compact_enabled() if act == "compact" else new_enabled()
+    at = compact_at() if act == "compact" else new_at()
+    if not on:
+        return "off"
+    return f"on, at {at}%" if at else "on, by hand only"
 
 
 def _issue_body(profile: SessionProfile) -> str:
@@ -5374,17 +5649,45 @@ def build_parser() -> argparse.ArgumentParser:
     add_session_flag(iss)
     iss.set_defaults(func=cmd_issue)
 
-    cx = sub.add_parser("context",
-                        help="compact or clear this agent's own context window,"
-                             " through the pane its wake is armed on")
-    cx.add_argument("action", choices=["compact", "clear"],
-                    help="compact summarises the session and keeps it; clear"
-                         " starts a new one and keeps nothing")
-    cx.add_argument("--agent", metavar="NAME",
+    # TWO COMMANDS AND NOT ONE WITH AN ARGUMENT. They are separate acts with
+    # separate costs — one keeps a summary, the other keeps nothing — and each
+    # has its own switch and its own threshold. A shared verb with a choice
+    # after it made them look like two spellings of one thing.
+    cp = sub.add_parser("compact",
+                        help="summarise this agent's own session and keep"
+                             " working in it, through the pane its wake is"
+                             " armed on")
+    cp.add_argument("--agent", metavar="NAME",
                     help="which agent in this checkout, when it holds more"
                          " than one")
-    add_session_flag(cx)
-    cx.set_defaults(func=cmd_context)
+    add_session_flag(cp)
+    cp.set_defaults(func=cmd_compact)
+
+    nw = sub.add_parser("new",
+                        help="start this agent a fresh session, keeping"
+                             " nothing, through the pane its wake is armed on")
+    nw.add_argument("--agent", metavar="NAME",
+                    help="which agent in this checkout, when it holds more"
+                         " than one")
+    # THE ROOM'S FORM OF THE SAME ACT, and a proposal rather than an order.
+    # Grouped as alternatives to each other because they are: you propose, or
+    # you answer, or you ask what is open.
+    nw.add_argument("--all", action="store_true",
+                    help="ask everyone to start a fresh session; they agree"
+                         " and every daemon acts on its own agent")
+    nw.add_argument("--agree", metavar="ID",
+                    help="agree with an open proposal, once your own work is"
+                         " at a boundary")
+    nw.add_argument("--decline", metavar="ID",
+                    help="decline one, with --reason")
+    nw.add_argument("--reason", metavar="TEXT",
+                    help="why, on a proposal or a decline")
+    nw.add_argument("--status", action="store_true",
+                    help="what is open, who has answered, and how long it has")
+    nw.add_argument("--json", action="store_true",
+                    help="with --status, emit raw JSON")
+    add_session_flag(nw)
+    nw.set_defaults(func=cmd_new)
 
     ck = sub.add_parser("check",
                         help="run on a loop: silent when all is well, says what"

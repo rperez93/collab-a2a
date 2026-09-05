@@ -84,6 +84,17 @@ COMPACT_RETRY = 60.0
 #: below a number that costs a daemon anything: each entry is one envelope.
 MAX_QUEUED_LEARNINGS = 200
 
+#: The two chat bodies a swarm-wide fresh session travels in. Chat is the only
+#: kind a client may send, so both ride in its body, and nothing hub-side reads
+#: either — the whole exchange is between daemons, over the ordinary feed.
+FRESH_SESSION = "fresh_session"
+FRESH_SESSION_VOTE = "fresh_session_vote"
+
+#: How long before the same participant may propose again. A proposal is put in
+#: front of every agent in the room as something to stop and answer, so one
+#: every turn would be one interruption per turn for everybody.
+PROPOSAL_COOLDOWN = 300.0
+
 #: Event kinds that change what the snapshot says, and so must pull a fresh one
 #: rather than waiting for the timer.
 #:
@@ -341,15 +352,34 @@ class Daemon:
         #: What we put on the roster on the woken turn's behalf, so that we
         #: retract that and nothing the agent said for itself.
         self._wake_activity: dict[str, Any] | None = None
-        #: The three moments `_maybe_compact` reasons from: when a compaction
-        #: last worked, when one was last attempted at all, and since when the
-        #: agent's reported share has been under the threshold. Held in memory
-        #: rather than on disk on purpose — a restarted daemon is entitled to
-        #: compact a full context again, and the alternative is a state file
-        #: whose staleness would have to be judged in its own right.
-        self._context_compacted_at = 0.0
-        self._context_tried_at = 0.0
-        self._context_under_since = 0.0
+        #: The three moments `_maybe_type_at_the_agent` reasons from, PER ACT:
+        #: when that act last worked, when it was last attempted at all, and
+        #: since when the agent's reported share has been under its threshold.
+        #: Held in memory rather than on disk on purpose — a restarted daemon
+        #: is entitled to compact a full context again, and the alternative is
+        #: a state file whose staleness would have to be judged in its own
+        #: right.
+        #:
+        #: Kept apart rather than shared, because compacting and starting again
+        #: are different acts with different costs, and one having just run says
+        #: nothing about whether the other should.
+        self._acted_at = {"compact": 0.0, "new": 0.0}
+        self._tried_at = {"compact": 0.0, "new": 0.0}
+        self._under_since = {"compact": 0.0, "new": 0.0}
+        #: When this agent was last seen ABOUT TO START SOMETHING, and whether
+        #: it was working when we last looked. A boundary is a moment rather
+        #: than a state, so it is recorded when it happens and consumed by
+        #: whatever acts on it; nothing else can reconstruct it afterwards,
+        #: because by the next heartbeat the agent is simply working.
+        self._boundary_at = 0.0
+        self._was_working = False
+        #: The one swarm-wide proposal this session may have open, as this
+        #: daemon saw it, and when each participant last proposed one. Every
+        #: daemon keeps its own copy and reaches its own verdict from the same
+        #: feed — there is no coordinator, which is the whole design.
+        self._proposal: dict[str, Any] | None = None
+        self._proposed_at: dict[str, float] = {}
+        self._settled: set[str] = set()
         #: Learnings in flight. Everything the feed notices is queued here and
         #: acted on by the heartbeat, off the event loop: a bundle write in the
         #: middle of the stream would hold the feed for a disk.
@@ -460,12 +490,15 @@ class Daemon:
             # from the agent's side: the command returned at once and said the
             # daemon would do it.
             "learnings": self._learning_figures(),
-            # When this daemon last compacted its own agent's context, or None
-            # for never. Written because the act is invisible from inside the
-            # agent — a session comes back shorter and nothing says who did it
-            # — and a feature that silently rewrites somebody's context has to
-            # leave a mark somewhere they can find it.
-            "context_compacted_at": self._context_compacted_at or None,
+            # When this daemon last compacted its own agent's context, and when
+            # it last started it a fresh session; None for never. Written
+            # because both acts are invisible from inside the agent — a session
+            # comes back shorter, or empty, and nothing says who did it — and a
+            # feature that silently rewrites somebody's context has to leave a
+            # mark somewhere they can find it. Both, separately, because
+            # «shorter» and «gone» are not the same news.
+            "context_compacted_at": self._acted_at["compact"] or None,
+            "context_new_at": self._acted_at["new"] or None,
             "heartbeat": time.time(),
             "connected_since": self.connected_since,
             "failures": self.failures,
@@ -980,74 +1013,429 @@ class Daemon:
             logger.warning("could not leave the reminder for the monitor")
             diagnostics.log("reminder", route="monitor", outcome="not written")
 
-    async def _maybe_compact(self) -> None:
-        """Compact the agent's context when its OWN figures say it is nearly full.
+    def _which_act_is_due(self, share: float) -> str:
+        """Which of the two the share has reached and the moment allows, or "".
 
-        The agent reports the share of its window in use — a status line hands
-        it over, or a `stats_command` prints it — and past a threshold the user
-        chose, the daemon types the compaction command into the same pane the
-        wake types into. Nobody else's number decides this: `read_stats` gives
-        back only figures stamped as ours, so two agents in one checkout cannot
-        compact each other.
+        LOWER THRESHOLD FIRST, which needs no arithmetic: a share of 75 with
+        compact at 70 and new at 90 has reached one of them and not the other.
+        The only case with a choice in it is both reached at once, and there
+        `new` wins — somebody who set both meant compact for a window filling
+        up and a fresh session for one that is nearly gone, so at the far end
+        the far answer is the one they asked for.
 
-        OFF UNLESS ASKED. Compacting is not undoable; it replaces what the
-        agent was holding with a summary of it, and doing that unbidden takes
-        away work somebody was in the middle of relying on.
-
-        TWO CONDITIONS BEFORE A SECOND ONE, and both are needed because either
-        alone fires forever. The share must have fallen back under the
-        threshold — a figure that stops being reported keeps its last value, so
-        «still over» is also what a dead status line looks like — and ten
-        minutes must have passed, because a compaction that frees very little
-        leaves the share hovering on the line, crossing it on every heartbeat.
-
-        Never raises: it is called from the guarded half of the heartbeat, but
-        a delivery that failed is a thing to write down rather than a thing to
-        take the wake down with.
+        UNLESS ITS MOMENT SAYS NO, in which case compact is what happens rather
+        than nothing. Refusing to act at all there would leave an agent that
+        set both keys with a full window and no help, on the strength of a
+        guard whose whole purpose is to protect the work in hand — and
+        compacting protects that work by definition.
         """
-        from ..config import CONTEXT_COMPACT_GAP, context_compact_at
+        from ..config import (compact_at, compact_enabled, compact_when,
+                              new_at, new_enabled, new_when)
 
-        threshold = context_compact_at()
+        wants_compact = (compact_enabled() and 0 < compact_at() <= share
+                         and self._moment_allows(compact_when()))
+        wants_new = (new_enabled() and 0 < new_at() <= share
+                     and self._moment_allows(new_when()))
+        if wants_new:
+            return "new"
+        return "compact" if wants_compact else ""
+
+    def _moment_allows(self, when: str) -> bool:
+        """Whether this is one of the moments that `when` names.
+
+        `always` is any moment at all: whenever the share is crossed, which is
+        what a percent on its own used to mean.
+
+        `task` is a boundary — the agent is about to start something. That is
+        the moment a summary costs least, because the reasoning the context
+        holds was for work that is now done; taken mid-turn instead, it throws
+        away exactly what the agent is using to finish what it is doing.
+
+        `idle` is the agent saying it has stopped, read the way the roster
+        reads it: a `working` nobody has renewed is stale and stale is not
+        working, so an agent killed mid-task cannot hold this off for ever.
+        """
+        from .. import activity as act
+        from ..config import WHEN_ALWAYS, WHEN_IDLE, WHEN_TASK
+
+        if when == WHEN_ALWAYS:
+            return True
+        if when == WHEN_TASK:
+            return bool(self._boundary_at)
+        if when == WHEN_IDLE:
+            return not act.is_working(act.read_local(self.profile))
+        return False
+
+    def _watch_for_a_boundary(self) -> None:
+        """Notice this agent moving from not-working to working.
+
+        THE MOMENT AND NOT THE STATE. `working` is true for as long as the work
+        lasts; the boundary is the edge, and only something watching over time
+        can see an edge. So it is recorded when it happens and consumed by
+        whatever acts on it — by the next heartbeat the agent is simply
+        working, and nothing left on disk says when it started being so.
+
+        Read off the local activity file the daemon already reads, which is
+        what `collab working` and `collab task claim` both write. Anything else
+        that publishes a working state lands here too, which is the point of
+        watching the file rather than listing the commands.
+
+        The edge is observed on a heartbeat, so it is a moment or two after the
+        agent said so rather than exactly at it. That is as close as anything
+        outside the turn can get, and it is inside the window where a summary
+        still costs nothing: the agent has said what it is about to do and has
+        not yet done it.
+        """
+        from .. import activity as act
+
+        working = act.is_working(act.read_local(self.profile))
+        if working and not self._was_working:
+            self._boundary_at = time.time()
+            logger.info("this agent is starting something; a boundary")
+        self._was_working = working
+
+    def _note_task_boundary(self, env: Envelope) -> None:
+        """The same edge, seen on the board rather than in the activity file.
+
+        A task moving to `working` with this agent as its owner is this agent
+        about to start something, whoever moved it — which is why the board is
+        watched as well as the file. Somebody else claiming a task FOR us is
+        the case the activity file cannot see.
+        """
+        body = env.body if isinstance(env.body, dict) else {}
+        state = str(body.get("state") or "").replace("TASK_STATE_", "").lower()
+        if state != "working":
+            return
+        owner = str(body.get("owner") or "")
+        if owner and owner not in (self.profile.name, self.profile.participant_id):
+            return
+        if not owner:
+            return
+        self._boundary_at = time.time()
+        logger.info("a task moved to working under our name; a boundary")
+
+    async def _compact_before_the_turn(self) -> None:
+        """Summarise before a woken turn is delivered, not after.
+
+        A wake starts a turn in an agent that was not looking. If that agent's
+        window is nearly full, the turn it is about to take is the one least
+        able to afford it — so the compaction goes first and the turn begins on
+        the summary. Afterwards would be the wrong order twice over: the turn
+        would run in the full window, and the summary would then discard what
+        it had just produced.
+
+        NEVER BLOCKS THE DELIVERY. A refused compaction is a pane in copy mode
+        or an agent that has exited, and neither is a reason to withhold
+        somebody's messages — the wake's own checks will meet the same pane a
+        moment later and say so properly. So this is logged and the turn
+        proceeds.
+        """
+        from ..config import compact_at, compact_enabled
+
+        if not compact_enabled():
+            return
+        threshold = compact_at()
         if not threshold:
             return
         try:
             share = float(read_stats(self.profile).get("context_pct"))
         except (TypeError, ValueError):
-            return                          # the agent reports no such figure
-        now = time.time()
-        if share < threshold:
-            # BELOW THE LINE IS THE ONLY THING THAT RE-ARMS IT. Recorded here
-            # rather than inferred later, because the daemon is the only thing
-            # that watches the figure over time.
-            self._context_under_since = self._context_under_since or now
             return
-        if (now - self._context_tried_at) < COMPACT_RETRY:
+        if share < threshold:
+            return
+        from .. import compaction
+
+        code, detail = await asyncio.to_thread(
+            compaction.apply, self.paths.root, "compact")
+        diagnostics.log("context_compact", outcome="typed" if code == 0 else "refused",
+                        share=round(share), before="wake")
+        if code == 0:
+            self._acted_at["compact"] = time.time()
+            self._under_since["compact"] = 0.0
+            logger.info("compacted at %.0f%% before waking: %s", share, detail)
+        else:
+            logger.warning("could not compact before waking at %.0f%%: %s;"
+                           " delivering anyway", share, detail)
+
+    # --- a fresh session for everybody, decided by everybody ----------------
+    #
+    # An operator with a new set of tasks wants the whole swarm to start clean,
+    # and no agent can be told to by another: the room is a room of peers, and
+    # a session somebody is mid-task in is not anybody else's to discard. So it
+    # is a PROPOSAL, and the only thing that carries it is agreement.
+    #
+    # THERE IS NO COORDINATOR. Every daemon sees the same feed, keeps its own
+    # copy of the proposal and the votes, and reaches its own verdict — which
+    # is the only arrangement with no single point to fail, and the reason two
+    # daemons can legitimately disagree about who was connected when the
+    # proposal arrived. That divergence is accepted and written down rather
+    # than papered over: each judges against the roster it had.
+
+    def _note_fresh_session(self, env: Envelope) -> None:
+        """A proposal, or a vote on one, seen on the feed.
+
+        BY PARTICIPANT ID AND NEVER BY NAME. A name is a display string anybody
+        may take; a vote counted under one would let a joiner agree on somebody
+        else's behalf by renaming themselves. The id is what the hub stamps.
+
+        Never raises: this runs inside the feed loop, where the only job is to
+        get the event recorded and move on.
+        """
+        try:
+            body = env.body if isinstance(env.body, dict) else {}
+            if isinstance(body.get(FRESH_SESSION), dict):
+                self._note_a_proposal(env, body[FRESH_SESSION])
+            elif isinstance(body.get(FRESH_SESSION_VOTE), dict):
+                self._note_a_vote(env, body[FRESH_SESSION_VOTE])
+        except Exception as exc:                              # noqa: BLE001
+            logger.warning("could not read a fresh-session message (%r)", exc)
+
+    def _note_a_proposal(self, env: Envelope, said: dict[str, Any]) -> None:
+        """Open a proposal, if there is room for one and the sender may.
+
+        ONE AT A TIME, per session. Two open proposals is two answers to «are
+        we starting again» and an agent asked to agree to both; the second is
+        ignored here and refused at the command that would send it.
+
+        RATE LIMITED PER PROPOSER, because a proposal is put in front of every
+        agent in the room as something to act on, and a loop proposing every
+        turn would be a loop interrupting everybody every turn.
+        """
+        who = str(env.sender_id or "")
+        proposal = str(said.get("proposal") or "")
+        if not who or not proposal:
+            return
+        now = time.time()
+        if self._proposal and not self._proposal_is_over(now):
+            logger.info("ignoring a second proposal while %s is open",
+                        self._proposal["id"])
+            return
+        if (now - self._proposed_at.get(who, 0.0)) < PROPOSAL_COOLDOWN:
+            logger.info("ignoring a proposal from %s so soon after the last", who)
+            return
+        if proposal in self._settled:
+            return
+        self._proposed_at[who] = now
+        # WHO WAS HERE WHEN IT ARRIVED, recorded now rather than counted later:
+        # consensus is about the room that was asked, and somebody who joined
+        # after the question was put was not asked.
+        connected = {str(person.get("id"))
+                     for person in self.snapshot.get("participants", [])
+                     if person.get("connected") and person.get("id")}
+        connected.discard(who)
+        self._proposal = {
+            "id": proposal,
+            "by": who,
+            "reason": str(said.get("reason") or ""),
+            "seen_at": now,
+            # The proposer's own vote is implied. Asking somebody to agree with
+            # themselves is a round trip that answers nothing.
+            "asked": connected,
+            "votes": {},
+        }
+        logger.info("a fresh-session proposal from %s, %d to answer",
+                    who, len(connected))
+        diagnostics.log("fresh_session_proposed", asked=len(connected))
+
+    def _note_a_vote(self, env: Envelope, said: dict[str, Any]) -> None:
+        """Record one answer, if it is about the proposal that is open."""
+        if not self._proposal:
+            return
+        who = str(env.sender_id or "")
+        if not who or str(said.get("proposal") or "") != self._proposal["id"]:
+            return
+        vote = str(said.get("vote") or "").strip().lower()
+        if vote not in ("agree", "decline"):
+            return
+        # Somebody who was not connected when the question was put may still
+        # answer it, and their answer is kept — but it is not counted towards a
+        # consensus of the room that was asked, which is what `asked` holds.
+        self._proposal["votes"][who] = vote
+        logger.info("%s says %s to %s", who, vote, self._proposal["id"])
+
+    def _proposal_is_over(self, now: float) -> bool:
+        from ..config import new_consensus_minutes
+
+        if not self._proposal:
+            return True
+        return (now - self._proposal["seen_at"]) > new_consensus_minutes() * 60
+
+    def _consensus_reached(self) -> str:
+        """"agreed", "declined", "expired" or "" while it still stands."""
+        from ..config import CONSENSUS_ALL, new_consensus
+
+        if not self._proposal:
+            return ""
+        if self._proposal_is_over(time.time()):
+            return "expired"
+        asked = self._proposal["asked"]
+        votes = self._proposal["votes"]
+        agreed = {who for who in asked if votes.get(who) == "agree"}
+        declined = {who for who in asked if votes.get(who) == "decline"}
+        rule = new_consensus()
+        if rule == CONSENSUS_ALL:
+            # ONE DECLINE ENDS IT. Under `all` the outcome is already decided
+            # the moment somebody says no, and leaving the question open would
+            # keep asking a room that has answered.
+            if declined:
+                return "declined"
+            return "agreed" if agreed == asked else ""
+        if len(agreed) * 2 > len(asked):
+            return "agreed"
+        if len(declined) * 2 >= len(asked):
+            return "declined"
+        return ""
+
+    async def _settle_any_proposal(self) -> None:
+        """Act on the room's answer, once there is one.
+
+        Runs on the heartbeat rather than on the vote that completes it: the
+        feed loop's job is to record and move on, and this publishes, types and
+        waits for a subprocess.
+        """
+        if not self._proposal:
+            return
+        outcome = self._consensus_reached()
+        if not outcome:
+            return
+        proposal = self._proposal
+        self._proposal = None
+        self._settled.add(proposal["id"])
+        diagnostics.log("fresh_session_settled", outcome=outcome)
+        if outcome != "agreed":
+            logger.info("the fresh-session proposal %s was %s",
+                        proposal["id"], outcome)
+            return
+        await self._start_a_fresh_session(proposal)
+
+    async def _start_a_fresh_session(self, proposal: dict[str, Any]) -> None:
+        """What this daemon does about a proposal the room agreed to.
+
+        NOT SUBJECT TO THE IDLE GUARD. That guard exists because a fresh
+        session discards the task in hand and nobody asked; here everybody was
+        asked and this agent agreed, and agreeing IS the agent saying it is at
+        a boundary. Overriding a guard the agent lifted itself would be the
+        program second-guessing the room.
+
+        Says so before doing it, in both places somebody would look: the
+        roster, because an agent about to lose its context is not working on
+        anything, and the room, because the others are waiting to see it
+        happen.
+        """
+        from .. import activity as act
+        from ..config import new_enabled
+
+        if not new_enabled():
+            # Ignored, and said out loud. A room that agreed to start fresh and
+            # has one agent that did not is a room where nobody can tell which.
+            logger.info("the room agreed to start fresh; `new` is off here,"
+                        " so nothing was done")
+            await self._say_in_the_room(
+                "the room agreed to start fresh, but `collab config new on`"
+                " is off here, so this agent kept its session")
+            return
+        await self._publish_activity(act.sanitise({"state": act.IDLE}))
+        await self._say_in_the_room("starting a fresh session as asked")
+        from .. import compaction
+
+        code, detail = await asyncio.to_thread(
+            compaction.apply, self.paths.root, "clear")
+        if code == 0:
+            self._acted_at["new"] = time.time()
+            self._under_since["new"] = 0.0
+            logger.info("started a fresh session as the room agreed: %s", detail)
+            return
+        # NO PANE TO TYPE INTO, which is an ordinary state of affairs rather
+        # than a fault: a Codex thread, a headless recipe, a tool with no wake
+        # armed. The agent is told in the one way it can still be reached, and
+        # the words are an instruction because that is what it is.
+        logger.warning("the room agreed to start fresh and this agent has no"
+                       " pane to type into (%s)", detail)
+        self.waker.offer_reminder(
+            "the room agreed that everyone starts a fresh session."
+            " Run `collab new` if your tool lets collab type at your prompt,"
+            " otherwise restart your session yourself and rejoin.")
+
+    async def _say_in_the_room(self, text: str) -> None:
+        """One line to the room, and never a reason to fail anything."""
+        with contextlib.suppress(Exception):
+            await self._post_chat({"kind": KIND_CHAT, "text": text})
+
+    async def _maybe_type_at_the_agent(self) -> None:
+        """Compact, or start again, when the agent's OWN figures say it is full.
+
+        The agent reports the share of its window in use — a status line hands
+        it over, or a `stats_command` prints it — and past a threshold the user
+        chose, the daemon types the matching command into the same pane the
+        wake types into. Nobody else's number decides this: `read_stats` gives
+        back only figures stamped as ours, so two agents in one checkout cannot
+        compact each other.
+
+        OFF UNLESS ASKED, both of them. Neither act is undoable: one replaces
+        what the agent was holding with a summary of it, the other keeps
+        nothing at all, and doing either unbidden takes away work somebody was
+        in the middle of relying on.
+
+        TWO CONDITIONS BEFORE THE SAME ACT RUNS AGAIN, and both are needed
+        because either alone fires forever. The share must have fallen back
+        under the threshold — a figure that stops being reported keeps its last
+        value, so «still over» is also what a dead status line looks like — and
+        ten minutes must have passed, because an act that frees very little
+        leaves the share hovering on the line, crossing it on every heartbeat.
+        Counted per act, so a compaction does not hold off a fresh session or
+        the other way about.
+
+        Never raises: it is called from the guarded half of the heartbeat, but
+        a delivery that failed is a thing to write down rather than a thing to
+        take the wake down with.
+        """
+        from ..config import COMPACT_GAP
+
+        try:
+            share = float(read_stats(self.profile).get("context_pct"))
+        except (TypeError, ValueError):
+            return                          # the agent reports no such figure
+        act_name = self._which_act_is_due(share)
+        now = time.time()
+        if not act_name:
+            # BELOW EVERY LINE IS WHAT RE-ARMS THEM. Recorded here rather than
+            # inferred later, because the daemon is the only thing that watches
+            # the figure over time — and recorded for both, because a share
+            # under the lower threshold is under the higher one too.
+            for key in self._under_since:
+                self._under_since[key] = self._under_since[key] or now
+            return
+        if (now - self._tried_at[act_name]) < COMPACT_RETRY:
             # A failed attempt must not become a `tmux display-message` every
             # three seconds for as long as the agent stays full. Nothing was
             # typed, so nothing is lost by asking again in a minute.
             return
-        if self._context_compacted_at and (
-                not self._context_under_since
-                or (now - self._context_compacted_at) < CONTEXT_COMPACT_GAP):
+        if self._acted_at[act_name] and (
+                not self._under_since[act_name]
+                or (now - self._acted_at[act_name]) < COMPACT_GAP):
             return
         from .. import compaction
 
-        self._context_tried_at = now
+        typed = "compact" if act_name == "compact" else "clear"
+        self._tried_at[act_name] = now
         code, detail = await asyncio.to_thread(
-            compaction.apply, self.paths.root, "compact")
-        diagnostics.log("context_compact", outcome="typed" if code == 0 else "refused",
-                        share=round(share), threshold=threshold)
+            compaction.apply, self.paths.root, typed)
+        diagnostics.log("context_" + act_name,
+                        outcome="typed" if code == 0 else "refused",
+                        share=round(share))
         if code == 0:
-            self._context_compacted_at = now
-            self._context_under_since = 0.0
-            logger.info("context at %.0f%% of the window, over the %s%%"
-                        " threshold — %s", share, threshold, detail)
+            self._acted_at[act_name] = now
+            self._under_since[act_name] = 0.0
+            # SPENT. A boundary is one moment and one act; leaving it set would
+            # let the next heartbeat act again on a moment that has passed.
+            self._boundary_at = 0.0
+            logger.info("context at %.0f%% of the window — %s", share, detail)
         else:
             # Not counted against the wake. The pane being in copy mode is the
             # same story here as it is for a batch, and it is not evidence that
             # messages are going unread.
-            logger.warning("could not compact the context at %.0f%%: %s",
-                           share, detail)
+            logger.warning("could not %s at %.0f%%: %s",
+                           act_name, share, detail)
 
     async def _maybe_wake(self) -> None:
         """Start a turn in an agent that cannot start one for itself.
@@ -1171,6 +1559,13 @@ class Daemon:
 
     async def _wake_once(self, batch: wake.Batch | None,
                          reminder: str = "") -> None:
+        # BEFORE THE LINE GOES IN, so the turn starts on the summary rather
+        # than producing one and throwing it away. See `_compact_before_the_turn`
+        # for why a refusal here is not a reason to withhold the messages.
+        from ..config import WHEN_TASK, compact_when
+
+        if compact_when() == WHEN_TASK:
+            await self._compact_before_the_turn()
         config = self.waker.config()
         carrying = batch.name if batch is not None else "the standing reminder"
         logger.info("waking the agent with %s", carrying)
@@ -1770,12 +2165,22 @@ class Daemon:
                     # to one clock. Whichever takes the reminder resets the
                     # interval, so the other finds nothing due.
                     self._remind_the_monitor()
+                    # BEFORE THE WAKE, because the wake may start a turn and a
+                    # boundary is a moment: an edge seen on this beat is the
+                    # one the turn is about to cross. The wake does its own
+                    # compaction on the way in — see `_compact_before_the_turn`
+                    # — and this is what notices the edge for everything else.
+                    self._watch_for_a_boundary()
                     await self._maybe_wake()
                     # AFTER THE WAKE, because a turn that was about to start is
                     # more urgent than a window that is nearly full, and
                     # compacting first would hand the woken turn a summary in
                     # place of the conversation it was about to answer.
-                    await self._maybe_compact()
+                    await self._maybe_type_at_the_agent()
+                    # The room's business, after this agent's own. A proposal
+                    # settles when everybody has answered, and everybody
+                    # answering is not a thing this beat can hurry.
+                    await self._settle_any_proposal()
                     # BEFORE the learnings work below and after the wake: the
                     # figures have to be watched on every beat for the two
                     # staleness measures to mean anything, and the decay is a
@@ -2217,6 +2622,8 @@ class Daemon:
                     continue
                 if self.inbox.record(env):
                     self._note_any_learning(env)
+                    self._note_task_boundary(env)
+                    self._note_fresh_session(env)
                     self.waker.note(env, own_name=self.profile.name)
                     await self.bridge.broadcast(env)
                     if env.kind in REFRESHES_THE_SNAPSHOT:

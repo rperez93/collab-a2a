@@ -579,6 +579,77 @@ bug, and it is written down as a rule in
 anything that reaches an agent has to name the mechanisms it travels by, and
 which agents each one covers, before it is built.
 
+## Starting again, alone and together
+
+Two acts, and the difference between them is the whole of it.
+Compacting replaces what the agent is holding with a summary: lossy, and the
+work goes on with less behind it.
+A fresh session keeps nothing at all, and the agent comes back not knowing what
+it was doing.
+Both are slash commands typed at the agent's own prompt, through the pane its
+tmux wake is armed on, because a model inside a turn cannot type at its own
+prompt.
+
+`collab compact` and `collab new` are the two, on demand.
+Each has a switch, on by default, which is the one place to stop collab typing
+at your prompt at all; each has a percentage of the context window, `0` by
+default, at which the daemon acts unasked; and each has a moment.
+
+The moment is the part worth understanding.
+A percentage says how full the window is, and a full window is not by itself a
+good time to act: a summary taken mid-turn throws away the reasoning the agent
+is using right now to finish what it is doing.
+A summary taken at a task boundary loses nothing still needed, because the work
+that context was for is done.
+So `compact_when` is `task` by default, and a boundary is any of three things —
+this agent publishing a working state, a task on the board moving to working
+under its name, or a woken turn about to be delivered.
+On the last of those the summary is taken before the wake line is typed, so the
+turn begins on the summary rather than producing one and then discarding it; a
+compaction that is refused there is logged and the turn is delivered anyway,
+because a pane in copy mode is not a reason to withhold somebody's messages.
+`new_when` adds `task` to the same list and defaults to `idle`, which is
+stricter because a fresh session keeps nothing.
+
+Every automatic form needs the agent's own reported share of its window.
+Where the tool reports none there is nothing to compare a threshold against, and
+nothing fires.
+
+### A fresh session for everyone, decided by everyone
+
+An operator with a new set of tasks wants the whole swarm to start clean, and no
+agent can be told to by another.
+A session somebody is mid-task in is not anybody else's to discard, and there is
+no participant here whose say-so counts for more — so `collab new --all` is a
+PROPOSAL, and agreement is the only thing that carries it.
+
+It travels as an ordinary chat with a body on it, which is the same door
+learnings use and the only kind a client may send.
+Every agent meets it through whatever route it already has, and answers with
+`collab new --agree` when its own work reaches a boundary.
+Agreeing is the agent saying it is at one, which is why an agreed proposal is
+not held back by `new_when`.
+
+THERE IS NO COORDINATOR, and that is the design.
+Every daemon sees the same feed, keeps its own copy of the proposal and the
+votes, applies `new_consensus` — `all` of the other participants that were
+connected when it saw the proposal, or `majority` of them — and acts on its own
+agent when that is met.
+One decline ends it under `all`.
+Nothing collects the answers and announces a verdict, because anything that did
+would be the one thing whose failure stops the room.
+
+The price is that two daemons can differ about who was connected at the moment
+the proposal arrived, and so about whether everyone has agreed.
+Each judges against the roster it had.
+That is accepted rather than papered over: the alternative is an authority, and
+an authority is what this is built without.
+
+Before acting, a daemon publishes `idle` and says one line in the room, so the
+others see it happen.
+One with no pane to type into puts the outcome in front of its own agent as an
+instruction instead — run `collab new`, or restart the session by hand.
+
 ## Settings
 
 Two kinds of state, split on purpose.

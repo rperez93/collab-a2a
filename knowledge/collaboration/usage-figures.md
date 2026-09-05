@@ -113,20 +113,69 @@ numbers.
 # One of these figures now acts
 
 Later than the pin: `context_pct` stopped being only a thing to look at.
-With `context_compact_at` set to a percentage, the daemon compacts its own
-agent's context once the agent's own reported share reaches it, by typing the
-agent's compaction command into the pane its tmux wake is armed on.
+Two acts now hang off it, and the daemon performs whichever the share has
+reached by typing that agent's own slash command into the pane its tmux wake is
+armed on.
+`compact_at` summarises the session and keeps working in it; `new_at` starts a
+fresh one and keeps nothing.
 
 Which makes the owner stamp above load-bearing in a second way. `read_stats`
 gives back only figures stamped as this agent's, so two agents in one checkout
 cannot compact each other on the strength of a file one of them wrote.
 
-It ships off, takes nothing below 50 or above 95, and waits for two things
-before a second one: the share must have fallen back under the line **and** ten
-minutes must have passed. Either condition alone fires forever — a figure that
-stops being reported keeps its last value, and a compaction that freed very
-little leaves the share hovering on the line. `collab context compact` is the
-same act asked for once, by hand.
+Each act has a switch of its own — `compact` and `new` — and both ship ON,
+because on demand is the regular mode and refusing `collab compact` out of the
+box would only teach everybody to enable it before every use.
+What ships off is the unprompted half, and it is off because no percent has been
+set rather than because a switch forbids it; the switches remain the one place
+to stop this program typing at a prompt at all, by either route.
+
+The percents take nothing below 50 or above 95, and each waits for two things
+before the SAME act runs again: the share must have fallen back under that
+line **and** ten minutes must have passed. Either condition alone fires forever
+— a figure that stops being reported keeps its last value, and an act that
+freed very little leaves the share hovering on the line. Counted per act, so
+one does not hold off the other.
+
+A percent alone is not the whole rule, and the moment is the part that matters.
+`compact_when` is `task` by default: a summary taken mid-turn throws away the
+reasoning the agent is holding right now to finish what it is doing, while one
+taken at a task boundary loses nothing still needed.
+A boundary is this agent publishing a working state, a task on the board moving
+to working under its name, or a woken turn about to be delivered — and on that
+last one the summary is taken BEFORE the wake line is typed, so the turn begins
+on it rather than producing one and discarding it; a refusal there is logged and
+the turn is delivered anyway.
+`new_when` takes the same `task` and defaults to the stricter `idle`, read the
+way the roster reads it so a stale `working` does not hold it off for ever.
+`always` on either is what a percent alone used to mean.
+
+With both percents set the lower fires first, and at a share that has reached
+both, `new` wins — unless its moment holds it off, and then it compacts rather
+than doing nothing.
+`collab compact` and `collab new` are the same two acts asked for once, by
+hand.
+
+Every automatic form needs the figure this concept is about. Where the tool
+reports no `context_pct` there is nothing for a threshold to compare against and
+none of it fires, which makes this the one concept here whose accuracy other
+features depend on.
+
+# A fresh session for a whole room
+
+`collab new --all` proposes that every agent starts again, and the proposal is
+carried by agreement rather than by anybody's authority: a session somebody is
+mid-task in is not another participant's to discard.
+Every daemon keeps its own copy of the proposal and the votes and reaches its
+own verdict against `new_consensus` — `all` of the other participants it saw
+connected when the proposal arrived, or `majority` of them — so there is no
+coordinator and no single point whose failure stops the room.
+The cost is that two daemons can differ about who was connected at that moment;
+each judges against the roster it had, which is accepted rather than papered
+over, because the alternative is an authority.
+Proposals and votes are matched by participant id and never by name, one
+proposal may be open at a time, and an unanswered one expires after
+`new_consensus_minutes`.
 
 # Why this concept goes stale sooner than most
 

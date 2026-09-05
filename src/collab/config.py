@@ -1048,62 +1048,247 @@ def set_diagnostics(on: bool) -> bool:
     cfg["diagnostics"] = bool(on)
     save_config(cfg)
     return diagnostics_enabled()
-
-
-#: OFF, and the reason it ships off is that the act is not undoable. Compacting
-#: a session replaces everything the agent was holding with a summary of it,
-#: and a summary is lossy by construction — a threshold nobody chose, firing in
-#: the middle of somebody's work, would throw away the reasoning they were
-#: relying on and give them a shorter version of it back. So it is asked for.
-CONTEXT_COMPACT_OFF = 0
-#: And where it may be set to. Below the floor is not a threshold, it is a
-#: session that spends its life being compacted: an agent restarted at half a
+#: WHAT THESE TWO ACTS ARE, because everything below turns on the difference.
+#: Compacting replaces what the agent is holding with a summary of it, which is
+#: lossy but continuous — the work goes on, with less behind it. Starting a new
+#: session keeps nothing at all: the agent comes back not knowing what it was
+#: doing. Both are typed at the agent's own prompt by this program.
+COMPACT_OFF = 0
+#: And where a threshold may be set. Below the floor is not a threshold, it is
+#: a session that spends its life being compacted: an agent restarted at half a
 #: window is one that will be back at half a window within the turn. Above the
 #: ceiling there is not enough room left to run the compaction in — the summary
 #: is produced by the agent, in the context being compacted, and a window with
 #: five percent free may not have room to write one.
-MIN_CONTEXT_COMPACT = 50
-MAX_CONTEXT_COMPACT = 95
-#: How long after a compaction before another may fire, on top of the share
-#: having fallen back under the threshold. Both conditions, because either
-#: alone has a way of firing forever: a figure that stops being reported stays
-#: at its last value, and a compaction that frees very little leaves the share
-#: hovering on the line. Ten minutes is long enough that a session compacting
-#: on every heartbeat is impossible and short enough to be invisible to anyone
-#: whose context genuinely refilled.
-CONTEXT_COMPACT_GAP = 600.0
+MIN_COMPACT = 50
+MAX_COMPACT = 95
+#: How long after one of these fires before the same one may fire again, on top
+#: of the share having fallen back under its threshold. Both conditions,
+#: because either alone has a way of firing forever: a figure that stops being
+#: reported stays at its last value, and a compaction that frees very little
+#: leaves the share hovering on the line. Ten minutes is long enough that a
+#: session compacting on every heartbeat is impossible and short enough to be
+#: invisible to anyone whose context genuinely refilled.
+#:
+#: KEPT PER COMMAND rather than shared. They are different acts with different
+#: costs, and one having just run says nothing about whether the other should.
+COMPACT_GAP = 600.0
+
+#: THE PERMISSION, not the threshold, and there is one per act. A switch says
+#: whether collab may press keys at this agent's prompt for that act at all —
+#: by the command or by the daemon; the percent beside it says when the daemon
+#: does so on its own, and the `_when` beside that says at which moment.
+#:
+#: ON, BOTH, WITH NO THRESHOLD. On demand is the regular mode: `collab compact`
+#: and `collab new` are things an agent or a person asks for at a moment they
+#: have chosen, and refusing those out of the box would only teach everybody to
+#: turn a switch on before every use. What is off is the UNPROMPTED half, and
+#: it is off because it is a percent nobody has set rather than because a
+#: switch forbids it — which is the honest place for the caution to live.
+#:
+#: The switch still matters, and this is the one line to change to shut either
+#: act off entirely: it governs the command and the daemon alike, so somebody
+#: who wants this program never to type at their prompt sets one key and is
+#: done.
+COMPACT_DEFAULT = True
+NEW_DEFAULT = True
+
+#: WHEN THE UNPROMPTED HALF MAY FIRE, per act, and the answer is a moment
+#: rather than only a number.
+#:
+#: `task` is the default for compaction and the reason the feature is usable at
+#: all. A summary taken mid-turn throws away the reasoning the agent is holding
+#: RIGHT NOW to finish what it is doing; a summary taken at a task boundary
+#: loses nothing still needed, because the work that context was for is done.
+#: So the automatic compaction waits for the agent to be about to start
+#: something, and then acts.
+#:
+#: `idle` is the default for a fresh session and is stricter still, because a
+#: fresh session keeps nothing: it waits for the agent to say it has stopped.
+#:
+#: `always` is «whenever the share is crossed», which is what a percent alone
+#: used to mean. It is nobody's default: it is the setting for somebody who has
+#: decided a full window is the worse problem, and it is theirs to decide.
+WHEN_TASK = "task"
+WHEN_IDLE = "idle"
+WHEN_ALWAYS = "always"
+COMPACT_WHEN = (WHEN_TASK, WHEN_ALWAYS)
+COMPACT_WHEN_DEFAULT = WHEN_TASK
+NEW_WHEN = (WHEN_IDLE, WHEN_TASK, WHEN_ALWAYS)
+NEW_WHEN_DEFAULT = WHEN_IDLE
+
+#: HOW MANY HAVE TO AGREE before a swarm-wide fresh session happens, and it is
+#: `all` because the thing being agreed to is destructive and unanimous is what
+#: «agreed» ordinarily means. `majority` is more than half of the participants
+#: that were connected when the proposal arrived, and it is for a room where
+#: somebody is reliably away.
+#:
+#: Judged by every daemon independently against its own roster, so the two
+#: values are the only coordination there is. See `concepts.md`.
+CONSENSUS_ALL = "all"
+CONSENSUS_MAJORITY = "majority"
+CONSENSUS = (CONSENSUS_ALL, CONSENSUS_MAJORITY)
+CONSENSUS_DEFAULT = CONSENSUS_ALL
+
+#: How long an unresolved proposal stands. Ten minutes is long enough for an
+#: agent to finish a piece of work and answer, and short enough that a proposal
+#: nobody answered does not fire an hour later at a room that has moved on.
+CONSENSUS_MINUTES_DEFAULT = 10
+MIN_CONSENSUS_MINUTES = 1
+MAX_CONSENSUS_MINUTES = 120
+
+#: The released name for `compact_at`. Read by nothing; named here so that
+#: `collab config` can say one line to whoever still has it in their file,
+#: rather than leaving them with a setting that silently stopped applying.
+RETIRED_COMPACT_AT = "context_compact_at"
 
 
-def context_compact_at() -> int:
-    """The share of the context window at which the daemon compacts, or 0.
+def compact_enabled() -> bool:
+    """Whether collab may compact this agent's context at all.
 
-    Read on the heartbeat, so it is validated against what the file could hold
-    rather than what it should — the rule every reader in this module follows,
-    for the reason `watch_status_settings` gives at length.
+    Read live, like every other setting here, so turning it off reaches the
+    daemon that is already running rather than the next one.
+    """
+    value = load_config().get("compact")
+    return COMPACT_DEFAULT if value is None else bool(value)
+
+
+def set_compact(on: bool) -> bool:
+    cfg = load_config()
+    cfg["compact"] = bool(on)
+    save_config(cfg)
+    return compact_enabled()
+
+
+def new_enabled() -> bool:
+    """Whether collab may start this agent a fresh session at all."""
+    value = load_config().get("new")
+    return NEW_DEFAULT if value is None else bool(value)
+
+
+def set_new(on: bool) -> bool:
+    cfg = load_config()
+    cfg["new"] = bool(on)
+    save_config(cfg)
+    return new_enabled()
+
+
+def _threshold(key: str) -> int:
+    """A percent from the config file, or 0, whatever the file actually holds.
 
     FLOORED AND CAPPED HERE, REFUSED AT THE COMMAND, the same split
     `remind_every` makes: a typo in a hand-edited file should cost the setting
     a sensible value rather than start compacting somebody's session at nine
     percent, and a typo typed at a command that answered «ok» should not leave
     them waiting for behaviour that was never coming.
+
+    `bool` is excluded before `int` is tried, because `True` is 1 in Python and
+    `compact_at: true` in a hand-edited file would otherwise become a
+    threshold of fifty rather than the nonsense it is.
     """
-    raw = load_config().get("context_compact_at")
+    raw = load_config().get(key)
     if raw is None or isinstance(raw, bool):
-        return CONTEXT_COMPACT_OFF
+        return COMPACT_OFF
     try:
         value = int(raw)
     except (TypeError, ValueError, OverflowError):
-        return CONTEXT_COMPACT_OFF
+        return COMPACT_OFF
     if value <= 0:
-        return CONTEXT_COMPACT_OFF
-    return max(MIN_CONTEXT_COMPACT, min(MAX_CONTEXT_COMPACT, value))
+        return COMPACT_OFF
+    return max(MIN_COMPACT, min(MAX_COMPACT, value))
 
 
-def set_context_compact_at(percent: int) -> int:
+def compact_at() -> int:
+    """The share of the context window at which the daemon compacts, or 0."""
+    return _threshold("compact_at")
+
+
+def set_compact_at(percent: int) -> int:
     cfg = load_config()
-    cfg["context_compact_at"] = int(percent)
+    cfg["compact_at"] = int(percent)
     save_config(cfg)
-    return context_compact_at()
+    return compact_at()
+
+
+def new_at() -> int:
+    """The share at which the daemon starts a fresh session, or 0."""
+    return _threshold("new_at")
+
+
+def set_new_at(percent: int) -> int:
+    cfg = load_config()
+    cfg["new_at"] = int(percent)
+    save_config(cfg)
+    return new_at()
+
+
+def _a_word_of(key: str, allowed: tuple[str, ...], fallback: str) -> str:
+    """A word from a fixed list, or the default. Never raises.
+
+    The read side defaults where the command refuses, which is the split every
+    reader in this module makes: a typo in a hand-edited file should cost the
+    setting its value and not the session.
+    """
+    value = load_config().get(key)
+    if not isinstance(value, str):
+        return fallback
+    value = value.strip().lower()
+    return value if value in allowed else fallback
+
+
+def compact_when() -> str:
+    """`task` or `always`: the moment an automatic compaction may fire."""
+    return _a_word_of("compact_when", COMPACT_WHEN, COMPACT_WHEN_DEFAULT)
+
+
+def set_compact_when(value: str) -> str:
+    cfg = load_config()
+    cfg["compact_when"] = str(value).strip().lower()
+    save_config(cfg)
+    return compact_when()
+
+
+def new_when() -> str:
+    """`idle`, `task` or `always`: when an automatic fresh session may fire."""
+    return _a_word_of("new_when", NEW_WHEN, NEW_WHEN_DEFAULT)
+
+
+def set_new_when(value: str) -> str:
+    cfg = load_config()
+    cfg["new_when"] = str(value).strip().lower()
+    save_config(cfg)
+    return new_when()
+
+
+def new_consensus() -> str:
+    """`all` or `majority`: how many must agree to a swarm-wide fresh start."""
+    return _a_word_of("new_consensus", CONSENSUS, CONSENSUS_DEFAULT)
+
+
+def set_new_consensus(value: str) -> str:
+    cfg = load_config()
+    cfg["new_consensus"] = str(value).strip().lower()
+    save_config(cfg)
+    return new_consensus()
+
+
+def new_consensus_minutes() -> int:
+    """How long a proposal stands before it expires."""
+    raw = load_config().get("new_consensus_minutes")
+    if raw is None or isinstance(raw, bool):
+        return CONSENSUS_MINUTES_DEFAULT
+    try:
+        value = int(raw)
+    except (TypeError, ValueError, OverflowError):
+        return CONSENSUS_MINUTES_DEFAULT
+    return max(MIN_CONSENSUS_MINUTES, min(MAX_CONSENSUS_MINUTES, value))
+
+
+def set_new_consensus_minutes(minutes: int) -> int:
+    cfg = load_config()
+    cfg["new_consensus_minutes"] = int(minutes)
+    save_config(cfg)
+    return new_consensus_minutes()
 
 
 #: The levels of the xterm-256 6x6x6 cube. They are not linear —they jump from
@@ -1418,23 +1603,64 @@ def _remind_every(text: str) -> int:
     return value
 
 
-def _compact_at(text: str) -> int:
+def _threshold_text(text: str) -> int:
     """A percentage of the context window, or 0 for «never».
 
-    Refused HERE and clamped in `context_compact_at`, the split `_remind_every`
-    argues for. The message names both ends of the range rather than the one
-    that was crossed: somebody typing `20` has not misjudged the floor by ten,
-    they have misunderstood what the number counts, and the range says which
-    way round it is.
+    Refused HERE and clamped in `_threshold`, the split `_remind_every` argues
+    for. The message names both ends of the range rather than the one that was
+    crossed: somebody typing `20` has not misjudged the floor by ten, they have
+    misunderstood what the number counts, and the range says which way round it
+    is.
     """
     value = _as_int(text)
     if value == 0:
         return 0
-    if not MIN_CONTEXT_COMPACT <= value <= MAX_CONTEXT_COMPACT:
+    if not MIN_COMPACT <= value <= MAX_COMPACT:
         raise ValueError(
-            f"expected 0 to turn it off, or {MIN_CONTEXT_COMPACT} to"
-            f" {MAX_CONTEXT_COMPACT} — the share of the context window IN USE"
-            " at which to compact, and compacting is not undoable")
+            f"expected 0 to turn it off, or {MIN_COMPACT} to"
+            f" {MAX_COMPACT} — the share of the context window IN USE"
+            " at which to act, and neither act can be undone")
+    return value
+
+
+def _word_from(allowed: tuple[str, ...], explain: str):
+    """A parser for one of a fixed set of words, refusing anything else.
+
+    Refused rather than defaulted, unlike the read side: somebody who typed
+    `when-idle` and was answered «ok» would go on believing the guard was on.
+    """
+    def parse(text: str) -> str:
+        value = text.strip().lower()
+        if value not in allowed:
+            raise ValueError(f"expected {' or '.join(allowed)} — {explain}")
+        return value
+    return parse
+
+
+_compact_when_text = _word_from(
+    COMPACT_WHEN,
+    "`task` compacts only when this agent is about to start a task, `always`"
+    " whenever the share is crossed")
+
+_new_when_text = _word_from(
+    NEW_WHEN,
+    "`idle` starts a fresh session only while this agent is not working,"
+    " `task` when it is about to start one, `always` whatever it is doing")
+
+_consensus_text = _word_from(
+    CONSENSUS,
+    "`all` needs every other participant that was connected to agree,"
+    " `majority` needs more than half of them")
+
+
+def _consensus_minutes_text(text: str) -> int:
+    """How long a proposal stands, in minutes."""
+    value = _as_int(text)
+    if not MIN_CONSENSUS_MINUTES <= value <= MAX_CONSENSUS_MINUTES:
+        raise ValueError(
+            f"expected {MIN_CONSENSUS_MINUTES} to {MAX_CONSENSUS_MINUTES}"
+            " minutes — under a minute is not time to answer, and a proposal"
+            " nobody answered should not fire at a room that has moved on")
     return value
 
 
@@ -1657,12 +1883,68 @@ def settings() -> tuple[Setting, ...]:
         # while nobody is watching. Somebody reading this listing to find out
         # what collab does to their session behind their back should meet both
         # in one place.
-        Setting("context_compact_at",
+        # EACH SWITCH BEFORE ITS OWN THRESHOLD, and the gentler act before the
+        # harsher one. That is the order the pairs are read in and the order
+        # somebody meets them in: a reader who finds a percent first sets it,
+        # sees nothing happen, and has no reason to look further, and a reader
+        # who meets `new` before `compact` meets the one that keeps nothing
+        # before the one that keeps a summary.
+        Setting("compact",
+                "let collab type the compaction command into your agent's own"
+                " prompt — needed by `collab compact` and by the percent below",
+                COMPACT_DEFAULT, _as_bool,
+                compact_enabled,
+                lambda v: set_compact(v)),
+        Setting("compact_at",
                 "compact your agent's context when its own reported share of"
-                " the window reaches this percent; 0 never does",
-                CONTEXT_COMPACT_OFF, _compact_at,
-                context_compact_at,
-                lambda v: set_context_compact_at(v)),
+                " the window reaches this percent; 0 never does. Needs compact"
+                " on, and the tool to report that share",
+                COMPACT_OFF, _threshold_text,
+                compact_at,
+                lambda v: set_compact_at(v)),
+        Setting("compact_when",
+                "«task» takes that automatic summary only when this agent is"
+                " about to start a task, «always» whenever the share is"
+                " crossed",
+                COMPACT_WHEN_DEFAULT, _compact_when_text,
+                compact_when,
+                lambda v: set_compact_when(v)),
+        Setting("new",
+                "let collab start your agent a fresh session — needed by"
+                " `collab new` and by the percent below. It keeps nothing",
+                NEW_DEFAULT, _as_bool,
+                new_enabled,
+                lambda v: set_new(v)),
+        Setting("new_at",
+                "start your agent a fresh session when its own reported share"
+                " of the window reaches this percent; 0 never does. Needs new"
+                " on, and the tool to report that share",
+                COMPACT_OFF, _threshold_text,
+                new_at,
+                lambda v: set_new_at(v)),
+        Setting("new_when",
+                "«idle» starts that fresh session only while this agent is not"
+                " working, «task» when it is about to start one, «always»"
+                " whatever it is doing",
+                NEW_WHEN_DEFAULT, _new_when_text,
+                new_when,
+                lambda v: set_new_when(v)),
+        # THE TWO THAT ARE ABOUT EVERYBODY ELSE, and so they come after the
+        # three that are about this agent. `collab new --all` asks the room to
+        # start fresh together, and these are how this daemon decides the room
+        # has agreed — judged here rather than by anybody's coordinator, which
+        # is why they are settings at all.
+        Setting("new_consensus",
+                "how many must agree to a swarm-wide fresh session: «all» of"
+                " the other participants that were connected, or «majority»",
+                CONSENSUS_DEFAULT, _consensus_text,
+                new_consensus,
+                lambda v: set_new_consensus(v)),
+        Setting("new_consensus_minutes",
+                "how long such a proposal stands before it expires",
+                CONSENSUS_MINUTES_DEFAULT, _consensus_minutes_text,
+                new_consensus_minutes,
+                lambda v: set_new_consensus_minutes(v)),
         # WITH THEM, for the same reason they are with each other: this is the
         # third thing the daemon does on its own, and the one that writes a
         # file. Somebody asking «what does collab record about me» should find

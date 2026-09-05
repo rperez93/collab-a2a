@@ -66,7 +66,14 @@ the project. A session belongs to a repository; a theme does not.
 | `remind_host` | what that reminder says when this agent is the host | they want their own words for it |
 | `remind_guest` | what it says when this agent is a guest | as above; empty means the shipped one |
 | `activity_stale_after` | minutes before an unrenewed «working» is questioned in the reminder and decayed to «quiet»; `0` leaves it alone | they say their status is being changed under them, or that nobody nudges them about it |
-| `context_compact_at` | compact this agent's context when its own reported share of the window reaches this percent; `0` never does | they say their agent keeps running out of context mid-task — **and** the tmux wake is armed |
+| `compact` | let collab type the compaction command into this agent's own prompt — needed by `collab compact` and by the percent below | on by default; set it off when they want this program never to type at their prompt |
+| `compact_at` | compact this agent's context when its own reported share of the window reaches this percent; `0` never does. Needs `compact` on, and the tool to report that share | they say their agent keeps running out of context mid-task — **and** the tmux wake is armed |
+| `compact_when` | `task` takes that automatic summary only when this agent is about to start a task, `always` whenever the share is crossed | rarely — `task` is the point of the feature; `always` only if they say a summary mid-task is what they want |
+| `new` | let collab start this agent a fresh session — needed by `collab new` and by the percent below. It keeps nothing | on by default; set it off to keep collab from ever clearing this agent |
+| `new_at` | start a fresh session when this agent's own reported share of the window reaches this percent; `0` never does. Needs `new` on, and the tool to report that share | as above, and only alongside `compact_at` or instead of it |
+| `new_when` | `idle` starts that fresh session only while this agent is not working, `task` when it is about to start one, `always` whatever it is doing | they say the daemon wiped a session mid-task, or that it never fires because the agent is always busy |
+| `new_consensus` | how many must agree to a swarm-wide fresh session: `all` of the other participants that were connected, or `majority` | somebody in the room is reliably away and a proposal never carries |
+| `new_consensus_minutes` | how long such a proposal stands before it expires | their agents need longer to reach a boundary and answer |
 | `diagnostics` | keep a local record of what the daemon and hub did — events only, never message text, names or addresses | they are reporting a bug, or something intermittent needs catching; turn it back off afterwards |
 | `learnings_dir` | where this agent keeps what it has learnt, outside any repository | they want the store somewhere else, or want the feature off entirely (empty string) |
 | `watch_layout` | `split`, `tmux`, `chat` or `roster` | they want tmux to own the panes |
@@ -217,18 +224,33 @@ on every render, so a change lands on the next prompt.
 
 ## Compacting a context that is filling up
 
-`context_compact_at` is a percentage of the context window. Past it, the user's
-own daemon types the agent's compaction command into the pane the tmux wake is
-armed on. It ships **off**, it takes `0` or 50 to 95, and it needs two things
-the user may not have: the tmux wake armed (`collab wake set --agent tmux`, from
-inside the agent's own pane) and the agent reporting `context_pct` at all. Check
-both before setting it, and say so if either is missing — a threshold set
-without them changes nothing and looks broken.
+Five keys and two acts. `compact` summarises the session and keeps working in
+it; `new` starts a fresh one and keeps nothing. Each has a switch — whether
+collab may type at the agent's prompt for that act at all, by the command or by
+the daemon — and each switch ships **off**. Beside each switch is a percentage
+of the context window, `0` or 50 to 95, past which the user's own daemon does
+that act without being asked. A percent on its own does nothing, because the
+switch is what grants the permission and the percent only says when.
 
-Say what it costs before turning it on. Compaction is **not undoable**: it
-replaces what the agent was holding with a summary, so a threshold set too low
-throws away reasoning the user was relying on. If they only want it once, now,
-that is `collab context compact` and no setting at all.
+Reach for `compact` first and name what `new` costs before offering it. A fresh
+session discards the task in hand; an agent that gets one mid-task comes back
+not knowing there was a task. `new_when` is the guard on exactly that, `idle` by
+default, and `always` is a thing to set only when the user says in so many words
+that a full window is the worse problem.
+
+Set both percents and the lower fires first; at a share that has reached both,
+`new` wins unless `new_when` holds it off, and then it compacts rather than
+doing nothing. Say that out loud if they set both — two thresholds is the
+arrangement people expect least of.
+
+Everything here needs two more things the user may not have: the tmux wake armed
+(`collab wake set --agent tmux`, from inside the agent's own pane) and the agent
+reporting `context_pct` at all. Check both before setting a percent, and say so
+if either is missing — a threshold set without them changes nothing and looks
+broken.
+
+If they only want it once, now, that is `collab config compact on` and then
+`collab compact`, with no threshold at all.
 
 ## When something is broken and needs reporting
 
