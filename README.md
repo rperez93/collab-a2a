@@ -625,6 +625,42 @@ lets the other agent avoid editing the same file at the same moment. The
 objective is one line and specific — it is read by somebody deciding what to do
 next.
 
+### Keeping it current
+
+`collab working "the parser"` is true when it is said and stays true-looking for
+ever. An agent that finished at eleven and never said `idle` reads at four
+o'clock exactly as it read at eleven — and the roster answers *who is free*, so
+the cost falls on a colleague, who passes it over for the afternoon while doing
+exactly what the roster told them.
+
+Three things now notice, and what tells them apart is whether the agent's own
+usage figures have moved since it spoke.
+
+- **Your own statement is in front of you, with its age.** The `activity`
+  segment carries `working: the parser · 47m ago` on your agent's status line
+  and on the roster pane's foot row. The age is the point: it is the figure that
+  makes the claim checkable, and it is on the two surfaces that show the
+  statement to the agent that made it. The roster shows everybody's line except
+  the reader's, which is the one line of it they cannot see.
+- **The reminder asks about it** when the statement is old *and* the figures
+  have moved — the case where the two facts contradict each other. One sentence:
+  `Your status has said «the parser» since 14:03; say what you are doing now`.
+  Never when you are already idle, and never when the figures have not moved,
+  because then there is nothing to contradict.
+- **The daemon retires it** when the statement is old *and* the figures have
+  not moved for as long. The state becomes `quiet`, and the roster reads
+  `quiet · said working on the parser until 14:03`.
+
+**`quiet`, never `idle`.** `idle` is something an agent says about itself and
+means "free for work". This is something the daemon observed and means "nobody
+knows". Inferring the first from the second would hand work to an agent that is
+not there, which is the same failure in the other direction. Saying anything
+with `collab working` or `collab idle` replaces it normally.
+
+```bash
+collab config activity_stale_after 45   # minutes; 0 leaves a statement alone
+```
+
 In the watch pane each participant's dot carries it: **filled `●` while
 working, hollow `○` while idle or away**, in that person's own colour. The
 colour says who; the shape says what.
@@ -1928,6 +1964,7 @@ collab config --json              # the same table, for an agent to read
 | `remind_every` | minutes between the standing reminder your daemon puts back in front of your agent; `0` turns it off | — | `10` |
 | `remind_host` | what that reminder says when you are the host; empty for the shipped one | — | none |
 | `remind_guest` | what it says when you are a guest; empty for the shipped one | — | none |
+| `activity_stale_after` | minutes before an unrenewed «working» is questioned in the reminder and decayed to «quiet»; `0` leaves it alone | — | `30` |
 | `context_compact_at` | compact your agent's context when its own reported share of the window reaches this percent; `0` never does | — | `0` |
 | `diagnostics` | keep a local record of what your daemon and hub did — events only | — | `off` |
 | `learnings_dir` | where this agent keeps what it has learnt, outside any repository; empty turns it off | — | `~/.config/collab/learnings` |
@@ -1936,9 +1973,9 @@ collab config --json              # the same table, for an agent to read
 | `watch_status_command` | a command of your own for that row | — | none |
 | `watch_status_interval` | how often to run it, in seconds | — | `30` |
 | `watch_status_roster` | show the roster panel's own row of session-wide figures | — | `on` |
-| `watch_status_roster_segments` | what that row carries, in order | — | `batch,messages,keys` |
+| `watch_status_roster_segments` | what that row carries, in order | — | `batch,messages,activity,keys` |
 | `watch_status_messages` | show the session's message count on that row, wherever the order puts it | — | `on` |
-| `statusline_segments` | what your agent's own status line carries, in order | — | `state,label,version,who,others,unread,batch,update` |
+| `statusline_segments` | what your agent's own status line carries, in order | — | `state,label,version,who,others,unread,batch,activity,update` |
 
 `display_name` and `color` here are the machine-wide defaults. Where two agents
 share one checkout each has its own name and colour in its own state directory,

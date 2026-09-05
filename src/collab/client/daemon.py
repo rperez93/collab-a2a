@@ -24,7 +24,7 @@ from typing import Any
 import httpx
 from httpx_sse import aconnect_sse
 
-from .. import __version__, diagnostics, lockfile, peers, wake
+from .. import __version__, activity as act, diagnostics, lockfile, peers, wake
 from ..batch import DELTA_SHOWN_FOR
 from ..config import SessionProfile, share_stats_enabled, stats_source
 from ..protocol import (EXT_PREFIX, KIND_CHAT, KIND_HELLO, KIND_PRESENCE,
@@ -350,6 +350,13 @@ class Daemon:
         self._sync_wanted = 0
         self._answered_sync: dict[str, float] = {}
         self._learning_error = ""
+        #: A fingerprint of this agent's usage figures, and when they last
+        #: actually CHANGED. The file is rewritten on every prompt whether or
+        #: not the numbers moved, so its timestamp says «this agent exists»
+        #: and nothing else; the two staleness measures need «this agent is
+        #: working», which only a watcher over time can tell.
+        self._figures_mark = ""
+        self._figures_moved_at = 0.0
 
     @property
     def inbox(self) -> Inbox:
@@ -430,6 +437,11 @@ class Daemon:
             "messages": self._message_figures(),
             # Where our own usage figures got to. See `_stats_figures`.
             "stats": self._stats_figures(),
+            # THIS AGENT'S OWN LAST WORD ABOUT ITSELF. Written here so the
+            # status line and the viewer read it out of the one file this
+            # daemon writes, rather than each opening `activity.json` on its
+            # own and going stale in a different way.
+            "activity": act.read_local(self.profile) or None,
             # What is still waiting to be published, and why it has not been.
             # A learning the agent recorded and nothing carried is invisible
             # from the agent's side: the command returned at once and said the
@@ -937,7 +949,7 @@ class Daemon:
             return                        # no followed stream; the wake's job
         if not self.waker.reminder_due():
             return
-        if self.waker.offer_reminder(self.waker.reminder()["text"]):
+        if self.waker.offer_reminder(self._reminder_text()):
             self.waker.reminded("monitor")
             # SAID OUT LOUD, in the daemon's ordinary log as well as the
             # optional diagnostic one. This route left no trace whatever: the
@@ -1041,7 +1053,7 @@ class Daemon:
         # nothing unread can be displaced by it.
         reminder = ""
         if self.waker.reminder_due():
-            reminder = self.waker.reminder()["text"]
+            reminder = self._reminder_text()
             self.waker.reminded("wake")
         if batch is None and not reminder:
             return
@@ -1092,8 +1104,6 @@ class Daemon:
         of its own is better evidence than anything inferred here, and only an
         absent, idle or stale one is replaced.
         """
-        from .. import activity as act
-
         mine = act.read_local(self.profile)
         if mine and mine.get("state") == act.WORKING and not act.is_stale(mine):
             self._wake_activity = None      # it speaks for itself; leave it be
@@ -1116,8 +1126,6 @@ class Daemon:
         If the agent replaced our line with one of its own during the turn, that
         line is its business and stays.
         """
-        from .. import activity as act
-
         if not self._wake_activity:
             return
         current = act.read_local(self.profile)
@@ -1130,8 +1138,6 @@ class Daemon:
                          previous=current))
 
     async def _publish_activity(self, said: dict[str, Any]) -> None:
-        from .. import activity as act
-
         act.write_local(self.profile, said)
         if self._http is None:
             return                          # the heartbeat carries it up later
@@ -1259,6 +1265,113 @@ class Daemon:
             # and says so locally, which is where a reminder belongs.
             if batch is not None:
                 await self._wake_is_broken(tail)
+
+    def _watch_the_figures(self) -> None:
+        """Notice when this agent's usage actually MOVED, not merely was rewritten.
+
+        The distinction is the whole of what the two measures below rest on. A
+        status line rewrites the figures file on every prompt and a polled
+        command on every interval, so the file's own timestamp says «this agent
+        exists», which is not the question. What tells a busy agent from a
+        departed one is whether the NUMBERS changed — tokens consumed, money
+        spent — and that has to be watched over time by something that outlives
+        a turn, which is this.
+        """
+        figures = read_stats(self.profile)
+        mark = json.dumps([figures.get("tokens_in"), figures.get("tokens_out"),
+                           figures.get("cost_usd")], sort_keys=True)
+        if not self._figures_mark:
+            # The first reading is not a movement. Treated as one, every
+            # restart would look like a busy agent for one interval.
+            self._figures_mark = mark
+            self._figures_moved_at = time.time()
+            return
+        if mark != self._figures_mark:
+            self._figures_mark = mark
+            self._figures_moved_at = time.time()
+
+    def _stale_status(self) -> dict[str, Any]:
+        """This agent's own statement, when it has stood too long. Else empty.
+
+        `working` only. An `idle` that nobody has renewed is not misleading
+        anybody — the roster reads «free», which is what it was told and what a
+        departed agent is — and `quiet` is already the answer to this question.
+        """
+        from ..config import activity_stale_after
+
+        minutes = activity_stale_after()
+        if not minutes:
+            return {}
+        mine = act.read_local(self.profile)
+        if mine.get("state") != act.WORKING:
+            return {}
+        try:
+            said_at = float(mine.get("updated_at") or 0)
+        except (TypeError, ValueError):
+            return {}
+        if not said_at or (time.time() - said_at) < minutes * 60:
+            return {}
+        return mine
+
+    def _reminder_text(self) -> str:
+        """The standing reminder, with a sentence about a status nobody renewed.
+
+        Added only when the figures have MOVED since the statement was made,
+        which is the case where the two facts contradict each other: the agent
+        is demonstrably working and the roster says it has been doing one thing
+        since an hour ago. Where the figures have not moved there is no
+        contradiction to point out — the agent is not doing anything, its old
+        statement is the last true thing it said, and `_maybe_decay_activity`
+        below is what answers that case.
+        """
+        text = self.waker.reminder()["text"]
+        mine = self._stale_status()
+        if not mine or self._figures_moved_at <= float(mine.get("updated_at") or 0):
+            return text
+        said = act.at_clock(mine.get("updated_at"))
+        what = scrub(str(mine.get("what") or "working"))
+        return (f"{text}\n\nYour status has said «{what}» since {said};"
+                " say what you are doing now with `collab activity`.")
+
+    async def _maybe_decay_activity(self) -> None:
+        """Retire a «working» that nothing has renewed and nothing is behind.
+
+        The roster answers «who is free», and a statement that outlived its
+        work answers it wrongly in the one direction that costs something: an
+        agent that finished at eleven and never said `idle` is passed over for
+        the rest of the afternoon, by colleagues doing exactly what the roster
+        told them.
+
+        DECAYED TO `quiet`, NEVER TO `idle`. `idle` is a thing an agent says
+        about itself and means «free for work»; this is a thing the daemon
+        observed and means «nobody knows». Inferring the first from the second
+        would hand work to an agent that is not there, which is the same
+        failure the other way round.
+
+        Both conditions, and the second is what keeps it honest: the statement
+        is old AND the agent's own usage figures have not moved for as long. A
+        busy agent that forgot to update its status is told about it in the
+        reminder instead; only an agent that is saying nothing and spending
+        nothing has its last word retired.
+        """
+        from ..config import activity_stale_after
+
+        minutes = activity_stale_after()
+        mine = self._stale_status()
+        if not minutes or not mine:
+            return
+        quiet_since = max(self._figures_moved_at,
+                          float(mine.get("updated_at") or 0))
+        if (time.time() - quiet_since) < minutes * 60:
+            return
+        said = act.sanitise({"state": act.QUIET, "decayed": True,
+                             "until": mine.get("updated_at"),
+                             "what": mine.get("what") or "working"},
+                            previous=mine)
+        logger.info("no word and no spend for %sm; the status decays to quiet",
+                    minutes)
+        diagnostics.log("activity_decayed", minutes=minutes)
+        await self._publish_activity(said)
 
     def _note_any_learning(self, env: Envelope) -> None:
         """Queue a learning, or a request for ours, that came past on the feed.
@@ -1587,6 +1700,12 @@ class Daemon:
                     # compacting first would hand the woken turn a summary in
                     # place of the conversation it was about to answer.
                     await self._maybe_compact()
+                    # BEFORE the learnings work below and after the wake: the
+                    # figures have to be watched on every beat for the two
+                    # staleness measures to mean anything, and the decay is a
+                    # publish, which belongs with the rest of the housekeeping.
+                    self._watch_the_figures()
+                    await self._maybe_decay_activity()
                     # LAST of the three, and outside nothing: a learning is the
                     # least urgent thing here and the most likely to touch a
                     # slow disk.

@@ -568,6 +568,14 @@ report, the route gone quiet, or the listener not carrying a fresh file. It
 says nothing when no route was ever set up. `collab stats` prints the same
 reason under your own row.
 
+A `working` that nothing has renewed is questioned in the standing reminder and
+then retired by the daemon, both governed by `collab config
+activity_stale_after`. Which of the two happens depends on whether this agent's
+own usage figures have moved since it spoke: moved means it is busy and its
+status is out of date, so the reminder says so; not moved means nobody is
+there, so the statement decays to `quiet`. See
+[Keeping it current](../README.md#keeping-it-current).
+
 The `count` check appears when the daemon is live and the message count on the
 roster row has stopped being refreshed — it says how old that count is and that
 the daemon has not refreshed the snapshot. The viewer already marks the count

@@ -319,6 +319,12 @@ def reasoned(status: dict[str, Any] | None = None, *, width: int | None = None,
         # drawing spills into; where the glyph is narrow it costs one blank.
         "unread": _paint(f"✉ {unread}", "live") if unread else "",
         "batch": _batch_segment(status),
+        # THIS AGENT'S OWN LAST WORD, in front of it while it works. Every
+        # other surface shows it to somebody else: the roster carries it to
+        # the other participants, and the agent that published it is the one
+        # party that never sees it again. An objective an hour old, said with
+        # its age, is the cheapest possible reminder to retract or renew it.
+        "activity": _paint(_activity_segment(status), "dim"),
         # Two agents on different versions can disagree about the wire format,
         # so this is worth a nudge rather than silence.
         "update": _paint("↑update", "reconnecting") if _update_available() else "",
@@ -537,6 +543,20 @@ def _batch_payload(status: dict[str, Any]) -> dict[str, Any] | None:
     return {**figures,
             "stale": batch_progress.is_stale(figures),
             "age": batch_progress.age(figures)}
+
+
+def _activity_segment(status: dict[str, Any]) -> str:
+    """This agent's own declared activity, off the file the daemon writes.
+
+    READ FROM `status.json` rather than from `activity.json`, even though the
+    latter is where the agent's own statement lives. Everything this module
+    reads comes out of the one file the daemon writes, and the rule at the top
+    is what makes that worth keeping: one file, one stat, no second path that
+    can be stale in a different way from the first.
+    """
+    from ..client.statusbar import activity_segment
+
+    return activity_segment(status.get("activity"))
 
 
 def remember_line(profile: Any, line: str) -> None:

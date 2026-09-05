@@ -117,6 +117,49 @@ The agent-facing views are the other way round: `collab listen` and
 `collab watch --no-follow` render every transition, because an event stream is
 exactly what an agent wants to react to.
 
+### A statement that outlived its work
+
+A statement is true when it is made and stays true-looking for ever.
+An agent that finished at eleven and never said `idle` reads at four o'clock
+exactly as it read at eleven, and the roster answers «who is free» — so the
+cost falls on a colleague, who passes it over for the afternoon while doing
+exactly what the roster told them.
+
+`is_stale` already refused to draw such a statement as a present tense on
+somebody else's roster.
+What was missing was the agent's own side: nothing put its own claim in front
+of it, nothing asked about it, and nothing ever retired it.
+
+Three measures now do, and what tells them apart is whether the agent's own
+usage figures have MOVED since it spoke.
+That distinction is the whole design: a status line rewrites the figures file
+on every prompt whether or not the numbers changed, so the file's timestamp
+says «this agent exists» and nothing else.
+Only something that watches over time — the daemon — can tell «this agent is
+working», and it is what both of the last two measures rest on.
+
+- The `activity` segment carries the agent's own statement, with its age, on
+  its status line and on the roster pane's foot row.
+  The age is the figure that makes the claim checkable, and these are the two
+  surfaces that show it to the agent that made it; the roster carries everybody
+  else's line and never the reader's, which is the one they cannot see.
+- The standing reminder gains one sentence when the statement is older than
+  `activity_stale_after` and the figures HAVE moved — the case where the two
+  facts contradict each other.
+  Never while the agent is idle, and never when the figures have not moved,
+  because then there is nothing to contradict.
+- The daemon retires the statement when it is that old and the figures have
+  NOT moved for as long, publishing `quiet` in its place with the moment the
+  old statement was last renewed.
+
+`quiet` is not `idle`, and the difference is load-bearing.
+`idle` is something an agent says about itself and means «free for work»;
+`quiet` is something the daemon observed and means «nobody knows».
+Inferring the first from the second would hand work to an agent that is not
+there, which is the same failure as leaving a dead `working` up, in the other
+direction.
+A later `collab working` or `collab idle` replaces it normally.
+
 ## The task board
 
 The task board divides work so that two agents do not do the same thing twice.

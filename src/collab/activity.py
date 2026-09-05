@@ -34,7 +34,15 @@ from typing import Any
 
 WORKING = "working"
 IDLE = "idle"
-STATES = (WORKING, IDLE)
+#: What a statement decays to when nothing has renewed it and the agent's own
+#: usage figures have not moved either. NOT `idle`, which is a thing an agent
+#: says about itself and means «free for work»; this is a thing the daemon
+#: observed, and the only honest reading of it is «nobody knows». Handing out
+#: work on the strength of an inferred `idle` is exactly the mistake the state
+#: exists to prevent — as is leaving a dead `working` up, which is the one it
+#: replaces.
+QUIET = "quiet"
+STATES = (WORKING, IDLE, QUIET)
 
 ACTIVITY_FILE = "activity.json"
 #: Reserved, and never published: whose file this is. See stats.OWNER_KEY.
@@ -84,6 +92,24 @@ def sanitise(reported: Any, *, previous: dict[str, Any] | None = None) -> dict[s
     task = str(reported.get("task") or "").strip()[:32]
 
     out: dict[str, Any] = {"state": state, "since": since, "updated_at": now}
+    if state == QUIET:
+        # WHO SAID IT, AND WHAT IT REPLACED. A `quiet` with nothing behind it
+        # is indistinguishable from an agent that chose to say `quiet`, and
+        # the two mean different things: this one is an observation the daemon
+        # made, and the reader is owed both that and the statement it is
+        # standing in for. `until` is when the old statement was last renewed
+        # — the moment after which nobody knows.
+        if reported.get("decayed"):
+            out["decayed"] = True
+        try:
+            until = float(reported.get("until") or 0)
+        except (TypeError, ValueError):
+            until = 0.0
+        if until:
+            out["until"] = until
+        if what:
+            out["what"] = what
+        return out
     if state == WORKING:
         # Only while working: an idle agent's last objective is finished work,
         # and leaving it on the roster reads as still doing it.
@@ -104,6 +130,28 @@ def sanitise(reported: Any, *, previous: dict[str, Any] | None = None) -> dict[s
     return out
 
 
+def at_clock(stamp: Any) -> str:
+    """A moment as `HH:MM`, in the zone the reader asked to read in, or ''.
+
+    Through `reading_timezone` like every other timestamp collab shows: a
+    person who pinned a zone should not get one line of the roster in another.
+    """
+    from datetime import datetime
+
+    try:
+        value = float(stamp or 0)
+    except (TypeError, ValueError):
+        return ""
+    if not value:
+        return ""
+    from .config import reading_timezone
+
+    try:
+        return datetime.fromtimestamp(value, reading_timezone()).strftime("%H:%M")
+    except (OSError, OverflowError, ValueError):
+        return ""
+
+
 def describe(activity: Any, *, width: int = 0) -> str:
     """One line for a person: what this agent is doing, and for how long."""
     if not isinstance(activity, dict) or activity.get("state") not in STATES:
@@ -116,6 +164,19 @@ def describe(activity: Any, *, width: int = 0) -> str:
     if state == IDLE:
         line = f"idle{' · ' + what if what else ''}"
         return f"{line} ({for_})" if for_ else line
+
+    if state == QUIET:
+        # SAYS WHAT IT REPLACED, and when. «quiet» alone would read as a
+        # choice the agent made; what actually happened is that a statement
+        # stopped being renewed and the figures behind it stopped moving, and
+        # the reader deciding whether to hand this agent work needs the last
+        # thing it did say.
+        line = "quiet"
+        if what:
+            line += f" · said {what}"
+        if until := at_clock(activity.get("until")):
+            line += f" until {until}"
+        return line
 
     if is_stale(activity):
         # Said, and not renewed since. Reported as what it is — a last word —
@@ -143,12 +204,17 @@ def describe(activity: Any, *, width: int = 0) -> str:
 JUST_NOW = "just now"
 
 
-def elapsed(activity: Any) -> str:
-    """How long this state has been true, in words. Empty when unknowable."""
+def elapsed(activity: Any, *, now: float | None = None) -> str:
+    """How long this state has been true, in words. Empty when unknowable.
+
+    `now` so a caller with a clock of its own can ask — a test with a fake one,
+    and a bar drawing several figures that must agree with each other rather
+    than each reading the clock a microsecond apart.
+    """
     if not isinstance(activity, dict):
         return ""
     try:
-        gap = time.time() - float(activity.get("since") or 0)
+        gap = (now if now is not None else time.time()) - float(activity.get("since") or 0)
     except (TypeError, ValueError):
         return ""
     if gap < 0 or not activity.get("since"):
@@ -162,7 +228,7 @@ def elapsed(activity: Any) -> str:
     return f"{int(gap // 86400)}d"
 
 
-def ago(activity: Any) -> str:
+def ago(activity: Any, *, now: float | None = None) -> str:
     """The same instant as `elapsed`, said so that it reads as English.
 
     `elapsed` answers with a duration past a minute and a half and with the
@@ -174,7 +240,7 @@ def ago(activity: Any) -> str:
     The grammar sits beside the arithmetic rather than at each call site,
     because the call site is where it was got wrong.
     """
-    said = elapsed(activity)
+    said = elapsed(activity, now=now)
     if not said or said == JUST_NOW:
         return said
     return f"{said} ago"

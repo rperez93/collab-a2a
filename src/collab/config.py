@@ -562,7 +562,17 @@ DEFAULT_WATCH_STATUS_SEGMENTS = ("notice", "stats", "command", "keys")
 #: four different numbers beside a batch bar that genuinely is shared, lending
 #: them credit they had not earned. `keys` is a legend rather than a figure and
 #: is drawn only where this row is the pane's only one.
-WATCH_ROSTER_SEGMENTS = ("batch", "messages", "keys")
+#:
+#: `activity` IS THE ONE EXCEPTION to that rule, made deliberately rather than
+#: by oversight. It is the READER's own figure on a row that otherwise carries
+#: only hub-counted ones. What earns it the place is that the roster is
+#: precisely where somebody looks to find out what people are doing — and their
+#: own line is the one line of it they cannot see. It says about the reader
+#: exactly what the rows above say about everybody else, in the same words, so
+#: nobody can read it as a session-wide figure; that is the difference from
+#: `stats`, where four participants would read four numbers off one row and
+#: each take theirs for everyone's. `stats` and `command` stay refused.
+WATCH_ROSTER_SEGMENTS = ("batch", "messages", "activity", "keys")
 #: What the coding agent's OWN status line can carry, in the order it is drawn.
 #: The third bar in the project and the last to get a list of its own: the two
 #: in `collab watch` belong to a window somebody opened on purpose, and this one
@@ -580,7 +590,7 @@ WATCH_ROSTER_SEGMENTS = ("batch", "messages", "keys")
 #: they are the same fact: a daemon or a hub on other code than this, drawn in
 #: the place the version would otherwise be.
 STATUSLINE_SEGMENTS = ("state", "label", "version", "who", "others", "unread",
-                       "batch", "update")
+                       "batch", "activity", "update")
 
 #: How often to re-run the bottom row's command. Thirty seconds because the row
 #: is glanced at rather than watched: a branch name, a build state or a ticket
@@ -899,6 +909,39 @@ def save_reminder(*, every: int | None = None, host: str | None = None,
             cfg.pop(key, None)
     save_config(cfg)
     return reminder_settings()
+
+
+#: How long a declared activity may stand without being renewed before collab
+#: says something about it. Thirty minutes because that is well past any single
+#: piece of work an agent announces and well short of an afternoon: a statement
+#: older than this is either finished work nobody retracted or an agent that has
+#: stopped saying anything, and both are wrong on a roster somebody is reading
+#: to decide who is free.
+DEFAULT_ACTIVITY_STALE = 30
+
+
+def activity_stale_after() -> int:
+    """Minutes, or 0 for «leave a statement alone however old it gets».
+
+    Validated the way everything read on the heartbeat is: a hand-edited value
+    here reaches the daemon's loop and the viewer's draw path, and a TypeError
+    out of either is not an error message.
+    """
+    raw = load_config().get("activity_stale_after")
+    if raw is None or isinstance(raw, bool):
+        return DEFAULT_ACTIVITY_STALE
+    try:
+        value = int(raw)
+    except (TypeError, ValueError, OverflowError):
+        return DEFAULT_ACTIVITY_STALE
+    return max(0, min(value, 24 * 60))
+
+
+def set_activity_stale_after(minutes: int) -> int:
+    cfg = load_config()
+    cfg["activity_stale_after"] = int(minutes)
+    save_config(cfg)
+    return activity_stale_after()
 
 
 #: The value that means «beside the global config», which is where the store
@@ -1527,6 +1570,17 @@ def settings() -> tuple[Setting, ...]:
                 "", str,
                 lambda: str(load_config().get("remind_guest") or ""),
                 lambda v: save_reminder(guest=v)),
+        # WITH THE REMINDER, which is one of the three things it changes: past
+        # this, the reminder gains a sentence about a status that has stopped
+        # being true, and the daemon decays the statement itself. A reader
+        # asking «what does collab do to my session while I am not looking»
+        # should meet all of it in one place.
+        Setting("activity_stale_after",
+                "minutes before an unrenewed «working» is questioned in the"
+                " reminder and decayed to «quiet»; 0 leaves it alone",
+                DEFAULT_ACTIVITY_STALE, _as_int,
+                activity_stale_after,
+                lambda v: set_activity_stale_after(v)),
         # BESIDE THE REMINDER, because it is the same kind of thing: the short
         # list of acts your own daemon performs on your own agent, unprompted,
         # while nobody is watching. Somebody reading this listing to find out
