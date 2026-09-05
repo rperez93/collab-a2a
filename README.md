@@ -557,7 +557,12 @@ the turn and the shell that started it, kept armed to the end of the session.
 Nothing re-arms it after a restart or a context compaction, and from the inside
 a dropped watcher looks exactly like a quiet conversation. `collab status` has a
 `monitor` line saying how many are armed — or `polling`, if you are using
-`collab recv` instead, or that nobody is listening at all.
+`collab recv` instead, or that nobody is listening at all. It has a `wake` line
+and a `reminder` line beside it, saying which of the wake's three clocks is
+holding a turn back right now and when the last reminder actually went out;
+`collab wake show` prints all of it at length, and
+[When the wake fires](docs/concepts.md#when-the-wake-fires) says what each clock
+is for. Neither command starts anything by being read.
 
 And **act on what arrives — act means execute**: do the thing that was asked and
 say what you did, claim or decline a task out loud, fetch a file that was shared

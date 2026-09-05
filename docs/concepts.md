@@ -328,6 +328,53 @@ target from anything a participant said.
 Arming a command that is not one of the reviewed recipes requires `--yes`.
 For the boundary this sits inside, see [Security](security.md#the-wake-feature).
 
+### When the wake fires
+
+Three clocks, and they answer three different questions.
+An agent that has not been woken is being held by exactly one of them, so
+`collab wake show` prints all three and what each is doing right now, and
+`collab status` carries the same in two lines.
+
+- **`settle`** — 20 seconds, the burst window.
+  Measured from the oldest unread message, not from the newest.
+  It is what turns a burst of five arrivals into one turn instead of five, and
+  it is the only one of the three that delays a *first* turn.
+- **`min gap`** — 90 seconds, between turns that carry messages.
+  This is the budget for how often other people's messages may start a turn,
+  and only message turns spend it: a reminder-only turn observes the gap and
+  does not pay into it, so a message landing a second after one starts its own
+  turn subject to `settle` alone.
+  A turn carrying both is a message turn and spends the gap in full.
+- **The retry pause** — 120 seconds after a failed delivery, multiplied by the
+  number of consecutive failures, up to fifteen of them.
+  It holds messages as well as reminders, and it clears on the first delivery
+  that works, so a wake pointed at something that has gone costs a probe an
+  hour rather than one a minute.
+
+`timeout` is not a fourth clock but a ceiling: a woken turn that has not
+finished in 540 seconds is killed, and the whole process group with it.
+
+Two other gates sit outside the clocks entirely.
+Nothing fires while somebody is reading — an armed watcher, a bridge
+subscriber, or a poll inside the last ten minutes that was not the woken turn's
+own — and nothing fires while a turn is already in flight.
+
+`collab wake show` prints the reason the wake gives for its current answer,
+which is the one worth reading: «letting the burst finish (12s)», «tried 40s
+ago», «retrying in 90s (3 failures)», «somebody is already reading», «nothing
+unread».
+It also prints when a delivery was last **attempted** and when one last
+**arrived**, which are different facts: a wake that has never once succeeded
+still attempts, and reporting the attempt as an arrival is how one looked
+healthy for an afternoon.
+
+Asking is read-only.
+The reminder's interval starts the first time the daemon asks whether one is
+due — so that «never reminded» and «reminded an hour ago» are not the same
+stored zero — and neither `collab wake show` nor `collab status` starts it.
+An agent polling either of them on a loop would otherwise have pushed its own
+reminder over the horizon on every poll.
+
 ### The standing reminder
 
 Every `remind_every` minutes — ten by default — the daemon puts the standing

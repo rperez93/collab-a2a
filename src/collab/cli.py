@@ -450,6 +450,80 @@ def _ago_seconds(seconds: float) -> str:
     return f"{int(seconds // 86400)}d ago"
 
 
+def _clock(stamp: float) -> str:
+    """A moment as `HH:MM`, in the zone the reader asked to read in.
+
+    Through `reading_timezone` like every other timestamp collab prints, so
+    that a person who pinned a zone does not get one line of the output in
+    another one.
+    """
+    from datetime import datetime
+
+    from .config import reading_timezone
+
+    if not stamp:
+        return ""
+    try:
+        return datetime.fromtimestamp(stamp, reading_timezone()).strftime("%H:%M")
+    except (OSError, OverflowError, ValueError):
+        return ""
+
+
+def _reminder_line(told: dict[str, Any]) -> str:
+    """The standing reminder's own clock, in one line.
+
+    Three separate facts and never fewer: how often, when the last one actually
+    went and by which route, and when the next falls due. «every 10m» alone was
+    what this said for a long time, and it is the one of the three that cannot
+    be wrong — so it was the one carrying no information when somebody came
+    here asking why they had not been reminded.
+    """
+    remind = told["reminder"]
+    if not remind["every"]:
+        return "off"
+    bits = [f"every {remind['every']}m"]
+    if remind["last_at"]:
+        via = f" via {remind['via']}" if remind["via"] else ""
+        bits.append(f"last {_clock(remind['last_at'])}{via}")
+    else:
+        bits.append("never yet")
+    if remind["next_at"]:
+        bits.append(f"next {_clock(remind['next_at'])}")
+    return " · ".join(bits)
+
+
+def _wake_clock_lines(told: dict[str, Any]) -> list[str]:
+    """The three clocks and what they are currently doing, as printable lines.
+
+    THREE CLOCKS, NOT ONE, and they are printed apart because they answer
+    different questions. `settle` is how long a burst is allowed to finish
+    before a first turn; `min gap` is how often other people's messages may
+    start a turn at all; the retry pause is what a failure buys, and it grows.
+    Somebody asking «why has nothing woken» is in exactly one of those three,
+    and a single «not yet» would send them looking in the wrong one.
+    """
+    lines = [f"  clocks    settle {int(told['settle'])}s (burst window)"
+             f" · min gap {int(told['min_gap'])}s"
+             f" · timeout {int(told['timeout'])}s"]
+    if told["backing_off_for"]:
+        lines.append(f"  backoff   {int(told['retry_pause'])}s pause,"
+                     f" {int(told['backing_off_for'])}s left"
+                     f" ({told['failures']} failures)")
+    else:
+        lines.append(f"  backoff   none — next failure would pause"
+                     f" {int(told['retry_pause'])}s")
+    attempted = (_ago_seconds(time.time() - told["last_attempt"])
+                 if told["last_attempt"] else "never")
+    delivered = (_ago_seconds(time.time() - told["last_delivery"])
+                 if told["last_delivery"] else "never")
+    # KEPT APART, because they were one field once and a wake that had never
+    # succeeded reported «last woke 2m ago» to somebody reading this page for
+    # exactly that reassurance.
+    lines.append(f"  attempts  last tried {attempted} · last arrived {delivered}")
+    lines.append(f"  right now {'a turn is due' if told['due'] else told['why']}")
+    return lines
+
+
 # --- commands -----------------------------------------------------------------
 
 def cmd_host(args: argparse.Namespace) -> int:
@@ -2935,6 +3009,13 @@ def cmd_wake(args: argparse.Namespace) -> int:
     remind = reminder_settings(bool(profile.is_host))
     reading = bool(watchers(profile)) or (
         time.time() - last_poll(profile)) < wk.POLL_COUNTS_AS_LISTENING
+    # READ-ONLY. `Waker.explain` asks `due` without letting it start the
+    # reminder's interval, which it otherwise does the first time it is asked —
+    # a command that printed the state would have changed it by printing it,
+    # and an agent running this on a loop would have pushed its own reminder
+    # over the horizon every time.
+    told = wk.Waker(root, profile.session_id,
+                    is_host=bool(profile.is_host)).explain(config)
     if args.json:
         print(json.dumps({
             "armed": config.enabled,
@@ -2945,6 +3026,15 @@ def cmd_wake(args: argparse.Namespace) -> int:
             "timeout": config.timeout,
             "attended": reading,
             "remind_every": remind["every"],
+            # The clocks, so an agent reading this does not have to parse the
+            # sentences below out of the human form.
+            "retry_pause": told["retry_pause"],
+            "backing_off_for": told["backing_off_for"],
+            "last_attempt": told["last_attempt"] or None,
+            "last_delivery": told["last_delivery"] or None,
+            "due": told["due"],
+            "why": told["why"],
+            "reminder": told["reminder"],
             **{k: live.get(k) for k in ("pending", "batches", "last_wake", "note")},
         }, indent=2))
         return 0
@@ -2993,7 +3083,9 @@ def cmd_wake(args: argparse.Namespace) -> int:
     # asking «what does the daemon do to my agent» should find it. The role is
     # named because it decides which text arrives, and it is the session's, not
     # the agent's name.
-    print("  reminder  " + (f"every {remind['every']}m, as the "
+    for line in _wake_clock_lines(told):
+        print(line)
+    print("  reminder  " + (f"{_reminder_line(told)}, as the "
                             + ("host" if profile.is_host else "guest")
                             if remind["every"] else dim("off")))
     if live.get("note"):
@@ -3162,6 +3254,22 @@ def cmd_status(args: argparse.Namespace) -> int:
     if pid is None:
         payload["hint"] = (f"the listener is not running — "
                            f"`{exe} daemon start` brings it back")
+    # THE WAKE'S CLOCKS, in two lines. Read the same read-only way `collab wake
+    # show` reads them — `Waker.explain` never starts the reminder's interval —
+    # because this command is the one an agent runs on a loop, and a page that
+    # pushed the reminder over the horizon by being looked at would have been
+    # the reason it never fired.
+    told = wake.Waker(DaemonPaths(profile.dir).root, profile.session_id,
+                      is_host=bool(profile.is_host)).explain()
+    payload["wake_clocks"] = {k: told[k] for k in
+                              ("armed", "settle", "min_gap", "timeout",
+                               "retry_pause", "backing_off_for", "due", "why")}
+    payload["reminder_clock"] = told["reminder"]
+    payload["wake"] = (
+        f"settle {int(told['settle'])}s · gap {int(told['min_gap'])}s"
+        f" · timeout {int(told['timeout'])}s · {told['why']}"
+        if told["armed"] else "not armed")
+    payload["reminder"] = _reminder_line(told)
     if args.json:
         print(json.dumps(payload, indent=2))
         return 0
@@ -3189,6 +3297,14 @@ def cmd_status(args: argparse.Namespace) -> int:
         if payload["polled_seconds_ago"] is not None:
             armed_line += dim(f" · last poll {_ago_seconds(payload['polled_seconds_ago'])}")
     print(f"  {'monitor':<16} {armed_line}")
+    # TWO LINES, and no more than two. This command is a page somebody scans,
+    # and the whole of `collab wake show` printed inside it would bury the
+    # connection state it exists for. One line for the clocks and what they are
+    # doing right now, one for the reminder — which is the thing people
+    # actually come here asking about, because it is the only part of this that
+    # happens while nobody is watching.
+    print(f"  {'wake':<16} {payload['wake']}")
+    print(f"  {'reminder':<16} {payload['reminder']}")
     if line := batch_progress.describe(payload.get("batch")):
         # The name came off the hub, through the daemon, into a file, and is
         # about to reach a real terminal. Every hop kept it as the remote party
