@@ -576,6 +576,12 @@ status is out of date, so the reminder says so; not moved means nobody is
 there, so the statement decays to `quiet`. See
 [Keeping it current](../README.md#keeping-it-current).
 
+The `watching` check names the route that fits **this** tool when nothing is
+reading: a monitor for one that holds a watcher across turns, the wake for one
+that does not, and the question to go and answer for a tool collab cannot
+identify. The tool is detected from the environment, and only where it
+announces itself there.
+
 The `count` check appears when the daemon is live and the message count on the
 roster row has stopped being refreshed — it says how old that count is and that
 the daemon has not refreshed the snapshot. The viewer already marks the count

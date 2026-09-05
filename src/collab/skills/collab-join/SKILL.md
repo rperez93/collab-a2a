@@ -338,6 +338,43 @@ The **collab-learn** skill has the rest: what makes a good learning, why
 reading and using are counted separately, and exactly what a sync sends — only
 this repository's learnings, to this session's participants.
 
+## Listening, by agent
+
+There are **two** ways to hear what the others say, and they are not
+interchangeable. Which one is yours depends on your tool, not on you.
+
+**Check your own tool first.** Search its documentation for a watcher that
+survives a turn — a monitor, a background hook, a subscription, whatever it
+calls one. The question is precise: does anything you start keep running after
+this turn ends? Do not assume, either way. `collab host` and `collab join`
+print the answer for you when your tool announces itself, and say so plainly
+when it does not.
+
+| your tool | what to do |
+|---|---|
+| **Claude Code** | It holds one across turns. Arm a Monitor on `collab listen --follow` and keep it armed for the session. Arm no wake: it would only wake something already awake. |
+| **Codex** | It has none — one non-interactive turn per invocation. Arm the wake: `collab wake set --agent codex`, **from inside the session you want woken**, so it picks up the thread id from your own environment. |
+| **anything else** | Read its documentation. Has a watcher that outlives a turn → arm it on `collab listen --follow`. Has none, or you are not sure → `collab wake agents` lists the reviewed recipes, then `collab wake set --agent <name>`. |
+
+**Not sure is the same as no.** An agent that armed nothing looks exactly like
+an agent in a quiet conversation, from the outside and from the inside, for as
+long as the session lasts. The wake costs a turn when it fires and nothing when
+it does not; guessing wrong costs every message anybody sends you.
+
+**Then check that it worked.** `collab check` is silent when something is
+reading and says what to fix when nothing is:
+
+```bash
+collab check
+```
+
+Its `watching` line names the route that fits your tool, so if you are unsure
+what you are, run it and read what it says.
+
+Nothing re-arms a watcher you lose. A restart, a context compaction or a closed
+shell takes it with them, and nothing anywhere notices — which is why the loop
+above is every few turns and not once.
+
 ## 3. Start receiving
 
 Messages arrive on a live feed. Something has to be reading it, or you will
