@@ -175,6 +175,28 @@ def test_a_refusal_costs_about_the_deadline_and_not_a_hang(profile):
     assert exclusive.ACQUIRE_WAIT <= waited < exclusive.ACQUIRE_WAIT + 2.0
 
 
+#: Abandoned waits to drain. Thirty is far past anything real and is chosen
+#: to make the drain take long enough to observe at all.
+ABANDONED = 30
+
+#: How long to allow that drain. Measured at 2 to 3 milliseconds for thirty of
+#: them, idle and with the whole suite running alongside — so this is not a
+#: budget, it is a bound on a hang. A tight one would only ever fail for a
+#: machine that was busy, which is the failure mode a test is worst at telling
+#: apart from the one it is looking for.
+DRAIN_DEADLINE = 30.0
+
+
+def _until(seconds: float, answer) -> bool:
+    """Poll `answer` until it is true, or the deadline passes."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if answer():
+            return True
+        time.sleep(0.01)
+    return False
+
+
 def test_a_wait_that_was_given_up_on_does_not_keep_the_lock(profile,
                                                             monkeypatch):
     """The instant the whole handover exists for.
@@ -184,25 +206,46 @@ def test_a_wait_that_was_given_up_on_does_not_keep_the_lock(profile,
     simply believed themselves, the lock would then be held for the life of the
     process by somebody who has already said it is not theirs — and no daemon
     could ever start in that directory again.
+
+    ASKED WITH AN ACQUIRE AND NOT WITH A SECOND LOOK, which is the correction
+    this test needed itself. It used to poll `taken` until it answered False
+    and then call `taken` AGAIN to assert on — two samples treated as one fact.
+    A drain of thirty is thirty waits each granted the lock and each giving it
+    straight back, so between those two calls one of them can be passing
+    through, and the assertion reads a lock held for microseconds by somebody
+    on their way out as a lock held for ever. Measured: 35 disagreements in 300
+    drains, and the lock still held half a second later in NONE of them.
+
+    An acquire cannot be wrong in that way. It waits, so a wait passing through
+    is something it queues behind, and it answers the question actually being
+    asked — can the next daemon have this session — rather than a question
+    about one instant.
     """
+    # Put back by name rather than with `monkeypatch.undo`, which would undo
+    # every patch this test's monkeypatch holds — including the suite-wide
+    # fixture that keeps `COLLAB_CONFIG` off the machine's own.
+    real_wait = exclusive.ACQUIRE_WAIT
     monkeypatch.setattr(exclusive, "ACQUIRE_WAIT", 0.01)
     holder = exclusive.DaemonLock(profile.dir)
     assert holder.acquire()
 
-    refused = [exclusive.DaemonLock(profile.dir).acquire() for _ in range(30)]
-    assert refused == [False] * 30
+    refused = [exclusive.DaemonLock(profile.dir).acquire()
+               for _ in range(ABANDONED)]
+    assert refused == [False] * ABANDONED
 
     holder.release()
-    # Whatever those waits were granted after they were abandoned, they gave
-    # straight back. Retried because the handover is a thread and this is the
-    # one place a test has to wait for one.
-    for _ in range(200):
-        if exclusive.taken(profile.dir) is False:
-            break
-        time.sleep(0.01)
-    assert exclusive.taken(profile.dir) is False, \
-        "an abandoned wait is still holding the lock"
+    monkeypatch.setattr(exclusive, "ACQUIRE_WAIT", real_wait)
 
+    # It drains at all: every abandoned wait is granted the lock in turn and
+    # gives it back. Polled, because the handover happens on threads.
+    assert _until(DRAIN_DEADLINE,
+                  lambda: exclusive.taken(profile.dir) is False), \
+        "the lock never came free after the waits were abandoned"
+
+    # And the proof, which is a start rather than a look.
     after = exclusive.DaemonLock(profile.dir)
-    assert after.acquire() is True
+    assert after.acquire() is True, \
+        "an abandoned wait is still holding the lock"
     after.release()
+    assert _until(DRAIN_DEADLINE,
+                  lambda: exclusive.taken(profile.dir) is False)
