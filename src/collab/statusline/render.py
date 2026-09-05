@@ -18,7 +18,7 @@ from typing import Any
 from .. import __version__
 from .. import batch as batch_progress
 from ..columns import width as _columns
-from ..config import SessionProfile, claimed_home
+from ..config import SessionProfile, claimed_home, statusline_settings
 from ..protocol import scrub
 # FROM daemon_files, NOT FROM daemon. The five names below read a pid file and
 # `status.json`; `client.daemon` also holds the async Daemon, and importing it
@@ -279,34 +279,63 @@ def reasoned(status: dict[str, Any] | None = None, *, width: int | None = None,
     else:
         tail = _paint("offline", "offline")
 
-    parts = [glyph, label]
+    # WHICH OF THEM THE READER ASKED FOR. Read on every render like every
+    # other setting here, so `collab config statusline_segments` reaches the
+    # next prompt without restarting anything. An unknown name costs that
+    # segment and not the line — the same rule the two viewer rows follow, and
+    # for a sharper reason: this file swallows its own errors, so a name it
+    # refused would be a status line that vanished with nothing to say why.
+    #
+    # THE ORDER IS THE LIST'S. `state` and `who` can be left out with the rest;
+    # the request was that every item be a choice, and a list that quietly
+    # excepted the two biggest ones would be answering a different question.
+    wanted = statusline_settings()["segments"]
     if note := daemon_note(status):
         # A daemon on other code than this: it writes the file, we draw it, and
         # whatever fields it never heard of are missing, silently, until it is
         # restarted. The version is not decoration in that state.
-        parts.append(_paint(note, "reconnecting"))
-    elif version:
-        parts.append(_paint(f"v{version}", "dim"))
-    parts += [who, tail]
-    if note := hub_note(status):
-        # The host's hub on other code: every participant's figures come off
-        # its snapshot, and only the host can replace it. After the identity,
-        # so the reader sees whose session it is before being told what the
-        # host of it has to do.
-        parts.append(_paint(note, "reconnecting"))
-    if unread:
+        shown_version = _paint(note, "reconnecting")
+    else:
+        shown_version = _paint(f"v{version}", "dim") if version else ""
+    # The host's hub on other code: every participant's figures come off its
+    # snapshot, and only the host can replace it. It rides `version`'s switch,
+    # because it is the same fact as the daemon's warning — something running
+    # other code than this — and two settings for one idea would be one more
+    # thing to get half right. It keeps its PLACE, which is after the identity:
+    # a reader has to know whose session this is before being told what the
+    # host of it has to do.
+    hub = (_paint(hub_note(status), "reconnecting")
+           if hub_note(status) and "version" in wanted else "")
+    pieces: dict[str, str] = {
+        "state": glyph,
+        "label": label,
+        "version": shown_version,
+        "who": who,
+        "others": tail,
         # A SPACE AFTER THE ENVELOPE. U+2709 is one column by every width table
         # and is drawn two columns wide by a good many terminals — Windows
         # Terminal among them — and set flush against its count, the wide
         # drawing painted over the first digit. The space is the column that
         # drawing spills into; where the glyph is narrow it costs one blank.
-        parts.append(_paint(f"✉ {unread}", "live"))
-    if bar := _batch_segment(status):
-        parts.append(bar)
-    if _update_available():
+        "unread": _paint(f"✉ {unread}", "live") if unread else "",
+        "batch": _batch_segment(status),
         # Two agents on different versions can disagree about the wire format,
         # so this is worth a nudge rather than silence.
-        parts.append(_paint("↑update", "reconnecting"))
+        "update": _paint("↑update", "reconnecting") if _update_available() else "",
+    }
+    parts = []
+    for name in wanted:
+        if piece := pieces.get(name, ""):
+            parts.append(piece)
+        if name == "others" and hub:
+            parts.append(hub)
+            hub = ""
+    if hub:
+        # `others` was hidden, so there is no identity to follow. The end of
+        # the line is the next best place for it, and it is still drawn: a
+        # stale hub blanks the message count for everybody, and a reader who
+        # turned off a segment has not asked to stop being told that.
+        parts.append(hub)
     line = "  ".join(parts)
 
     limit = width or _terminal_width()
@@ -315,10 +344,15 @@ def reasoned(status: dict[str, Any] | None = None, *, width: int | None = None,
         # batch keeps its place, in its narrow form: it is the figure both
         # agents are steering by, and a status line that hides it at 80 columns
         # is one where they quietly stop sharing a number.
-        short = [glyph, who, tail]
-        if narrow := _batch_segment(status, narrow=True):
-            short.append(narrow)
-        line = "  ".join(short)
+        #
+        # THROUGH THE SAME FILTER. A reader who turned a segment off has turned
+        # it off at every width; a fallback that put `who` back on a narrow
+        # pane would have made the setting look like it worked until the
+        # terminal was resized.
+        narrow_pieces = {"state": glyph, "who": who, "others": tail,
+                         "batch": _batch_segment(status, narrow=True)}
+        line = "  ".join(piece for name in ("state", "who", "others", "batch")
+                         if name in wanted and (piece := narrow_pieces[name]))
         # AND MEASURED AGAIN. The fallback was built and returned unchecked, on
         # the assumption that dropping the label and the version is always
         # enough — which it is not with a long host name, and is less so now
@@ -579,7 +613,14 @@ def draw(cwd: Path | None = None, width: int | None = None) -> tuple[str, str]:
     if line:
         remember_line(profile, line)
         return line, ""
-    if why == NO_PROFILE or profile is None:
+    # ONLY THESE THREE GET THE KEPT LINE, named rather than «anything that is
+    # not a drawn line». The other two empty results are not hiccups: a profile
+    # that no longer exists is a session that ended, and an empty line built
+    # from an empty `statusline_segments` is exactly what its reader asked for.
+    # Standing the last line back up over either would be overruling somebody.
+    if why not in (NO_DAEMON, NO_STATUS, ERROR):
+        return "", why
+    if profile is None:
         return "", NO_PROFILE
     if kept := last_line(profile):
         return kept, KEPT
