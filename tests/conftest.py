@@ -4,12 +4,45 @@ import curses
 
 import pytest
 
-from collab import themes
+from collab import config, themes
 from collab.client import tui
 from collab.config import SessionProfile
 from collab.server.app import create_app
 from collab.server.auth import new_secret
 from collab.server.store import Store
+
+
+@pytest.fixture(autouse=True)
+def _never_the_machines_own_config(tmp_path, monkeypatch):
+    """Every test gets a global config of its own. None of them gets the user's.
+
+    Several files here already take one, each having discovered the same thing
+    separately: `load_config` falls back to `~/.config/collab/config.json`, so
+    a test that reads a setting reads whatever the person running the suite
+    happens to have — and `test_check.py` was one release away from failing on
+    a developer's machine and nowhere else. Written per file, that guard is
+    something every new test has to remember, and the ones that forgot were
+    found by grep rather than by a failure.
+
+    THREE PATHS AND NOT ONE. `peers_dir` and `update.cache_path` both hang off
+    `global_config_path().parent`, so moving the config moves the machine peer
+    registry and the update-check stamp with it. Before this, a test that
+    announced a peer wrote a record into the registry a live session reads.
+    That is worse than reading: this suite runs on a machine with sessions
+    open on it.
+
+    Composes rather than competes: a file that sets `COLLAB_CONFIG` itself, or
+    patches `global_config_path` outright, runs after this and wins. What is
+    left over is the case nobody thought about, and that case now lands in
+    `tmp_path` instead of in somebody's home directory.
+    """
+    monkeypatch.setenv("COLLAB_CONFIG", str(tmp_path / "collab" / "config.json"))
+    # The reader caches on the file's stamp, and the cache is module-level, so
+    # a value read under one test's config would otherwise still be answered
+    # under the next one's.
+    config._CACHE.clear()
+    yield
+    config._CACHE.clear()
 
 
 @pytest.fixture(autouse=True)
