@@ -431,6 +431,7 @@ class _Daemon:
     _watch_for_a_boundary = d.Daemon._watch_for_a_boundary
     _note_task_boundary = d.Daemon._note_task_boundary
     _compact_before_the_turn = d.Daemon._compact_before_the_turn
+    _wake_once = d.Daemon._wake_once
 
     def __init__(self, profile, share):
         self.profile = profile
@@ -441,7 +442,19 @@ class _Daemon:
         self._under_since = {"compact": 0.0, "new": 0.0}
         self._boundary_at = 0.0
         self._was_working = False
+        #: The turn this daemon started and has not seen end, exactly as the
+        #: real one holds it: `_maybe_wake` launches a background task and the
+        #: heartbeat carries on.
+        self._waking = None
+        # A real one: `_wake_once` asks it for the armed command and for
+        # somewhere to write the prompt, and a fake that answered differently
+        # would be testing a wake that does not exist.
+        self.waker = wake.Waker(self.paths.root, profile.session_id)
+        self._wake_note = ""
         self.applied: list[str] = []
+
+    def _log_wake(self, *a, **kw):
+        """The diagnostic record. Not what these tests are about."""
 
 
 @pytest.fixture
@@ -924,3 +937,158 @@ def test_a_refused_compaction_never_blocks_the_turn(acting, monkeypatch):
     _before_the_turn(daemon)                    # must not raise
 
     assert daemon._acted_at["compact"] == 0.0, "and it did not pretend it had"
+
+
+# --- the pre-wake compaction, through the gate that decides it --------------------
+#
+# Everything above drives `_compact_before_the_turn` directly. These go through
+# `_wake_once`, which is the code that decides whether it is called at all —
+# and which is where the gate was wrong.
+
+class _InFlight:
+    """A turn that has been started and has not finished."""
+
+    def __init__(self, done=False):
+        self._done = done
+
+    def done(self):
+        return self._done
+
+
+def _wake_the_agent(daemon, monkeypatch, now=1000.0):
+    """`_wake_once` as far as the compaction, with the launch stubbed out.
+
+    The subprocess half is somebody else's test. What is exercised here is the
+    order: the summary goes in before the line does.
+    """
+    started = []
+
+    async def never_launched(*a, **kw):
+        started.append(True)
+        raise OSError("not launching a real turn in a test")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", never_launched)
+    import collab.client.daemon as mod
+    real = mod.time.time
+    mod.time.time = lambda: now                       # noqa: B010
+    try:
+        asyncio.run(daemon._wake_once(None, "a reminder"))
+    finally:
+        mod.time.time = real
+    return started
+
+
+@pytest.mark.parametrize("when", ["task", "always"])
+def test_a_woken_turn_is_given_a_summary_first_under_either_setting(
+        when, acting, monkeypatch):
+    """A woken turn about to be typed is one of the moments `task` names, and
+    `always` is every moment including that one. Gated on `task`, the LESS
+    restrictive setting lost the one guarantee the design is built around: the
+    turn ran on the full window and the compaction caught up on a later
+    heartbeat, after the turn it was for."""
+    daemon, share = acting
+    cfg.setting("compact_when").write(when)
+    cfg.setting("compact_at").write(80)
+    share["pct"] = 95.0
+
+    _wake_the_agent(daemon, monkeypatch)
+
+    assert daemon.applied == ["compact"]
+
+
+def test_a_woken_turn_with_room_in_the_window_is_not_compacted(acting,
+                                                               monkeypatch):
+    daemon, share = acting
+    cfg.setting("compact_at").write(80)
+    share["pct"] = 40.0
+
+    _wake_the_agent(daemon, monkeypatch)
+
+    assert daemon.applied == []
+
+
+def test_the_turn_is_still_delivered_when_the_compaction_is_refused(
+        acting, monkeypatch):
+    """A pane in copy mode is not a reason to withhold somebody's messages."""
+    daemon, share = acting
+    cfg.setting("compact_at").write(80)
+    share["pct"] = 95.0
+    monkeypatch.setattr(compaction, "apply",
+                        lambda root, action, **_kw: (1, "pane %3 is in copy mode"))
+
+    started = _wake_the_agent(daemon, monkeypatch)
+
+    assert started, "the delivery was attempted all the same"
+
+
+# --- and nothing is typed while a turn of ours is in flight -----------------------
+
+@pytest.mark.parametrize("key,typed", [("compact_at", "compact"),
+                                       ("new_at", "clear")])
+def test_neither_act_is_typed_into_a_pane_taking_our_own_turn(key, typed,
+                                                              acting):
+    """`_maybe_wake` starts the turn as a background task and the heartbeat
+    carries on. Without this the next beat types into the pane where that turn
+    is still being taken, and the agent loses the work it was woken to do — to
+    this program, rather than to anything it did."""
+    daemon, share = acting
+    cfg.setting(key).write(80)
+    share["pct"] = 95.0
+    daemon._waking = _InFlight(done=False)
+
+    for tick in range(10):
+        _beat(daemon, 1000.0 + tick * 3)
+
+    assert daemon.applied == []
+
+
+@pytest.mark.parametrize("key,typed", [("compact_at", "compact"),
+                                       ("new_at", "clear")])
+def test_the_act_happens_on_the_next_beat_after_the_turn_ends(key, typed,
+                                                              acting):
+    """Postponed, not cancelled: a threshold still crossed when the turn ends
+    is still crossed on the beat after it."""
+    daemon, share = acting
+    cfg.setting(key).write(80)
+    share["pct"] = 95.0
+    daemon._waking = _InFlight(done=False)
+    _beat(daemon, 1000.0)
+    assert daemon.applied == []
+
+    daemon._waking = _InFlight(done=True)
+    _beat(daemon, 1030.0)
+
+    assert daemon.applied == [typed]
+
+
+def test_a_turn_in_flight_does_not_spend_the_boundary(acting):
+    """A turn arriving between the boundary and the act must not cost the act
+    its moment. The boundary is a moment the agent gave us, not a token this
+    program may drop while it is busy."""
+    daemon, share = acting
+    cfg.setting("compact_when").write("task")
+    cfg.setting("compact_at").write(80)
+    share["pct"] = 95.0
+    _at_a_boundary(daemon)
+    daemon._waking = _InFlight(done=False)
+
+    for tick in range(5):
+        _beat(daemon, 1000.0 + tick * 3)
+    assert daemon.applied == []
+    assert daemon._boundary_at, "the moment is still ours to act on"
+
+    daemon._waking = _InFlight(done=True)
+    _beat(daemon, 1100.0)
+
+    assert daemon.applied == ["compact"]
+
+
+def test_a_finished_turn_is_no_obstacle(acting):
+    daemon, share = acting
+    cfg.setting("compact_at").write(80)
+    share["pct"] = 95.0
+    daemon._waking = _InFlight(done=True)
+
+    _beat(daemon, 1000.0)
+
+    assert daemon.applied == ["compact"]

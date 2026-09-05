@@ -1385,12 +1385,27 @@ class Daemon:
         Counted per act, so a compaction does not hold off a fresh session or
         the other way about.
 
+        NOT WHILE A TURN OF OURS IS IN FLIGHT. `_maybe_wake` starts the turn as
+        a background task and the heartbeat carries on, so without this the
+        next beat could type `/compact` — or `/clear`, which keeps nothing —
+        into the pane where that turn is still being taken. The agent would
+        lose the work it was woken to do, and lose it to this program rather
+        than to anything it did.
+
+        The act is not cancelled, only postponed: a threshold that is still
+        crossed when the turn ends is still crossed on the next beat, and the
+        boundary is deliberately not consumed by the wait, so a turn arriving
+        between the boundary and the act does not cost the act its moment.
+
         Never raises: it is called from the guarded half of the heartbeat, but
         a delivery that failed is a thing to write down rather than a thing to
         take the wake down with.
         """
         from ..config import COMPACT_GAP
 
+        if self._waking is not None and not self._waking.done():
+            logger.debug("a turn is in flight; not typing at the pane yet")
+            return
         try:
             share = float(read_stats(self.profile).get("context_pct"))
         except (TypeError, ValueError):
@@ -1562,10 +1577,14 @@ class Daemon:
         # BEFORE THE LINE GOES IN, so the turn starts on the summary rather
         # than producing one and throwing it away. See `_compact_before_the_turn`
         # for why a refusal here is not a reason to withhold the messages.
-        from ..config import WHEN_TASK, compact_when
-
-        if compact_when() == WHEN_TASK:
-            await self._compact_before_the_turn()
+        #
+        # UNDER EITHER `compact_when`, and not only under `task`. A woken turn
+        # about to be typed is one of the moments `task` names, and `always` is
+        # every moment including that one — so gating this on `task` made the
+        # LESS restrictive setting lose the one guarantee the design is built
+        # around, and the turn ran on the full window with the compaction
+        # catching up on a later heartbeat, after the turn it was for.
+        await self._compact_before_the_turn()
         config = self.waker.config()
         carrying = batch.name if batch is not None else "the standing reminder"
         logger.info("waking the agent with %s", carrying)
