@@ -203,6 +203,22 @@ spent when the reminder reaches a route, not when something asks whether one is
 due: that question is asked twice on the way to one delivery, and by two
 commands that only report.
 
+# It outlives the session it was armed in
+
+Later than the pin. A wake is a command written to disk, not a running thing,
+so stopping a session cannot remove it: `collab kill` ends the hub, the
+listener and the tunnel, and leaves the instruction exactly where it was. While
+the session is down that costs nothing and shows nothing. Resume the session
+weeks later and the first batch of messages fires it, and an agent takes a turn
+on a conversation whoever is at the keyboard had forgotten.
+
+So the stop now names it, `collab kill --disarm` and `collab daemon stop
+--disarm` take it with them, and `collab check` warns about a wake armed on a
+session with no listener — while staying silent about one armed on a live
+session, which is the wake doing its job. The other thing a stop leaves behind
+is the opposite shape: a `collab listen --follow` is a live process belonging
+to whatever armed it, so it is named with its pid and never signalled.
+
 # Arming something unreviewed
 
 `collab wake set '<command>'` accepts any command, but one that is not a

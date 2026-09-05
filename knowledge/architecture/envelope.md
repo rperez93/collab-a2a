@@ -124,10 +124,19 @@ receiver that has acts on — because anybody can type a message beginning
 `learning:`, and a message that merely looks like one is not a fact about
 anybody's repository.
 
-The hub is unchanged by it. The marker is sequenced, fanned out and stored like
-any other body, and nothing hub-side reads it; acting on it is entirely
-client-side, which is why the rule above still holds — one kind a client may
-send, and a body it may put things in.
+A second marker rides the same door: `{learning_sync: true}` asks the room for
+what it has, and the answer is the ordinary marker again, one message per
+learning. The request carries the asking agent's repository, and the answering
+daemon does not read it. It answers from the one bundle it is entitled to
+publish — the repository its own session is checked out in — and a receiver
+files what arrives under the key it derived for itself, never under the key the
+sender wrote. That is the whole defence: a participant can ask, and cannot say
+which repository the answer is about or where it will be filed.
+
+The hub is unchanged by either. The markers are sequenced, fanned out and
+stored like any other body, and nothing hub-side reads them; acting on them is
+entirely client-side, which is why the rule above still holds — one kind a
+client may send, and a body it may put things in.
 
 # Bounds, applied on the way in
 

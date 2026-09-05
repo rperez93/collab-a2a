@@ -105,12 +105,24 @@ held at `23db6d0`.
 | `statusline-last.json` | The last status line that could be built, with its timestamp and colour mode, so a status file mid-rewrite does not blank the segment for a redraw. Sixty seconds. |
 | `diagnostics/YYYY-MM-DD.jsonl` | Off by default. Events only — never message text, names, invites, addresses, or paths under the reader's home. Kept seven days. See [the trust model](/operating/security-model.md). |
 
-One more lives in the **shared** `.collab/` rather than in a session directory
-or a per-agent home: `learnings.md`, with a `learnings.d/` beside it holding one
-empty file per learning already written down. Two agents in one checkout are
-working on one repository, so a file each would give them two half-answers with
-no way to know it, and the claim file is how exactly one of the two daemons
-wins the right to append a given line.
+Learnings are the exception that leaves this tree altogether. They live beside
+the global config — `<config dir>/learnings/<repo key>/`, moved by the
+`learnings_dir` setting — because a learning belongs to the agent that found it
+and outlives any checkout of the repository it is about. The repo key is the
+`origin` remote normalised to `host/owner/name`, or `local/<directory>` where
+there is no remote, so two clones of one repository share a folder and two
+unrelated directories of the same name do not. Each folder holds one Markdown
+file per learning, an `index.md` and a `log.md` regenerated from them, and a
+`.index.db` FTS5 index rebuilt whenever a stamp over the folder's own entries
+disagrees with the one the index was built from.
+
+What the session directory holds is the handover, not the store:
+`learn/pending/<millis>-<op>.json`, one spool file per unpublished learning.
+The CLI writes there and returns; the daemon drains it on a heartbeat, in a
+thread, and unlinks a file only once the publish it describes has succeeded —
+so a crash mid-publish repeats the send rather than losing the fact. The slug
+the daemon settled on is written back into the spool file first, which is what
+makes the repeat a republish instead of a second copy.
 
 # The permissions, stated honestly
 

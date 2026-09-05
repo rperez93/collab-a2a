@@ -82,16 +82,29 @@ pinned tree when it was not.
 
 | Command | What the parser says it does |
 |---|---|
-| `learn` | say something the next agent in this repo will need, and write it down where they will find it |
+| `learn` | write down a fact worth keeping, and search, read and share what has been written |
 | `context` | compact or clear this agent's own context window, through the pane its wake is armed on |
 | `remind` | make the standing reminder due now instead of at the end of its interval |
 | `issue` | write a bug report from this machine's own records, and print the command that posts it |
 
-`learn` takes the text as a positional and `--list` to read them back; `context`
-takes `compact` or `clear`; `remind` takes `now`; `issue` takes `draft` and
-`--out FILE`. None of them posts anything anywhere: `issue` prints a
-`gh issue create` line for a person to run, and `learn` sends an ordinary chat
-message like `send` does.
+`learn` takes sub-verbs of its own — `add`, `list`, `search`, `read`, `used`
+and `sync` — over a store that lives beside the global config rather than in
+the checkout, grouped by the repository the learning is about; `context` takes
+`compact` or `clear`; `remind` takes `now`; `issue` takes `draft` and
+`--out FILE`. None of them posts anything anywhere on its own: `issue` prints a
+`gh issue create` line for a person to run, and `learn add` and `learn sync`
+send ordinary chat messages like `send` does, by way of a spool the daemon
+drains rather than from the command itself.
+
+Two flags and one line of output are later than the pin as well. `collab kill`
+and `collab daemon stop` take `--disarm`, which turns off the wake armed on the
+session being stopped; without it the stop names what it left behind rather
+than removing it, and a followed stream is named with its pid and never
+signalled, because it belongs to whatever armed it. And `collab host`,
+`collab join` and `collab check` now name the listening route for the tool they
+are talking to — a watcher on `collab listen --follow`, or a wake — instead of
+listing both and leaving an agent to guess a fact about itself it does not
+reliably know.
 
 # The sub-verbs
 
