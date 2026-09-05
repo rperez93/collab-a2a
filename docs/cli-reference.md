@@ -581,18 +581,54 @@ every five minutes, and an unanswered proposal expires after
 
 ## remind
 
-Make the standing reminder due now, rather than at the end of its interval.
+Read or change the standing reminder your daemon puts in front of your agent,
+or ask for one now.
 
 ```text
+collab remind [show] [--host|--guest] [--session SESSION]
+collab remind set "<text>" [--host|--guest] [--file PATH]
+collab remind add "<text>" [--host|--guest] [--file PATH]
+collab remind clear [--host|--guest]
 collab remind now [--session SESSION]
 ```
 
 | Argument or flag | Meaning |
 |---|---|
-| `now` | The only action. Ask for a reminder immediately. |
+| `show` | What is in force for that role, numbered, with its source. The default. |
+| `set` | Replace the whole text. |
+| `add` | Append a paragraph to it. |
+| `clear` | Give the role back the shipped text. |
+| `now` | Ask for a delivery immediately. |
+| `--host`, `--guest` | Which role's reminder. Defaults to the current session's own; required outside a session. |
+| `--file PATH` | Read the text from a file, or `-` for standard input. |
 | `--session SESSION` | Act on this session id instead of the current one. |
 
-For the moment you have just changed `remind_host` or just armed the route, and
+`add` is the one worth explaining. The text is stored in `remind_host` and
+`remind_guest`, and an empty value means «the shipped one» — so appending to
+the key by itself would store the addition alone, and the agent would be
+reminded of the new line and nothing else. It arrives, it reads like a
+reminder, and the instructions that were doing the work are gone. So `add`
+writes the shipped text out first and appends to that.
+
+The two roles are two separate texts, because a host and a guest are told
+different things. An edit to one never touches the other, and outside a session
+the role has to be named: both keys exist and both accept anything, so a guess
+would change the wrong text quietly.
+
+A reminder longer than 8,000 characters is refused, and the refusal says the
+size and the limit — the number is `wake.MAX_TEXT`'s reasoning applied here,
+and it is also about what an agent can be asked to read every few minutes.
+
+Every change is live. The daemon reads the text at each delivery, so an edit
+lands on the next reminder — within `remind_every` minutes, on either route,
+with nothing restarted.
+
+`collab config remind_host` and `remind_guest` still write the same keys and
+still show the whole text, whichever command built it.
+
+### now
+
+For the moment you have just changed the text or just armed the route, and
 want to see the thing arrive rather than wait ten minutes to find out whether
 it works. It prints which route will carry it and roughly when.
 

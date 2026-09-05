@@ -483,6 +483,38 @@ what the board says, keep a batch open, keep the work in subagents — and the
 guest's is § 4b — keep going on the objective you were given, say when you
 stop, say when you are blocked.
 
+**You can add to it as well as replace it.** After the first week what
+anybody wants is one more standing instruction on top of the ones already
+working, not a rewrite of the lot:
+
+```bash
+collab remind show                   # what is in force, and where it came from
+collab remind add "Close the batch before proposing a fresh session."
+collab remind set "<instead of all that>"
+collab remind clear                  # back to the shipped one
+```
+
+`add` appends a paragraph. When you have not written anything yet it
+materialises the shipped text first and appends to that, so adding an
+instruction never quietly drops the four that were already being followed —
+which is what appending to an empty setting would have done, invisibly, since a
+reminder that has lost most of itself still arrives and still reads as a
+reminder.
+
+The two roles are two texts. `--host` and `--guest` say which, and default to
+the role of the session you are in; outside a session they are required,
+because guessing would edit the wrong one and you would find out at the next
+reminder. `--file <path>` or `--file -` takes the text from a file or standard
+input, which is easier than quoting a paragraph at a shell.
+
+**Every change is live.** The daemon reads the text at each delivery, so an
+edit lands on the next reminder — within `remind_every` minutes, on either
+route, with nothing restarted. That is true of your own daemon; everyone else's
+reminder is their own setting and unaffected by yours.
+
+The config keys are unchanged and still the whole of the storage, so
+`collab config` shows the entire text however it was built:
+
 ```bash
 collab config remind_every 15        # or 0 to turn it off
 collab config remind_host "<what your host agent should be told>"

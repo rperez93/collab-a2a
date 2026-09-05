@@ -3555,7 +3555,145 @@ def _reminder_route(profile: SessionProfile, armed: bool) -> tuple[str, str]:
                 f" `{exe} wake set --agent <name>`")
 
 
+def _which_role(args: argparse.Namespace) -> bool | None:
+    """Whose reminder this command is about: True host, False guest, None stop.
+
+    THE SESSION'S OWN ROLE BY DEFAULT, because that is the reminder the agent
+    running the command is actually being given, and asking somebody to name it
+    every time would be asking them to repeat something collab already knows.
+
+    REQUIRED OUTSIDE A SESSION, because there is nothing to infer it from and
+    guessing would edit the wrong role's text — quietly, since both keys exist
+    and both accept anything. A host who meant to add a line for their guests
+    and changed their own reminder instead would find out at the next reminder,
+    which is the worst moment to find out.
+    """
+    if getattr(args, "host", False) and getattr(args, "guest", False):
+        fail("--host and --guest are two different reminders; pick one")
+        return None
+    if getattr(args, "host", False):
+        return True
+    if getattr(args, "guest", False):
+        return False
+    profile = (SessionProfile.load(args.session)
+               if getattr(args, "session", None) else SessionProfile.current())
+    if profile is None:
+        fail("no active session, so say whose reminder you mean")
+        print(dim("  --host or --guest; they are two separate texts"))
+        return None
+    return bool(profile.is_host)
+
+
+def _text_argument(args: argparse.Namespace, what: str) -> str | None:
+    """The text for `set` or `add`: an argument, a file, or standard input.
+
+    A reminder is a paragraph of standing instructions and paragraphs are
+    awkward to type at a shell — quoting, newlines, a shell that eats a `!`. So
+    `--file` and `-` are here for the same reason they are on every command
+    that takes prose, and an agent writing one has somewhere to put it that is
+    not a command line.
+    """
+    where = getattr(args, "file", "") or ""
+    if where == "-":
+        return sys.stdin.read()
+    if where:
+        try:
+            return Path(where).read_text(encoding="utf-8")
+        except OSError as exc:
+            fail(f"could not read {where}: {exc.strerror or exc}")
+            return None
+    text = " ".join(getattr(args, "text", None) or []).strip()
+    if not text:
+        fail(f"nothing to {what}")
+        print(dim(f"  {Path(sys.argv[0]).name} remind {what} \"<text>\","
+                  " or --file <path>, or --file - to read it from stdin"))
+        return None
+    return text
+
+
+def _say_the_reminder(is_host: bool) -> None:
+    """Print the text in force, numbered, with where it came from."""
+    from .config import MAX_REMIND_TEXT, reminder_is_yours
+
+    role = "host" if is_host else "guest"
+    yours = reminder_is_yours(is_host)
+    text = reminder_settings(is_host)["text"]
+    heading(f"the {role} reminder · {'yours' if yours else 'shipped'}")
+    # NUMBERED, because the reason to look at this is usually to change one
+    # line of it, and «the third line» is how a person says which.
+    for n, line in enumerate(text.splitlines() or [""], start=1):
+        print(f"  {n:>3}  {said(line)}")
+    print()
+    print(dim(f"  {len(text)} of {MAX_REMIND_TEXT} characters"))
+    exe = Path(sys.argv[0]).name
+    if yours:
+        print(dim(f"  {exe} remind clear --{role}   gives back the shipped one"))
+    else:
+        print(dim(f"  {exe} remind add \"<text>\" --{role}   keeps this and adds"
+                  " to it"))
+
+
 def cmd_remind(args: argparse.Namespace) -> int:
+    """Read and change the standing reminder, or ask for one now.
+
+    THE TEXT LIVES WHERE IT ALWAYS DID, in `remind_host` and `remind_guest`, so
+    `collab config` still lists the whole of it and the live-reload rule needs
+    no exception: `Waker.reminder()` reads fresh at every delivery, which means
+    an edit here lands on the very next reminder on either route, with nothing
+    restarted.
+    """
+    action = getattr(args, "action", "now")
+    if action == "now":
+        return _remind_now(args)
+
+    from .config import (ReminderTooLong, append_reminder_text,
+                         clear_reminder_text, set_reminder_text)
+
+    is_host = _which_role(args)
+    if is_host is None:
+        return 1
+    role = "host" if is_host else "guest"
+    exe = Path(sys.argv[0]).name
+
+    if action == "show":
+        _say_the_reminder(is_host)
+        return 0
+
+    if action == "clear":
+        clear_reminder_text(is_host)
+        ok(f"the {role} reminder is the shipped one again")
+        print(dim(f"  {exe} remind show --{role}   what that says"))
+        return 0
+
+    text = _text_argument(args, action)
+    if text is None:
+        return 1
+    change = set_reminder_text if action == "set" else append_reminder_text
+    try:
+        now_says = change(is_host, text)
+    except ReminderTooLong as too_long:
+        # SAYS BOTH NUMBERS. «Too long» leaves somebody guessing whether to
+        # trim a line or start again, and this is a text people add to over
+        # weeks — the answer is usually neither obvious nor small.
+        fail(f"that would make the {role} reminder {too_long.size} characters,"
+             f" and the limit is {too_long.limit}")
+        print(dim(f"  {exe} remind show --{role}   what is in it now"))
+        print(dim("  every reminder spends a turn, so the limit is about what"
+                  " an agent can be asked to read every few minutes"))
+        return 1
+    did = "replaced" if action == "set" else "added to"
+    ok(f"{did} the {role} reminder — {len(now_says)} characters")
+    # THE POINT OF THE COMMAND, said out loud: it is live, and the next one
+    # carries it. Somebody who did not know that would restart their daemon.
+    every = reminder_settings(is_host)["every"]
+    print(dim(f"  every daemon on this machine reads it fresh at each delivery,"
+              f" so the next reminder carries it"
+              + (f" — within {every} minutes" if every else
+                 f"; but remind_every is 0, so none is due")))
+    return 0
+
+
+def _remind_now(args: argparse.Namespace) -> int:
     """Make the standing reminder due now, rather than at the end of its interval.
 
     For the moment somebody has just changed `remind_host`, or has just armed
@@ -5633,10 +5771,23 @@ def build_parser() -> argparse.ArgumentParser:
     wa.set_defaults(func=cmd_wake)
 
     rn = sub.add_parser("remind",
-                        help="make the standing reminder due now instead of at"
-                             " the end of its interval")
-    rn.add_argument("action", choices=["now"],
-                    help="ask for one immediately")
+                        help="read or change the standing reminder your daemon"
+                             " puts in front of your agent, or ask for one now")
+    rn.add_argument("action", nargs="?", default="show",
+                    choices=["show", "set", "add", "clear", "now"],
+                    help="show what is in force; set replaces it; add appends a"
+                         " paragraph; clear gives back the shipped one; now asks"
+                         " for a delivery immediately")
+    rn.add_argument("text", nargs="*",
+                    help="the text, for set and add")
+    # TWO REMINDERS AND NOT ONE: the roles are told different things, so a
+    # host editing theirs must not change what their guests are told.
+    rn.add_argument("--host", action="store_true",
+                    help="the host reminder; defaults to this session's role")
+    rn.add_argument("--guest", action="store_true",
+                    help="the guest reminder; defaults to this session's role")
+    rn.add_argument("--file", metavar="PATH",
+                    help="read the text from a file, or - for stdin")
     add_session_flag(rn)
     rn.set_defaults(func=cmd_remind)
 

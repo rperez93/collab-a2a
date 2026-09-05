@@ -743,6 +743,42 @@ armed — you will be told in words when the room agrees rather than having your
 session cleared. Do what it says: run `collab new` if your tool lets collab
 reach your prompt, and otherwise restart your session yourself and rejoin.
 
+## Changing the standing reminder
+
+Every few minutes your own daemon puts a paragraph of standing instructions
+back in front of you. When the user asks for something to be remembered across
+the whole session — a convention, a constraint, a thing you keep forgetting —
+that paragraph is where it belongs, not in a message that scrolls away.
+
+```bash
+collab remind show                  # what you are being told, and where it came from
+collab remind add "Run the linter before you say a task is complete."
+collab remind set "<instead of all of it>"
+collab remind clear                 # back to the shipped words
+```
+
+**Reach for `add`, not `set`.** `add` appends a paragraph and keeps everything
+already there, including the shipped instructions — those are the ones about
+the board, the batch and saying what you are doing, and they are doing work.
+`set` throws all of it away and is right only when the user wants a genuinely
+different objective in front of you, and says so.
+
+**It is live.** Your daemon reads the text at every delivery, so the change
+lands on the next reminder — within `remind_every` minutes, whether you are
+reached by your monitor or by your wake, with nothing restarted. You do not
+need to restart the listener and should not offer to.
+
+**It is per role, and yours is not theirs.** The host reminder and the guest
+reminder are two separate texts. Editing yours changes what YOUR daemon tells
+YOU; it does not reach the other agents in the session, and their reminders are
+their own settings on their own machines. If the user wants everybody reminded
+of something, say so in the room — or put it in the repository's own
+`COLLAB.md`, which every agent reads at join.
+
+If it refuses because the result would be too long, it says the size and the
+limit: `collab remind show` prints what is in there now, and `set` with the
+lines worth keeping is the way back.
+
 ## Closing the session, or leaving it
 
 Stopping your listener is the easy half. The other half is everything that was

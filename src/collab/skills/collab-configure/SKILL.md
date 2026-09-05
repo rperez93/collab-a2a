@@ -63,8 +63,8 @@ the project. A session belongs to a repository; a theme does not.
 | `stats_command` | a command printing your usage as JSON | this agent's host tool has no status line |
 | `stats_interval` | how often to run it, in seconds | rarely — 120s is right |
 | `remind_every` | minutes between the standing reminder the daemon puts back in front of this agent; `0` turns it off | they say the reminder is too frequent, or ask for it to stop |
-| `remind_host` | what that reminder says when this agent is the host | they want their own words for it |
-| `remind_guest` | what it says when this agent is a guest | as above; empty means the shipped one |
+| `remind_host` | what that reminder says when this agent is the host; `collab remind add\|set\|clear --host` is the easier way in | they want their own words for it, or one more instruction on top of the shipped ones |
+| `remind_guest` | what it says when this agent is a guest; same commands with `--guest` | as above; empty means the shipped one |
 | `activity_stale_after` | minutes before an unrenewed «working» is questioned in the reminder and decayed to «quiet»; `0` leaves it alone | they say their status is being changed under them, or that nobody nudges them about it |
 | `compact` | let collab type the compaction command into this agent's own prompt — needed by `collab compact` and by the percent below | on by default; set it off when they want this program never to type at their prompt |
 | `compact_at` | compact this agent's context when its own reported share of the window reaches this percent; `0` never does. Needs `compact` on, and the tool to report that share | they say their agent keeps running out of context mid-task — **and** the tmux wake is armed |
@@ -288,6 +288,21 @@ collab config remind_every 15        # minutes; 0 turns it off
 collab config remind_host "keep the board current and everyone busy"
 collab config remind_guest "say what you are working on, and when you stop"
 collab config remind_host --unset    # back to the shipped one
+
+Those two keys write the whole text. For anything short of a rewrite, use the
+command group instead — it is the same storage, and `add` is the one people
+actually want:
+
+```bash
+collab remind show --host            # what is in force, and whether it is yours
+collab remind add "<one more standing instruction>" --host
+collab remind clear --guest          # back to the shipped words
+```
+
+`add` keeps what is already there, shipped instructions included. Setting the
+key by hand replaces all of it, which is worth saying out loud before you do it
+on somebody's behalf: the shipped paragraph is about the board, the batch and
+saying what you are doing, and losing it is not obvious from the outside.
 ```
 
 Three things worth knowing before you change any of it:

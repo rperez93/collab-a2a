@@ -988,6 +988,86 @@ def reminder_settings(is_host: bool = False) -> dict[str, Any]:
     }
 
 
+def reminder_role_key(is_host: bool) -> str:
+    """Which config key holds this role's reminder.
+
+    ONE KEY PER ROLE and no third store, which is what keeps `collab config`
+    honest: the whole text is in the file it lists, whether it was written by
+    `remind set`, appended to by `remind add` or typed straight into
+    `collab config remind_host`. A separate «additions» key would have made the
+    listing show half of what an agent is actually being told.
+    """
+    return "remind_host" if is_host else "remind_guest"
+
+
+def shipped_reminder(is_host: bool) -> str:
+    """What this role is reminded of when nobody has written anything."""
+    return DEFAULT_REMIND_HOST if is_host else DEFAULT_REMIND_GUEST
+
+
+def reminder_is_yours(is_host: bool) -> bool:
+    """Whether the text in force was written here rather than shipped."""
+    written = load_config().get(reminder_role_key(is_host))
+    return isinstance(written, str) and bool(written.strip())
+
+
+class ReminderTooLong(ValueError):
+    """The result would be longer than a wake can carry.
+
+    Carries both numbers because the useful thing to say is not «too long» but
+    how much too long: somebody appending a paragraph to a reminder they have
+    been adding to for weeks needs to know whether to trim a line or start
+    again.
+    """
+
+    def __init__(self, size: int, limit: int) -> None:
+        super().__init__(f"{size} characters, and the limit is {limit}")
+        self.size, self.limit = size, limit
+
+
+def set_reminder_text(is_host: bool, text: str) -> str:
+    """Replace this role's reminder. Empty text returns it to the shipped one."""
+    text = text.strip()
+    if len(text) > MAX_REMIND_TEXT:
+        raise ReminderTooLong(len(text), MAX_REMIND_TEXT)
+    cfg = load_config()
+    key = reminder_role_key(is_host)
+    if text:
+        cfg[key] = text
+    else:
+        cfg.pop(key, None)
+    save_config(cfg)
+    return reminder_settings(is_host)["text"]
+
+
+def append_reminder_text(is_host: bool, text: str) -> str:
+    """Add a paragraph to this role's reminder.
+
+    THE SHIPPED TEXT IS MATERIALISED FIRST when nothing has been written yet,
+    and that is the whole of the care here. Appending to an empty key would
+    store the addition alone, and the addition alone is what the agent would
+    then be reminded of — so «add one more instruction» would silently delete
+    the four that were already being followed. Nobody would see it happen: the
+    reminder still arrives, still reads as a reminder, and is missing the part
+    that was doing the work.
+
+    A blank line between, because these are paragraphs of standing instructions
+    rather than a list, and two of them run together read as one sentence that
+    contradicts itself.
+    """
+    addition = text.strip()
+    if not addition:
+        return reminder_settings(is_host)["text"]
+    standing = reminder_settings(is_host)["text"].strip()
+    joined = f"{standing}\n\n{addition}" if standing else addition
+    return set_reminder_text(is_host, joined)
+
+
+def clear_reminder_text(is_host: bool) -> str:
+    """Give this role back the shipped reminder."""
+    return set_reminder_text(is_host, "")
+
+
 def save_reminder(*, every: int | None = None, host: str | None = None,
                   guest: str | None = None) -> dict[str, Any]:
     # `is not None` and not a bare truth test: 0 is the value that turns this

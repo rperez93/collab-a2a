@@ -568,8 +568,21 @@ once per interval and not twice, and the monitor is offered it first because
 that route is free.
 
 `collab config remind_every`, `remind_host` and `remind_guest` are the whole of
-its configuration. An agent with neither a monitor nor a wake has no route and
-receives none; once a reminder is configured, `collab check` says so.
+its configuration, and `collab remind` is the way to work on the text: `show`
+prints what is in force with its source, `set` replaces it, `add` appends a
+paragraph and `clear` returns the role to the shipped words.
+`add` materialises the shipped text before appending when nothing has been
+written yet, because the stored value starts empty and empty is what the shipped
+text MEANS — so appending to the key alone would have stored the addition by
+itself, and an agent would then be reminded of the new line and nothing else,
+which is invisible from the outside because a reminder still arrives and still
+reads like one.
+Both live in the same two keys whatever built them, so the listing always shows
+the whole of what an agent is told.
+Changes are live in the ordinary way: the text is read at every delivery, so an
+edit reaches the next reminder on either route without a restart.
+An agent with neither a monitor nor a wake has no route and receives none; once
+a reminder is configured, `collab check` says so.
 
 It shipped on the wake alone, which is the one route the most common agent here
 is told not to arm — so for a while the agent most likely to be in a session was
