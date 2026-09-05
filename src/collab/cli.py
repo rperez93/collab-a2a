@@ -3592,21 +3592,39 @@ def _text_argument(args: argparse.Namespace, what: str) -> str | None:
     `--file` and `-` are here for the same reason they are on every command
     that takes prose, and an agent writing one has somewhere to put it that is
     not a command line.
+
+    EMPTY IS REFUSED WHEREVER IT CAME FROM, and this is the whole of the care
+    here. Emptiness means «go back to the shipped text» to the layer below, and
+    that is right for `remind clear`, which is somebody saying so. It is not
+    right for a pipe that produced nothing: `remind set --file -` with an empty
+    upstream would wipe a reminder built up over weeks and report success,
+    which reads exactly like a deliberate clear and is the accident this guard
+    exists for. There is a command for meaning it, and it is not this one.
     """
     where = getattr(args, "file", "") or ""
     if where == "-":
-        return sys.stdin.read()
-    if where:
+        text = sys.stdin.read()
+    elif where:
         try:
-            return Path(where).read_text(encoding="utf-8")
+            text = Path(where).read_text(encoding="utf-8")
         except OSError as exc:
             fail(f"could not read {where}: {exc.strerror or exc}")
             return None
-    text = " ".join(getattr(args, "text", None) or []).strip()
-    if not text:
+    else:
+        text = " ".join(getattr(args, "text", None) or [])
+    if not text.strip():
+        exe = Path(sys.argv[0]).name
         fail(f"nothing to {what}")
-        print(dim(f"  {Path(sys.argv[0]).name} remind {what} \"<text>\","
-                  " or --file <path>, or --file - to read it from stdin"))
+        if where:
+            # Says which nothing it was, because «the file is empty» and «you
+            # gave me no text» are different mistakes with different fixes.
+            print(dim(f"  {'stdin' if where == '-' else where} is empty;"
+                      " nothing was changed"))
+            print(dim(f"  {exe} remind clear   is how to go back to the"
+                      " shipped text on purpose"))
+        else:
+            print(dim(f"  {exe} remind {what} \"<text>\","
+                      " or --file <path>, or --file - to read it from stdin"))
         return None
     return text
 

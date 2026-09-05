@@ -304,6 +304,76 @@ def test_a_file_that_is_not_there_is_said_so(monkeypatch, tmp_path):
     assert code == 1 and "could not read" in out
 
 
+# --- an empty pipe is not a way of saying «clear this» ---------------------------------
+#
+# Emptiness means «go back to the shipped text» one layer down, and that is
+# right for `remind clear`, which is somebody saying so. It is not right for a
+# pipe that produced nothing. `remind set --file -` with an empty upstream wiped
+# a reminder built up over weeks and reported success, which reads exactly like
+# a deliberate clear — so the accident and the intention were indistinguishable
+# afterwards, from the output and from the file.
+
+@pytest.mark.parametrize("action", ["set", "add"])
+def test_an_empty_file_changes_nothing_and_says_so(action, monkeypatch,
+                                                   tmp_path):
+    _run(monkeypatch, action="set", host=True, text=["Weeks of instructions."])
+    empty = tmp_path / "empty.txt"
+    empty.write_text("", encoding="utf-8")
+
+    code, out = _run(monkeypatch, action=action, host=True, file=str(empty))
+
+    assert code == 1
+    assert f"nothing to {action}" in out and "is empty" in out
+    assert _text(True) == "Weeks of instructions."
+
+
+@pytest.mark.parametrize("action", ["set", "add"])
+def test_empty_standard_input_changes_nothing_and_says_so(action, monkeypatch):
+    """The upstream-pipe-went-empty accident, which is the one that happens."""
+    _run(monkeypatch, action="set", host=True, text=["Weeks of instructions."])
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+
+    code, out = _run(monkeypatch, action=action, host=True, file="-")
+
+    assert code == 1
+    assert f"nothing to {action}" in out and "stdin is empty" in out
+    assert _text(True) == "Weeks of instructions."
+
+
+@pytest.mark.parametrize("action", ["set", "add"])
+def test_whitespace_is_the_same_as_empty(action, monkeypatch):
+    """A file with a stray newline in it is a file that says nothing."""
+    _run(monkeypatch, action="set", host=True, text=["Weeks of instructions."])
+    monkeypatch.setattr(sys, "stdin", io.StringIO("   \n\n  "))
+
+    code, _out = _run(monkeypatch, action=action, host=True, file="-")
+
+    assert code == 1
+    assert _text(True) == "Weeks of instructions."
+
+
+def test_the_refusal_names_the_command_that_does_mean_it(monkeypatch):
+    """Somebody who really did want the shipped text back should be told how,
+    rather than being left to reach for the thing that just refused them."""
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+
+    _code, out = _run(monkeypatch, action="set", host=True, file="-")
+
+    assert "remind clear" in out
+
+
+def test_nothing_added_never_reports_a_number(monkeypatch):
+    """`add` with empty input wrote nothing and still said «added to … 564
+    characters», which is a success message for work that did not happen."""
+    _run(monkeypatch, action="set", host=True, text=["Weeks of instructions."])
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+
+    _code, out = _run(monkeypatch, action="add", host=True, file="-")
+
+    assert "added to" not in out
+    assert "characters" not in out
+
+
 # --- and it is live, on both routes ----------------------------------------------------
 #
 # `Waker.reminder()` reads the config at every delivery, so this needs no

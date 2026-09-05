@@ -600,7 +600,7 @@ collab remind now [--session SESSION]
 | `clear` | Give the role back the shipped text. |
 | `now` | Ask for a delivery immediately. |
 | `--host`, `--guest` | Which role's reminder. Defaults to the current session's own; required outside a session. |
-| `--file PATH` | Read the text from a file, or `-` for standard input. |
+| `--file PATH` | Read the text from a file, or `-` for standard input. Empty input is refused rather than treated as a clear. |
 | `--session SESSION` | Act on this session id instead of the current one. |
 
 `add` is the one worth explaining. The text is stored in `remind_host` and
