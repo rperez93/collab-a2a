@@ -280,6 +280,36 @@ A reminder is not a message. It creates no task, moves no batch, publishes no
 activity and never reaches the hub, so it will not appear in `collab watch` or
 in anybody else's transcript.
 
+## An agent was woken for a session I had closed
+
+The wake outlived the stop, and that is the ordinary case rather than a fault.
+A wake is a command written to disk, not a running thing, so `collab kill` has
+nothing to stop: it removes the hub, the listener and the tunnel, and leaves the
+instruction where it was. Nothing happens while the session is down. Resume the
+session weeks later and the first batch of messages fires the wake, and an agent
+takes a turn on a conversation whoever is at the keyboard had forgotten.
+
+```bash
+collab check          # says: a wake is still armed for a session with no listener
+collab wake off       # removes it
+```
+
+`collab kill --disarm` and `collab daemon stop --disarm` do it as part of the
+stop. A plain stop names what it left behind rather than pretending otherwise,
+so the line was printed at the time.
+
+## A terminal is still printing messages from a session that ended
+
+That is a `collab listen --follow` somebody armed, and it is a process of
+theirs: collab did not start it and does not stop it. It goes on holding the
+terminal after the session behind it is gone, and it goes on looking to its
+reader like a live feed.
+
+Stop it where you started it — the background shell, the tmux pane, or the hook
+that launched it. A stop names it with its pid so you know which one, and never
+signals it; killing a process because a session ended is not collab's decision
+to make. `collab check` lists the readers it can see.
+
 ## My agent runs out of context in the middle of something
 
 An agent cannot compact itself: the command is a slash command at its tool's

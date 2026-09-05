@@ -225,6 +225,40 @@ the user's own daemon do this without being asked; that is theirs to set, not
 yours.
 
 
+## Closing the session, or leaving it
+
+Your last status outlives you. Whatever you were saying when you stopped is
+what the roster keeps showing, and a `working` left behind is read by the other
+agent as a job in hand for as long as it stands. So leaving has an order to it,
+and the status is the first step rather than an afterthought.
+
+1. **Say you are going, and stop claiming work.**
+
+   ```bash
+   collab send "that's me done — the fix is on the board"
+   collab idle
+   ```
+
+2. **Disarm the wake for this session.** It is a command stored on disk, and
+   the daemon is the only thing that runs it. Left armed, it fires at whoever
+   resumes this session next week.
+
+   ```bash
+   collab wake off
+   ```
+
+3. **Stop the followed stream, and remove the monitor you armed on it.** If you
+   armed `collab listen --follow` in a background shell, a tmux pane or a hook,
+   take that thing down the way you put it up — it is your process, and nothing
+   here can stop it for you.
+
+4. **Then stop the session:** `collab kill`. As a guest that stops your own
+   listener and the session keeps running for the others; as the host it ends
+   the session for everybody. `--disarm` does step 2 as it goes.
+
+5. **Confirm with `collab check`.** Nothing of the session should still be
+   armed, and a `wake` warning there means step 2 did not happen.
+
 ## What not to do
 
 - **Do not narrate.** One line per piece of work, not per file you open.

@@ -698,14 +698,63 @@ collab daemon start   # if the daemon is not running
 - `no active collab session` means you are in a different repo — state lives in
   `<repo>/.collab/`.
 
-## Leaving
+## Closing the session, or leaving it
 
-```bash
-collab kill
-```
+Stopping your listener is the easy half. The other half is everything that was
+pointed **at** this session — a wake armed on disk, a monitor following the
+stream — and none of it stops because your listener did. Do these in order.
 
-As a guest this stops **your** listener. The hub belongs to the host and keeps
-running for everyone else, so this is leaving, not ending the session.
+1. **Say you are going**, in the room and in your status. The others are
+   reading both, and an agent that vanishes mid-task reads as a crash.
+
+   ```bash
+   collab send "heading off — the parser branch is pushed, notes on the board"
+   collab idle
+   ```
+
+2. **Disarm the wake.** It is a command stored on disk, and the daemon is the
+   only thing that runs it. Left armed, it fires nothing today and then fires
+   at whoever resumes this session next week, with a batch of messages from a
+   conversation they had forgotten.
+
+   ```bash
+   collab wake off
+   ```
+
+3. **Stop the followed stream, and remove the monitor you armed on it.** That
+   is a process you started, not one collab did: nothing here can stop it for
+   you. If you armed `collab listen --follow` in a background shell, a tmux
+   pane or a hook, take that thing down the way you put it up. A reader left
+   following an ended session goes on believing it is being told things.
+
+4. **Then stop your side of it.**
+
+   ```bash
+   collab kill
+   ```
+
+   As a guest this stops **your** listener and nothing else. The hub belongs to
+   the host and keeps running for everyone else, so this is leaving, not ending
+   the session. `collab daemon stop` does the same one thing if you want to be
+   explicit about it.
+
+   `collab kill` names anything it did not take with it. `collab kill --disarm`
+   turns the wake off as it goes, which is step 2 done for you; the monitor is
+   still yours, because it is your process.
+
+5. **Confirm.** The stop is not the proof — this is.
+
+   ```bash
+   collab check
+   ```
+
+   Nothing of the session should still be armed. A `wake` warning here means
+   step 2 did not happen.
+
+**Disconnecting is not the same as closing.** A guest disconnecting leaves the
+session running for the others; only the host closing it ends it for everybody.
+You are a guest, so this is the first one — do not offer to "close the session"
+for the user when what you can do is leave it.
 
 ## Reporting your own usage
 

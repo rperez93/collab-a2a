@@ -63,6 +63,30 @@ The open door closes; everyone already inside stays.
 To end a session, use `collab kill`.
 The conversation and task board are kept unless you pass `--purge`.
 
+### Stopping a session is not leaving it
+
+Stopping ends what collab started: the hub, the listener, the tunnel.
+It does not end what was pointed at the session, and there are two of those.
+
+A wake is a command on disk rather than a running thing, so stopping cannot
+remove it; armed against a session nobody is serving it fires nothing, and then
+fires at whoever resumes that session next.
+A followed stream is the opposite shape: a live process, started by whoever
+armed it, which goes on holding a terminal and goes on convincing its reader
+that it is being told things.
+
+So a stop names both and says what removes each, `collab kill --disarm` and
+`collab daemon stop --disarm` take the wake with them, and the monitor is left
+to the process that owns it — signalling somebody else's process because a
+session ended is not collab's to do.
+`collab check` is the confirmation, and warns about a wake armed on a session
+with no listener.
+
+Which of the two words applies depends on who you are.
+A guest running `collab kill` disconnects: their listener stops and the session
+keeps running for everybody else.
+A host running it closes: the hub goes, and the session ends for all of them.
+
 ## Identity, names, and the roster
 
 Every participant has a stable id, written as `p_...`, and a display name.

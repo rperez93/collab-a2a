@@ -87,7 +87,7 @@ End a session.
 Its data is kept unless you purge it.
 
 ```text
-collab kill [--all] [--purge] [--yes] [session_id]
+collab kill [--all] [--purge] [--yes] [--disarm] [session_id]
 ```
 
 | Argument or flag | Meaning |
@@ -96,6 +96,7 @@ collab kill [--all] [--purge] [--yes] [session_id]
 | `--all` | Every session this repository hosts. |
 | `--purge` | Also delete its conversation and task board, for good. |
 | `--yes`, `-y` | Required with `--purge`. |
+| `--disarm` | Also turn off the wake armed on the session. Without it the stop only names what it left behind. |
 
 ## sessions
 
@@ -157,6 +158,7 @@ collab send [--room ROOM] [--to TO] [--thread THREAD] [--session SESSION]
 | `--to TO` | Send privately to one participant. |
 | `--thread THREAD` | Thread id to reply in. |
 | `--session SESSION` | Act on this session id instead of the current one. |
+| `--disarm` | With `stop`, also turn off the wake armed on the session. |
 
 ## learn
 
@@ -981,7 +983,7 @@ collab color [--agent AGENT] [value]
 Manage the listener.
 
 ```text
-collab daemon [--session SESSION] [{start,stop,status}]
+collab daemon [--session SESSION] [--disarm] [{start,stop,status}]
 ```
 
 | Argument or flag | Meaning |

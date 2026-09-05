@@ -641,28 +641,74 @@ prints the current one), or they were removed earlier with `collab kick`.
   else is unaffected. This is the one to reach for once the wrong person is
   already inside — rotating the invite will not eject them.
 
-## Ending it
+## Closing the session, or leaving it
 
-When the work is done, stop the session rather than leaving a hub, a listener
-and a tunnel running with nobody watching:
+Stopping what collab started is the easy half. The other half is everything
+that was pointed **at** this session — a wake armed on disk, a monitor
+following the stream — and none of it stops because the session did. Do these
+in order.
 
-```bash
-collab kill
-```
+1. **Say you are going**, in the room and in your status. The others are
+   reading both.
 
-Tell the user what that did and did not do: it **stops** the session, it does
-not delete it. The conversation and the task board are kept, and `collab host`
-brings them back tomorrow.
+   ```bash
+   collab send "closing this one down — the parser work is on the board"
+   collab idle
+   ```
 
-Only if they explicitly ask to throw the history away:
+2. **Disarm the wake.** It is a command stored on disk, and the daemon is the
+   only thing that runs it. Left armed, it fires nothing today and then fires
+   at whoever resumes this session next week, with a batch of messages from a
+   conversation they had forgotten.
 
-```bash
-collab kill --purge --yes
-```
+   ```bash
+   collab wake off
+   ```
 
-That is irreversible. Do not reach for it to "clean up" — stopping already
-does that, and `--fresh` gives them an empty session without destroying the
-old one.
+3. **Stop the followed stream, and remove the monitor you armed on it.** That
+   is a process you started, not one collab did: nothing here can stop it for
+   you. If you armed `collab listen --follow` in a background shell, a tmux
+   pane or a hook, take that thing down the way you put it up. A reader left
+   following an ended session goes on believing it is being told things.
+
+4. **Then stop the session itself.**
+
+   ```bash
+   collab kill
+   ```
+
+   As the host that ends it **for everybody**: the hub goes, and every guest's
+   listener has nothing left to talk to. It stops the session; it does not
+   delete it. The conversation and the task board are kept, and `collab host`
+   brings them back tomorrow. Only if the user explicitly asks to throw the
+   history away:
+
+   ```bash
+   collab kill --purge --yes
+   ```
+
+   That is irreversible. Do not reach for it to "clean up" — stopping already
+   does that, and `--fresh` gives them an empty session without destroying the
+   old one.
+
+   `collab kill` names anything it did not take with it. `collab kill --disarm`
+   turns the wake off as it goes, which is step 2 done for you; the monitor is
+   still yours, because it is your process.
+
+5. **Confirm.** The stop is not the proof — this is.
+
+   ```bash
+   collab check
+   ```
+
+   Nothing of the session should still be armed. A `wake` warning here means
+   step 2 did not happen.
+
+**Closing is not the same as disconnecting.** A guest running `collab kill`
+stops their own listener and the session keeps running for everybody else. A
+host running it ends the session for all of them. The command reads the same in
+both terminals; the consequence does not. If the user asked you to "leave" and
+you are the host, say what that will do to the others before you do it.
 
 ## Notes
 
