@@ -2127,7 +2127,19 @@ class Tui:
         # (A hub that has counted zero HAS something to say — «0 messages» —
         # and takes the row; see statusbar.messages_segment.)
         session = self._roster_bar() if self._roster_settings["enabled"] else []
-        session_h = 1 if session and roster_h - 2 >= 2 else 0
+        # HOW MANY ROWS THE FOOT WANTS, before the roster is divided up. It is
+        # a grid of four columns now, and a segment that does not fit in what
+        # is left of a row starts the next one — so the foot is one to
+        # `watch_status_roster_rows` rows deep, and the roster has to know
+        # which before it decides how many participants it can show.
+        want_rows, grid_fits = self._foot_wants(session, width)
+        # AND NEVER MORE THAN THE PANEL CAN AFFORD. Every row of the foot is a
+        # row the roster gives up, and the rule the rest of this section
+        # follows applies to each of them in turn: a row is taken only while
+        # two rows of participants — one whole person — still remain after it.
+        session_h = 0
+        while session_h < want_rows and roster_h - 2 - session_h >= 2:
+            session_h += 1
         # A RULE ABOVE THAT ROW, drawn the way the section headers are and
         # labelled the way they are — `STATUS`, beside `PARTICIPANTS (3)` and
         # `CONVERSATION` — so the figures read as a section of the panel and
@@ -2138,7 +2150,7 @@ class Tui:
         # remain after it, and below that the rule is what goes, never a
         # participant and never the row. Out of the roster's allocation, so
         # `chat_top` does not move.
-        rule_h = 1 if session_h and roster_h - 3 >= 2 else 0
+        rule_h = 1 if session_h and roster_h - 2 - session_h >= 2 else 0
         # AND A ROW OF AIR ON EITHER SIDE, on the same terms and paid for last:
         # one above the rule, so the last participant and the section header
         # do not touch, and one under the status row, so the figures do not
@@ -2147,8 +2159,12 @@ class Tui:
         # pane shrinks — the one below first, the one above next, then the
         # rule — because they are the only things at the foot that say
         # nothing. Also out of the roster's allocation.
-        pad_top = 1 if rule_h and roster_h - 4 >= 2 else 0
-        pad_bottom = 1 if pad_top and roster_h - 5 >= 2 else 0
+        # TWO WHOLE PARTICIPANTS after it, not one. The padding is the only
+        # thing at the foot that says nothing at all, so it is the first to be
+        # asked to justify itself: on a panel showing one person, a blank row
+        # is a quarter of what the reader came for.
+        pad_top = 1 if rule_h and roster_h - 3 - session_h >= 4 else 0
+        pad_bottom = 1 if pad_top and roster_h - 4 - session_h >= 4 else 0
         self.roster.rows = roster_h - 1 - session_h - rule_h - pad_top - pad_bottom
         # AND THE HEIGHT IS SETTLED BEFORE THE WIDTH IS ASKED FOR, because
         # `_gutter_width` reads `rows` to decide whether there is anything to
@@ -2188,7 +2204,7 @@ class Tui:
         # blank), the row, the rule, the padding above it (left blank).
         row_y = chat_top - 1 - pad_bottom
         if rule_h:
-            self._hline(win, row_y - 1, width, "STATUS")
+            self._hline(win, row_y - session_h, width, "STATUS")
         if session_h:
             # THE LAST ROW OF THE ROSTER PANEL, mirroring the conversation's
             # own row at the last row of the window — one bar per panel, each
@@ -2203,7 +2219,21 @@ class Tui:
             # feature not working: in a `collab watch --tmux` pane the count
             # went and the batch kept its glyphs. Narrow forms first, then a
             # clip that shows — see `statusbar.fit`.
-            self._paint_bar(win, row_y, width, session, keep=len(session))
+            if grid_fits and session_h >= want_rows:
+                cells = statusbar.grid(
+                    session, max(width - 1, 0), _w, _clip,
+                    spans=self._roster_settings.get("spans"), rows=session_h)
+                self._paint_foot(win, row_y - session_h + 1, width, cells)
+            else:
+                # THE PANEL CANNOT AFFORD THE GRID, so it gets what this foot
+                # did before there was one: a single fitted row that narrows
+                # every figure rather than dropping any. Dropping is what the
+                # grid does past its OWN row limit, where the reader chose the
+                # limit; here the pane chose it, and losing the message count
+                # to a short terminal is the defect the count's own tests
+                # exist to prevent.
+                self._paint_bar(win, row_y, width, statusbar.plain(session),
+                                keep=len(session))
         self._chat_top = chat_top
         self._hline(win, chat_top, width, self._chat_label())
 
@@ -2352,13 +2382,25 @@ class Tui:
             what += " — End (or G) jumps to the newest"
         keep = 1
         if roster and self._roster_settings["enabled"]:
-            parts = self._roster_bar(keys=keys)
-            # EVERY FIGURE ON THIS ROW IS KEPT, and only the legend may go. The
-            # figures are what the row is for; the legend is the same words
-            # every session. `compose` appends the very object it was handed
-            # for the keys, so identity is what tells the legend apart from a
-            # figure that happened to render as the same text.
-            keep = sum(1 for part in parts if part is not keys)
+            # THE ROSTER'S FOOT IS A GRID, here as in the split view: this
+            # pane's one bottom row IS the roster panel's foot, so it is laid
+            # out by the same function rather than by a second arrangement
+            # that could disagree with it. It grows upward from the last row,
+            # because the last row is where a foot belongs and the rows above
+            # it are the roster's to give.
+            named = self._roster_bar(keys=keys)
+            want, grid_fits = self._foot_wants(named, width)
+            rows_here = max(1, min(want, max(height - 3, 1)))
+            if grid_fits and rows_here >= want:
+                cells = statusbar.grid(
+                    named, max(width - 1, 0), _w, _clip,
+                    spans=self._roster_settings.get("spans"), rows=rows_here)
+                self._paint_foot(win, height - rows_here, width, cells)
+            else:
+                self._paint_bar(win, height - 1, width, statusbar.plain(named),
+                                keep=len(named))
+            self._jump_y, self._jump = -1, (0, 0)
+            return
         else:
             parts = statusbar.compose(notice=what, keys=keys,
                                       batch=self.model.status.get("batch"),
@@ -2410,7 +2452,7 @@ class Tui:
         Empty when there is nothing true to say, and `_draw` then leaves the
         row to the roster. No figure is better than a false zero.
         """
-        return statusbar.compose(
+        return statusbar.compose_named(
             keys=keys,
             batch=self.model.status.get("batch"),
             messages=self.model.status.get("messages"),
@@ -2427,6 +2469,100 @@ class Tui:
             segments=statusbar.roster_segments(
                 self._roster_settings["segments"],
                 messages=self._roster_settings["messages"]))
+
+    #: The colours a segment's own escape codes may ask for, as this viewer's
+    #: pairs. The same four `statusline.COLORS` speaks, because the one segment
+    #: that arrives painted is a status line rendered for a terminal.
+    SGR_PAIRS = {"32": C_ONLINE, "33": C_WARN, "31": C_OFFLINE, "36": C_ACCENT}
+
+    #: What each figure on the roster's foot is drawn in. One attribute per
+    #: SEGMENT rather than one for the row, because the row was uniformly dim
+    #: and a dim batch bar beside a dim count beside a dim legend reads as one
+    #: undifferentiated strip: the eye has nothing to catch on, and the figure
+    #: two agents are steering by looks exactly like the words `q: quit`.
+    #:
+    #: The batch takes the accent, which is what the section rules and the
+    #: scrolled-back notice already use for «this is the thing to look at».
+    #: `activity` is bold while working and dim otherwise, so the reader's own
+    #: line stands out at exactly the moment it is a claim rather than a
+    #: statement of rest. The count and the legend stay dim: one is a slow
+    #: number and the other is the same six words every session.
+    FOOT_COLOURS = {
+        "batch": (C_ACCENT, 0),
+        "messages": (C_DIM, curses.A_DIM),
+        "activity": (C_DIM, curses.A_DIM),
+        "keys": (C_DIM, curses.A_DIM),
+    }
+
+    def _foot_wants(self, named: list, width: int) -> tuple[int, bool]:
+        """How many rows the roster's foot wants, and whether it gets the grid.
+
+        ONE ANSWER FOR BOTH THE RESERVATION AND THE DRAW. The panel's height is
+        divided up before anything is painted, and the two arithmetics were
+        separate — so a pane too narrow for four columns reserved two rows and
+        then drew one fitted row into the lower of them, leaving a blank row
+        the roster had already paid for.
+
+        Falls back to a single row on a pane the grid cannot carry the figures
+        on: at twenty-four columns a quarter-cell is four characters, and `128
+        msgs` arrives as `128…`. That is worse than the one fitted row this
+        foot had before the grid, which narrows everything and drops nothing.
+        """
+        told = self._roster_settings
+        if not told.get("enabled") or not named:
+            return 0, False
+        spans = told.get("spans")
+        want = statusbar.rows_needed(
+            [name for name, _piece in named], spans, rows=told.get("rows", 3))
+        if not want:
+            return 0, False
+        fits = statusbar.fits_the_grid(named, max(width - 1, 0), _w,
+                                       spans=spans, rows=want)
+        return (want, True) if fits else (1, False)
+
+    def _foot_attr(self, cell: Any) -> int:
+        """The attribute for one cell of the roster's foot."""
+        pair, extra = self.FOOT_COLOURS.get(cell.name, (C_DIM, curses.A_DIM))
+        if cell.name == "activity" and cell.text.startswith("working"):
+            pair, extra = C_ACCENT, curses.A_BOLD
+        return curses.color_pair(pair) | extra
+
+    def _paint_foot(self, win, top: int, width: int, cells: list[Any]) -> None:
+        """Draw the roster's foot, one cell at a time, each in its own colour.
+
+        Cell by cell rather than a joined line, which is what makes the colour
+        per segment possible at all — and what makes the grid honest: a cell is
+        written at its own column and can neither run into its neighbour nor
+        drift when the one before it renders shorter than expected.
+        """
+        room = max(width - 1, 0)
+        for cell in cells:
+            if cell.x >= room:
+                continue
+            base = self._foot_attr(cell)
+            x, left = cell.x, min(cell.width, room - cell.x)
+            # SPLIT WHERE ITS COLOUR CHANGES. A segment's text is plain in
+            # every case collab builds itself, and one of them is not: a status
+            # line rendered for a terminal arrives painted. Walking the codes
+            # is what keeps a green dot green and keeps three visible
+            # characters of escape off the screen — and anything that is not a
+            # colour, a bold or a dim is dropped rather than passed on, because
+            # a cursor movement in a segment is a command to the terminal.
+            for run, colour, bold, dim in statusbar.sgr_runs(cell.text):
+                if left <= 0:
+                    break
+                attr = base
+                if colour or bold or dim:
+                    attr = ((curses.color_pair(self.SGR_PAIRS[colour])
+                             if colour in self.SGR_PAIRS else base)
+                            | (curses.A_BOLD if bold else 0)
+                            | (curses.A_DIM if dim else 0))
+                try:
+                    win.addnstr(top + cell.row, x, run, left, attr)
+                except curses.error:
+                    pass
+                x += _w(run)
+                left -= _w(run)
 
     def _paint_bar(self, win, y: int, width: int, parts: list[Any], *,
                    behind: int = 0, keep: int = 1) -> str:
@@ -2787,12 +2923,18 @@ class Tui:
             # row: the row is on the pane's last line, where the conversation's
             # own bar is in its pane, and under it is a tmux border that
             # already separates it from whatever is next.
-            row = self._bar or self._roster_settings["enabled"]
-            rule = self._roster_settings["enabled"] and height - 3 >= 2
-            pad = rule and height - 4 >= 2
+            # THE SAME KEYS THE DRAW USES, both forms of them. Handed only the
+            # long one, the legend never fits its cell and the foot reserved
+            # one row while `_hint` drew two into it.
+            want, _fits = self._foot_wants(
+                self._roster_bar(keys=(ROSTER_KEYS, ROSTER_KEYS_SHORT)), width)
+            foot = min(want, max(height - 3, 1)) if want else 0
+            row = foot or (1 if self._bar else 0)
+            rule = bool(foot) and height - 2 - foot >= 2
+            pad = rule and height - 3 - foot >= 4
         else:
             row, rule, pad = self._bar, False, False
-        pane.rows = height - 1 - (1 if row else 0) - (1 if rule else 0) - (1 if pad else 0)
+        pane.rows = height - 1 - row - (1 if rule else 0) - (1 if pad else 0)
         pane.total = len(rows)
         pane.settle()
         for i in range(pane.rows):
@@ -2806,7 +2948,7 @@ class Tui:
                 more_above=pane is self.chat and m.more_above(),
                 more_below=pane is self.chat and bool(m.pending()))
         if rule:
-            self._hline(win, height - 2, width, "STATUS")
+            self._hline(win, height - 1 - row, width, "STATUS")
 
         if self.view == "roster":
             # Its own keys, and no scrolled-back notice: the roster does not

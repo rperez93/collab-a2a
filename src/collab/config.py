@@ -653,6 +653,46 @@ def watch_status_settings() -> dict[str, Any]:
     }
 
 
+#: How many rows the roster's foot may grow to, and the bounds on it. Three
+#: because that is what the default spans need — a batch across the whole
+#: width, then the count beside the activity, then the keys — and six because
+#: past that the foot is the panel and the roster is a caption on it.
+DEFAULT_ROSTER_ROWS = 3
+MIN_ROSTER_FOOT_ROWS = 1
+MAX_ROSTER_FOOT_ROWS = 6
+
+#: `batch:4` — a segment and how many columns it takes.
+_SPAN = re.compile(r"^([a-z_]+):([0-9]+)$")
+
+
+def _split_span(item: Any) -> tuple[str, int]:
+    """`batch:4` into («batch», 4); a bare name into («batch», 0) for «default».
+
+    A span outside the grid costs THAT SEGMENT ITS SPAN and not its place on
+    the row: somebody who typed `batch:9` wants the batch, and dropping it
+    would answer a question they did not ask. The name is still theirs; only
+    the number is refused, and the default takes its place.
+    """
+    text = str(item).strip().lower()
+    found = _SPAN.match(text)
+    if not found:
+        return text, 0
+    span = int(found.group(2))
+    return found.group(1), (span if 1 <= span <= 4 else 0)
+
+
+def _roster_rows(cfg: dict[str, Any]) -> int:
+    """How many rows the foot may use, clamped. Read on the draw path."""
+    raw = cfg.get("watch_status_roster_rows")
+    if raw is None or isinstance(raw, bool):
+        return DEFAULT_ROSTER_ROWS
+    try:
+        value = int(raw)
+    except (TypeError, ValueError, OverflowError):
+        return DEFAULT_ROSTER_ROWS
+    return max(MIN_ROSTER_FOOT_ROWS, min(value, MAX_ROSTER_FOOT_ROWS))
+
+
 def watch_roster_settings() -> dict[str, Any]:
     """The roster panel's own bottom row, validated the same way as the other.
 
@@ -667,12 +707,15 @@ def watch_roster_settings() -> dict[str, Any]:
     cfg = load_config()
     enabled = cfg.get("watch_status_roster")
     raw = cfg.get("watch_status_roster_segments")
+    spans: dict[str, int] = {}
     if isinstance(raw, (list, tuple)):
         seen: list[str] = []
         for item in raw:
-            name = str(item).strip().lower()
+            name, span = _split_span(item)
             if name in WATCH_ROSTER_SEGMENTS and name not in seen:
                 seen.append(name)
+                if span:
+                    spans[name] = span
         segments = tuple(seen)
     else:
         segments = WATCH_ROSTER_SEGMENTS
@@ -680,6 +723,12 @@ def watch_roster_settings() -> dict[str, Any]:
     return {
         "enabled": True if enabled is None else bool(enabled),
         "segments": segments,
+        # HOW MANY OF THE FOUR COLUMNS EACH ONE TAKES, where somebody said. A
+        # name on its own keeps its default, so the whole feature is invisible
+        # to anybody who does not want it — which is most people, and the list
+        # they already wrote goes on meaning what it meant.
+        "spans": spans,
+        "rows": _roster_rows(cfg),
         # A SWITCH OF ITS OWN, beside the order rather than inside it. What it
         # is for is the person who wanted the count gone and had to rewrite the
         # whole order to say so, and the person who wrote an order once and
@@ -721,7 +770,8 @@ def save_statusline(*, segments: Any = None) -> dict[str, Any]:
 
 def save_watch_roster(*, enabled: bool | None = None,
                       segments: Any = None,
-                      messages: bool | None = None) -> dict[str, Any]:
+                      messages: bool | None = None,
+                      rows: int | None = None) -> dict[str, Any]:
     cfg = load_config()
     if enabled is not None:
         cfg["watch_status_roster"] = bool(enabled)
@@ -729,6 +779,8 @@ def save_watch_roster(*, enabled: bool | None = None,
         cfg["watch_status_roster_segments"] = [str(s) for s in segments]
     if messages is not None:
         cfg["watch_status_messages"] = bool(messages)
+    if rows is not None:
+        cfg["watch_status_roster_rows"] = int(rows)
     save_config(cfg)
     return watch_roster_settings()
 
@@ -1433,7 +1485,8 @@ def _write_segments(value: list[str]) -> Any:
 
 
 def _write_roster_segments(value: list[str]) -> Any:
-    unknown = [name for name in value if name not in WATCH_ROSTER_SEGMENTS]
+    unknown = [name for name, _span in map(_split_span, value)
+               if name not in WATCH_ROSTER_SEGMENTS]
     if unknown:
         # `stats` and `command` land here, and the message has to say why
         # rather than only that they are not on the list: they are real
@@ -1445,6 +1498,16 @@ def _write_roster_segments(value: list[str]) -> Any:
             + ". That row speaks for the whole session, so it carries only"
               " figures the hub counted for everybody; your own quota and your"
               " own command belong on watch_status_segments")
+    # THE SPAN IS REFUSED HERE TOO, and by itself: `batch:9` keeps the batch
+    # and loses the nine, because somebody who typed it wants the batch and
+    # dropping the segment would answer a question they did not ask. Said out
+    # loud rather than silently corrected — a number obeyed as something else
+    # is how a setting stops being believed.
+    over = [str(v) for v in value
+            if ":" in str(v) and not _split_span(v)[1]]
+    if over:
+        raise ValueError("a span is 1 to 4 columns: " + ", ".join(over)
+                         + " — the segment stays, its span goes back to the default")
     return save_watch_roster(segments=value)
 
 
@@ -1460,6 +1523,14 @@ def _write_statusline_segments(value: list[str]) -> Any:
                          + ", ".join(unknown) + " — have "
                          + ", ".join(STATUSLINE_SEGMENTS))
     return save_statusline(segments=value)
+
+
+def _shown_roster_segments() -> list[str]:
+    """The roster row's order, with each span written where one was set."""
+    told = watch_roster_settings()
+    spans = told["spans"]
+    return [f"{name}:{spans[name]}" if name in spans else name
+            for name in told["segments"]]
 
 
 def _shown_learnings_dir() -> str:
@@ -1654,13 +1725,22 @@ def settings() -> tuple[Setting, ...]:
                 "what that row carries; only figures the hub counts for "
                 "everybody are allowed on it",
                 list(WATCH_ROSTER_SEGMENTS), _as_list,
-                lambda: list(watch_roster_settings()["segments"]),
+                # PRINTED BACK IN THE FORM IT WAS TYPED, spans and all. A
+                # listing that showed `batch` for a stored `batch:4` would
+                # answer «what did I set» with something that is not what
+                # setting it again would produce.
+                _shown_roster_segments,
                 _write_roster_segments),
         # DIRECTLY AFTER THE ORDER, because it is the other half of the same
         # answer and somebody reading the listing for «how do I lose the
         # count» has to meet both keys at once. The order alone was the whole
         # answer once, and it was the wrong shape for the question: it made
         # losing one figure a matter of retyping the other two.
+        Setting("watch_status_roster_rows",
+                "how many rows that row may grow to; the roster gives them up",
+                DEFAULT_ROSTER_ROWS, _as_int,
+                lambda: watch_roster_settings()["rows"],
+                lambda v: save_watch_roster(rows=v)),
         Setting("watch_status_messages",
                 "show the session's message count on the roster row, wherever"
                 " the order above puts it",

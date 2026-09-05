@@ -78,6 +78,7 @@ the project. A session belongs to a repository; a theme does not.
 | `watch_status_interval` | how often to run it, in seconds | their command is slow or expensive |
 | `watch_status_roster` | show the roster pane's row of session-wide figures | **almost never — see below** |
 | `watch_status_roster_segments` | what that row carries, in order | they want a figure moved, or the bar off that row |
+| `watch_status_roster_rows` | how many rows that foot may grow to | they want it shorter, or want every segment on it at once |
 | `watch_status_messages` | show the session's message count on that row | they want the count gone — **this** key, not the order above |
 | `statusline_segments` | what the agent's own status line carries, in order | they want something off their prompt's collab segment, or want it shorter |
 
@@ -141,7 +142,18 @@ them a figure. With the switch off it is gone even from an order that names it.
 ```bash
 collab config watch_status_messages off        # the count gone, the order untouched
 collab config watch_status_roster_segments messages,batch,keys   # the count first
+collab config watch_status_roster_segments batch:4,messages:1,keys:2   # spans
+collab config watch_status_roster_rows 2       # how tall the foot may get
 ```
+
+That foot is a **grid of four columns**. Each segment says how many it takes —
+the batch four, so its bar runs the width of the panel; `messages` one;
+`activity` and `keys` two — and rows are added as the spans need them, up to
+`watch_status_roster_rows`. A bare name keeps its default span; a span outside
+1 to 4 is refused, and only the span, never the segment. Every row of the foot
+is a row the roster gives up, so raising the limit shortens the participant
+list: say so before doing it. On a pane too narrow or too short the foot falls
+back to one fitted row, which narrows everything and drops nothing.
 
 ### The conversation pane's row — the reader's own
 
