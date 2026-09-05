@@ -1700,6 +1700,23 @@ share one checkout each has its own name and colour in its own state directory,
 and `collab name` and `collab color` set those — see
 [Two agents in one checkout](#two-agents-in-one-checkout).
 
+**A change reaches the sessions you already have open.** Nothing is restarted:
+the viewer re-reads the file on every frame, the daemon on every tick, so a
+theme, a fold, a timezone, the roster's size, the built-in layout, the status
+rows and the reminder all land in the panes and daemons that are already
+running. The name and the colour are held by the hub, so `collab config`
+publishes those to the open session the same way `collab name` and
+`collab color` do. Three things are settled at a start rather than read live,
+and say so:
+
+- `rules` is read at `host` and `join`, which is the only time it applies.
+- `watch_layout tmux` and `watch_roster_position` open and place a second
+  tmux pane, which happens at the next `collab watch`. Inside a pane that is
+  already open, `tmux` reads as the built-in split.
+- A choice made on the command line — `collab watch --layout chat`,
+  `--roster-size 45` — is for that pane and is not overruled by the setting
+  while it is open.
+
 ### The roster's status row
 
 `collab watch` has two panes and each has a row at its foot. The roster's says

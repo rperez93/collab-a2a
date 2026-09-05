@@ -504,6 +504,24 @@ def watch_settings() -> dict[str, Any]:
             "roster_position": position}
 
 
+def layout_view(layout: str, view: str = "both") -> str:
+    """Which half of the viewer a layout asks for, inside one window.
+
+    `chat` and `roster` are one pane each. `split` is both, and so is `tmux`
+    for a pane that is already open: its second pane is tmux's to open, which
+    happens at the next `collab watch`, so within one window it can only read
+    as the built-in split. In one place because three callers decide it — the
+    real session, the simulated one, and a viewer following a setting that
+    changed under it — and a `--layout chat` that showed the roster in one of
+    them would be a difference nothing would catch.
+    """
+    if layout == "chat":
+        return "chat"
+    if layout == "roster":
+        return "roster"
+    return view
+
+
 def save_watch_settings(*, layout: str | None = None, roster_size: int | None = None,
                         roster_position: str | None = None) -> dict[str, Any]:
     cfg = load_config()

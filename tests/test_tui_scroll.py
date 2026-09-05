@@ -171,10 +171,10 @@ def test_tab_still_works():
 def test_the_roster_keeps_at_least_one_visible_row(height):
     """At zero visible rows it renders nothing, and a pane you cannot see is a
     pane you cannot scroll."""
-    from collab.client.tui import MIN_ROSTER_ROWS, ROSTER_SHARE
+    from collab.client.tui import MIN_ROSTER_ROWS, roster_share
 
     body_height = height - 3
-    roster_h = max(int(body_height * ROSTER_SHARE), MIN_ROSTER_ROWS)
+    roster_h = max(int(body_height * roster_share()), MIN_ROSTER_ROWS)
     roster_h = min(roster_h, max(body_height - 4, 2))
     assert roster_h - 1 >= 1, f"roster invisible at height {height}"
 

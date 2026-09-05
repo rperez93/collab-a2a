@@ -548,6 +548,11 @@ collab watch [--tmux] [--vertical] [--percent PERCENT] [--no-follow] [--plain]
 | `--session SESSION` | Act on this session id instead of the current one. |
 | `--demo` | Open the viewer on a simulated conversation, with no session and nothing on the network. Same as `collab demo watch`. |
 
+`--layout` and `--roster-size` given here are for this pane and stay. Left
+out, the saved `watch_layout` and `watch_roster_size` apply, and keep applying
+while the pane is open: `collab config watch_roster_size 45` in another
+terminal moves the split on the next frame.
+
 ## demo
 
 Draw the two halves of a screenshot: a coding agent's terminal that is a
@@ -722,6 +727,14 @@ collab config theme --unset         put it back to its default
 The settings are listed in the README under
 [Global settings](../README.md#global-settings). The commands that predate this
 one still work and still write the same keys.
+
+A change reaches the sessions already open: the viewer re-reads the file on
+every frame and the daemon on every tick, and `display_name` and `color` are
+published to the open session as `collab name` and `collab color` publish
+theirs. The exceptions are `rules`, read at `host` and `join`; `watch_layout
+tmux` and `watch_roster_position`, which open a second tmux pane at the next
+`collab watch`; and any layout choice given on the `collab watch` command
+line, which is for that pane and stays.
 
 Three of them have no older command of their own and are set only here — the
 standing reminder your own daemon puts back in front of your agent:
