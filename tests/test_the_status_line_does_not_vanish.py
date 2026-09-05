@@ -24,7 +24,10 @@ else.
 from __future__ import annotations
 
 import json
+import os
 import time
+from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -191,6 +194,82 @@ def test_remembering_never_raises_over_a_directory_it_cannot_write(session):
 
     r.remember_line(Nowhere(), "a line")          # must not raise
     r.remember_line(None, "a line")
+
+
+# --- and the keepsake is never caught half written -------------------------------
+
+def test_the_keepsake_is_written_somewhere_else_and_renamed_into_place(
+        session, monkeypatch):
+    """The file a reader opens is only ever whole.
+
+    This one is worth pinning rather than trusting, because the failure is
+    invisible on the machine that writes it: the window is one buffer flush
+    wide, and the reader who lands in it is somebody else's prompt on somebody
+    else's redraw. What makes it worth closing at all is that the keepsake is
+    read at exactly the moment something has already gone wrong — a truncated
+    line is handed to the prompt as the guard against a missing one.
+    """
+    wrote: list[str] = []
+    renamed: list[tuple[str, str]] = []
+    real_write, real_replace = Path.write_text, Path.replace
+
+    def watched_write(self, *a, **k):
+        wrote.append(self.name)
+        return real_write(self, *a, **k)
+
+    def watched_replace(self, target):
+        renamed.append((self.name, Path(target).name))
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "write_text", watched_write)
+    monkeypatch.setattr(Path, "replace", watched_replace)
+
+    r.remember_line(session, "a line worth keeping")
+
+    assert wrote == [f"statusline-last.{os.getpid()}.tmp"], wrote
+    assert renamed == [(f"statusline-last.{os.getpid()}.tmp", r.LAST_LINE_FILE)]
+    assert r.last_line(session) == "a line worth keeping"
+
+
+def test_two_prompts_writing_at_once_do_not_share_a_temporary(session):
+    """A fixed temporary name would let two of them interleave into one file
+    and rename the mixture into place. The daemon's `status.json` has one
+    writer and needs no such thing; this file has as many writers as the user
+    has prompts open on the session."""
+    seen = set()
+    real = Path.write_text
+
+    def note(self, *a, **k):
+        seen.add(self.name)
+        return real(self, *a, **k)
+
+    with mock.patch.object(Path, "write_text", note):
+        with mock.patch("os.getpid", lambda: 111):
+            r.remember_line(session, "from one shell")
+        with mock.patch("os.getpid", lambda: 222):
+            r.remember_line(session, "from another")
+
+    assert seen == {"statusline-last.111.tmp", "statusline-last.222.tmp"}
+    assert r.last_line(session) == "from another"
+
+
+def test_a_write_that_fails_leaves_the_previous_keepsake_and_no_litter(
+        session, monkeypatch):
+    """Interrupted mid-write, the reader still gets the last whole line. And
+    the scratch file goes: this runs on every redraw, so a directory filling
+    with temporaries is a worse failure than the keepsake it came from."""
+    r.remember_line(session, "the line before")
+    real = Path.write_text
+
+    def fails(self, *a, **k):
+        real(self, "{half of a js")          # a genuine partial write
+        raise OSError("the disk went away")
+
+    monkeypatch.setattr(Path, "write_text", fails)
+    r.remember_line(session, "the line that never lands")   # must not raise
+
+    assert r.last_line(session) == "the line before"
+    assert list(Path(session.dir).glob("*.tmp")) == []
 
 
 # --- what --json says about all of it ------------------------------------------

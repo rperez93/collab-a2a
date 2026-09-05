@@ -1731,16 +1731,20 @@ def settings() -> tuple[Setting, ...]:
                 # setting it again would produce.
                 _shown_roster_segments,
                 _write_roster_segments),
-        # DIRECTLY AFTER THE ORDER, because it is the other half of the same
-        # answer and somebody reading the listing for «how do I lose the
-        # count» has to meet both keys at once. The order alone was the whole
-        # answer once, and it was the wrong shape for the question: it made
-        # losing one figure a matter of retyping the other two.
+        # BESIDE THE ORDER RATHER THAN AFTER THE COUNT, because the spans in
+        # that order are what spends these rows: reading «batch:4» and «how
+        # many rows may it have» apart from each other leaves somebody setting
+        # a span they have no room for.
         Setting("watch_status_roster_rows",
                 "how many rows that row may grow to; the roster gives them up",
                 DEFAULT_ROSTER_ROWS, _as_int,
                 lambda: watch_roster_settings()["rows"],
                 lambda v: save_watch_roster(rows=v)),
+        # DIRECTLY AFTER THE ORDER, because it is the other half of the same
+        # answer and somebody reading the listing for «how do I lose the
+        # count» has to meet both keys at once. The order alone was the whole
+        # answer once, and it was the wrong shape for the question: it made
+        # losing one figure a matter of retyping the other two.
         Setting("watch_status_messages",
                 "show the session's message count on the roster row, wherever"
                 " the order above puts it",

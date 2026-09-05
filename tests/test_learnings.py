@@ -370,43 +370,10 @@ def test_the_scan_finds_the_same_things_when_there_is_no_index(store, monkeypatc
     assert [h.learning.slug for h in hits] == ["titled", "bodied"]
 
 
-def test_an_unchanged_bundle_opens_no_learning_to_search_it(store, monkeypatch):
-    """The whole reason for an index: the alternative is parsing every file to
-    find out whether parsing every file was necessary."""
-    bundle = _bundle(store)
-    _fill(bundle, 40)
-    L.search(bundle, ["subject"])           # warms and validates
-
-    opened: list[str] = []
-    real = Path.read_text
-
-    def counted(self, *a, **k):
-        if self.suffix == ".md":
-            opened.append(self.name)
-        return real(self, *a, **k)
-
-    monkeypatch.setattr(Path, "read_text", counted)
-    hits, engine = L.search(bundle, ["subject"], limit=5)
-    assert engine == "fts5"
-    # The hits themselves are loaded from their files; nothing else is.
-    assert len(opened) == len(hits) <= 5, opened
-
-
-def test_a_rebuild_reads_each_learning_exactly_once(store, monkeypatch):
-    bundle = _bundle(store)
-    _fill(bundle, 20)
-    opened: list[str] = []
-    real = Path.read_text
-
-    def counted(self, *a, **k):
-        if self.suffix == ".md" and self.name not in (L.INDEX, L.LOG):
-            opened.append(self.name)
-        return real(self, *a, **k)
-
-    monkeypatch.setattr(Path, "read_text", counted)
-    L.rebuild_index(bundle)
-    assert len(opened) == 20 and len(set(opened)) == 20
-
+# The cost pins that used to sit here — a search opening no file it does not
+# return, a rebuild reading each learning once — are in
+# `test_learnings_cost.py`, with the rest of what this store costs to use and
+# at the size the question is actually asked at.
 
 # --- the spool: the agent never waits ---------------------------------------------
 
