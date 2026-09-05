@@ -12,6 +12,12 @@ layout, read once at launch; and the name and the colour, which
 
 from __future__ import annotations
 
+import json
+import os
+import time
+from pathlib import Path
+from unittest import mock
+
 import pytest
 
 from collab import cli, config
@@ -220,3 +226,121 @@ def test_turning_sharing_off_says_the_old_figure_stays(session, capsys):
     reporting at once, and the hub keeps the last figure until told otherwise."""
     assert cli.main(["config", "share_stats", "off"]) == 0
     assert "keep seeing whatever you last shared" in capsys.readouterr().out
+
+
+# --- and the stamp that decides when the file is read again ------------------------
+#
+# Every setting above reaches a running session because `load_config` re-reads
+# the file when its stamp moves. The stamp is (mtime, size), and «nearly
+# always» was doing more work in that sentence than it could carry: two values
+# of the same length written inside one mtime tick are one stamp. A colour is
+# always seven characters. Two themes can be named alike. `new_when` goes
+# between `idle` and `task` without moving a byte.
+#
+# On a filesystem that stamps whole seconds — the network and FUSE mounts this
+# project has met — the second write of such a pair was invisible, and the
+# setting stayed at its old value for the life of the process.
+
+def _whole_second_filesystem(path, when):
+    """A file stamped the way a coarse filesystem stamps it."""
+    os.utime(path, (when, when))
+
+
+def test_a_same_size_change_inside_one_tick_is_still_seen(isolated):
+    """The case the size cannot tell apart, on the clock that cannot either."""
+    path = isolated / "config.json"
+    tick = int(time.time())
+
+    path.write_text(json.dumps({"new_when": "idle"}))
+    _whole_second_filesystem(path, tick)
+    assert config.new_when() == "idle"
+
+    path.write_text(json.dumps({"new_when": "task"}))
+    _whole_second_filesystem(path, tick)
+
+    assert config.new_when() == "task"
+
+
+def test_a_colour_is_always_seven_characters_and_still_changes(isolated):
+    """The everyday version of the same thing: two `collab color` calls in one
+    second differ in no byte the stamp was looking at."""
+    path = isolated / "config.json"
+    tick = int(time.time())
+
+    path.write_text(json.dumps({"color": "#00cccc"}))
+    _whole_second_filesystem(path, tick)
+    assert config.default_color() == "#00cccc"
+
+    path.write_text(json.dumps({"color": "#ff8800"}))
+    _whole_second_filesystem(path, tick)
+
+    assert config.default_color() == "#ff8800"
+
+
+def test_a_viewer_already_open_sees_it_too(isolated):
+    """Through the running object rather than the accessor, because the frame
+    is where this was going to be noticed or not. Two real zones of the same
+    length and an hour and a half apart, so the clocks on the rows differ and
+    the file does not."""
+    path = isolated / "config.json"
+    tick = int(time.time())
+    path.write_text(json.dumps({"timezone": "Asia/Kolkata"}))
+    _whole_second_filesystem(path, tick)
+    viewer = _viewer()
+    before = viewer._conversation(80)
+
+    path.write_text(json.dumps({"timezone": "Asia/Jakarta"}))
+    _whole_second_filesystem(path, tick)
+    after = viewer._conversation(80)
+
+    assert after is not before, "the rows were served from the cache"
+    assert [r.text for r in after] != [r.text for r in before]
+
+
+def test_a_file_nobody_has_touched_is_still_answered_from_the_cache(isolated):
+    """The fix must not have bought correctness by throwing the cache away: the
+    viewer asks this several times a frame, four times a second, and a re-read
+    each time is what the cache exists to prevent."""
+    path = isolated / "config.json"
+    path.write_text(json.dumps({"theme": "classic"}))
+    long_ago = time.time() - 3600
+    _whole_second_filesystem(path, long_ago)
+    config.load_config()
+
+    reads = []
+    real = Path.read_text
+
+    def counted(self, *a, **kw):
+        if self.name == "config.json":
+            reads.append(1)
+        return real(self, *a, **kw)
+
+    with mock.patch.object(Path, "read_text", counted):
+        for _ in range(200):
+            config.load_config()
+
+    assert reads == [], "an old file is read once and then remembered"
+
+
+def test_a_file_just_written_is_re_read_until_its_stamp_settles(isolated):
+    """The cost, stated: a read per call for as long as the stamp is too fresh
+    to be believed — which is the second somebody is watching to see whether
+    their change worked."""
+    path = isolated / "config.json"
+    path.write_text(json.dumps({"theme": "classic"}))
+    config.load_config()
+
+    reads = []
+    real = Path.read_text
+
+    def counted(self, *a, **kw):
+        if self.name == "config.json":
+            reads.append(1)
+        return real(self, *a, **kw)
+
+    with mock.patch.object(Path, "read_text", counted):
+        for _ in range(5):
+            config.load_config()
+
+    assert len(reads) == 5
+    assert config.STAMP_SETTLES > 1.0, "longer than a whole-second tick"

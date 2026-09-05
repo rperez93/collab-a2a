@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -271,6 +272,13 @@ def global_config_path() -> Path:
 
 _CACHE: dict[str, Any] = {}
 
+#: How long a config file's stamp is distrusted after it was written. Longer
+#: than the coarsest mtime resolution anybody here runs on — whole seconds, on
+#: the network and FUSE mounts this project has met — so that a second write
+#: inside one tick cannot hide behind the first. Short enough that the extra
+#: read is confined to the moment somebody is actually changing something.
+STAMP_SETTLES = 1.5
+
 
 def load_config() -> dict[str, Any]:
     """The global config, re-read WHEN THE FILE CHANGES and not before.
@@ -286,6 +294,24 @@ def load_config() -> dict[str, Any]:
     filesystems, and two writes inside the same second —perfectly possible:
     `collab color "#00cccc" && collab theme chat`— would give the same stamp. The
     size tells them apart nearly always and costs nothing.
+
+    NEARLY ALWAYS IS NOT ALWAYS, and the exceptions are not exotic. Two values
+    of the same length written inside one mtime tick are one stamp: a colour is
+    always seven characters, two themes can be named alike, and `new_when` goes
+    between `idle` and `task` without moving a byte. Measured on a filesystem
+    stamping whole seconds, the second write of such a pair was invisible and
+    the setting stayed at its old value for the life of the process.
+
+    So a stamp is only believed once it is safely in the past. Inside
+    `STAMP_SETTLES` of the mtime the file is re-read, because a file written a
+    moment ago is a file that may be written again before the clock moves. That
+    costs a read per frame for one second after somebody changes a setting,
+    which is precisely the second in which they are watching to see whether it
+    worked; a config written hours ago —every other second of a session— is
+    answered from the cache exactly as before.
+
+    A future mtime falls in the window too, and should: a clock that has gone
+    backwards is a reason to trust a stamp less, not more.
     """
     p = global_config_path()
     try:
@@ -294,7 +320,7 @@ def load_config() -> dict[str, Any]:
     except OSError:
         _CACHE.clear()
         return {}
-    if _CACHE.get("stamp") == stamp:
+    if _CACHE.get("stamp") == stamp and (time.time() - st.st_mtime) > STAMP_SETTLES:
         return _CACHE["data"]
     try:
         data = json.loads(p.read_text())

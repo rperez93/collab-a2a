@@ -10,6 +10,8 @@ those are what decide whether the change lands.
 from __future__ import annotations
 
 import json
+import os
+import time
 import types
 
 import pytest
@@ -68,8 +70,19 @@ def test_two_changes_in_the_same_second_are_not_lost(cfg):
 
 
 def test_the_file_is_not_re_read_when_nothing_changed(cfg, monkeypatch):
-    """The other half: reading four settings per frame cannot mean disk."""
+    """The other half: reading four settings per frame cannot mean disk.
+
+    ONCE THE STAMP HAS SETTLED, which is the whole of the change here and the
+    reason this test ages the file. A stamp is (mtime, size), and two values of
+    the same length written inside one mtime tick are one stamp — so for
+    `STAMP_SETTLES` after a write the file is read again rather than trusted.
+    That window is the second somebody is changing a setting and watching to
+    see whether it worked; every other second of a session is this test, and
+    the guarantee it was written for is unchanged.
+    """
     config.set_theme("other")
+    long_ago = time.time() - 3600
+    os.utime(cfg, (long_ago, long_ago))
     config.theme()                                   # fills the cache
     reads = []
     real = type(cfg).read_text
