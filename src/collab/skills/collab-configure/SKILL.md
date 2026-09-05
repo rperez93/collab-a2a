@@ -65,6 +65,7 @@ the project. A session belongs to a repository; a theme does not.
 | `remind_every` | minutes between the standing reminder the daemon puts back in front of this agent; `0` turns it off | they say the reminder is too frequent, or ask for it to stop |
 | `remind_host` | what that reminder says when this agent is the host | they want their own words for it |
 | `remind_guest` | what it says when this agent is a guest | as above; empty means the shipped one |
+| `context_compact_at` | compact this agent's context when its own reported share of the window reaches this percent; `0` never does | they say their agent keeps running out of context mid-task — **and** the tmux wake is armed |
 | `watch_layout` | `split`, `tmux`, `chat` or `roster` | they want tmux to own the panes |
 | `watch_roster_size` | the roster's share of the window, in percent | the roster is too small to read |
 | `watch_roster_position` | `top`, `bottom`, `left` or `right` | they ask for it beside rather than above |
@@ -178,6 +179,21 @@ To drop a segment, add the batch, or reorder them:
 collab config watch_status_segments batch,stats,keys
 ```
 
+
+## Compacting a context that is filling up
+
+`context_compact_at` is a percentage of the context window. Past it, the user's
+own daemon types the agent's compaction command into the pane the tmux wake is
+armed on. It ships **off**, it takes `0` or 50 to 95, and it needs two things
+the user may not have: the tmux wake armed (`collab wake set --agent tmux`, from
+inside the agent's own pane) and the agent reporting `context_pct` at all. Check
+both before setting it, and say so if either is missing — a threshold set
+without them changes nothing and looks broken.
+
+Say what it costs before turning it on. Compaction is **not undoable**: it
+replaces what the agent was holding with a summary, so a threshold set too low
+throws away reasoning the user was relying on. If they only want it once, now,
+that is `collab context compact` and no setting at all.
 
 ## The standing reminder
 

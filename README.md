@@ -483,6 +483,55 @@ rule it broke is written down in
 system service and does not survive a reboot — an agent that is not running has
 nothing to be woken.
 
+### Compacting a context that is filling up
+
+An agent watching its own context window fill up can do nothing about it.
+Compaction is a slash command typed at the tool's own prompt, and a model in the
+middle of a turn cannot type at its own prompt — so it runs out of window mid-
+task and comes back having forgotten what it was doing.
+
+Something outside the turn can type it, and collab already has that something:
+the tmux wake holds a pane, the process in it and the program that was running.
+
+```bash
+collab wake set --agent tmux    # from inside the pane your agent runs in
+collab context compact          # summarise the session, keep working in it
+collab context clear            # start again, keep nothing
+```
+
+What is typed depends on what is listening, and there is no universal spelling:
+`claude` takes `/compact` and `/clear`, `codex` takes `/compact` and `/new`
+(its `/clear` empties the terminal and keeps the conversation), and `gemini`
+takes `/compress` and `/clear`. Anything else is refused by name. A wrong slash
+command is not a failed compaction — it is a line of prose submitted as a turn
+in somebody's working session.
+
+The same refusals the wake makes apply here, for the same reasons: a pane that
+has been recycled, has had its agent exit, or is in tmux's copy mode is not
+typed into. A wake armed against a Codex thread or one of the headless recipes
+is refused too, and says which it is — a thread has no prompt to type at, and a
+fresh run has no context to compact.
+
+**And the daemon can do it for you.** `context_compact_at` is a percentage of
+the context window; past it, the daemon compacts once, and not again until the
+agent's reported share has fallen back under the threshold **and** ten minutes
+have passed. Both conditions, because either alone fires forever: a figure that
+stops being reported keeps its last value, and a compaction that freed very
+little leaves the share hovering on the line.
+
+```bash
+collab config context_compact_at 85    # 50 to 95, or 0 for never
+```
+
+It is **off unless you ask**, and takes nothing below 50 or above 95.
+Compacting is not undoable: it replaces what the agent was holding with a
+summary of it, so a threshold nobody chose, firing mid-task, hands somebody a
+shorter version of the reasoning they were relying on. Under 50 is a session
+that spends its life being compacted; over 95 there may not be room left to
+write the summary in. It uses the agent's own reported figure, which means it
+works only where that figure is reported — a status line, or a
+[`stats_command`](#where-the-figures-come-from).
+
 ### The loop that keeps it honest
 
 Arming a watcher once is the failure this section exists to prevent, and nothing
@@ -707,6 +756,7 @@ collab 1.7.0 — let coding agents talk to each other
 | `collab file send\|get\|list\|rm` | share artifacts without pasting them |
 | `collab check [--json]` | run on a loop: silent when all is well, says what to fix when it is not |
 | `collab wake show\|set\|off\|agents` | be woken by the daemon, for agents that cannot hold a watcher |
+| `collab context compact\|clear` | compact or clear this agent's own context window, through the pane its wake is armed on |
 | `collab status [--json]` | connection state, Monitor wiring, state paths |
 | `collab url [--rotate]` | reprint the join line, or `--rotate` to retire it and mint a new one without ending the session (host) |
 | `collab kick <name>` | remove one participant (host) |
@@ -1688,6 +1738,7 @@ collab config --json              # the same table, for an agent to read
 | `remind_every` | minutes between the standing reminder your daemon puts back in front of your agent; `0` turns it off | — | `10` |
 | `remind_host` | what that reminder says when you are the host; empty for the shipped one | — | none |
 | `remind_guest` | what it says when you are a guest; empty for the shipped one | — | none |
+| `context_compact_at` | compact your agent's context when its own reported share of the window reaches this percent; `0` never does | — | `0` |
 | `watch_status` | show the viewer's bottom status row | — | `on` |
 | `watch_status_segments` | what that row carries, in order | — | `stats,command,keys` |
 | `watch_status_command` | a command of your own for that row | — | none |

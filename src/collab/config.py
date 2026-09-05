@@ -845,6 +845,62 @@ def save_reminder(*, every: int | None = None, host: str | None = None,
     return reminder_settings()
 
 
+#: OFF, and the reason it ships off is that the act is not undoable. Compacting
+#: a session replaces everything the agent was holding with a summary of it,
+#: and a summary is lossy by construction — a threshold nobody chose, firing in
+#: the middle of somebody's work, would throw away the reasoning they were
+#: relying on and give them a shorter version of it back. So it is asked for.
+CONTEXT_COMPACT_OFF = 0
+#: And where it may be set to. Below the floor is not a threshold, it is a
+#: session that spends its life being compacted: an agent restarted at half a
+#: window is one that will be back at half a window within the turn. Above the
+#: ceiling there is not enough room left to run the compaction in — the summary
+#: is produced by the agent, in the context being compacted, and a window with
+#: five percent free may not have room to write one.
+MIN_CONTEXT_COMPACT = 50
+MAX_CONTEXT_COMPACT = 95
+#: How long after a compaction before another may fire, on top of the share
+#: having fallen back under the threshold. Both conditions, because either
+#: alone has a way of firing forever: a figure that stops being reported stays
+#: at its last value, and a compaction that frees very little leaves the share
+#: hovering on the line. Ten minutes is long enough that a session compacting
+#: on every heartbeat is impossible and short enough to be invisible to anyone
+#: whose context genuinely refilled.
+CONTEXT_COMPACT_GAP = 600.0
+
+
+def context_compact_at() -> int:
+    """The share of the context window at which the daemon compacts, or 0.
+
+    Read on the heartbeat, so it is validated against what the file could hold
+    rather than what it should — the rule every reader in this module follows,
+    for the reason `watch_status_settings` gives at length.
+
+    FLOORED AND CAPPED HERE, REFUSED AT THE COMMAND, the same split
+    `remind_every` makes: a typo in a hand-edited file should cost the setting
+    a sensible value rather than start compacting somebody's session at nine
+    percent, and a typo typed at a command that answered «ok» should not leave
+    them waiting for behaviour that was never coming.
+    """
+    raw = load_config().get("context_compact_at")
+    if raw is None or isinstance(raw, bool):
+        return CONTEXT_COMPACT_OFF
+    try:
+        value = int(raw)
+    except (TypeError, ValueError, OverflowError):
+        return CONTEXT_COMPACT_OFF
+    if value <= 0:
+        return CONTEXT_COMPACT_OFF
+    return max(MIN_CONTEXT_COMPACT, min(MAX_CONTEXT_COMPACT, value))
+
+
+def set_context_compact_at(percent: int) -> int:
+    cfg = load_config()
+    cfg["context_compact_at"] = int(percent)
+    save_config(cfg)
+    return context_compact_at()
+
+
 #: The levels of the xterm-256 6x6x6 cube. They are not linear —they jump from
 #: 0 to 95— so the closest 256-colour to a hex has to be searched for, not
 #: arrived at by dividing by 51.
@@ -1157,6 +1213,26 @@ def _remind_every(text: str) -> int:
     return value
 
 
+def _compact_at(text: str) -> int:
+    """A percentage of the context window, or 0 for «never».
+
+    Refused HERE and clamped in `context_compact_at`, the split `_remind_every`
+    argues for. The message names both ends of the range rather than the one
+    that was crossed: somebody typing `20` has not misjudged the floor by ten,
+    they have misunderstood what the number counts, and the range says which
+    way round it is.
+    """
+    value = _as_int(text)
+    if value == 0:
+        return 0
+    if not MIN_CONTEXT_COMPACT <= value <= MAX_CONTEXT_COMPACT:
+        raise ValueError(
+            f"expected 0 to turn it off, or {MIN_CONTEXT_COMPACT} to"
+            f" {MAX_CONTEXT_COMPACT} — the share of the context window IN USE"
+            " at which to compact, and compacting is not undoable")
+    return value
+
+
 def _as_list(text: str) -> list[str]:
     """Commas or spaces, either way. An empty string is an empty list.
 
@@ -1314,6 +1390,17 @@ def settings() -> tuple[Setting, ...]:
                 "", str,
                 lambda: str(load_config().get("remind_guest") or ""),
                 lambda v: save_reminder(guest=v)),
+        # BESIDE THE REMINDER, because it is the same kind of thing: the short
+        # list of acts your own daemon performs on your own agent, unprompted,
+        # while nobody is watching. Somebody reading this listing to find out
+        # what collab does to their session behind their back should meet both
+        # in one place.
+        Setting("context_compact_at",
+                "compact your agent's context when its own reported share of"
+                " the window reaches this percent; 0 never does",
+                CONTEXT_COMPACT_OFF, _compact_at,
+                context_compact_at,
+                lambda v: set_context_compact_at(v)),
         Setting("watch_layout", "how `collab watch` arranges its two panes",
                 DEFAULT_WATCH_LAYOUT, _one_of(WATCH_LAYOUTS),
                 lambda: watch_settings()["layout"],
