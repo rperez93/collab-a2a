@@ -1693,7 +1693,8 @@ collab config --json              # the same table, for an agent to read
 | `watch_status_command` | a command of your own for that row | — | none |
 | `watch_status_interval` | how often to run it, in seconds | — | `30` |
 | `watch_status_roster` | show the roster panel's own row of session-wide figures | — | `on` |
-| `watch_status_roster_segments` | what that row carries | — | `batch,messages,keys` |
+| `watch_status_roster_segments` | what that row carries, in order | — | `batch,messages,keys` |
+| `watch_status_messages` | show the session's message count on that row, wherever the order puts it | — | `on` |
 
 `display_name` and `color` here are the machine-wide defaults. Where two agents
 share one checkout each has its own name and colour in its own state directory,
@@ -1759,8 +1760,17 @@ on a short pane it gives it up rather than leaving half a participant.
 
 ```bash
 collab config watch_status_roster off                    # give the row back
-collab config watch_status_roster_segments batch         # or just the bar
+collab config watch_status_messages off                  # keep the row, lose the count
+collab config watch_status_roster_segments messages,batch,keys   # the count first
 ```
+
+The order and the count's switch are separate keys because they answer separate
+questions. `watch_status_roster_segments` says **where** each figure goes;
+`watch_status_messages` says **whether** the count is there at all. With the
+switch on and the order silent about the count, the count is still drawn — after
+the batch, or first when the batch is not on the row — so an order written
+before the count existed does not cost you a figure you were never asked about.
+With the switch off it is gone, even from an order that names it.
 
 `stats` and `command` are refused on this row by name. They are real segments
 on the row below, and they are the reader's own; a row that speaks for

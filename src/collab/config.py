@@ -639,19 +639,30 @@ def watch_roster_settings() -> dict[str, Any]:
         segments = tuple(seen)
     else:
         segments = WATCH_ROSTER_SEGMENTS
+    messages = cfg.get("watch_status_messages")
     return {
         "enabled": True if enabled is None else bool(enabled),
         "segments": segments,
+        # A SWITCH OF ITS OWN, beside the order rather than inside it. What it
+        # is for is the person who wanted the count gone and had to rewrite the
+        # whole order to say so, and the person who wrote an order once and
+        # then found the count missing from it because they had never thought
+        # to name a figure they had not asked to lose. See
+        # `statusbar.roster_segments`, which puts the two together.
+        "messages": True if messages is None else bool(messages),
     }
 
 
 def save_watch_roster(*, enabled: bool | None = None,
-                      segments: Any = None) -> dict[str, Any]:
+                      segments: Any = None,
+                      messages: bool | None = None) -> dict[str, Any]:
     cfg = load_config()
     if enabled is not None:
         cfg["watch_status_roster"] = bool(enabled)
     if segments is not None:
         cfg["watch_status_roster_segments"] = [str(s) for s in segments]
+    if messages is not None:
+        cfg["watch_status_messages"] = bool(messages)
     save_config(cfg)
     return watch_roster_settings()
 
@@ -1344,6 +1355,17 @@ def settings() -> tuple[Setting, ...]:
                 list(WATCH_ROSTER_SEGMENTS), _as_list,
                 lambda: list(watch_roster_settings()["segments"]),
                 _write_roster_segments),
+        # DIRECTLY AFTER THE ORDER, because it is the other half of the same
+        # answer and somebody reading the listing for «how do I lose the
+        # count» has to meet both keys at once. The order alone was the whole
+        # answer once, and it was the wrong shape for the question: it made
+        # losing one figure a matter of retyping the other two.
+        Setting("watch_status_messages",
+                "show the session's message count on the roster row, wherever"
+                " the order above puts it",
+                True, _as_bool,
+                lambda: watch_roster_settings()["messages"],
+                lambda v: save_watch_roster(messages=v)),
     )
 
 

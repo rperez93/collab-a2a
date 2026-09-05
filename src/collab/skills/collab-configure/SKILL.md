@@ -73,7 +73,8 @@ the project. A session belongs to a repository; a theme does not.
 | `watch_status_command` | a command of theirs for that row | they ask for something of their own on it |
 | `watch_status_interval` | how often to run it, in seconds | their command is slow or expensive |
 | `watch_status_roster` | show the roster pane's row of session-wide figures | **almost never — see below** |
-| `watch_status_roster_segments` | what that row carries | they want the message count gone |
+| `watch_status_roster_segments` | what that row carries, in order | they want a figure moved, or the bar off that row |
+| `watch_status_messages` | show the session's message count on that row | they want the count gone — **this** key, not the order above |
 
 `display_name` and `color` here are the **machine-wide** defaults. An agent
 with a state directory of its own — `.collab-alice`, when two agents share a
@@ -124,6 +125,18 @@ not how much this agent was shown.
 `collab config watch_status_roster_segments` takes only `batch`, `messages` and
 `keys`, and refuses `stats` and `command` by name. Those are the reader's own
 figures; they belong on the row below and nowhere else.
+
+**To drop the count, use `watch_status_messages off`, not the order.** The two
+keys govern different things: the order says where the count goes, the switch
+says whether it is there. With the switch on and the order silent about it, the
+count still appears — behind the batch, or first when the batch is not on the
+row — so an order somebody typed before the count existed does not quietly cost
+them a figure. With the switch off it is gone even from an order that names it.
+
+```bash
+collab config watch_status_messages off        # the count gone, the order untouched
+collab config watch_status_roster_segments messages,batch,keys   # the count first
+```
 
 ### The conversation pane's row — the reader's own
 
