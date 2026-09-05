@@ -235,6 +235,44 @@ The roster says each agent's state in words — `online`, or `offline · last se
 5m ago` — under which sits whatever they share: repo and branch, machine,
 model, every quota window with when it resets, spend and context use.
 
+## The two status rows at the foot
+
+Each pane has a row of its own at the bottom, and they answer different
+questions. The conversation's carries the legend, whatever a user's own command
+prints, and a notice. The roster's carries the session: how much of the open
+batch is done, how many messages have been sent in it, what this agent is
+working on and how long ago it said so, and the keys.
+
+```
+ batch ▓▓▓▓▓▓▓▓░░░░ 66% 8/12       ✉ 128
+ working: the parser · 4m ago      TAB switch · q quit
+```
+
+The roster's is a grid of four equal columns rather than one fitted line. Each
+figure declares how many columns it takes, so the layout depends on the spans
+and never on the text — a foot that reflowed as a percentage went from 9% to
+10% would move every figure four times a minute, and the eye would have nowhere
+to rest. Rows are added up to `watch_status_roster_rows`, and every row of the
+foot is a row the roster gives up, so it is bounded by choice rather than by
+the terminal.
+
+On a pane too narrow or too short for that, it falls back to a single fitted
+row, which narrows everything and drops nothing.
+
+Any of it can be turned off, and the settings reach a pane that is already open:
+
+```bash
+collab config watch_status_roster off             # no session row at all
+collab config watch_status_roster_segments batch:4,activity:2,keys:2
+collab config watch_status_roster_rows 2
+collab config watch_status_messages off           # keep the row, lose the count
+collab config watch_status off                    # the conversation's row
+```
+
+If the user asks why a figure is missing, that list is where to look first: each
+of those is a thing somebody can have turned off, and a missing figure is far
+more often a setting than a fault.
+
 ## Notes
 
 - It reads the local inbox the daemon maintains, so it works even while the hub

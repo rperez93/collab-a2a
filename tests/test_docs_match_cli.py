@@ -99,3 +99,59 @@ def test_the_check_would_catch_a_made_up_flag(tmp_path, monkeypatch):
 def test_every_doc_is_actually_scanned(doc):
     """A rename that silently empties the doc list would pass everything."""
     assert doc.exists() and doc.stat().st_size > 0
+
+
+# --- and the settings they name -----------------------------------------------
+#
+# `collab config <key>` is a command with a flag-shaped argument, so the checks
+# above walk straight past it: `collab config no_such_setting on` is a real
+# command with no flags in it, and every one of them passed.
+#
+# The configure skill's table is held to the registry by
+# `test_skill_settings_match_the_registry.py`, key by key and in order. What was
+# held nowhere is a key named in PROSE — in another skill, in the README, in the
+# guide — which is where most of them are actually met, and where a rename
+# leaves an instruction that answers «unknown setting» to whoever follows it.
+
+#: `collab config <key>`, wherever it is written. ONE SPACE, deliberately: the
+#: reference lists the bare command with its description padded out to a column,
+#: and `collab config      every setting…` is prose about it rather than a key.
+#: The cost is a key wrapped onto the next line, which is not how anybody writes
+#: an instruction somebody is meant to run.
+NAMED_KEY = re.compile(r"collab config (?!--)([a-z][a-z_]*)")
+
+
+def _named_settings() -> list[tuple[Path, str]]:
+    return [(doc, m.group(1))
+            for doc in DOCS
+            for m in NAMED_KEY.finditer(doc.read_text())]
+
+
+def test_the_docs_name_real_settings():
+    from collab.config import settings
+
+    known = {s.name for s in settings()}
+    unknown = sorted({(d.name, k) for d, k in _named_settings()
+                      if k not in known})
+    assert not unknown, f"documented but not a setting: {unknown}"
+
+
+def test_the_settings_named_are_actually_being_looked_at():
+    """A regex that matched nothing would pass the test above for ever."""
+    found = {k for _, k in _named_settings()}
+    assert len(found) > 10, found
+    assert "compact" in found and "watch_status" in found
+
+
+def test_the_check_would_catch_a_setting_that_was_renamed(tmp_path, monkeypatch):
+    """The guard is worthless if it cannot fail."""
+    fake = tmp_path / "FAKE.md"
+    fake.write_text("Run `collab config context_compact_at 80` to set it.\n")
+    import sys
+    monkeypatch.setattr(sys.modules[__name__], "DOCS", [fake])
+
+    from collab.config import settings
+
+    known = {s.name for s in settings()}
+    assert [k for _, k in _named_settings() if k not in known] \
+        == ["context_compact_at"]
