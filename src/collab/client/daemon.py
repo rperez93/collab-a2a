@@ -24,7 +24,7 @@ from typing import Any
 import httpx
 from httpx_sse import aconnect_sse
 
-from .. import __version__, lockfile, peers, wake
+from .. import __version__, diagnostics, lockfile, peers, wake
 from ..batch import DELTA_SHOWN_FOR
 from ..config import SessionProfile, share_stats_enabled, stats_source
 from ..protocol import (EXT_PREFIX, KIND_CHAT, KIND_HELLO, KIND_PRESENCE,
@@ -96,6 +96,23 @@ COMPACT_RETRY = 60.0
 REFRESHES_THE_SNAPSHOT = frozenset({
     KIND_HELLO, KIND_PRESENCE, KIND_SYSTEM, KIND_TASK,
 })
+
+
+def _log_crash(where: str, exc: BaseException) -> None:
+    """Record an exception nobody was expecting, with its traceback.
+
+    THE TRACEBACK AND NOT THE MESSAGE. An exception's own text is where the
+    unsafe things are — an httpx error carries the URL, an OSError carries the
+    path — while the traceback is file names, line numbers and our own function
+    names, which is what actually locates a bug. The message is dropped and the
+    type is kept; `diagnostics._safe` strips the home prefix from the file
+    names, so what survives is `~/…/collab/client/daemon.py`, line 1194.
+    """
+    import traceback
+
+    frames = traceback.format_tb(exc.__traceback__)
+    diagnostics.log("crash", where=where, kind=type(exc).__name__,
+                    traceback=[line.strip() for line in frames[-6:]])
 
 
 def _has_host(url: str) -> bool:
@@ -896,6 +913,7 @@ class Daemon:
             return
         if self.waker.offer_reminder(self.waker.reminder()["text"]):
             self.waker.reminded()
+            diagnostics.log("reminder", route="monitor", outcome="handed over")
 
     async def _maybe_compact(self) -> None:
         """Compact the agent's context when its OWN figures say it is nearly full.
@@ -952,6 +970,8 @@ class Daemon:
         self._context_tried_at = now
         code, detail = await asyncio.to_thread(
             compaction.apply, self.paths.root, "compact")
+        diagnostics.log("context_compact", outcome="typed" if code == 0 else "refused",
+                        share=round(share), threshold=threshold)
         if code == 0:
             self._context_compacted_at = now
             self._context_under_since = 0.0
@@ -1123,6 +1143,7 @@ class Daemon:
             logger.warning("wake command would not start (%r)", exc)
             self.waker.failed(batch)
             self._wake_note = f"wake command would not start: {exc}"
+            self._log_wake("would-not-start", type(exc).__name__, batch, reminder)
             return
         try:
             out, _ = await asyncio.wait_for(
@@ -1146,9 +1167,11 @@ class Daemon:
             logger.warning("wake timed out after %ss", config.timeout)
             self.waker.failed(batch)
             self._wake_note = f"the woken turn did not finish in {int(config.timeout)}s"
+            self._log_wake("timed-out", f"{int(config.timeout)}s", batch, reminder)
             return
         if proc.returncode == 0:
             self.waker.succeeded(batch)
+            self._log_wake("delivered", "", batch, reminder)
             self._wake_note = (
                 f"woke the agent with {wake.summarise(batch.events())}"
                 if batch is not None
@@ -1171,12 +1194,18 @@ class Daemon:
             self._wake_note = ((out or b"").decode(errors="replace").strip()
                                [-160:] or "not deliverable just now; will retry")
             logger.info("wake deferred: %s", self._wake_note)
+            self._log_wake("deferred", "", batch, reminder)
         else:
             self.waker.failed(batch)
             tail = (out or b"").decode(errors="replace").strip()[-200:]
             logger.warning("wake failed (exit %s) %s", proc.returncode, tail)
             self._wake_note = (f"the wake command exited {proc.returncode}"
                                f" ({self.waker.failures}x); will retry")
+            # THE EXIT CODE, NEVER THE OUTPUT. `tail` is whatever the agent
+            # printed, and a woken agent prints what it was woken about — which
+            # is the messages. The count of failures is the fact worth having.
+            self._log_wake(f"exit-{proc.returncode}",
+                           f"{self.waker.failures} in a row", batch, reminder)
             # THE ALARM STAYS TIED TO MESSAGES. A reminder that could not be
             # delivered is counted like any other failure — it is the same
             # route to the same agent, and probing it every ten minutes is the
@@ -1186,6 +1215,24 @@ class Daemon:
             # and says so locally, which is where a reminder belongs.
             if batch is not None:
                 await self._wake_is_broken(tail)
+
+    def _log_wake(self, outcome: str, why: str, batch: wake.Batch | None,
+                  reminder: str) -> None:
+        """One `wake_attempt` record, with nothing in it anybody said.
+
+        `carrying` is the SHAPE of the turn — messages, a reminder, or both —
+        because that is what tells a reminder-only route failing apart from a
+        wake that is failing altogether, and it is the whole of what a reader
+        needs. The batch's name, the messages in it and whatever the woken
+        agent printed all stay out: a woken agent prints what it was woken
+        about, which is the conversation.
+        """
+        carrying = ("messages+reminder" if batch is not None and reminder
+                    else "messages" if batch is not None else "reminder")
+        diagnostics.log("wake_attempt", outcome=outcome, why=why,
+                        carrying=carrying, events=len(batch.events()) if batch else 0)
+        if reminder:
+            diagnostics.log("reminder", route="wake", outcome=outcome)
 
     async def _wake_is_broken(self, detail: str) -> None:
         """Say once, in the room, that messages are landing nowhere.
@@ -1274,8 +1321,9 @@ class Daemon:
                     await self._maybe_compact()
                 except asyncio.CancelledError:
                     raise
-                except Exception:           # noqa: BLE001
+                except Exception as exc:    # noqa: BLE001
                     logger.exception("the wake failed; the rest carries on")
+                    _log_crash("wake", exc)
                 if (time.time() - last_refresh) > SNAPSHOT_REFRESH \
                         and self.state == "live":
                     if self._http is not None:
@@ -1293,10 +1341,17 @@ class Daemon:
                     await self._refresh_stats_from_command()
                     await self._report_stats(self._http)
                 self.write_status()
+                # LAST, and rate-limited inside `sample_memory`. A leak is
+                # visible only over hours, so what this is for is the shape of
+                # a line rather than any one reading; and it is a file write,
+                # so it goes behind everything the heartbeat actually owes.
+                diagnostics.sample_memory()
+                diagnostics.sweep()
             except asyncio.CancelledError:
                 raise                       # shutdown, not a fault
-            except Exception:               # noqa: BLE001
+            except Exception as exc:        # noqa: BLE001
                 logger.exception("heartbeat iteration failed; carrying on")
+                _log_crash("heartbeat", exc)
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._stop.wait(), timeout=STATUS_HEARTBEAT)
 
@@ -1548,6 +1603,12 @@ class Daemon:
         # that is what the rest of the tree reads out of this file — and the
         # start time goes underneath it.
         self.paths.pid.write_text(exclusive.stamp())
+        # ATTACHED HERE, after the lock is won and before anything can go
+        # wrong. A daemon that lost the race must leave nothing behind, this
+        # file included, and everything worth recording happens below.
+        diagnostics.begin(self.paths.root, "daemon")
+        diagnostics.sweep(force=True)
+        diagnostics.log("start", version=__version__, host=bool(self.profile.is_host))
         await self.bridge.start()
         self.profile.bridge_port = self.bridge.port
         # This one DOES claim the pointer: a daemon starting up for a session is
@@ -1572,6 +1633,7 @@ class Daemon:
             await self.bridge.stop()
             self.state = "stopped"
             self.write_status()
+            diagnostics.log("stop", failures=self.failures)
             peers.withdraw(self.profile.session_id)
             # A listener stopping is a guest leaving; for a host the hub is
             # still there, so only give up the lock when it is ours to give —
@@ -1622,6 +1684,14 @@ class Daemon:
                     self._follow_url_change()
                     self.write_status()
                     logger.warning("feed dropped (%s); retrying in %.1fs", exc, backoff)
+                    # THE EXCEPTION'S TYPE, NOT ITS TEXT. An httpx error's
+                    # message carries the URL it was talking to, which is the
+                    # host's tunnel address — the one thing a public bug report
+                    # must not contain. `_safe` would strip it; not passing it
+                    # is better than relying on that.
+                    diagnostics.log("feed_dropped", why=type(exc).__name__,
+                                    failures=self.failures,
+                                    retry_in=round(backoff, 1))
                     # Jitter keeps several agents from stampeding a restarted hub.
                     delay = backoff * (0.5 + random.random())
                     with contextlib.suppress(asyncio.TimeoutError):
@@ -1647,6 +1717,13 @@ class Daemon:
             source.response.raise_for_status()
             self.state = "live"
             self.connected_since = time.time()
+            # AFTER a drop and not on the first connect: «reconnected» in a
+            # log that also carries `start` would double every session's first
+            # line and hide the count that matters, which is how often this
+            # session has had to come back.
+            if self.failures:
+                diagnostics.log("reconnected", after_failures=self.failures,
+                                resumed_from=resume)
             self.failures = 0
             self.write_status()
 
@@ -1680,4 +1757,17 @@ class Daemon:
 
 
 async def run_daemon(profile: SessionProfile, *, bridge_port: int = 0) -> None:
-    await Daemon(profile, bridge_port=bridge_port).run()
+    try:
+        await Daemon(profile, bridge_port=bridge_port).run()
+    except asyncio.CancelledError:
+        raise                               # shutdown, not a fault
+    except BaseException as exc:            # noqa: BLE001
+        # THE OUTERMOST HANDLER, and it re-raises. A daemon that dies of an
+        # unhandled exception writes its traceback to `daemon.log` and then the
+        # process is gone; from every other surface that is indistinguishable
+        # from having been killed, which is the report that arrives — «it just
+        # stops». One line in the diagnostic record makes the two tellable
+        # apart, and re-raising leaves `daemon.log` and the exit status exactly
+        # as they were.
+        _log_crash("daemon", exc)
+        raise

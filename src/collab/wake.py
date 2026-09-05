@@ -47,7 +47,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Sequence
 
 #: Tells two writers in one process apart; the pid tells the processes apart.
 _WRITES = itertools.count()
@@ -511,6 +511,39 @@ def recipe(agent: str) -> Recipe | None:
 
 def known_agents() -> list[str]:
     return [r.agent for r in RECIPES]
+
+
+def recipe_of(command: Sequence[str]) -> str:
+    """Which recipe an armed command came from, by its shape. '' for a custom one.
+
+    Not recorded at arming, and deliberately: the config file is written by
+    `collab wake set` and edited by hand, and a stored label would be a claim
+    about a command that could since have been changed underneath it. The shape
+    is the command itself.
+
+    Matched entry by entry, with each `{placeholder}` standing for anything.
+    That is enough to be certain: the entries around the placeholders are our
+    own words — `wake deliver --to tmux`, `--sandbox workspace-write` — and no
+    two recipes in the table share a shape.
+
+    What this is FOR is saying, in a bug report, how an agent is being reached
+    without saying which pane or which thread. `tmux` is a fact about the
+    installation; `%3` is a fact about somebody's terminal.
+    """
+    argv = [str(part) for part in command]
+    for known in RECIPES:
+        if len(known.argv) != len(argv):
+            continue
+        if all(_shaped_like(template, actual)
+               for template, actual in zip(known.argv, argv)):
+            return known.agent
+    return ""
+
+
+def _shaped_like(template: str, actual: str) -> bool:
+    """One argv entry against one recipe entry, placeholders matching anything."""
+    pattern = re.sub(r"\\\{[a-z]+\\\}", ".*", re.escape(template))
+    return re.fullmatch(pattern, actual, re.S) is not None
 
 
 @dataclass

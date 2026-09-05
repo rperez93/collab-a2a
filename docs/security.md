@@ -133,6 +133,24 @@ command — with owner-only permissions (mode 0600).
 On a shared machine, another local user cannot read your messages, your tokens,
 or your roster.
 
+### The diagnostic log
+
+`collab config diagnostics` is off by default, and what it writes when it is on
+is written to be pasted into a public issue.
+It records events and never content: no line of any message, no participant
+name, no invite or token, no URL with an address in it, and no path under your
+home directory — those are rewritten as `~/…`.
+An exception's text is dropped and its type and traceback are kept, because the
+text is where the addresses and the paths are.
+The rule is kept at both ends: the code passes classifications rather than free
+text, and the writer scrubs whatever reaches it anyway, control characters
+included — this file is read with `cat` and pasted into a browser.
+It lives beside your other session state, at mode 0700, and is deleted after
+seven days.
+`collab issue draft` assembles it into a report and prints the command that
+would post it; it never posts anything, because a file built out of your own
+machine's records is one you should read before publishing.
+
 ## What collab does not protect against
 
 Be clear-eyed about the limits.

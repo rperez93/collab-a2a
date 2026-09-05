@@ -27,6 +27,7 @@ These are noted per command below.
 | [`batch`](#batch) | Open a batch of work and show how much of it is done. |
 | [`wake`](#wake) | Let the daemon start a turn for an agent that cannot watch the feed. |
 | [`context`](#context) | Compact or clear this agent's own context window. |
+| [`issue`](#issue) | Write a bug report from this machine's own records. |
 | [`check`](#check) | Report what to fix when something is wrong. |
 | [`working`](#working) | Say what you are doing. |
 | [`idle`](#idle) | Say you have stopped. |
@@ -403,6 +404,43 @@ own checks, not a second set.
 `collab config context_compact_at <percent>` has the daemon do this on its own
 when the agent's own reported share of its window reaches that percent. It is
 `0` — off — unless you ask, because compacting is not undoable.
+
+## issue
+
+Write a bug report from this machine's own records, and print the command that
+would post it.
+
+```text
+collab issue [--out FILE] [--session SESSION] [{draft}]
+```
+
+| Argument or flag | Meaning |
+|---|---|
+| `{draft}` | The only action, and the default. |
+| `--out FILE` | Write it here instead of beside the diagnostics. |
+| `--session SESSION` | Act on this session id instead of the current one. |
+
+The report carries the collab and hub versions, the Python version, the
+platform, how long the daemon has been up, whether a wake is armed and **which
+recipe** it uses (never its target), the memory minimum, maximum and last
+reading per process, a count of each recorded event, and the last 200 records.
+
+**It never posts anything.** It writes the file and prints the
+`gh issue create --repo … --body-file …` line for you to run. Read the file
+first: it is assembled out of your own machine's records, and nothing here
+entitles anybody to publish it unseen.
+
+With `collab config diagnostics` off it still writes the header section, which
+is a usable report on its own, and says how to capture a log:
+
+```bash
+collab config diagnostics on
+# reproduce the problem, then:
+collab issue draft
+```
+
+See [Diagnostics](../README.md#diagnostics) for what the log does and does not
+record, and [security](security.md#the-diagnostic-log) for why.
 
 ## check
 
