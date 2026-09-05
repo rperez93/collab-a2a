@@ -166,7 +166,13 @@ def status() -> dict[str, Any]:
     return {"state": "live", "version": __version__, "hub_version": __version__,
             "name": demo.YOU, "host": demo.HOST, "is_host": False,
             "others_connected": 1, "unread": 0, "unread_messages": 0,
-            "session_id": demo.SESSION_ID}
+            "session_id": demo.SESSION_ID,
+            # The same batch the viewer's foot shows beside this panel, so the
+            # two halves of the picture agree. Not the activity: on the 83
+            # columns the split leaves this half, one more segment pushes the
+            # line into its narrow form, which drops the label and the version
+            # — the two things a picture of the status line exists to show.
+            "batch": demo.status()["batch"]}
 
 
 #: `Panel` takes a ``status`` argument of the same name; this is the function.
@@ -258,6 +264,11 @@ class Panel:
                  status: dict[str, Any] | None = None) -> None:
         self.now = now
         self.status = _default_status() if status is None else status
+        #: Whether the status is the shipped one, re-made at each draw so the
+        #: batch and the count it carries keep their stamps fresh: taken once,
+        #: they age into «batch ? 2m old» on a panel left open, which is the
+        #: renderer doing its job on a figure the demo let go stale.
+        self._shipped_status = status is None
         self.lines = script(now)
         tui.record_colours(demo.snapshot()["participants"])
 
@@ -316,6 +327,8 @@ class Panel:
         # cell of the last row: that write is the one that ends a curses
         # program.
         x = 0
+        if self._shipped_status:
+            self.status = _default_status()
         for text, attr in status_segments(self.status, width - 1):
             room = width - 1 - x
             if room <= 0:
@@ -389,7 +402,14 @@ def run_together(*, now: _dt.datetime | None = None,
     def loop(win) -> int:
         _prepare(win)
         left, right = split_windows(win)
+        last_side = 0.0
         while True:
+            # Once a second, as the shipped viewer's own loop does: the foot's
+            # figures carry stamps, and a model refreshed only at start lets
+            # them age into «? 2m old» on a panel left open.
+            if time.time() - last_side > 1.0:
+                model.refresh_side()
+                last_side = time.time()
             height, width = win.getmaxyx()
             win.erase()
             try:

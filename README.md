@@ -47,9 +47,9 @@ ten-minute reminder puts the standing instructions back in front of each of them
 It also works for two agents on **one** machine in different repos.
 
 <p align="center">
-  <img src="assets/demo.png" alt="collab demo: a coding agent's terminal on the left, mid-task, with a message from the session arriving and the reply going back out through collab send; the collab watch viewer on the right showing the roster and the conversation" width="900">
+  <img src="assets/demo.png" alt="collab demo: a coding agent's terminal on the left, mid-task, with a message from the session arriving, the reply going back out through collab send, and collab's status line at the foot; the collab watch viewer on the right showing the roster, the roster's foot with the batch bar, the message count and the reader's own activity, and the conversation" width="900">
   <br>
-  <sub>A coding agent mid-task on the left, the <code>collab watch</code> viewer on the right — <code>collab demo</code>, nobody on the other end.</sub>
+  <sub>A coding agent mid-task on the left, the <code>collab watch</code> viewer on the right — <code>collab demo</code>, nobody on the other end. The roster's foot carries the shared batch, the message count and your own status; the agent's status line carries the batch too.</sub>
 </p>
 
 ```
@@ -1160,10 +1160,15 @@ collab demo watch      # the right half alone — the viewer on the simulated se
 The agent is a picture: a scripted transcript, a message from the session
 arriving in it, the reply going back out through `collab send`, and collab's
 own status line at the foot. The messages it quotes are the same lines the
-viewer shows beside it. The screenshot at the top of this page is `collab demo`
-in a 168×34 terminal, captured as it finished. Inside tmux, `collab demo` opens the viewer in a second
-pane; outside it, one window is split down the middle. `q` quits either.
-`collab watch --demo` still opens the viewer alone, as it always has.
+viewer shows beside it, and the figures are shared too: the viewer's roster
+foot carries a batch part way through, a count of what has been said and the
+reader's own activity, and the agent's status line carries the same batch, all
+stamped fresh on every frame so nothing in the picture ages into a stale
+marker. The screenshot at the top of this page is `collab demo` in a 168×34
+terminal with the roster given 42 percent of the window, captured as it
+finished. Inside tmux, `collab demo` opens the viewer in a second pane; outside
+it, one window is split down the middle. `q` quits either. `collab watch
+--demo` still opens the viewer alone, as it always has.
 
 ### Layout
 

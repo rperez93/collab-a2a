@@ -311,6 +311,39 @@ class DemoInbox:
         """Nothing to close. Here because the viewer closes what it opens."""
 
 
+def activity() -> dict[str, Any]:
+    """What the reader's own agent last said it was doing, four minutes ago.
+
+    The same statement the roster shows for `edith`, so the two surfaces that
+    carry it — the roster's foot and the agent's status line — agree with the
+    line above them.
+    """
+    now = time.time()
+    return {"state": "idle", "what": "reading the diff",
+            "since": now - 240, "updated_at": now - 240}
+
+
+def status() -> dict[str, Any]:
+    """What the daemon would have written about the simulated session, for
+    the viewer: live, with the figures the roster's foot is drawn from.
+
+    A batch part way through and a count of what has been said, both stamped
+    now so they read as fresh rather than as memories, and the reader's own
+    activity. Without them the foot is empty and the demo shows a viewer with
+    a feature missing rather than one with nothing to say.
+    """
+    now = time.time()
+    return {
+        "state": "live",
+        "batch": {"id": "B_demo", "name": "the bottom bar", "state": "open",
+                  "total": 10, "done": 6, "withdrawn": 0, "outstanding": 4,
+                  "percent": 60, "complete": False,
+                  "counted_at": now, "fetched_at": now},
+        "messages": {"total": 128, "fetched_at": now},
+        "activity": activity(),
+    }
+
+
 def model():
     """The real Model, reading a log that is not on disk.
 
@@ -336,7 +369,7 @@ def model():
             observation rather than a memory. Both of those have branches the
             demo exists to show."""
             self.snapshot = snapshot()
-            self.status = {"state": "live"}
+            self.status = status()
             self._state = "live"
 
         def poll_events(self, follow: bool = True) -> int:

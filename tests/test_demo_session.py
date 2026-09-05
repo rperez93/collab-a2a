@@ -241,3 +241,44 @@ def test_reading_back_and_returning_to_the_live_end(monkeypatch, tmp_path):
 
     model.load_tail()
     assert model.pending() == 0
+
+
+# --- the figures the roster's foot is drawn from ------------------------------
+
+def test_the_foot_has_something_to_say():
+    """A viewer with an empty foot is a picture of a feature missing, not of
+    one with nothing to report: the batch, the count and the reader's own
+    activity are all there, and stamped now, so they read as fresh."""
+    import time
+
+    from collab.client import statusbar
+
+    status = demo.status()
+    now = time.time()
+    assert now - status["batch"]["fetched_at"] < 5
+    assert now - status["messages"]["fetched_at"] < 5
+    assert statusbar.batch_segment(status["batch"], now=now).startswith("batch ")
+    assert statusbar.messages_segment(status["messages"], now=now) == "128 messages"
+    assert statusbar.activity_segment(status["activity"], now=now).startswith("idle")
+
+
+def test_the_two_halves_carry_the_same_batch():
+    """The agent's status line and the viewer's foot sit side by side in the
+    screenshot, and a batch that disagreed between them would be the picture
+    contradicting itself."""
+    from collab.client import demo_agent
+
+    assert demo_agent.status()["batch"]["done"] == demo.status()["batch"]["done"]
+    assert demo_agent.status()["batch"]["total"] == demo.status()["batch"]["total"]
+
+
+def test_the_figures_are_fresh_on_every_refresh(monkeypatch):
+    """`refresh_side` runs once a second in both loops so the stamps move
+    with the clock; a model that stamped once would age into «? 2m old» on a
+    demo left open."""
+    model = demo.model()
+    model.refresh_side()
+    first = model.status["batch"]["fetched_at"]
+    monkeypatch.setattr(demo.time, "time", lambda: first + 120)
+    model.refresh_side()
+    assert model.status["batch"]["fetched_at"] == first + 120
