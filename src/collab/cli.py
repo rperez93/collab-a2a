@@ -660,6 +660,8 @@ def cmd_host(args: argparse.Namespace) -> int:
     # The monitor first — it is the thing that must be armed NOW — then how to
     # behave, which is the other decision an agent makes on arrival.
     print(_rules_briefing())
+    if pointer := _learnings_pointer():
+        print(pointer)
     _opening_message(profile)
     print()
     return 0
@@ -1134,6 +1136,8 @@ def cmd_join(args: argparse.Namespace) -> int:
     _print_snapshot(snapshot, profile.name)
     _monitor_hint(profile, status)
     print(_rules_briefing())
+    if pointer := _learnings_pointer():
+        print(pointer)
     print()
     return 0
 
@@ -1172,69 +1176,336 @@ def cmd_send(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_learn(args: argparse.Namespace) -> int:
-    """Say something the next agent in this repository will need to know.
+def _learnings_here(cwd: Path | None = None):
+    """The bundle for the repository this command is about, and its key.
 
-    A session is a conversation, and a conversation is the wrong shape for a
-    fact: said once, at four in the afternoon, to whoever happened to be
-    reading, and then a hundred messages back. This says it AND writes it down,
-    in the shared state directory where every agent in the checkout can find
-    it and where a fresh session starts by reading it.
-
-    It goes out as an ordinary chat, marked in the body. Nothing else is a kind
-    a client may send, and it should not be: a participant whose client knows
-    nothing about any of this still sees the sentence, prefixed with what it
-    is.
+    THE SESSION'S CHECKOUT WHEN THERE IS ONE, and the working directory
+    otherwise. The session is the better answer because its daemon is what
+    files everything, and a command run from a subdirectory or from a second
+    worktree would otherwise read one bundle while the daemon wrote another.
+    Falling back to the working directory is what lets an agent read what a
+    repository has taught the others BEFORE joining anything, which is exactly
+    when it is most worth reading.
     """
     from . import learnings
 
-    if args.list:
-        # A READ, so `_require_profile` and not `_require_own_profile`: asking
-        # what this repository has learnt is not acting as anybody.
-        profile = _require_profile(args)
-        found = learnings.read(profile.home)
+    where = cwd
+    if where is None:
+        profile = SessionProfile.current()
+        if profile is not None and profile.home:
+            where = Path(profile.home).parent
+    key = learnings.repo_key(where)
+    return key, learnings.bundle_dir(key)
+
+
+def _learning_line(hit: Any) -> str:
+    """One learning as one line, the same shape for `list` and `search`.
+
+    The counts are shown as `used 7 by others` rather than as a bare number,
+    because a fresh agent's own counts are zero and a bare `7` would read as
+    something it had done itself. What the figure is for is ordering an index
+    nobody local has opened yet.
+    """
+    from . import learnings
+
+    one = hit.learning if isinstance(hit, learnings.Hit) else hit
+    bits = []
+    if one.uses or one.reads:
+        bits.append(f"used {one.uses}, read {one.reads}")
+    if one.peer_uses or one.peer_reads:
+        bits.append(f"used {one.peer_uses} by others"
+                    if one.peer_uses else f"read {one.peer_reads} by others")
+    tail = dim("  " + " · ".join(bits)) if bits else ""
+    return f"  {c(one.slug, '36'):<28} {said(one.title)}{tail}"
+
+
+def _print_learnings(hits: list, *, key: str, bundle: Any) -> None:
+    exe = Path(sys.argv[0]).name
+    if not hits:
+        print(dim(f"  nothing yet — `{exe} learn sync` asks the others"))
+        return
+    from . import learnings
+
+    for hit in hits:
+        print(_learning_line(hit))
+        line = getattr(hit, "line", "")
+        if line and getattr(hit, "where", "") == "body":
+            print(dim(f"      {said(line)}"))
+    print()
+    print(dim(f"  {len(hits)} for {key} · {exe} learn read <slug>"))
+
+
+def cmd_learn(args: argparse.Namespace) -> int:
+    """What this agent has learnt about this repository, and the others' too.
+
+    A session is a conversation, and a conversation is the wrong shape for a
+    fact: said once, at four in the afternoon, to whoever happened to be
+    reading, and a hundred messages back by five. A learning is written down
+    instead, in a store belonging to the AGENT rather than to the checkout, and
+    grouped by a repository key that two machines agree on.
+
+    NOTHING HERE MAKES THE AGENT WAIT. Every write goes to a spool file the
+    daemon drains on its heartbeat, so recording a learning costs the same as
+    writing one short file, whatever the disk and the network are doing. Only
+    `read` touches the bundle synchronously, because printing it is the whole
+    of what `read` is for.
+    """
+    from . import learnings
+
+    if learnings.store_dir() is None:
+        fail("learnings are turned off")
+        print(dim(f"  {Path(sys.argv[0]).name} config learnings_dir <path>"
+                  "   turns them back on"))
+        return 1
+
+    key, bundle = _learnings_here()
+    if bundle is None:
+        fail("cannot tell which repository this is")
+        return 1
+    action = args.action
+    if action == "list":
+        return _learn_list(args, key, bundle)
+    if action == "search":
+        return _learn_search(args, key, bundle)
+    if action == "read":
+        return _learn_read(args, key, bundle)
+    if action == "used":
+        return _learn_used(args, bundle)
+    if action == "add":
+        return _learn_add(args, key)
+    return _learn_sync(args)
+
+
+def _learn_list(args: argparse.Namespace, key: str, bundle: Path) -> int:
+    from . import learnings
+
+    if args.all:
+        root = learnings.store_dir()
+        rows = []
+        for path in sorted(root.rglob(learnings.INDEX)) if root else []:
+            where = path.parent
+            rows.append((str(where.relative_to(root)), len(learnings.slugs(where))))
         if args.json:
-            print(learnings.as_json(profile.home))
+            print(json.dumps({"store": str(root), "repos":
+                              [{"repo": r, "learnings": n} for r, n in rows]},
+                             indent=2))
             return 0
-        if not found:
-            print(dim(f"nothing learnt here yet — {Path(sys.argv[0]).name}"
-                      ' learn "<what you found out>"'))
-            return 0
-        heading(f"learnt in this repository ({len(found)})")
-        for line in found:
-            print(f"  {scrub(line)}")
+        heading(f"learnings · {len(rows)} repositories")
+        for name, count in rows:
+            print(f"  {c(name, '36')}  {plural(count, 'learning')}")
         print()
-        print(dim(f"  {learnings.path_for(profile.home)}"))
         return 0
+    hits, _engine = learnings.search(bundle, (), limit=args.limit or 0)
+    if args.json:
+        print(json.dumps({"repo": key, "learnings":
+                          [_as_json(h.learning) for h in hits]}, indent=2))
+        return 0
+    heading(f"learnings · {key}")
+    _print_learnings(hits, key=key, bundle=bundle)
+    return 0
+
+
+def _learn_search(args: argparse.Namespace, key: str, bundle: Path) -> int:
+    from . import learnings
+
+    words = [w for w in args.rest if w.strip()]
+    if not words and not args.tag:
+        fail("say what to look for: collab learn search <words>")
+        return 1
+    hits, engine = learnings.search(bundle, words, tag=args.tag or "",
+                                    limit=args.limit)
+    if args.json:
+        print(json.dumps({"repo": key, "engine": engine, "query": words,
+                          "hits": [{**_as_json(h.learning), "where": h.where,
+                                    "line": h.line} for h in hits]}, indent=2))
+        return 0
+    heading(f"{plural(len(hits), 'match')} · {key}")
+    _print_learnings(hits, key=key, bundle=bundle)
+    return 0
+
+
+def _learn_read(args: argparse.Namespace, key: str, bundle: Path) -> int:
+    """Print one, and spool the fact that it was read.
+
+    The PRINT is synchronous and the COUNT is not, which is the one place in
+    this command where the split is visible. Printing is what was asked for;
+    counting is bookkeeping, and bookkeeping is never worth a turn.
+    """
+    from . import learnings
+
+    slug = (args.rest or [""])[0]
+    one = learnings.load(bundle, slug)
+    if one is None:
+        fail(f"no learning called {scrub(slug)!r} for {key}")
+        print(dim(f"  {Path(sys.argv[0]).name} learn list   shows them"))
+        return 1
+    if args.json:
+        print(json.dumps(_as_json(one), indent=2))
+    else:
+        heading(said(one.title))
+        if one.description:
+            print(f"  {said(one.description)}")
+        if one.tags:
+            print(dim("  " + " ".join(f"#{said(t)}" for t in one.tags)))
+        print()
+        for line in scrub_block(one.body).splitlines():
+            print(f"  {line}")
+        print()
+        print(dim(f"  recorded by {said(one.by) or 'somebody'}"
+                  f"{' on ' + said(one.at)[:10] if one.at else ''}"))
+    profile = SessionProfile.current()
+    if profile is not None:
+        learnings.spool(profile.dir, "read", slug=one.slug)
+    return 0
+
+
+def _learn_used(args: argparse.Namespace, bundle: Path) -> int:
+    """Say a learning actually helped.
+
+    A separate command from `read` on purpose. Reading one costs nothing and
+    proves nothing; an agent that applied it and found it true is the only
+    thing that can say so, and that is the figure worth ranking by. A file
+    somebody opened in an editor counts neither.
+    """
+    from . import learnings
+
+    slug = (args.rest or [""])[0]
+    one = learnings.load(bundle, slug)
+    if one is None:
+        fail(f"no learning called {scrub(slug)!r} here")
+        return 1
+    profile = SessionProfile.current()
+    if profile is None:
+        fail("no active session, so there is nowhere to record it")
+        print(dim("  the count is kept by this repo's daemon; join or host first"))
+        return 1
+    learnings.spool(profile.dir, "used", slug=one.slug,
+                    note=scrub(args.note or "")[:300])
+    ok(f"noted that {one.slug} helped")
+    print(dim("  the daemon records it in the background"))
+    return 0
+
+
+def _learn_add(args: argparse.Namespace, key: str) -> int:
+    from . import learnings
 
     profile = _require_own_profile(args)
-    text = " ".join(args.text).strip()
-    if not text:
-        fail("say what you learnt: collab learn \"<what you found out>\"")
-        print(dim("  or collab learn --list to read what this repo already"
-                  " knows"))
+    title = " ".join(args.rest).strip()
+    if not title:
+        fail('say what you learnt: collab learn add "<title>"')
+        print(dim("  --body '<the detail>' or --body - to read it from stdin"))
         return 1
-    env = Envelope(
-        kind=KIND_CHAT,
-        # The prefix is for the human and the other agents' transcripts; the
-        # body is what any daemon actually decides on. Both, because either
-        # alone is a half-feature: a body nobody can see, or a prefix anybody
-        # can type by accident.
-        text=f"{learnings.PREFIX} {text}",
-        sender=profile.name, room=args.room or profile.room,
-        body={learnings.MARKER: True},
-        stats=_current_stats(profile),
-    )
-    try:
-        with _client(profile) as client:
-            client.send(env)
-    except HubError as exc:
-        fail(str(exc))
+    body = args.body or ""
+    if body == "-":
+        body = "" if sys.stdin.isatty() else sys.stdin.read()
+    tags = [t.strip() for t in re.split(r"[,\s]+", args.tags or "") if t.strip()]
+    # THE FIRST LINE, AND ONLY WHEN THERE IS A SECOND. The description exists
+    # so an index can say what a learning is about without printing it; for a
+    # one-line learning it would be the learning, and `read` would print the
+    # same sentence twice under two headings.
+    lines = [ln for ln in scrub_block(body).splitlines() if ln.strip()]
+    payload = {
+        "title": scrub(title)[:learnings.MAX_TITLE],
+        "description": (scrub(lines[0])[:learnings.MAX_DESCRIPTION]
+                        if len(lines) > 1 else ""),
+        "body": scrub_block(body)[:learnings.MAX_BODY],
+        "tags": tags[:learnings.MAX_TAGS],
+        "source": scrub(args.source or "")[:500],
+        "by": profile.name,
+        "repo": key,
+    }
+    if learnings.spool(profile.dir, "add", learning=payload) is None:
+        fail("could not record it")
         return 1
-    ok(f"learnt: {scrub(text)}")
-    print(dim("  said in the room, and every agent's daemon writes it into"))
-    print(dim(f"  {learnings.path_for(profile.home)}"))
+    ok(f"recorded: {said(payload['title'])}")
+    _say_who_does_the_work(profile)
     return 0
+
+
+def _learn_sync(args: argparse.Namespace) -> int:
+    from . import learnings
+
+    profile = _require_own_profile(args)
+    want = max(1, min(int(args.want or learnings.DEFAULT_WANT), learnings.MAX_WANT))
+    if learnings.spool(profile.dir, "sync", want=want) is None:
+        fail("could not ask")
+        return 1
+    ok(f"asked the others for their {want} most used")
+    if args.wait is None:
+        _say_who_does_the_work(profile)
+        print(dim(f"  {Path(sys.argv[0]).name} learn list   shows what arrived"))
+        return 0
+    return _wait_for_learnings(profile, float(args.wait))
+
+
+def _wait_for_learnings(profile: SessionProfile, seconds: float) -> int:
+    """Poll the inbox for answers, for somebody who would rather watch.
+
+    The default is not to wait: an agent asking for other people's knowledge
+    has other things to do for the next twenty seconds, and a command that
+    blocked would have made the asking cost the very turn the whole feature
+    exists to save.
+    """
+    from . import learnings
+
+    inbox = Inbox(profile.dir)
+    started, seen = time.time(), inbox.last_seq()
+    senders: dict[str, int] = {}
+    while (time.time() - started) < seconds:
+        for env in inbox.all_events(limit=200):
+            if (env.seq or 0) <= seen or not learnings.is_learning(env):
+                continue
+            seen = max(seen, env.seq or 0)
+            senders[env.sender or "somebody"] = senders.get(env.sender or "somebody", 0) + 1
+        if senders:
+            break
+        time.sleep(0.5)
+    if not senders:
+        warn("nothing arrived yet")
+        print(dim("  the others answer when their daemons next beat;"
+                  " `collab learn list` later"))
+        return 0
+    total = sum(senders.values())
+    ok(f"{plural(total, 'learning')} from " + ", ".join(sorted(senders)))
+    return 0
+
+
+def _say_who_does_the_work(profile: SessionProfile) -> None:
+    """One line saying the agent is not waiting, and who is."""
+    if is_running(profile) is None:
+        print(dim("  no daemon is running: it will be published when one starts"))
+    else:
+        print(dim("  the daemon publishes it in the background"))
+
+
+def _as_json(one: Any) -> dict[str, Any]:
+    return {"slug": one.slug, "title": one.title, "description": one.description,
+            "tags": list(one.tags), "body": one.body, "by": one.by, "at": one.at,
+            "repo": one.repo, "uses": one.uses, "reads": one.reads,
+            "peer_uses": one.peer_uses, "peer_reads": one.peer_reads}
+
+
+def _learnings_pointer(cwd: Path | None = None) -> str:
+    """What `host` and `join` say about this repository's learnings.
+
+    Printed at the two moments an agent is deciding what to do first, because
+    that is when reading what the room already knows is worth a line and ten
+    minutes later it is not.
+    """
+    from . import learnings
+
+    if learnings.store_dir() is None:
+        return ""
+    exe = Path(sys.argv[0]).name
+    _key, bundle = _learnings_here(cwd)
+    if bundle is None:
+        return ""
+    held = len(learnings.slugs(bundle))
+    if held:
+        return dim(f"  you hold {plural(held, 'learning')} for this repo — "
+                   f"`{exe} learn list`")
+    return dim(f"  no learnings for this repo yet — `{exe} learn sync`"
+               " asks the others")
 
 
 def cmd_listen(args: argparse.Namespace) -> int:
@@ -2463,6 +2734,22 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
             + " — the daemon has not refreshed the snapshot",
             f"{exe} status says whether the hub is still answering; if it is,"
             f" {exe} daemon stop && {exe} daemon start")
+
+    # 1c. Is anything the agent recorded still waiting to be published?
+    #
+    #     The whole point of spooling a learning is that the agent does not
+    #     wait for it, which means the agent also never finds out that it did
+    #     not happen. The command said «the daemon publishes it in the
+    #     background» and returned; if the daemon cannot, nothing else here
+    #     would ever say so.
+    waiting_learnings = status.get("learnings")
+    if isinstance(waiting_learnings, dict) and waiting_learnings.get("pending"):
+        held = int(waiting_learnings["pending"] or 0)
+        why = str(waiting_learnings.get("last_error") or "")
+        add("learnings", CHECK_WARN if why else CHECK_OK,
+            f"{plural(held, 'learning')} waiting to be published"
+            + (f" — {said(why)}" if why else ", on the next beat"),
+            f"{exe} daemon stop && {exe} daemon start" if why else "")
 
     # 2. Is anything READING what arrives?
     armed = len(watchers(profile)) + int(status.get("ws_clients") or 0)
@@ -4794,14 +5081,33 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_send)
 
     ln = sub.add_parser("learn",
-                        help="say something the next agent in this repo will"
-                             " need, and write it down where they will find it")
-    ln.add_argument("text", nargs="*", help="what you found out, in one line")
-    ln.add_argument("--list", action="store_true",
-                    help="print what this repo has learnt, instead of adding to it")
-    ln.add_argument("--room", help="room to say it in (default: your current room)")
-    ln.add_argument("--json", action="store_true",
-                    help="with --list, emit raw JSON")
+                        help="what this agent has learnt about this repo, and"
+                             " what the others have")
+    ln.add_argument("action",
+                    choices=["add", "list", "search", "read", "used", "sync"],
+                    help="record one, list them, search them, read one, say"
+                         " one helped, or ask the others for theirs")
+    ln.add_argument("rest", nargs="*", metavar="TEXT",
+                    help="the title for `add`, the slug for `read` and `used`,"
+                         " the words for `search`")
+    ln.add_argument("--body", metavar="TEXT",
+                    help="with `add`: the detail; `-` reads it from stdin")
+    ln.add_argument("--tags", metavar="A,B", help="with `add`: tags for the area")
+    ln.add_argument("--source", metavar="URL",
+                    help="with `add`: where it was established")
+    ln.add_argument("--note", metavar="TEXT",
+                    help="with `used`: what it helped with")
+    ln.add_argument("--tag", metavar="T", help="with `search`: only this tag")
+    ln.add_argument("--limit", type=int, default=20, metavar="N",
+                    help="how many to show")
+    ln.add_argument("--want", type=int, default=20, metavar="N",
+                    help="with `sync`: how many each agent should send")
+    ln.add_argument("--wait", nargs="?", type=float, const=20.0, metavar="SECONDS",
+                    help="with `sync`: wait and report what arrived, instead of"
+                         " returning at once")
+    ln.add_argument("--all", action="store_true",
+                    help="every repository in the store, not only this one")
+    ln.add_argument("--json", action="store_true")
     add_session_flag(ln)
     ln.set_defaults(func=cmd_learn)
 

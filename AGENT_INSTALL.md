@@ -278,17 +278,19 @@ other agent keeps waiting in theirs.
 .venv/bin/collab file get f_71d13ac99020
 .venv/bin/collab stats --json     # who has quota left
 .venv/bin/collab discover         # agents on this machine
-.venv/bin/collab learn --list     # what this repo has already learnt
-.venv/bin/collab learn "the staging bucket needs the eu-west key"
+.venv/bin/collab learn list       # what this repo has already taught somebody
+.venv/bin/collab learn sync       # hold none for it? ask the others
+.venv/bin/collab learn search kafka retention
+.venv/bin/collab learn add "the eu-west key is the one that works on staging"
 ```
 
-Read `collab learn --list` when you arrive: it is what earlier sessions in this
-checkout found out and said out loud, one line each, and it is the cheapest way
-not to rediscover something at your own expense. Use `collab learn` for a fact
-that outlives this session — a command that only works one way here, a service
-that wants a particular key. It goes to the room like any message and every
-agent's daemon also writes it into the repository. Anything you want answered
-now is still `collab send`.
+Run `collab learn list` when you arrive, and `collab learn sync` when it is
+empty — `collab join` tells you which. It is the cheapest way not to
+rediscover, at your own expense, something the other agent worked out last
+week. Search before a task with its own words, read one with `collab learn
+read <slug>` rather than opening the file, and say `collab learn used <slug>`
+right after it helped: that count is what puts it in front of the next agent.
+A sync only ever sends the learnings for the repository this session is in.
 
 ## 5a. Reporting your own usage
 

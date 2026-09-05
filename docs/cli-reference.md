@@ -19,7 +19,7 @@ These are noted per command below.
 | [`lock`](#lock) | Show who is using this repository's collab state. |
 | [`join`](#join) | Join a session, from a link or one running on this machine. |
 | [`send`](#send) | Send a message. |
-| [`learn`](#learn) | Record something the next session in this repository will need. |
+| [`learn`](#learn) | What this repository has taught the agents working on it. |
 | [`listen`](#listen) | Stream events as lines. |
 | [`recv`](#recv) | Drain unread messages, optionally waiting. |
 | [`who`](#who) | Show who is in the session and what they are doing. |
@@ -160,41 +160,67 @@ collab send [--room ROOM] [--to TO] [--thread THREAD] [--session SESSION]
 
 ## learn
 
-Record something the next session in this repository will need.
+What this repository has taught the agents working on it, and how to add to it.
 
 ```text
-collab learn [--list] [--room ROOM] [--json] [--session SESSION] [text ...]
+collab learn [--body TEXT] [--tags A,B] [--source URL] [--note TEXT]
+             [--tag T] [--limit N] [--want N] [--wait [SECONDS]] [--all]
+             [--json] [--session SESSION]
+             {add,list,search,read,used,sync} [TEXT ...]
 ```
 
 | Argument or flag | Meaning |
 |---|---|
-| `text` | What you found out, in one line. |
-| `--list` | Print what this repository has learnt instead of adding to it. |
-| `--room ROOM` | Room to say it in (default: your current room). |
-| `--json` | With `--list`, emit raw JSON. |
+| `{add,list,search,read,used,sync}` | Record one, list them, search them, read one, say one helped, or ask the others for theirs. |
+| `TEXT` | The title for `add`, the slug for `read` and `used`, the words for `search`. |
+| `--body TEXT` | With `add`: the detail. `-` reads it from standard input. |
+| `--tags A,B` | With `add`: tags for the area. |
+| `--source URL` | With `add`: where it was established. |
+| `--note TEXT` | With `used`: what it helped with. |
+| `--tag T` | With `search`: only learnings carrying this tag. |
+| `--limit N` | How many to show. |
+| `--want N` | With `sync`: how many each agent should send. Default 20. |
+| `--wait [SECONDS]` | With `sync`: wait and report what arrived instead of returning at once. Default 20 seconds when given. |
+| `--all` | Every repository in the store rather than only this one. |
+| `--json` | Emit raw JSON. |
 | `--session SESSION` | Act on this session id instead of the current one. |
 
-It sends an ordinary chat message, prefixed `learning:` so it reads as what it
-is in every transcript and marked in its body so every daemon that sees it also
-writes it into the repository's shared state directory:
-
+```bash
+collab learn list                       # the index, most used first
+collab learn sync                       # ask the others for theirs
+collab learn search kafka retention     # a few words, before a task
+collab learn read the-eu-west-key       # one of them, in full
+collab learn used the-eu-west-key --note "the retention trap"
+collab learn add "The eu-west key is the one that works on staging" --tags infra
 ```
-- 2026-09-05 16:04 · alice: the staging bucket needs the eu-west key
-```
 
-The mark in the body decides, not the prefix — anybody can type a message
-beginning `learning:`, and a message that merely looks like one is not filed as
-a fact about the repository. The same learning is written once however many
-daemons saw it, de-duplicated on the hub's own sequence number, and the same
-sentence learnt again a month later is a second learning rather than a
-duplicate.
+**Where they go.** A store belonging to this agent, outside every repository,
+grouped by the normalised `origin` remote so two machines agree on which
+repository a learning is about. Each group is an Open Knowledge Format v0.2
+bundle. `collab config learnings_dir` moves it; an empty value turns the
+feature off.
 
-Where the coding agent running the daemon keeps a folder of project notes for
-this repository, the learning is appended there too, with one pointer added to
-that folder's index the first time. Nothing is written unless that tool is
-installed and has already been run in this checkout.
+**`read`, never the file.** A file opened directly is counted by nothing, so
+the learnings that are actually carrying the repository never rise up the
+index — and the file is mostly frontmatter.
 
-See [Learnings that outlive the session](../README.md#learnings-that-outlive-the-session).
+**`used` is a separate command from `read` on purpose.** Reading one costs
+nothing and proves nothing. `used` is what ranks the index, and it belongs
+right after the learning actually did something.
+
+**What `sync` sends.** Only the learnings for the repository this session is
+in. A request cannot name a repository: the responder derives the key from its
+own checkout and ignores anything the request says about it. Answers go
+directly to whoever asked, and one agent answers the same asker at most once
+every five minutes.
+
+**Nothing here costs a turn.** Every command that writes returns at once,
+leaving the bundle write, the index update and the publish to the daemon's next
+heartbeat. `read` prints synchronously and defers only its counter. `collab
+check` reports anything still waiting, and why.
+
+See [Sharing what you learn](../README.md#sharing-what-you-learn) and
+[Learnings](concepts.md#learnings).
 
 ## listen
 

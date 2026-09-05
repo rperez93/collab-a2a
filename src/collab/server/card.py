@@ -42,6 +42,18 @@ SKILLS = [
         tags=["tasks", "coordination"],
         examples=["propose 'migrate sessions to the new store'", "claim T-3"],
     ),
+    AgentSkill(
+        id="learnings",
+        name="Share what you learn",
+        description=(
+            "Record something the next agent in this repository will need, "
+            "look up what the others already found out, and ask them for "
+            "theirs. Scoped to the repository this session is in."
+        ),
+        tags=["learnings", "knowledge", "collaboration"],
+        examples=["what do we know about the staging bucket?",
+                  "record that the eu-west key is the one that works"],
+    ),
 ]
 
 

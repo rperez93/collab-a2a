@@ -901,6 +901,36 @@ def save_reminder(*, every: int | None = None, host: str | None = None,
     return reminder_settings()
 
 
+#: The value that means «beside the global config», which is where the store
+#: goes when nobody has said otherwise. Stored as a marker rather than as the
+#: resolved path so that the answer follows `COLLAB_CONFIG`: a second profile
+#: takes its learnings with it, and so does a test. A path written into the
+#: file by hand is taken literally, which is what somebody typing one means.
+LEARNINGS_DEFAULT = "-"
+
+
+def learnings_dir() -> str:
+    """Where this agent keeps what it has learnt, or '' when it keeps nothing.
+
+    The empty string is the off switch and is a real answer rather than a
+    missing one: a key present and empty is somebody who decided, and an absent
+    key is somebody who has not been asked. Both give the default here, because
+    a feature that writes nothing until it is configured would be a feature
+    nobody finds.
+    """
+    value = load_config().get("learnings_dir")
+    if value is None:
+        return LEARNINGS_DEFAULT
+    return str(value).strip()
+
+
+def set_learnings_dir(where: str) -> str:
+    cfg = load_config()
+    cfg["learnings_dir"] = str(where).strip()
+    save_config(cfg)
+    return learnings_dir()
+
+
 #: OFF, because a log nobody asked for is a file that grows on somebody's disk
 #: to answer a question they may never ask. See `collab.diagnostics` for what it
 #: does and does not record.
@@ -1389,6 +1419,19 @@ def _write_statusline_segments(value: list[str]) -> Any:
     return save_statusline(segments=value)
 
 
+def _shown_learnings_dir() -> str:
+    """The path the store is actually at, for the settings listing.
+
+    Not the stored value. `-` means «follow the config file», which is true and
+    is not an answer to «where are my learnings»; and a reader comparing this
+    line against its default needs to see a path in both.
+    """
+    from . import learnings
+
+    where = learnings.store_dir()
+    return str(where) if where is not None else ""
+
+
 def _name_fallback() -> str:
     """What `resolve_name` lands on with nothing in the config or the identity.
 
@@ -1505,6 +1548,19 @@ def settings() -> tuple[Setting, ...]:
                 DIAGNOSTICS_DEFAULT, _as_bool,
                 diagnostics_enabled,
                 lambda v: set_diagnostics(v)),
+        # SHOWN AS THE RESOLVED PATH, not as the marker that is stored. What a
+        # reader wants from this line is where their learnings actually are,
+        # and «-» is an implementation detail of following `COLLAB_CONFIG`.
+        # The default is COMPUTED for the same reason `display_name`'s is: the
+        # default is a rule rather than a value, and a listing that printed the
+        # rule in one column and the answer in the other would be showing a
+        # reader two things they cannot compare.
+        Setting("learnings_dir",
+                "where this agent keeps what it has learnt, outside any"
+                " repository; empty turns it off",
+                _shown_learnings_dir(), str,
+                _shown_learnings_dir,
+                lambda v: set_learnings_dir(v)),
         Setting("watch_layout", "how `collab watch` arranges its two panes",
                 DEFAULT_WATCH_LAYOUT, _one_of(WATCH_LAYOUTS),
                 lambda: watch_settings()["layout"],
