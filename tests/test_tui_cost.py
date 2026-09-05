@@ -123,3 +123,81 @@ def test_but_it_is_re_read_soon_enough_to_notice_a_rename(monkeypatch):
     monkeypatch.setattr(T.time, "monotonic",
                         lambda: T._OWN_NAME["at"] + T.OWN_NAME_TTL + 0.01)
     assert "after" in T.my_names("me")
+
+
+# --- and what the roster's foot costs -------------------------------------------------
+
+def _counted_batch(monkeypatch):
+    """`statusbar.batch_segment`, with a tally of how often it actually ran."""
+    from collab.client import statusbar as SB
+
+    calls: list[int] = []
+    real = SB.batch_segment
+
+    def counted(figures, **kw):
+        calls.append("narrow" if kw.get("narrow") else kw.get("room", 0))
+        return real(figures, **kw)
+
+    monkeypatch.setattr(SB, "batch_segment", counted)
+    return calls
+
+
+def _figures():
+    import time
+
+    return {"done": 6, "total": 10, "fetched_at": time.time()}
+
+
+def test_the_batch_is_rendered_once_per_width_and_not_once_per_probe(monkeypatch):
+    """The foot's layout measures a candidate before it draws it, so the piece
+    that scales to its cell is asked for the same cell several times over one
+    frame. Each ask re-derived the hub's counts six times: four renderings and
+    twenty-four `count_of` calls per frame, for a row of four figures.
+
+    The closure lives exactly as long as the row it belongs to and reads
+    figures it captured rather than looks up, so remembering what it already
+    answered cannot go stale."""
+    from collab.client import statusbar as SB
+
+    calls = _counted_batch(monkeypatch)
+    named = SB.compose_named(batch=_figures(), messages={"total": 9},
+                             keys="q quit", segments=("batch", "messages", "keys"))
+    piece = dict(named)["batch"]
+
+    for _ in range(10):
+        piece(40)
+    for _ in range(10):
+        piece(80)
+
+    # The narrow form, the zero-room probe `compose_named` makes to find out
+    # whether this segment has anything to say at all, and one per width.
+    assert calls == ["narrow", 0, 40, 80], calls
+
+
+def test_the_narrow_form_is_built_once_however_often_it_is_asked(monkeypatch):
+    """It does not depend on the room at all, and was being rebuilt on every
+    call because it sat inside the function of the room."""
+    from collab.client import statusbar as SB
+
+    calls = _counted_batch(monkeypatch)
+    piece = dict(SB.compose_named(batch=_figures(),
+                                  segments=("batch",)))["batch"]
+    for room in range(20, 120, 10):
+        piece(room)
+
+    assert calls.count("narrow") == 1, "however many widths it is asked at"
+
+
+def test_remembering_does_not_cost_the_bar_its_scale(monkeypatch):
+    """The whole reason this piece is a function of its room: the bar grows
+    into the cell it is given. A cache that returned one width for every room
+    would be cheaper and wrong."""
+    from collab.client import statusbar as SB
+
+    piece = dict(SB.compose_named(batch=_figures(),
+                                  segments=("batch",)))["batch"]
+    narrow_cell = piece(30)[0]
+    wide_cell = piece(90)[0]
+
+    assert len(wide_cell) > len(narrow_cell)
+    assert piece(90)[0] == wide_cell, "and the same answer the second time"

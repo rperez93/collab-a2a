@@ -523,14 +523,37 @@ def compose_named(*, notice: str = "", keys: Any = "", batch: Any = None,
         kept = tuple(dict.fromkeys(m for m in made if m))
         return kept if len(kept) > 1 else (kept[0] if kept else "")
 
+    def batch_piece() -> Any:
+        """The batch, as a function of the room it is given.
+
+        A CALLABLE, because this is the one segment whose rendering depends on
+        the room: the bar's glyph count scales to the cell. `compose` resolves
+        it at zero room for the single row, where six glyphs beside three other
+        figures is still the right answer.
+
+        Both savings here are this round's own waste. The narrow form does not
+        depend on the room at all and was being rebuilt on every call; and the
+        wide form is asked for the same cell several times over one frame,
+        because the layout measures a candidate before it draws it. The closure
+        lives exactly as long as the row it belongs to, so a cache on it cannot
+        go stale — the figures it reads are captured, not looked up.
+
+        Measured on the roster's foot: `batch_segment` ran four times per frame
+        and `batch.count_of` twenty-four; now once each per distinct width.
+        """
+        narrow = batch_segment(batch, now=now, narrow=True)
+        seen: dict[int, Any] = {}
+
+        def at(room: int = 0) -> Any:
+            if room not in seen:
+                seen[room] = forms(batch_segment(batch, now=now, room=room),
+                                   narrow)
+            return seen[room]
+
+        return at
+
     built = {
-        # A CALLABLE, because this is the one segment whose rendering depends
-        # on the room it is given: the bar's glyph count scales to the cell.
-        # `compose` resolves it at zero room for the single row, where six
-        # glyphs beside three other figures is still the right answer.
-        "batch": lambda: (lambda room=0: forms(
-            batch_segment(batch, now=now, room=room),
-            batch_segment(batch, now=now, narrow=True))),
+        "batch": batch_piece,
         "messages": lambda: forms(messages_segment(messages, now=now),
                                   messages_segment(messages, now=now, narrow=True)),
         "stats": lambda: stats_segment(stats),
