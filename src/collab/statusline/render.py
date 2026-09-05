@@ -7,6 +7,7 @@ triggers, so a segment that touched the network could stall the whole line.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import select
@@ -569,14 +570,34 @@ def remember_line(profile: Any, line: str) -> None:
     Never raises. This runs on the redraw path of somebody's prompt, and a
     read-only state directory is a reason to lose the flicker guard and not a
     reason to lose the status line.
+
+    WRITTEN THROUGH A TEMPORARY AND RENAMED, like every other shared file here.
+    The whole point of the keepsake is to be read at the moment something else
+    has gone wrong, by a redraw that is already racing whoever wrote it; a
+    plain write leaves a window in which the reader gets a truncated line and
+    the guard hands the prompt exactly the garbage it exists to prevent.
+
+    The temporary carries the writing process's pid, which `write_status` does
+    not need. That file has one writer, the daemon. This one has as many as the
+    user has prompts open on the session, and a fixed temporary name would let
+    two of them interleave into one file and rename the mixture into place.
     """
     if profile is None or not line:
         return
+    tmp = None
     try:
         path = Path(profile.dir) / LAST_LINE_FILE
-        path.write_text(json.dumps({"at": time.time(), "line": line,
-                                    "color": _use_color()}))
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps({"at": time.time(), "line": line,
+                                   "color": _use_color()}))
+        tmp.replace(path)  # atomic: a reader never sees a half file
     except (OSError, TypeError, ValueError):
+        # A failed write must not leave its scratch file behind: this runs on
+        # every redraw, and a directory filling with `.tmp` files is a worse
+        # failure than the missing keepsake it came from.
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                tmp.unlink()
         return
 
 

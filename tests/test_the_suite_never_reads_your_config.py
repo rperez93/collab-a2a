@@ -2,11 +2,12 @@
 
 The suite runs on the machine collab is used on, which is the whole of the
 problem. `load_config` falls back to `~/.config/collab/config.json`, and
-`peers_dir` and `update.cache_path` both hang off that folder — so a test that
-read a setting read whatever the person running it had configured, and a test
-that announced a peer wrote a record into the registry a LIVE session reads.
-The first makes a pass depend on somebody's settings; the second reaches into
-a session somebody is using.
+`peers_dir`, `update.cache_path` and the learnings store all hang off that
+folder — so a test that read a setting read whatever the person running it had
+configured, a test that announced a peer wrote a record into the registry a
+LIVE session reads, and a test of the learnings store would write into the
+facts somebody's own agents have collected. The first makes a pass depend on
+somebody's settings; the other two reach into things somebody is using.
 
 Several files had each discovered the first half separately and taken a config
 of their own. Written per file, that guard is something every new test has to
@@ -26,16 +27,21 @@ from pathlib import Path
 
 import pytest
 
-from collab import peers, update
+from collab import learnings, peers, update
 from collab.config import global_config_path
 
 #: Everything that follows the global config folder. Named here rather than
-#: asserted one by one, so a fourth path added to that folder later is caught
+#: asserted one by one, so a fifth path added to that folder later is caught
 #: by the loop below rather than quietly escaping the guard.
+#:
+#: `store_dir` is the one that arrived after the fixture and proves the point:
+#: it was written to follow the config folder, and nothing but this enumeration
+#: would notice a refactor that gave it a home of its own.
 GLOBAL_PATHS = {
     "settings": global_config_path,
     "peers": peers.peers_dir,
     "update-check": update.cache_path,
+    "learnings": learnings.store_dir,
 }
 
 
@@ -47,7 +53,7 @@ def test_the_config_this_test_would_read_is_a_temporary_one(tmp_path):
 
 @pytest.mark.parametrize("name", sorted(GLOBAL_PATHS))
 def test_no_global_path_resolves_into_the_users_own_folder(name):
-    """The three of them move together, so it is worth asking of each."""
+    """The four of them move together, so it is worth asking of each."""
     resolved = GLOBAL_PATHS[name]()
     real = Path.home() / ".config" / "collab"
     assert real not in resolved.parents and resolved != real, \

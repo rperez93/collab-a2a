@@ -44,6 +44,14 @@ from . import wake
 #: `codex` clears with `/new` and NOT with `/clear`, which in Codex empties the
 #: terminal and leaves the conversation exactly where it was — the one spelling
 #: here that reads as obviously right and is not.
+#:
+#: Each row is cited where the vendor lists its own slash commands, as the
+#: markers in `hosttool.py` and the recipes in `wake.RECIPES` are. This types
+#: into a live terminal, so «I remember it being called that» is not a source:
+#:
+#:   claude  https://docs.claude.com/en/docs/claude-code/slash-commands
+#:   codex   https://developers.openai.com/codex/
+#:   gemini  https://google-gemini.github.io/gemini-cli/docs/cli/commands.html
 COMMANDS: dict[str, dict[str, str]] = {
     "claude": {"compact": "/compact", "clear": "/clear"},
     "codex": {"compact": "/compact", "clear": "/new"},

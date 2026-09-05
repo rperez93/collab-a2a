@@ -24,12 +24,14 @@ def _never_the_machines_own_config(tmp_path, monkeypatch):
     something every new test has to remember, and the ones that forgot were
     found by grep rather than by a failure.
 
-    THREE PATHS AND NOT ONE. `peers_dir` and `update.cache_path` both hang off
-    `global_config_path().parent`, so moving the config moves the machine peer
-    registry and the update-check stamp with it. Before this, a test that
-    announced a peer wrote a record into the registry a live session reads.
-    That is worse than reading: this suite runs on a machine with sessions
-    open on it.
+    FOUR PATHS AND NOT ONE. `peers_dir`, `update.cache_path` and the default
+    `learnings.store_dir` all hang off `global_config_path().parent`, so moving
+    the config moves the machine peer registry, the update-check stamp and the
+    agent's own learnings store with it. Before this, a test that announced a
+    peer wrote a record into the registry a live session reads. That is worse
+    than reading: this suite runs on a machine with sessions open on it, and
+    the learnings store is the one of the four whose contents somebody would
+    actually miss.
 
     Composes rather than competes: a file that sets `COLLAB_CONFIG` itself, or
     patches `global_config_path` outright, runs after this and wins. What is

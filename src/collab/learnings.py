@@ -472,12 +472,26 @@ def append_log(bundle: Path, entry: str) -> None:
 
 
 def bump(bundle: Path, slug: str, field_name: str, by: int = 1) -> Learning | None:
-    """Add to one counter and write the file back. Returns what it now says."""
+    """Add to one counter and write the file back. Returns what it now says.
+
+    ONE FILE AND ONE ROW, which is why this does not go through `save`. That
+    regenerates the bundle's index, and regenerating the index reads every
+    learning in the folder — so a `used` on a store of five hundred would open
+    five hundred files to record a single number. The index carries a title, a
+    slug and a description and no count at all, so a bump cannot change a line
+    of it; the only derived thing that moves is the row in the search index,
+    which `index_one` replaces on its own.
+    """
     one = load(bundle, slug)
     if one is None or field_name not in ("uses", "reads", "peer_uses", "peer_reads"):
         return None
     setattr(one, field_name, max(0, getattr(one, field_name) + by))
-    save(bundle, one)
+    path = learning_path(bundle, one.slug)
+    if path is None:
+        return None
+    _write_atomically(path, to_markdown(one))
+    with contextlib.suppress(OSError):
+        path.chmod(0o600)
     index_one(bundle, one)
     return one
 
