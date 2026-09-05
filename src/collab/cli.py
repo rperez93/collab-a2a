@@ -2535,7 +2535,16 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
     #     same rule the stats check below follows for a route never set up.
     remind = reminder_settings(bool(profile.is_host))
     if remind["configured"] and remind["every"]:
-        route, _why = _reminder_route(profile, bool(woken.get("armed")))
+        # EITHER SOURCE COUNTS, and they answer slightly different questions.
+        # `status.json` is what the daemon reports, which is accurate while one
+        # is running and absent when none is; the config on disk is what is
+        # armed whether or not anything is reading it. Taking only the first
+        # told somebody with a wake armed and no daemon that no wake was armed,
+        # while `collab remind now` — reading the config — told them the
+        # opposite in the same minute.
+        armed_wake = bool(woken.get("armed")) or wake.read_config(
+            DaemonPaths(profile.dir).root).enabled
+        route, _why = _reminder_route(profile, armed_wake)
         if not route:
             add("reminder", CHECK_WARN,
                 f"your {remind['every']}-minute reminder cannot be delivered —"
