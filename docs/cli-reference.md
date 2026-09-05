@@ -1035,13 +1035,20 @@ The settings are listed in the README under
 [Global settings](../README.md#global-settings). The commands that predate this
 one still work and still write the same keys.
 
-A change reaches the sessions already open: the viewer re-reads the file on
-every frame and the daemon on every tick, and `display_name` and `color` are
+A change reaches the sessions already open, for every setting here. The viewer
+re-reads the file on every frame, the daemon on every heartbeat — three seconds,
+which is how long a change to the compaction thresholds, the fresh-session
+settings, the activity decay, the diagnostic log or the learnings store takes to
+reach a daemon that is already running — the wake at every delivery, and your
+agent's status line each time it renders. `display_name` and `color` are
 published to the open session as `collab name` and `collab color` publish
-theirs. The exceptions are `rules`, read at `host` and `join`; `watch_layout
-tmux` and `watch_roster_position`, which open a second tmux pane at the next
-`collab watch`; and any layout choice given on the `collab watch` command
-line, which is for that pane and stays.
+theirs. It holds when the change does not alter the file's size, too.
+
+The exceptions are `rules`, read at `host` and `join`; `watch_layout tmux` and
+`watch_roster_position`, which open a second tmux pane at the next
+`collab watch`; and any layout choice given on the `collab watch` command line,
+which is for that pane and stays. Your own display name is remembered by the
+viewer for two seconds, so a rename lands a frame or two later than the rest.
 
 Three of them have no older command of their own and are set only here — the
 standing reminder your own daemon puts back in front of your agent:

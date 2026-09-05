@@ -677,10 +677,24 @@ value that is the wrong type there is not an error message but a terminal left
 in a broken state.
 A setting collab does not understand is ignored rather than fatal.
 
-The file is read live, not at start-up.
-The reader caches it on the file's stamp, so asking on every frame costs a
-stat, and a change made in one terminal reaches the viewer and the daemon
-already running in another without a restart.
+The file is read live, not at start-up, and that is true of every setting
+rather than most of them.
+Nothing here remembers a value: the viewer asks on every frame, the daemon on
+every heartbeat — three seconds, so that is how long a change to anything it
+does unprompted takes to land — the wake at every delivery, and the status line
+each time it renders.
+The reader caches on the file's stamp, so asking that often costs a stat and
+not a read.
+
+A stamp is (mtime, size), which cannot by itself tell two values of the same
+length apart when both are written inside one mtime tick: a colour is always
+seven characters, and `new_when` moves between `idle` and `task` without moving
+a byte.
+On a filesystem stamping whole seconds the second of such a pair used to be
+invisible, so a stamp is believed only once it is a second and a half old — a
+read per call in the second somebody is changing something, and the cache
+exactly as before in every other second.
+
 What the hub holds about you — the name and the colour — cannot be read from a
 file by anyone else, so a change to either is published to the open session at
 the moment it is made, whichever command made it.

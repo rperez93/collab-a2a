@@ -2125,14 +2125,31 @@ share one checkout each has its own name and colour in its own state directory,
 and `collab name` and `collab color` set those — see
 [Two agents in one checkout](#two-agents-in-one-checkout).
 
-**A change reaches the sessions you already have open.** Nothing is restarted:
-the viewer re-reads the file on every frame, the daemon on every tick, so a
-theme, a fold, a timezone, the roster's size, the built-in layout, the status
-rows and the reminder all land in the panes and daemons that are already
-running. The name and the colour are held by the hub, so `collab config`
-publishes those to the open session the same way `collab name` and
-`collab color` do. Three things are settled at a start rather than read live,
-and say so:
+**A change reaches the sessions you already have open.** That is the rule for
+every setting in the table above, and it holds because nothing here remembers a
+value: each is read at the moment it is used.
+
+| what reads it | how often | so a change lands |
+|---|---|---|
+| the viewer (`collab watch`) | every frame, four a second | on the next redraw |
+| the daemon | every heartbeat, 3 seconds | within 3 seconds |
+| the wake and the standing reminder | at every delivery | on the next one |
+| your agent's status line | every time it renders | on the next prompt |
+
+So the compaction thresholds and their moments, the fresh-session settings and
+the consensus rule, the activity decay, the diagnostic log, the learnings store
+and the usage-command timer all reach a daemon that is already running, within
+a heartbeat of your typing the command. The name and the colour are held by the
+hub, so `collab config` publishes those to the open session the same way
+`collab name` and `collab color` do.
+
+A change is seen even when it does not change the file's size — two colours are
+both seven characters, and `new_when` moves between `idle` and `task` without
+moving a byte. Where the filesystem stamps only whole seconds, that used to
+hide the second of two quick changes; a stamp is now believed only once it is a
+second and a half old.
+
+Three things are settled at a start rather than read live, and say so:
 
 - `rules` is read at `host` and `join`, which is the only time it applies.
 - `watch_layout tmux` and `watch_roster_position` open and place a second
@@ -2141,6 +2158,10 @@ and say so:
 - A choice made on the command line — `collab watch --layout chat`,
   `--roster-size 45` — is for that pane and is not overruled by the setting
   while it is open.
+
+One thing is nearly live and worth naming precisely: your own display name is
+remembered by the viewer for two seconds at a time, so a rename shows up on the
+next frame after that rather than the very next one.
 
 ### The roster's status row
 
