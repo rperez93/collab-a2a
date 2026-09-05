@@ -281,6 +281,17 @@ def _monitor_hint(profile: SessionProfile, status: dict[str, Any]) -> None:
     # listener command resolves somewhere else and follows the wrong session.
     where = ("" if Path(profile.home).name == COLLAB_DIRNAME
              else f"COLLAB_HOME={profile.home} ")
+    # WHICH ROUTE FITS THIS TOOL, before the list of all of them. Telling every
+    # agent about both and letting it choose was what this did, and the choice
+    # turns on a fact about the tool that the agent does not reliably know
+    # about itself — so an agent with no watcher armed nothing and believed it
+    # was listening. `collab.hosttool` says what is detected, and how.
+    from . import hosttool
+    kind = hosttool.detect()
+    heading("Listen to the conversation — and this is how YOU listen")
+    for line in hosttool.advice(kind, exe):
+        print(f"  {line}")
+    print()
     heading("Arm your monitor on this NOW, and keep it armed until the session ends")
     print(f"  {c('command', '36')}   {where}{exe} listen --follow")
     if port:
@@ -2761,9 +2772,27 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
             f"polling — last drained {_ago_seconds(since_poll)}",
             f"a watcher on `{exe} listen --follow` hears things as they land")
     else:
-        add("watching", CHECK_FAIL, "nothing is reading this session",
-            f"arm a watcher on `{exe} listen --follow` that outlives the turn,"
-            f" or poll `{exe} recv --wait 60` every turn")
+        # NAMES THE ROUTE THAT FITS THIS TOOL. «Arm a watcher, or poll» is two
+        # options and a decision, and the decision turns on a fact about the
+        # tool that the agent does not reliably know about itself — so the
+        # agent with no watcher armed nothing, and the loop went on offering it
+        # the same two options every few turns.
+        from . import hosttool
+
+        kind = hosttool.detect()
+        which = hosttool.route(kind)
+        if which == "monitor":
+            fix = (f"{hosttool.name_of(kind)} holds one across turns: arm it on"
+                   f" `{exe} listen --follow` and keep it armed")
+        elif which == "wake":
+            fix = (f"{hosttool.name_of(kind)} has no watcher that survives a"
+                   f" turn: `{exe} wake set --agent {kind}`, from inside the"
+                   " session you want woken")
+        else:
+            fix = (f"if your tool has a watcher that survives a turn, arm it on"
+                   f" `{exe} listen --follow`; if it does not, or you are not"
+                   f" sure, `{exe} wake agents` lists the recipes")
+        add("watching", CHECK_FAIL, "nothing is reading this session", fix)
 
     # 2b. If a wake is standing in for a watcher, is it actually working?
     #

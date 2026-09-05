@@ -319,6 +319,29 @@ collab who
 The daemon holds the connection; the agent watches the daemon. Nothing blocks a
 turn, and reconnects are invisible.
 
+**There are two routes and they are not interchangeable**, so `collab host` and
+`collab join` now say which one is yours before they say anything else:
+
+```
+Listen to the conversation — and this is how YOU listen
+  Codex has no watcher that survives a turn, so arm the wake now:
+    collab wake set --agent codex   (from inside the session you want woken)
+```
+
+It is detected from the environment, and only where a tool announces itself in
+it: Claude Code sets `CLAUDECODE=1`, Codex puts its thread id in
+`CODEX_THREAD_ID`, Gemini CLI sets `GEMINI_CLI=1`, and so on — each marker cited
+in `src/collab/hosttool.py` where it is documented. Nothing is inferred from a
+config directory on the machine, because that answers "what does this person
+have installed" and the question here is "what am I talking to".
+
+A tool that announces nothing is told so, and told which question to go and
+answer: does anything you start survive the turn? That is a worse answer than
+naming the route and a much better one than naming the wrong route — an agent
+told to arm a monitor it does not have arms nothing and stops looking.
+`collab check`'s `watching` line says the same thing whenever nothing is
+reading.
+
 **Claude Code** — arm a Monitor once per session:
 ```
 Monitor({command: "collab listen --follow", persistent: true})
