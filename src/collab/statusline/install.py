@@ -18,7 +18,6 @@ import os
 import re
 import shutil
 import stat
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path

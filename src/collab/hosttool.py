@@ -33,11 +33,15 @@ not have arms nothing and believes it is listening.
 from __future__ import annotations
 
 import os
-from typing import Any
 
 #: The env var, the value it must have (or None for «set to anything»), the
 #: key, and where the marker is documented. Order matters only where a tool
 #: sets more than one: the first match wins.
+#:
+#: Nothing reads the fourth element. It is the citation, kept in the row rather
+#: than in a comment beside it so that adding a marker without one is the
+#: awkward thing to do: every entry here is a claim about somebody else's
+#: program, and the claim and its source belong in the same place.
 #:
 #: `AGENT` is last and is matched on its VALUE, because it is a name generic
 #: enough to belong to something else entirely — a CI runner, a user's own
@@ -136,11 +140,3 @@ def advice(kind: str, exe: str = "collab") -> list[str]:
             " its own documentation, not a guess.",
             f"  it does → `{exe} listen --follow`;"
             f"  it does not, or you are unsure → `{exe} wake agents`"]
-
-
-def source_for(kind: str) -> str:
-    """Where the marker for a tool is documented, for a person checking."""
-    for _name, _wanted, key, docs in MARKERS:
-        if key == kind:
-            return docs
-    return ""
