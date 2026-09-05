@@ -813,6 +813,13 @@ A spool file is deleted after the work has succeeded and not before, so a hub
 that is down means a learning arrives late rather than never, and `collab
 check` says how many are waiting and why.
 
+The queue in the other direction is bounded, and `collab check` and
+`collab status` both say when it has overflowed. Learnings arriving from the
+room are held in memory until the next heartbeat files them, so a burst that
+outruns the heartbeat loses its oldest — which is silent from both ends
+otherwise, because the sender was told the room had its fact. Ask again with
+`collab learn sync` once the flood has passed.
+
 ## Batches of work
 
 Two agents splitting a defined job need one answer to *how much is left*, and

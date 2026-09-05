@@ -2835,6 +2835,30 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
             + (f" — {said(why)}" if why else ", on the next beat"),
             f"{exe} daemon stop && {exe} daemon start" if why else "")
 
+    # 1d. And is anything that arrived being thrown away?
+    #
+    #     The daemon's queue for learnings is bounded, because the feed fills
+    #     it and a timer empties it and nothing else stands between the two. A
+    #     drop is therefore a real possibility rather than a theoretical one,
+    #     and it is silent by construction: the sender was told the room had
+    #     its fact, and this end never filed it.
+    #
+    #     Counted since the daemon started rather than since anybody looked, so
+    #     it does not reset itself into silence; a restart is what clears it,
+    #     and a restart is also the thing most likely to have been the cause.
+    #     Separate from the block above because the two are unrelated failures
+    #     — one is our own writing not going out, this is somebody else's not
+    #     coming in — and a session can have either without the other.
+    if isinstance(waiting_learnings, dict) and waiting_learnings.get("dropped"):
+        lost = int(waiting_learnings["dropped"] or 0)
+        add("learnings", CHECK_WARN,
+            f"{plural(lost, 'learning')} or sync answer"
+            f"{'' if lost == 1 else 's'} dropped since the listener started —"
+            " they arrived faster than they could be filed and the queue is"
+            " bounded",
+            f"{exe} learn sync once the flood has passed; the listener's log"
+            " names what went")
+
     # 2. Is anything READING what arrives?
     armed = len(watchers(profile)) + int(status.get("ws_clients") or 0)
     since_poll = time.time() - last_poll(profile)
@@ -3764,6 +3788,17 @@ def cmd_status(args: argparse.Namespace) -> int:
         f" · timeout {int(told['timeout'])}s · {told['why']}"
         if told["armed"] else "not armed")
     payload["reminder"] = _reminder_line(told)
+    # WHAT BECAME OF THE FACTS, in one line and only when there is one to
+    # print. Three figures the daemon keeps and nothing showed a person: how
+    # many of this agent's own learnings are still spooled, why the last
+    # publish failed, and how many arriving ones were dropped for want of room.
+    # The third is the one that cannot be discovered any other way — a sender
+    # was told the room had its fact and this end never filed it — and it was
+    # reaching `status.json` and stopping there.
+    if isinstance(status.get("learnings"), dict):
+        figures = {k: v for k, v in status["learnings"].items() if v}
+        if figures:
+            payload["learnings"] = figures
     if args.json:
         print(json.dumps(payload, indent=2))
         return 0
@@ -3799,6 +3834,16 @@ def cmd_status(args: argparse.Namespace) -> int:
     # happens while nobody is watching.
     print(f"  {'wake':<16} {payload['wake']}")
     print(f"  {'reminder':<16} {payload['reminder']}")
+    if figures := payload.get("learnings"):
+        said_parts = []
+        if held := int(figures.get("pending") or 0):
+            said_parts.append(f"{held} waiting to publish")
+        if lost := int(figures.get("dropped") or 0):
+            said_parts.append(c(f"{lost} dropped", "33"))
+        if why := figures.get("last_error"):
+            said_parts.append(said(str(why)))
+        if said_parts:
+            print(f"  {'learnings':<16} {' · '.join(said_parts)}")
     if line := batch_progress.describe(payload.get("batch")):
         # The name came off the hub, through the daemon, into a file, and is
         # about to reach a real terminal. Every hop kept it as the remote party
