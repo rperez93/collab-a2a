@@ -28,7 +28,7 @@ from .. import __version__, diagnostics, lockfile, peers, wake
 from ..batch import DELTA_SHOWN_FOR
 from ..config import SessionProfile, share_stats_enabled, stats_source
 from ..protocol import (EXT_PREFIX, KIND_CHAT, KIND_HELLO, KIND_PRESENCE,
-                        KIND_SYSTEM, KIND_TASK, Envelope)
+                        KIND_SYSTEM, KIND_TASK, Envelope, now_iso, scrub)
 from ..stats import STATS_FILE, read_stats, write_stats
 from . import exclusive
 # THE FILES ARE READ FROM daemon_files, AND RE-EXPORTED FROM HERE. Everything
@@ -342,6 +342,14 @@ class Daemon:
         self._context_compacted_at = 0.0
         self._context_tried_at = 0.0
         self._context_under_since = 0.0
+        #: Learnings in flight. Everything the feed notices is queued here and
+        #: acted on by the heartbeat, off the event loop: a bundle write in the
+        #: middle of the stream would hold the feed for a disk.
+        self._arrived: list[Envelope] = []
+        self._sync_asks: list[Envelope] = []
+        self._sync_wanted = 0
+        self._answered_sync: dict[str, float] = {}
+        self._learning_error = ""
 
     @property
     def inbox(self) -> Inbox:
@@ -422,6 +430,11 @@ class Daemon:
             "messages": self._message_figures(),
             # Where our own usage figures got to. See `_stats_figures`.
             "stats": self._stats_figures(),
+            # What is still waiting to be published, and why it has not been.
+            # A learning the agent recorded and nothing carried is invisible
+            # from the agent's side: the command returned at once and said the
+            # daemon would do it.
+            "learnings": self._learning_figures(),
             # When this daemon last compacted its own agent's context, or None
             # for never. Written because the act is invisible from inside the
             # agent — a session comes back shorter and nothing says who did it
@@ -460,6 +473,19 @@ class Daemon:
         tmp = self.paths.status.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload))
         tmp.replace(self.paths.status)  # atomic: a reader never sees a half file
+
+    def _learning_figures(self) -> dict[str, Any]:
+        """What is still spooled, and the reason if it is stuck.
+
+        The whole point of spooling is that the agent does not wait, which
+        means the agent also does not find out. Something has to say so, and
+        `collab check` reads this: two learnings waiting with a permission
+        error behind them is a fault, and two waiting for three seconds is not.
+        """
+        from .. import learnings
+
+        waiting = len(learnings.pending(self.profile.dir))
+        return {"pending": waiting, "last_error": self._learning_error or None}
 
     def _stats_file_mtime(self) -> float:
         try:
@@ -1234,30 +1260,229 @@ class Daemon:
             if batch is not None:
                 await self._wake_is_broken(tail)
 
-    def _file_any_learning(self, env: Envelope) -> None:
-        """Write down a learning that came past, including one we sent.
+    def _note_any_learning(self, env: Envelope) -> None:
+        """Queue a learning, or a request for ours, that came past on the feed.
 
-        OUR OWN TOO. The sender is at least as likely as anybody to be the one
-        that forgets: it compacts its context an hour later and the thing it
-        found out is gone, while the file in the repository is not. Every
-        daemon files every learning it sees, and the claim in
-        `learnings.record` is what keeps two agents in one checkout from
-        writing the same one twice.
+        QUEUED AND NOT DONE HERE. This runs inside the feed loop, where the
+        only job is to get the event recorded and move on; a bundle write and
+        an index update belong on the heartbeat, off the event loop, beside
+        everything else this daemon does slowly. It also means a burst of forty
+        sync answers costs one list append each rather than forty file writes
+        in the middle of the stream.
 
-        Never raises. This runs inside the feed loop, where an exception is a
-        dropped connection and a reconnect, and a learning is not worth that.
+        Never raises. A learning is not worth a dropped connection.
         """
         try:
             from .. import learnings
 
-            written = learnings.record(self.profile.home, env,
-                                       session_id=self.profile.session_id)
+            if learnings.is_learning(env):
+                self._arrived.append(env)
+            elif learnings.is_sync_request(env) and env.sender != self.profile.name:
+                self._sync_asks.append(env)
         except Exception as exc:                              # noqa: BLE001
-            logger.warning("could not write down a learning (%r)", exc)
+            logger.warning("could not note a learning (%r)", exc)
+
+    async def _do_the_learning_work(self) -> None:
+        """Everything about learnings that touches a disk or the network.
+
+        One place, on the heartbeat, off the event loop. Three kinds of work
+        meet here because they share the one thing that matters: none of them
+        may happen while an agent is waiting, and none of them may happen on
+        the thread holding the feed.
+
+        Never raises out. The heartbeat guards this already, but a learning
+        failing must not cost the status write that follows it either, so the
+        reason is recorded and the next beat tries again.
+        """
+        from .. import learnings
+
+        if learnings.store_dir() is None:
+            return                          # switched off; nothing to keep
+        try:
+            work = await asyncio.to_thread(self._drain_learning_spool)
+            await self._finish_spooled(work)
+            await asyncio.to_thread(self._store_arrived_learnings)
+            await self._answer_sync_requests()
+            self._learning_error = ""
+        except Exception as exc:                              # noqa: BLE001
+            self._learning_error = f"{type(exc).__name__}: {exc}"[:200]
+            logger.warning("the learnings work failed (%r); retrying", exc)
+
+    def _bundle(self):
+        """This session's own bundle. THE ONLY ONE THIS DAEMON MAY PUBLISH.
+
+        Derived from the checkout the session lives in, every time, and never
+        from anything that arrived on the wire. The store holds every
+        repository this agent has ever worked on, and the people in this room
+        have nothing to do with most of them.
+        """
+        from .. import learnings
+
+        key = learnings.repo_key(Path(self.profile.home).parent)
+        return key, learnings.bundle_dir(key)
+
+    def _drain_learning_spool(self) -> list:
+        """Do the FILE half of what the CLI asked for, oldest first.
+
+        Returns what still has to be published, paired with the spool file that
+        asked for it — because the spool file may not be deleted until the
+        publish has succeeded too. A crash between the write and the publish
+        then leaves the file, the next daemon finds it, and the learning
+        arrives late rather than never; deleting it here would lose exactly the
+        ones recorded while something was wrong.
+
+        Which makes a RETRY the thing to get right, and the spool file is where
+        the progress is kept: once the bundle write has happened the chosen
+        slug is written back into it, so the next attempt republishes that one
+        learning rather than recording a second copy of it under `-2`.
+        """
+        from .. import learnings
+
+        key, bundle = self._bundle()
+        left: list = []
+        if bundle is None:
+            return left
+        for path in learnings.pending(self.profile.dir):
+            asked = learnings.read_spooled(path)
+            if asked is None:
+                with contextlib.suppress(OSError):
+                    path.unlink()           # not ours, or half a file
+                continue
+            left.append((path, self._carry_out(path, asked, key, bundle)))
+        return left
+
+    def _carry_out(self, path: Path, asked: dict[str, Any], key: str,
+                   bundle: Path) -> Any:
+        """One spooled operation's file work. Returns what is left to publish."""
+        from .. import learnings
+
+        op = str(asked.get("op") or "")
+        if op == "add":
+            done = str(asked.get("slug") or "")
+            if done and (already := learnings.load(bundle, done)) is not None:
+                return already              # written last time; only the send failed
+            payload = asked.get("learning") or {}
+            one = learnings.from_wire({**payload, "slug": learnings.slugify(
+                str(payload.get("title") or ""), learnings.slugs(bundle))}, key)
+            if one is None:
+                return None                 # nothing usable; do not retry for ever
+            one.by = str(payload.get("by") or self.profile.name)
+            one.at = now_iso()
+            one.peer_uses = one.peer_reads = 0
+            learnings.save(bundle, one)
+            learnings.index_one(bundle, one)
+            learnings.append_log(bundle, f"**Recorded** {one.title} ({one.slug}).")
+            with contextlib.suppress(OSError, TypeError, ValueError):
+                path.write_text(json.dumps({**asked, "slug": one.slug}),
+                                encoding="utf-8")
+            return one
+        if op in ("read", "used"):
+            learnings.bump(bundle, str(asked.get("slug") or ""),
+                           "reads" if op == "read" else "uses")
+            return None
+        if op == "sync":
+            self._sync_wanted = max(
+                self._sync_wanted, int(asked.get("want") or learnings.DEFAULT_WANT))
+            return None
+        return None
+
+    async def _finish_spooled(self, work: list) -> None:
+        """Publish what the file work produced, then forget the request.
+
+        The publish is the half that can fail — a hub that has gone, a token
+        that was revoked — and it is the whole reason the spool file is still
+        here. An operation with nothing to publish is finished the moment its
+        files are written.
+        """
+        for path, one in work:
+            if one is not None:
+                await self._send_learning(one)
+            with contextlib.suppress(OSError):
+                path.unlink()
+
+    def _store_arrived_learnings(self) -> None:
+        """File what other agents sent, under OUR key and never theirs."""
+        from .. import learnings
+
+        key, bundle = self._bundle()
+        if bundle is None:
+            self._arrived.clear()
             return
-        if written:
-            logger.info("wrote a learning down in %s",
-                        learnings.path_for(self.profile.home))
+        while self._arrived:
+            env = self._arrived.pop(0)
+            body = env.body if isinstance(env.body, dict) else {}
+            one = learnings.from_wire(body.get(learnings.MARKER), key)
+            if one is None:
+                continue
+            what = learnings.receive(bundle, one)
+            if what != "known":
+                learnings.append_log(
+                    bundle, f"**{what.title()}** {one.title} ({one.slug}),"
+                            f" from {scrub(env.sender or 'somebody')}.")
+            logger.info("learning %s: %s", what, one.slug)
+
+    async def _answer_sync_requests(self) -> None:
+        """Send our own repository's best learnings to whoever asked.
+
+        DIRECTLY, and rate limited. Direct because a sync is a burst of twenty
+        messages and the room does not want them; rate limited because an agent
+        that asked twice by accident, or a loop that asked on every turn, would
+        otherwise be answered every time by every other agent in the session.
+        """
+        from .. import learnings
+
+        asks, self._sync_asks = self._sync_asks, []
+        if self._sync_wanted:
+            await self._publish_learning_requests()
+        if not asks or self._http is None:
+            return
+        key, bundle = self._bundle()
+        if bundle is None:
+            return
+        now = time.time()
+        for env in asks:
+            who = env.sender or ""
+            if (now - self._answered_sync.get(who, 0.0)) < learnings.SYNC_COOLDOWN:
+                logger.info("not answering %s again so soon", who)
+                continue
+            self._answered_sync[who] = now
+            best = (await asyncio.to_thread(learnings.every, bundle))[
+                :learnings.wanted(env)]
+            logger.info("answering %s with %d learnings for %s",
+                        who, len(best), key)
+            for one in best:
+                await self._send_learning(one, to=who)
+
+    async def _publish_learning_requests(self) -> None:
+        """Ask the room for theirs, and publish anything we just recorded."""
+        from .. import learnings
+
+        want, self._sync_wanted = self._sync_wanted, 0
+        if want and self._http is not None:
+            await self._post_chat({"kind": KIND_CHAT, "text": learnings.SYNC_TEXT,
+                                   "body": {learnings.SYNC_MARKER: {"want": want}}})
+
+    async def _send_learning(self, one: Any, to: str = "") -> None:
+        from .. import learnings
+
+        payload: dict[str, Any] = {
+            "kind": KIND_CHAT, "text": f"{learnings.PREFIX} {one.title}",
+            "body": {learnings.MARKER: learnings.to_wire(one)}}
+        if to:
+            payload["to"] = to
+        await self._post_chat(payload)
+
+    async def _post_chat(self, payload: dict[str, Any]) -> None:
+        if self._http is None:
+            return
+        try:
+            await self._http.post(
+                f"{self.profile.url}{EXT_PREFIX}/messages",
+                headers={"Authorization": f"Bearer {self.profile.token}"},
+                json=payload, timeout=15.0)
+        except (httpx.HTTPError, AttributeError, TypeError, RuntimeError) as exc:
+            logger.warning("could not publish a learning (%r)", exc)
+            raise
 
     def _log_wake(self, outcome: str, why: str, batch: wake.Batch | None,
                   reminder: str) -> None:
@@ -1362,6 +1587,10 @@ class Daemon:
                     # compacting first would hand the woken turn a summary in
                     # place of the conversation it was about to answer.
                     await self._maybe_compact()
+                    # LAST of the three, and outside nothing: a learning is the
+                    # least urgent thing here and the most likely to touch a
+                    # slow disk.
+                    await self._do_the_learning_work()
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:    # noqa: BLE001
@@ -1792,7 +2021,7 @@ class Daemon:
                     logger.warning("skipping unparseable event")
                     continue
                 if self.inbox.record(env):
-                    self._file_any_learning(env)
+                    self._note_any_learning(env)
                     self.waker.note(env, own_name=self.profile.name)
                     await self.bridge.broadcast(env)
                     if env.kind in REFRESHES_THE_SNAPSHOT:

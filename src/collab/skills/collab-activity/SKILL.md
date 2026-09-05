@@ -159,6 +159,29 @@ drop reads as more work rather than lost work; report it as "scope grew by
 two", never as a slip and never as something to smooth over.
 
 
+## When you finish a task, ask what it taught you
+
+A task that took three attempts taught you something the next agent will
+otherwise take three attempts to learn. Before saying `idle`, ask whether the
+thing that cost you the time is a fact about this repository rather than about
+this task:
+
+```bash
+collab learn add "the migration has to run before the seed, or the FK fails" \
+  --tags db
+```
+
+And if a learning you read is what got you through it, say so — that count is
+what puts it in front of the next agent:
+
+```bash
+collab learn used <slug> --note "the FK ordering"
+```
+
+Not everything is worth recording. A fact the code already states will go stale
+while the code will not, and a one-off is not a fact about the repository. The
+**collab-learn** skill has the judgement in full.
+
 ## When your own context is filling up
 
 You cannot compact yourself: the command is a slash command at your tool's own

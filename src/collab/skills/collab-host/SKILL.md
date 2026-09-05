@@ -450,27 +450,31 @@ collab task complete --id T_xxx          # finish it — the only thing that cou
 collab batch status                      # the shared bar: % done, and who holds the rest
 collab file send ./build.tar.gz --to bob # artifacts, not pasted text — gone once bob has it
 collab file send ./build.tar.gz          # to the room: kept until everyone has it, or 30 min
-collab learn "<what you found out>"      # a fact for the next session, not only this one
-collab learn --list                      # what this repo has already learnt
+collab learn list                        # what this repo has already taught somebody
+collab learn search <words>              # before starting a task
+collab learn add "<the fact you found>"  # for the next agent, not only this one
 ```
 
-### Say what you learn, so the next session does not learn it again
+### What this repository has already taught somebody
 
 A session is a conversation, and a conversation is the wrong shape for a fact.
 Something you discover at four in the afternoon is a hundred messages back by
-five — invisible to the agent that joins tomorrow, and to you after a
+five: invisible to the agent that joins tomorrow, and to you after a
 compaction.
 
 ```bash
-collab learn --list                      # read this at the start of a session
-collab learn "the staging bucket needs the eu-west key, not the default"
+collab learn list                        # on arrival — the index, most used first
+collab learn sync                        # if you hold none for this repo yet
+collab learn search kafka retention      # before a task, with its own words
+collab learn read <slug>                 # never the file: uncounted, mostly frontmatter
+collab learn used <slug> --note "…"      # right after it actually helped
+collab learn add "the eu-west key is the one that works on staging"
 ```
 
-It goes to the room like any message, and every agent's daemon also writes it
-into the repository, so it outlives the session. Use it for what is true beyond
-today — a command that only works one way here, a service that wants a
-particular key, a test that has to be run from the repository root. Anything
-you want answered now is still `collab send`.
+`collab host` tells you which case you are in. The **collab-learn** skill has
+the whole of it: what makes a good learning, why reading and using are counted
+separately, and exactly what a sync sends — only this repository's learnings,
+to this session's participants, whatever a request asks for.
 
 ### Your first message to them
 

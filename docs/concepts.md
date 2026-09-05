@@ -263,34 +263,98 @@ compacted its own context an hour ago.
 So every session in a repository ends up rediscovering the same handful of
 things.
 
-`collab learn "<text>"` says it and writes it down.
-On the wire it is an ordinary chat — chat is the only kind a client sends —
-prefixed `learning:` so a participant whose client knows nothing about this
-still reads the sentence as what it is, and marked in its body so every daemon
-that sees the event can act on it.
-The body decides and the prefix does not: anybody can type a message beginning
-`learning:`, and a message that merely looks like one is not a fact about the
-repository.
+A learning is written down instead, and four decisions shape where.
 
-Every daemon files every learning it sees, including one its own agent sent —
-the sender is at least as likely as anybody to be the one that forgets.
-It goes into the **shared** state directory, `.collab/`, and not into the
-writing agent's own: where two agents share a checkout they have a directory
-each because the session is theirs individually, and the repository is not.
-The same learning is written once however many daemons saw it, claimed on the
-hub's own sequence number by a file that exactly one of them can create.
-The same sentence learnt again a month later is a second learning; the
-de-duplication is on the event, never on the text, and a fact confirmed twice
-is worth knowing twice.
+**Outside every repository.**
+The store belongs to the agent rather than to the checkout: one folder holding
+what it has learnt about every repository it has worked on.
+Writing into the checkout would put an agent's private notes into somebody's
+diff and make the feature a thing to be reviewed, and an agent that works on
+ten repositories wants one place to look rather than ten.
 
-Where the coding agent running a daemon keeps a folder of project notes for
-this repository, the learning is appended there as well, because that is the
-file it actually reads at the start of a session.
-Nothing is written unless that tool is installed **and** has already been run in
-this checkout — a folder in somebody's home directory is not evidence that the
-agent in front of us is the one that reads it.
-The notes index gets one pointer, the first time, and not one line per
-learning: it is loaded whole at the start of every session.
+**Grouped by a key that survives the machine.**
+Two agents on two laptops with two different paths are working on ONE
+repository, and a learning from one is worth having on the other.
+The key is the normalised `origin` remote — scheme, credentials, port, `.git`
+suffix and host case removed — so `git@host:a/b.git` and `https://host/a/b`
+land in the same group.
+With no remote it is `local/<directory name>`, and the prefix is not
+decoration: two people with a directory called `api` and no remote are not
+working on the same repository, and a bare `api` would have claimed they were.
+
+**A bundle rather than a file.**
+Each group is a Google Open Knowledge Format v0.2 bundle, modelled on this
+repository's own `knowledge/` folder: an index, a dated log, and one file per
+learning carrying frontmatter that says who recorded it and when.
+That is the shape an agent is already taught to traverse here, and one file per
+learning is what makes a slug, a counter and a search index possible at all.
+`generated.by` is the participant's display name.
+
+**A daemon can only ever publish the bundle of the repository its own session
+is in.**
+Not the one a request names — a request cannot name one.
+The store holds every repository this agent has touched, and the people in the
+room have nothing to do with most of them.
+The responder derives the key from its own checkout every time and does not
+read one out of the request, so a field claiming otherwise is not refused so
+much as unnoticed: a field nobody reads cannot become a field somebody reads by
+accident.
+
+### Reading, and using, are different numbers
+
+`collab learn read <slug>` prints one and counts a read.
+`collab learn used <slug>` is a separate command an agent runs after the
+learning actually did something — a rule applied, a pitfall avoided, a bug
+reproduced.
+Reading one costs nothing and proves nothing; an agent that applied it and
+found it true is the only thing that can say it was worth writing, and that is
+what ranks the index.
+A file opened directly is counted by neither, which is why the skills tell an
+agent to read one through the command.
+
+A learning arriving from somebody else carries that agent's counts, stored
+apart as `peer_uses` and `peer_reads` and shown as `used 7 by others`.
+A count records what THIS agent did, so a copied one would be a claim about
+work it never performed — and a fresh agent still gets an index ordered by what
+everybody else found valuable.
+
+### Search
+
+The markdown files are the source of truth and the index is derived: a SQLite
+FTS5 table beside them that can be deleted at any moment, at the cost of one
+rebuild.
+That is what makes it safe to have at all — a store copied between machines,
+edited by hand or restored from a backup arrives with an index describing a
+bundle that no longer exists, and the answer has to be «rebuild», not «be
+wrong».
+
+It is kept current two ways, because either alone leaves a hole.
+Every writer updates it in the same operation, which keeps the ordinary path
+free; and every reader compares it against a digest of the folder's (name,
+modification time, size) — the technique `load_config` and the theme reader
+already use — and rebuilds when they differ, which catches the writer that was
+not this process.
+Ranking is `bm25` with the title weighted ten times the body, so a word in a
+title outranks a word in an aside, and the counts settle what relevance leaves
+level.
+Where SQLite was built without FTS5 the same module scans the files with the
+same ordering and says which engine answered.
+
+### Nothing here costs a turn
+
+Every command that writes leaves one small file in the session's state
+directory and returns.
+The daemon does the bundle write, the index update and the publish on its next
+heartbeat, off its event loop, so a slow disk never holds the feed.
+`read` is the exception and prints from the file at once, because printing it is
+the whole of what `read` is for; only its counter is deferred.
+
+A spool file is deleted after the work has succeeded and not before, so a hub
+that is down means a learning arrives late rather than never.
+Once the bundle write has happened the chosen slug is written back into the
+spool file, so a retry republishes that learning rather than recording a second
+copy of it.
+`collab check` reports what is still waiting and why.
 
 ## The wake
 

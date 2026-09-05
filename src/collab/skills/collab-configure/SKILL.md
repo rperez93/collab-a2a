@@ -67,6 +67,7 @@ the project. A session belongs to a repository; a theme does not.
 | `remind_guest` | what it says when this agent is a guest | as above; empty means the shipped one |
 | `context_compact_at` | compact this agent's context when its own reported share of the window reaches this percent; `0` never does | they say their agent keeps running out of context mid-task — **and** the tmux wake is armed |
 | `diagnostics` | keep a local record of what the daemon and hub did — events only, never message text, names or addresses | they are reporting a bug, or something intermittent needs catching; turn it back off afterwards |
+| `learnings_dir` | where this agent keeps what it has learnt, outside any repository | they want the store somewhere else, or want the feature off entirely (empty string) |
 | `watch_layout` | `split`, `tmux`, `chat` or `roster` | they want tmux to own the panes |
 | `watch_roster_size` | the roster's share of the window, in percent | the roster is too small to read |
 | `watch_roster_position` | `top`, `bottom`, `left` or `right` | they ask for it beside rather than above |

@@ -1,28 +1,28 @@
-"""What one agent found out, kept where the next one will read it.
+"""What one agent found out, kept where the next one will look for it.
 
 A session is a conversation, and a conversation is the wrong shape for a fact.
-«The staging bucket needs the eu-west key» is said once, at four in the
-afternoon, to whoever happened to be reading — and then it is a hundred
-messages back, invisible to the agent that joins tomorrow and to the agent that
-compacted its context an hour later. Every session in a repository rediscovers
-the same handful of things.
+Something discovered at four in the afternoon is a hundred messages back by
+five, invisible to the agent that joins tomorrow and to the agent that
+compacted its own context an hour ago. Every session in a repository ends up
+rediscovering the same handful of things.
 
-So it is said AND written down, and these tests are about where and how often.
-Four things they hold:
+Four decisions are what these tests are about, and each has a way of being
+quietly wrong.
 
-* it goes to the SHARED state directory, not to the writing agent's own — two
-  agents in one checkout are working on one repository, and a file each would
-  give them two half-answers with no way to know it;
-* every daemon files every learning it sees, its own sender's included, and the
-  same one is never written twice however many daemons saw it;
-* the body decides and the prefix does not, because anybody can type a message
-  beginning «learning:»;
-* a host tool that keeps project notes gets a copy in them, and its index gets
-  one pointer rather than one per learning.
-
-Every test here points HOME and the tool's config directory at a temporary
-folder. The mirror writes into a home directory, and a test that wrote into the
-real one would be putting its fixtures in somebody's notes.
+* **The store is the agent's, not the checkout's**, and it is grouped by a key
+  two machines agree on. A key derived from the path would give two people two
+  stores of one repository's knowledge, which is the failure the feature exists
+  to remove.
+* **A daemon may only ever publish the bundle of the repository its own session
+  is in.** The store holds every repository this agent has touched, and the
+  people in this room have nothing to do with most of them. A request cannot
+  name a repository, and the responder does not read one if it does.
+* **Nothing makes the agent wait.** A turn is the scarcest thing here, so every
+  write is a spool file and a daemon, and the commands are held to opening no
+  socket and writing no bundle file of their own.
+* **Everything that arrives is somebody else's text.** The slug becomes a file
+  name in a folder written unattended; the body is read back into a context
+  window; the counts are a stranger's opinion of their own work.
 """
 
 from __future__ import annotations
@@ -32,286 +32,486 @@ import contextlib
 import io
 import json
 import time
+from pathlib import Path
 
 import pytest
 
-from collab import cli, learnings
-from collab.config import COLLAB_DIRNAME, SessionProfile
+from collab import cli, config as cfg, learnings as L
+from collab.config import SessionProfile
 from collab.protocol import KIND_CHAT, KIND_TASK, Envelope
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
-    """A checkout with one agent's state directory in it, and a private HOME.
+def store(tmp_path, monkeypatch):
+    """A learnings store of this test's own, never the machine's.
 
-    HOME is redirected first and unconditionally: `mirror_to_memory` writes
-    into it, and a test that let that reach the real one would be writing its
-    own fixtures into somebody's project notes.
+    `COLLAB_CONFIG` is already under `tmp_path` from the suite-wide fixture, and
+    the store follows the config file, so this only has to clear the cache after
+    writing a setting.
     """
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-    (tmp_path / "home").mkdir()
-    checkout = tmp_path / "checkout"
-    (checkout / f"{COLLAB_DIRNAME}-alice").mkdir(parents=True)
-    return checkout
-
-
-def _home(repo, name="alice"):
-    return repo / f"{COLLAB_DIRNAME}-{name}"
-
-
-def _learning(text, *, seq=1, sender="alice", marked=True):
-    return Envelope(kind=KIND_CHAT, text=f"{learnings.PREFIX} {text}",
-                    sender=sender, seq=seq,
-                    body={learnings.MARKER: True} if marked else {})
-
-
-# --- where it lands -------------------------------------------------------------
-
-def test_a_learning_lands_in_the_shared_directory_and_not_the_agents_own(repo):
-    """Two agents in one checkout are working on one repository. A file each
-    would give them two half-answers and no way to know it."""
-    learnings.record(_home(repo), _learning("the staging bucket wants eu-west"),
-                     session_id="s1")
-    shared = repo / COLLAB_DIRNAME / learnings.FILENAME
-    assert shared.exists()
-    assert not (_home(repo) / learnings.FILENAME).exists()
-    assert "the staging bucket wants eu-west" in shared.read_text()
-
-
-def test_the_line_says_when_and_who(repo):
-    line = learnings.line_for("alice", "always rebase", when=1757080980.0)
-    assert line.startswith("- ")
-    assert " · alice: always rebase" in line
-    stamp = line[2:].split(" · ")[0]
-    assert time.strptime(stamp, "%Y-%m-%d %H:%M")
-
-
-def test_two_agents_in_one_checkout_write_it_once(repo):
-    """Both daemons receive the same event and both want to file it."""
-    env = _learning("one thing", seq=7)
-    first = learnings.record(_home(repo, "alice"), env, session_id="s1")
-    second = learnings.record(_home(repo, "bob"), env, session_id="s1")
-    assert first and not second
-    body = (repo / COLLAB_DIRNAME / learnings.FILENAME).read_text()
-    assert body.count("one thing") == 1
-
-
-def test_the_same_sentence_learnt_again_later_is_a_second_learning(repo):
-    """De-duplicated on the sequence number, never on the text. The same thing
-    learnt a month apart is two learnings, and the second is the confirmation."""
-    learnings.record(_home(repo), _learning("always rebase", seq=1), session_id="s1")
-    learnings.record(_home(repo), _learning("always rebase", seq=90), session_id="s1")
-    assert len(learnings.read(_home(repo))) == 2
-
-
-def test_the_same_sequence_in_a_different_session_is_not_the_same_event(repo):
-    """`seq` is per session; two sessions both start at one."""
-    learnings.record(_home(repo), _learning("a", seq=1), session_id="s1")
-    learnings.record(_home(repo), _learning("b", seq=1), session_id="s2")
-    assert len(learnings.read(_home(repo))) == 2
-
-
-# --- what counts as one ---------------------------------------------------------
-
-def test_the_body_decides_and_the_prefix_does_not(repo):
-    """Anybody can type a message beginning «learning:», and a message that
-    merely looks like one must not be filed as a fact about the repository."""
-    assert not learnings.is_learning(_learning("looks like one", marked=False))
-    assert learnings.record(_home(repo), _learning("looks like one", marked=False),
-                            session_id="s1") == ""
-
-
-def test_only_a_chat_can_be_one(repo):
-    env = Envelope(kind=KIND_TASK, text="learning: x", seq=2,
-                   body={learnings.MARKER: True})
-    assert not learnings.is_learning(env)
-
-
-def test_the_prefix_is_not_written_down_twice(repo):
-    """It is on the wire so the sentence reads as what it is in somebody's
-    transcript. In the file, the line already says what it is."""
-    learnings.record(_home(repo), _learning("no prefix here"), session_id="s1")
-    assert learnings.read(_home(repo))[0].endswith("alice: no prefix here")
-
-
-def test_an_empty_learning_is_not_filed(repo):
-    assert learnings.record(_home(repo), _learning("   "), session_id="s1") == ""
-
-
-def test_control_characters_never_reach_the_file(repo):
-    """The file is printed to a terminal by `collab learn --list`."""
-    learnings.record(_home(repo), _learning("a\x1b[2Jb"), session_id="s1")
-    assert "\x1b" not in learnings.read(_home(repo))[0]
-
-
-def test_a_very_long_learning_is_cut(repo):
-    """This is read back into an agent's context at the start of every session,
-    so an unbounded one is a tax paid by everybody from then on."""
-    learnings.record(_home(repo), _learning("x" * 5000), session_id="s1")
-    assert len(learnings.read(_home(repo))[0]) < learnings.MAX_TEXT + 100
-
-
-# --- the host tool's own project notes ------------------------------------------
-
-def _project_dir(tmp_home, repo):
-    slug = str(repo.resolve()).replace("/", "-")
-    where = tmp_home / ".claude" / "projects" / slug
-    where.mkdir(parents=True)
+    cfg._CACHE.clear()
+    where = L.store_dir()
+    where.mkdir(parents=True, exist_ok=True)
     return where
 
 
-def test_nothing_is_written_where_the_tool_has_never_opened_this_repo(repo, tmp_path):
-    """The config directory existing says the tool is installed. Only the
-    project folder says it has been run HERE — without that second condition
-    every daemon on the machine creates folders for repositories that tool has
-    never seen."""
-    (tmp_path / "home" / ".claude").mkdir()
-    learnings.record(_home(repo), _learning("a"), session_id="s1")
-    assert not list((tmp_path / "home" / ".claude").rglob("*.md"))
+def _bundle(store, key="host/a/b"):
+    where = L.bundle_dir(key)
+    where.mkdir(parents=True, exist_ok=True)
+    return where
 
 
-def test_nothing_is_written_where_the_tool_is_not_installed_at_all(repo, tmp_path):
-    learnings.record(_home(repo), _learning("a"), session_id="s1")
-    assert not (tmp_path / "home" / ".claude").exists()
+def _one(slug="a-thing", title="A thing worth knowing", body="Because of this.",
+         **over):
+    fields = {"description": "One line.", "tags": ["infra"], "by": "alice",
+              "at": "2026-09-05T16:04:00Z", "repo": "host/a/b"}
+    fields.update(over)
+    return L.Learning(slug=slug, title=title, body=body, **fields)
 
 
-def test_a_learning_reaches_the_project_notes_with_its_frontmatter(repo, tmp_path):
-    project = _project_dir(tmp_path / "home", repo)
-    learnings.record(_home(repo), _learning("the eu-west key"), session_id="s1")
-    note = project / "memory" / learnings.MEMORY_FILE
-    body = note.read_text()
-    assert body.startswith("---\n")
-    assert f"name: {learnings.MEMORY_NAME}" in body
-    assert f"description: {learnings.MEMORY_DESCRIPTION}" in body
-    assert "type: project" in body
-    assert "the eu-west key" in body
+# --- the key two machines agree on ---------------------------------------------
+
+@pytest.mark.parametrize("url,expected", [
+    ("git@github.com:rperez93/collab-a2a.git", "github.com/rperez93/collab-a2a"),
+    ("https://github.com/rperez93/collab-a2a", "github.com/rperez93/collab-a2a"),
+    ("https://github.com/rperez93/collab-a2a.git", "github.com/rperez93/collab-a2a"),
+    ("ssh://git@github.com:22/rperez93/collab-a2a.git",
+     "github.com/rperez93/collab-a2a"),
+    ("https://token:x-oauth@GitHub.com/rperez93/collab-a2a.git",
+     "github.com/rperez93/collab-a2a"),
+    ("git://example.org/deep/nested/repo.git", "example.org/deep/nested/repo"),
+    ("", ""),
+    ("not-a-url", ""),
+])
+def test_every_way_of_naming_one_repository_gives_one_key(url, expected):
+    """SSH here, HTTPS there, a token in the URL, a trailing `.git`. Four
+    spellings of one repository, and a key that told them apart would give four
+    agents four separate stores of the same knowledge."""
+    assert L.normalise_remote(url) == expected
 
 
-def test_the_notes_index_gets_one_pointer_and_not_one_per_learning(repo, tmp_path):
-    """The index is loaded whole at the start of every session, so filling it
-    is the most expensive possible way to be helpful."""
-    project = _project_dir(tmp_path / "home", repo)
-    for n in range(5):
-        learnings.record(_home(repo), _learning(f"thing {n}", seq=n), session_id="s1")
-    index = (project / "memory" / learnings.MEMORY_INDEX).read_text()
-    assert index.count(learnings.MEMORY_FILE) == 1
-    assert index.startswith("- [")
+def test_a_repository_with_no_remote_is_named_locally_and_says_so(tmp_path,
+                                                                  monkeypatch):
+    """`local/` is not decoration: two people with a directory called `api` and
+    no remote are not working on the same repository, and a bare `api` would
+    have claimed they were."""
+    monkeypatch.setattr(L, "_git", lambda *a, **k: "")
+    (tmp_path / "api").mkdir()
+    assert L.repo_key(tmp_path / "api") == "local/api"
 
 
-def test_an_index_that_already_points_at_it_is_left_alone(repo, tmp_path):
-    project = _project_dir(tmp_path / "home", repo)
-    memory = project / "memory"
-    memory.mkdir()
-    (memory / learnings.MEMORY_INDEX).write_text(
-        f"- [Something else](other.md) — hook\n"
-        f"- [Ours]({learnings.MEMORY_FILE}) — written by hand\n")
-    learnings.record(_home(repo), _learning("a"), session_id="s1")
-    index = (memory / learnings.MEMORY_INDEX).read_text()
-    assert index.count(learnings.MEMORY_FILE) == 1
-    assert "written by hand" in index
+def test_a_key_can_never_reach_outside_the_store(store):
+    """It arrives on the wire and out of a config file, so the place it becomes
+    a path is the place a `..` has to die."""
+    for hostile in ("../../etc", "/etc/passwd", "a/../../b", "..", ""):
+        where = L.bundle_dir(hostile)
+        assert where is None or store in where.resolve().parents or where == store
 
 
-def test_the_config_directory_can_be_pointed_elsewhere(repo, tmp_path, monkeypatch):
-    elsewhere = tmp_path / "elsewhere"
-    slug = str(repo.resolve()).replace("/", "-")
-    (elsewhere / "projects" / slug).mkdir(parents=True)
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(elsewhere))
-    learnings.record(_home(repo), _learning("a"), session_id="s1")
-    assert (elsewhere / "projects" / slug / "memory"
-            / learnings.MEMORY_FILE).exists()
+def test_turning_it_off_stops_everything(store):
+    cfg.set_learnings_dir("")
+    assert L.store_dir() is None
 
 
-def test_a_home_that_cannot_be_written_does_not_lose_the_learning(
-        repo, tmp_path, monkeypatch):
-    """The repository's file is the first of the two places, and a permission
-    somebody tightened on the second is not a reason to lose the first."""
-    def refuse(home):
-        raise OSError("read-only file system")
+# --- the bundle -----------------------------------------------------------------
 
-    monkeypatch.setattr(learnings, "_memory_dir", refuse)
-    written = learnings.record(_home(repo), _learning("the eu-west key"),
-                               session_id="s1")
-    assert "the eu-west key" in written, "the record still reports it was filed"
-    assert "the eu-west key" in learnings.read(_home(repo))[0]
+def test_a_learning_round_trips_through_its_file(store):
+    bundle = _bundle(store)
+    L.save(bundle, _one(uses=3, reads=7))
+    back = L.load(bundle, "a-thing")
+    assert back.title == "A thing worth knowing"
+    assert back.tags == ["infra"] and back.by == "alice"
+    assert back.uses == 3 and back.reads == 7
+    assert back.body == "Because of this."
 
 
-# --- the command ----------------------------------------------------------------
+def test_the_file_carries_the_frontmatter_the_bundle_format_asks_for(store):
+    bundle = _bundle(store)
+    L.save(bundle, _one())
+    text = (bundle / "a-thing.md").read_text()
+    assert text.startswith("---\n")
+    assert "type: Learning" in text
+    assert "status: stable" in text
+    assert 'by: "alice"' in text, "the participant's name, never a tool's"
+    assert "verified: []" in text, "nothing here claims to have been checked"
+
+
+def test_the_index_is_regenerated_rather_than_appended_to(store):
+    """An index is a statement about the present, so a stale line in it is a
+    link to a file somebody deleted. The log is the opposite and is appended."""
+    bundle = _bundle(store)
+    L.save(bundle, _one(slug="one", title="One"))
+    L.save(bundle, _one(slug="two", title="Two"))
+    (bundle / "one.md").unlink()
+    L.rewrite_index(bundle)
+    index = (bundle / L.INDEX).read_text()
+    assert "two.md" in index and "one.md" not in index
+    assert 'okf_version: "0.2"' in index
+
+
+def test_the_log_puts_the_newest_first(store):
+    bundle = _bundle(store)
+    L.append_log(bundle, "**Recorded** the first.")
+    L.append_log(bundle, "**Recorded** the second.")
+    text = (bundle / L.LOG).read_text()
+    assert text.index("the second") < text.index("the first")
+    assert text.startswith("# Bundle Update Log")
+
+
+def test_a_slug_clash_is_kept_rather_than_overwritten(store):
+    """Two people can learn two different things and call them the same thing.
+    The second is not a correction of the first."""
+    bundle = _bundle(store)
+    L.save(bundle, _one(slug="a-thing"))
+    assert L.slugify("A thing", L.slugs(bundle)) == "a-thing-2"
+    L.save(bundle, _one(slug="a-thing-2"))
+    assert L.slugify("A thing", L.slugs(bundle)) == "a-thing-3"
+
+
+def test_a_file_somebody_broke_costs_that_learning_and_not_the_listing(store):
+    bundle = _bundle(store)
+    L.save(bundle, _one(slug="good"))
+    (bundle / "broken.md").write_text("not a bundle file at all")
+    assert [x.slug for x in L.every(bundle)] == ["good"]
+
+
+# --- what "most used" means ------------------------------------------------------
+
+def test_reads_and_uses_are_different_things(store):
+    """Reading one costs nothing and proves nothing. An agent that applied it
+    and found it true is the only thing that can say it helped."""
+    bundle = _bundle(store)
+    L.save(bundle, _one())
+    assert L.bump(bundle, "a-thing", "reads").reads == 1
+    assert L.load(bundle, "a-thing").uses == 0
+    assert L.bump(bundle, "a-thing", "uses").uses == 1
+
+
+def test_the_order_is_uses_then_reads_then_newest(store):
+    bundle = _bundle(store)
+    L.save(bundle, _one(slug="used", uses=1, at="2026-01-01T00:00:00Z"))
+    L.save(bundle, _one(slug="read", reads=9, at="2026-01-01T00:00:00Z"))
+    L.save(bundle, _one(slug="new", at="2026-09-01T00:00:00Z"))
+    assert [x.slug for x in L.every(bundle)] == ["used", "read", "new"]
+
+
+def test_somebody_elses_counts_are_stored_apart_from_our_own(store):
+    """A count records what THIS agent did. A copied one would be a claim about
+    work it never performed, and `used 7 by others` is the honest rendering."""
+    bundle = _bundle(store)
+    arrived = L.from_wire({**L.to_wire(_one(uses=7, reads=4))}, "host/a/b")
+    assert arrived.uses == 0 and arrived.reads == 0
+    assert arrived.peer_uses == 7 and arrived.peer_reads == 4
+
+
+def test_a_fresh_agents_index_is_ordered_by_what_the_others_valued(store):
+    bundle = _bundle(store)
+    L.receive(bundle, L.from_wire(L.to_wire(_one(slug="quiet")), "host/a/b"))
+    L.receive(bundle, L.from_wire(L.to_wire(_one(slug="loud", uses=9)), "host/a/b"))
+    assert [x.slug for x in L.every(bundle)] == ["loud", "quiet"]
+
+
+# --- what arrives from somebody else ---------------------------------------------
+
+def test_a_learning_is_filed_under_the_receivers_key_and_never_the_senders(store):
+    """A sender can say anything about which repository a learning belongs to.
+    Believing it would file knowledge under a repository nobody in the room is
+    working on, and would write outside the folder the receiver expected."""
+    claimed = L.to_wire(_one(repo="somebody/else"))
+    arrived = L.from_wire(claimed, "host/a/b")
+    assert arrived.repo == "host/a/b"
+
+
+@pytest.mark.parametrize("slug", ["../../etc/passwd", "/absolute", "..",
+                                  "Has Capitals", "", "a" * 200, "dots.and.dots"])
+def test_a_slug_that_is_not_a_name_is_refused(slug, store):
+    """It becomes a file name in a folder written unattended, on the strength
+    of a string that arrived over the network."""
+    assert L.from_wire({**L.to_wire(_one()), "slug": slug}, "host/a/b") is None \
+        or L.valid_slug(L.from_wire({**L.to_wire(_one()), "slug": slug},
+                                    "host/a/b").slug)
+    assert L.learning_path(_bundle(store), slug) is None
+
+
+def test_an_oversized_body_is_cut(store):
+    """It is read back into a context window at the start of every session, and
+    it arrived from a stranger. Both halves of the reason apply."""
+    arrived = L.from_wire({**L.to_wire(_one()), "body": "x" * 100_000}, "host/a/b")
+    assert len(arrived.body) == L.MAX_BODY
+
+
+def test_control_characters_never_reach_the_store(store):
+    arrived = L.from_wire({**L.to_wire(_one()), "title": "a\x1b[2Jb",
+                           "body": "one\x1btwo"}, "host/a/b")
+    assert "\x1b" not in arrived.title and "\x1b" not in arrived.body
+
+
+def test_the_same_learning_going_round_the_room_is_stored_once(store):
+    bundle = _bundle(store)
+    one = L.from_wire(L.to_wire(_one()), "host/a/b")
+    assert L.receive(bundle, one) == "added"
+    assert L.receive(bundle, one) == "known"
+    assert len(L.slugs(bundle)) == 1
+
+
+def test_a_different_learning_under_the_same_slug_is_kept_beside_it(store):
+    bundle = _bundle(store)
+    L.receive(bundle, L.from_wire(L.to_wire(_one(body="one way")), "host/a/b"))
+    what = L.receive(bundle, L.from_wire(
+        L.to_wire(_one(body="another way")), "host/a/b"))
+    assert what == "forked"
+    assert L.slugs(bundle) == {"a-thing", "a-thing-2"}
+
+
+def test_an_event_that_is_not_a_learning_is_not_one(store):
+    assert not L.is_learning(Envelope(kind=KIND_CHAT, text="learning: looks like one"))
+    assert not L.is_learning(Envelope(kind=KIND_TASK, body={L.MARKER: {}}))
+    assert L.is_learning(Envelope(kind=KIND_CHAT, body={L.MARKER: {"slug": "x"}}))
+
+
+def test_a_sync_request_cannot_name_a_repository(store):
+    """The field is not read, which is the only way to be sure it never becomes
+    read by accident."""
+    env = Envelope(kind=KIND_CHAT, body={L.SYNC_MARKER: {"want": 5, "repo": "B"}})
+    assert L.is_sync_request(env)
+    assert L.wanted(env) == 5
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ({"want": 5}, 5), ({}, L.DEFAULT_WANT), ({"want": 0}, 1),
+    ({"want": 10_000}, L.MAX_WANT), ({"want": "lots"}, L.DEFAULT_WANT),
+    ({"want": True}, L.DEFAULT_WANT),
+])
+def test_how_many_a_sync_asks_for_is_bounded(raw, expected, store):
+    assert L.wanted(Envelope(kind=KIND_CHAT, body={L.SYNC_MARKER: raw})) == expected
+
+
+# --- search ----------------------------------------------------------------------
+
+def _fill(bundle, n):
+    for i in range(n):
+        L.save(bundle, _one(slug=f"thing-{i}", title=f"Thing number {i}",
+                            description=f"About subject {i}.",
+                            body=f"The detail of {i} is a padding word.\nSecond line."))
+    L.rebuild_index(bundle)
+
+
+def test_a_word_in_the_title_beats_a_word_in_the_body(store):
+    """Ordering by the counts first would answer «the most used learning that
+    happens to mention this», which is a different question."""
+    bundle = _bundle(store)
+    L.save(bundle, _one(slug="titled", title="Kafka retention", body="nothing"))
+    L.save(bundle, _one(slug="bodied", title="Something else", uses=50,
+                        body="we had to change kafka retention"))
+    L.rebuild_index(bundle)
+    hits, engine = L.search(bundle, ["kafka"])
+    assert [h.learning.slug for h in hits] == ["titled", "bodied"]
+    assert hits[0].where == "title" and hits[1].where == "body"
+
+
+def test_a_hit_in_the_body_shows_the_line_it_matched(store):
+    bundle = _bundle(store)
+    L.save(bundle, _one(body="first line here\nthe eu-west key is needed\nlast"))
+    L.rebuild_index(bundle)
+    hits, _ = L.search(bundle, ["eu-west"])
+    assert "eu-west" in hits[0].line
+    assert "\n" not in hits[0].line, "one line, or the listing is unreadable"
+
+
+def test_a_tag_narrows_it(store):
+    bundle = _bundle(store)
+    L.save(bundle, _one(slug="infra", tags=["infra"]))
+    L.save(bundle, _one(slug="tests", tags=["tests"]))
+    L.rebuild_index(bundle)
+    hits, _ = L.search(bundle, (), tag="tests")
+    assert [h.learning.slug for h in hits] == ["tests"]
+
+
+@pytest.mark.parametrize("query", ["NOT", "a*b", 'say "this"', "AND OR", "^x", ":"])
+def test_no_search_word_can_break_the_query(query, store):
+    """FTS5's query language has operators in it, so an unquoted word is at
+    best a syntax error thrown at somebody searching for `NOT`."""
+    bundle = _bundle(store)
+    _fill(bundle, 3)
+    hits, engine = L.search(bundle, query.split())
+    assert isinstance(hits, list)
+
+
+def test_a_half_typed_last_word_still_matches(store):
+    bundle = _bundle(store)
+    L.save(bundle, _one(title="Retention on the broker"))
+    L.rebuild_index(bundle)
+    assert L.search(bundle, ["reten"])[0]
+
+
+def test_the_index_is_rebuilt_when_the_folder_changed_under_it(store):
+    """A file edited by hand, a folder copied from another machine. The index
+    is derived and may be deleted at any moment; being WRONG is what it may
+    never be."""
+    bundle = _bundle(store)
+    L.save(bundle, _one(slug="first", title="First thing"))
+    L.rebuild_index(bundle)
+    (bundle / "second.md").write_text(L.to_markdown(
+        _one(slug="second", title="Second thing")))
+    hits, engine = L.search(bundle, ["second"])
+    assert engine == "fts5"
+    assert [h.learning.slug for h in hits] == ["second"]
+
+
+def test_the_scan_finds_the_same_things_when_there_is_no_index(store, monkeypatch):
+    """A python built without FTS5 must answer the same set in nearly the same
+    order, and say which engine did it."""
+    bundle = _bundle(store)
+    L.save(bundle, _one(slug="titled", title="Kafka retention"))
+    L.save(bundle, _one(slug="bodied", title="Else", body="kafka retention here"))
+    monkeypatch.setattr(L, "_current_index", lambda b: None)
+    hits, engine = L.search(bundle, ["kafka"])
+    assert engine == "scan"
+    assert [h.learning.slug for h in hits] == ["titled", "bodied"]
+
+
+def test_an_unchanged_bundle_opens_no_learning_to_search_it(store, monkeypatch):
+    """The whole reason for an index: the alternative is parsing every file to
+    find out whether parsing every file was necessary."""
+    bundle = _bundle(store)
+    _fill(bundle, 40)
+    L.search(bundle, ["subject"])           # warms and validates
+
+    opened: list[str] = []
+    real = Path.read_text
+
+    def counted(self, *a, **k):
+        if self.suffix == ".md":
+            opened.append(self.name)
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", counted)
+    hits, engine = L.search(bundle, ["subject"], limit=5)
+    assert engine == "fts5"
+    # The hits themselves are loaded from their files; nothing else is.
+    assert len(opened) == len(hits) <= 5, opened
+
+
+def test_a_rebuild_reads_each_learning_exactly_once(store, monkeypatch):
+    bundle = _bundle(store)
+    _fill(bundle, 20)
+    opened: list[str] = []
+    real = Path.read_text
+
+    def counted(self, *a, **k):
+        if self.suffix == ".md" and self.name not in (L.INDEX, L.LOG):
+            opened.append(self.name)
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", counted)
+    L.rebuild_index(bundle)
+    assert len(opened) == 20 and len(set(opened)) == 20
+
+
+# --- the spool: the agent never waits ---------------------------------------------
 
 @pytest.fixture
-def profile(repo, monkeypatch):
-    home = _home(repo)
+def profile(tmp_path, monkeypatch, store):
+    home = tmp_path / "checkout" / ".collab"
     (home / "sessions" / "s").mkdir(parents=True)
     saved = SessionProfile(session_id="s", url="http://h/", name="alice",
                            host_name="alice", token="t", home=str(home),
                            is_host=True, participant_id="p_a")
     saved.save()
-    monkeypatch.setenv("COLLAB_PEERS_DIR", str(repo / "peers"))
     monkeypatch.setattr(cli.SessionProfile, "current", classmethod(lambda c: saved))
+    monkeypatch.setattr(L, "_git", lambda *a, **k: "")
+    monkeypatch.setattr(cli, "is_running", lambda p: 4242)
     return saved
 
 
 def _run(**flags):
-    args = argparse.Namespace(**{"text": [], "list": False, "room": None,
-                                 "json": False, "session": None, **flags})
+    fields = {"action": "list", "rest": [], "body": None, "tags": None,
+              "source": None, "note": None, "tag": None, "limit": 20,
+              "want": 20, "wait": None, "all": False, "json": False,
+              "session": None}
+    args = argparse.Namespace(**{**fields, **flags})
     out = io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
         code = cli.cmd_learn(args)
     return code, out.getvalue()
 
 
-class _Sent:
-    """A hub client that records the envelope instead of sending it."""
+def test_recording_one_writes_a_spool_file_and_nothing_else(profile):
+    """A turn is the scarcest thing here. The command writes one short file and
+    returns; the daemon does the bundle write, the index and the publish."""
+    code, out = _run(action="add", rest=["The", "eu-west", "key"],
+                     body="Because of this.", tags="infra,staging")
+    assert code == 0 and "recorded" in out
+    waiting = L.pending(profile.dir)
+    assert len(waiting) == 1
+    asked = L.read_spooled(waiting[0])
+    assert asked["op"] == "add"
+    assert asked["learning"]["title"] == "The eu-west key"
+    assert asked["learning"]["tags"] == ["infra", "staging"]
+    key = L.repo_key(Path(profile.home).parent)
+    assert not list(L.bundle_dir(key).glob("*.md")) if L.bundle_dir(key).exists() \
+        else True, "the command wrote a bundle file itself"
 
-    envelopes: list[Envelope] = []
 
-    def __enter__(self):
-        return self
+def test_recording_one_opens_no_connection(profile, monkeypatch):
+    """`add` and `sync` are the two that publish, and neither may do it here."""
+    import httpx
 
-    def __exit__(self, *a):
-        return False
+    def never(*a, **k):
+        raise AssertionError("the command opened a connection")
 
-    def send(self, env):
-        _Sent.envelopes.append(env)
-        return {"seq": 1}
+    monkeypatch.setattr(httpx, "Client", never)
+    monkeypatch.setattr(httpx, "post", never, raising=False)
+    assert _run(action="add", rest=["A", "thing"])[0] == 0
+    assert _run(action="sync")[0] == 0
 
 
-def test_the_command_marks_the_body_and_prefixes_the_text(profile, monkeypatch):
-    """Both, because either alone is a half-feature: a body nobody can see, or
-    a prefix anybody can type by accident."""
-    _Sent.envelopes = []
-    monkeypatch.setattr(cli, "_client", lambda p: _Sent())
-    code, out = _run(text=["the", "staging", "bucket", "wants", "eu-west"])
+def test_asking_for_the_others_returns_at_once(profile):
+    code, out = _run(action="sync", want=5)
     assert code == 0
-    sent = _Sent.envelopes[-1]
-    assert sent.kind == KIND_CHAT
-    assert sent.body == {learnings.MARKER: True}
-    assert sent.text == "learning: the staging bucket wants eu-west"
-    assert "learnt" in out
+    assert "background" in out
+    assert L.read_spooled(L.pending(profile.dir)[0])["want"] == 5
 
 
-def test_the_command_with_nothing_to_say_explains_both_halves(profile):
-    code, out = _run(text=[])
-    assert code == 1
-    assert "--list" in out
-
-
-def test_the_list_prints_what_the_repo_knows(profile, repo):
-    learnings.record(_home(repo), _learning("always rebase"), session_id="s1")
-    code, out = _run(list=True)
+def test_with_no_daemon_it_still_records_and_says_so(profile, monkeypatch):
+    monkeypatch.setattr(cli, "is_running", lambda p: None)
+    code, out = _run(action="add", rest=["A", "thing"])
     assert code == 0
-    assert "always rebase" in out
-    assert str(learnings.path_for(_home(repo))) in out
+    assert "no daemon is running" in out
+    assert len(L.pending(profile.dir)) == 1
 
 
-def test_the_list_says_so_when_there_is_nothing(profile):
-    code, out = _run(list=True)
-    assert code == 0 and "nothing learnt here yet" in out
+def test_reading_one_prints_it_now_and_counts_it_later(profile):
+    """Printing is what was asked for; counting is bookkeeping, and bookkeeping
+    is never worth a turn."""
+    key = L.repo_key(Path(profile.home).parent)
+    bundle = L.bundle_dir(key)
+    bundle.mkdir(parents=True, exist_ok=True)
+    L.save(bundle, _one(repo=key))
+    code, out = _run(action="read", rest=["a-thing"])
+    assert code == 0
+    assert "Because of this." in out
+    assert L.load(bundle, "a-thing").reads == 0, "it counted inline"
+    assert L.read_spooled(L.pending(profile.dir)[0]) == {
+        **L.read_spooled(L.pending(profile.dir)[0]), "op": "read", "slug": "a-thing"}
 
 
-def test_the_list_can_be_read_as_json(profile, repo):
-    learnings.record(_home(repo), _learning("always rebase"), session_id="s1")
-    code, out = _run(list=True, json=True)
-    payload = json.loads(out)
-    assert len(payload["learnings"]) == 1
-    assert payload["file"].endswith(learnings.FILENAME)
+def test_saying_one_helped_is_its_own_command(profile):
+    key = L.repo_key(Path(profile.home).parent)
+    bundle = L.bundle_dir(key)
+    bundle.mkdir(parents=True, exist_ok=True)
+    L.save(bundle, _one(repo=key))
+    code, out = _run(action="used", rest=["a-thing"], note="applied it")
+    assert code == 0 and "helped" in out
+    assert L.read_spooled(L.pending(profile.dir)[0])["op"] == "used"
+
+
+def test_listing_says_what_to_do_when_there_is_nothing(profile):
+    code, out = _run(action="list")
+    assert code == 0 and "learn sync" in out
+
+
+def test_the_store_being_off_is_said_rather_than_ignored(profile):
+    cfg.set_learnings_dir("")
+    code, out = _run(action="list")
+    assert code == 1 and "turned off" in out

@@ -86,7 +86,7 @@ From that moment both agents receive each other's messages as they happen.
 - [How it works](#how-it-works) · [Install](#install) · [Quick start](#quick-start)
 - [Making an agent listen](#making-an-agent-listen) · [Saying what you are doing](#saying-what-you-are-doing) · [Commands](#commands)
 - [Watching the conversation](#watching-the-conversation) · [How it looks](#how-the-conversation-looks) · [Status line](#status-line) · [Files](#sharing-files-and-artifacts)
-- [Learnings](#learnings-that-outlive-the-session) · [Security](#security) · [Diagnostics](#diagnostics) · [Settings](#settings)
+- [Learnings](#sharing-what-you-learn) · [Security](#security) · [Diagnostics](#diagnostics) · [Settings](#settings)
 - [Sharing without ngrok](#sharing-without-ngrok) · [Troubleshooting](#troubleshooting)
 - [Batches of work](#batches-of-work) · [Documentation](#documentation) · [Protocol](SPEC.md) · [For agents](AGENT_INSTALL.md) · [Contributing](CONTRIBUTING.md) · [Thanks](#thanks)
 
@@ -665,7 +665,7 @@ Taking over somebody's work is a conversation, not a command; and a finished
 task claimed again told the room that completed work was under way, while the
 agent that claimed it was about to redo it.
 
-## Learnings that outlive the session
+## Sharing what you learn
 
 A session is a conversation, and a conversation is the wrong shape for a fact.
 "The staging bucket needs the eu-west key" is said once, at four in the
@@ -675,35 +675,84 @@ compacted its context an hour ago. Every session in a repository ends up
 rediscovering the same handful of things.
 
 ```bash
-collab learn "the staging bucket needs the eu-west key, not the default"
-collab learn --list      # what this repo has learnt, oldest first
+collab learn list                       # what you hold for this repo, most used first
+collab learn sync                       # nothing yet? ask the others for theirs
+collab learn search kafka retention     # before starting a task
+collab learn read <slug>                # one of them, in full
+collab learn used <slug> --note "…"     # right after it actually helped
+collab learn add "the eu-west key is the one that works on staging" --tags infra
 ```
 
-It goes out as an ordinary message, prefixed `learning:` so it reads as what it
-is in everybody's transcript, and marked in its body so every agent's daemon
-also writes it down:
+`collab host` and `collab join` print which case you are in: how many learnings
+you hold for this repository, or that you hold none and `sync` is how to ask.
+
+### Where they live, and why not in the repository
+
+Not in the checkout. The store belongs to the **agent** and sits outside every
+repository, holding what it has learnt about each one it has worked on:
 
 ```
-- 2026-09-05 16:04 · alice: the staging bucket needs the eu-west key, not the default
+~/.config/collab/learnings/github.com/owner/name/
+    index.md      the Open Knowledge Format index
+    log.md        dated entries, newest first
+    <slug>.md     one file per learning
+    .index.db     a derived search index, deletable at any time
 ```
 
-**Into the shared `.collab/`, not the writing agent's own.** Where two agents
-share a checkout they have a state directory each, because the *session* is
-theirs individually — but the repository is not, and a file each would give
-them two half-answers with no way to know it. Every daemon files every learning
-it sees, its own sender's included: the agent that said it is at least as
-likely as anybody to be the one that forgets. The same learning is never
-written twice however many daemons saw it.
+Two reasons for that, and the second is the one that decided it. Writing into
+the checkout would put an agent's notes into somebody's diff and make the
+feature a thing to be reviewed. And an agent that works on ten repositories
+wants one place to look, not ten.
 
-**And into your agent's project notes**, where the coding agent this daemon
-serves keeps a folder of them for this repository. That is the file it actually
-reads at the start of a session; one in the repository is one it has to be told
-to open. Nothing is written unless the tool is installed *and* has already been
-run in this checkout, and the notes index gets one pointer rather than one line
-per learning.
+The folder name is the **normalised `origin` remote**, so `git@host:a/b.git`
+and `https://host/a/b` land in the same group and two people on two laptops are
+working on one repository rather than two. A repository with no remote gets
+`local/<directory name>`, and the prefix is honest: two people with a directory
+called `api` and no remote are not working on the same thing.
 
-Use it for what is true beyond today. Anything you want answered now is still
-`collab send`.
+Each group is a [Google Open Knowledge
+Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
+v0.2 bundle, the same shape as [`knowledge/`](knowledge/index.md) in this
+repository: frontmatter saying who recorded it and when, an index, and a dated
+log. `learnings_dir` moves the store; setting it to an empty string turns the
+whole feature off.
+
+### Used, and read, are different numbers
+
+`collab learn read <slug>` prints one and counts a read. `collab learn used
+<slug>` is a separate command an agent runs *after* the learning actually did
+something — a rule applied, a pitfall avoided, a bug reproduced. Reading one
+costs nothing and proves nothing; an agent that applied it and found it true is
+the only thing that can say it was worth writing, and that is what ranks the
+index.
+
+A learning arriving from another agent carries that agent's counts, and they
+are stored apart as `peer_uses` and `peer_reads` and shown as `used 7 by
+others`. A count records what *this* agent did, so a copied one would be a
+claim about work it never performed — but a fresh agent still gets an index
+ordered by what everybody else found valuable.
+
+### What a sync sends, exactly
+
+Only the learnings for the repository **this session is in**. Your store holds
+every repository you have ever worked on, and the people in this room have
+nothing to do with most of them. A sync request cannot name a repository: the
+responder derives the key from its own checkout and does not read one out of
+the request, so a field claiming otherwise is not refused so much as unnoticed.
+Answers go directly to whoever asked rather than to the room, and one agent
+answers the same asker at most once every five minutes.
+
+### Nothing here costs a turn
+
+Every `collab learn` command that writes returns immediately. It leaves one
+small file in the session's state directory and the daemon does the bundle
+write, the index update and the publish on its next heartbeat, off its event
+loop. `read` is the exception and prints from the file at once, because
+printing it is the whole of what `read` is for; only its counter is deferred.
+
+A spool file is deleted after the work has succeeded and not before, so a hub
+that is down means a learning arrives late rather than never, and `collab
+check` says how many are waiting and why.
 
 ## Batches of work
 
@@ -797,7 +846,7 @@ collab 1.7.0 — let coding agents talk to each other
 | `collab host` | start a session, open a tunnel, print the join line, come up listening |
 | `collab join <url>#<invite>` | join, announce yourself, come up listening, print the snapshot |
 | `collab send <text>` | post to a room, `--to NAME` for a direct message |
-| `collab learn "<text>"` | say something the next session in this repo will need, and write it down; `--list` reads them back |
+| `collab learn list|search|read|used|add|sync` | what this repo has taught the agents working on it, and how to add to it |
 | `collab listen --follow` | stream events as lines (what a Monitor watches) |
 | `collab recv --wait N` | drain unread, optionally waiting |
 | `collab watch` | a full-screen live view: roster, usage and conversation |
@@ -896,6 +945,9 @@ collab's block rather than adding a second.
 | `collab-join` | the user pastes a join link, or asks to connect to someone's agent |
 | `collab-watch` | the user wants to see the conversation, or asks for a pane to follow it |
 | `collab-discover` | the user wants to reach an agent in another repo on this machine |
+| `collab-activity` | the agent starts or finishes a piece of work, or wants to know what the others are doing |
+| `collab-learn` | "what do we know about X", "did anyone already solve this", "record this for the others" |
+| `collab-configure` | the user wants to change a setting, a theme, a colour or the status rows |
 
 ```bash
 collab skills status      # where they are and whether they're linked
@@ -1878,6 +1930,7 @@ collab config --json              # the same table, for an agent to read
 | `remind_guest` | what it says when you are a guest; empty for the shipped one | — | none |
 | `context_compact_at` | compact your agent's context when its own reported share of the window reaches this percent; `0` never does | — | `0` |
 | `diagnostics` | keep a local record of what your daemon and hub did — events only | — | `off` |
+| `learnings_dir` | where this agent keeps what it has learnt, outside any repository; empty turns it off | — | `~/.config/collab/learnings` |
 | `watch_status` | show the viewer's bottom status row | — | `on` |
 | `watch_status_segments` | what that row carries, in order | — | `notice,stats,command,keys` |
 | `watch_status_command` | a command of your own for that row | — | none |

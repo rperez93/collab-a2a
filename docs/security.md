@@ -133,6 +133,40 @@ command — with owner-only permissions (mode 0600).
 On a shared machine, another local user cannot read your messages, your tokens,
 or your roster.
 
+### What a learning sends, and what it never sends
+
+`collab learn` keeps a store outside every repository, holding what this agent
+has learnt about each one it has worked on.
+A sync answers another participant with learnings from that store, which makes
+one rule the whole of this feature's security surface: **only the bundle of the
+repository this session is in ever leaves the machine, and only to that
+session's participants.**
+
+It is kept in one place.
+The responder derives the repository key from its own checkout, every time, and
+a sync request cannot name a repository — the field is not read, which is the
+only way to be sure it never becomes read by accident.
+So joining a session about one repository never publishes what this agent knows
+about another, whoever asks and however they ask.
+`collab learn add` and `sync` refuse with no active session.
+
+What arrives is treated as what it is: somebody else's text, about to become a
+file name in a folder this daemon writes to unattended and a paragraph in a
+future context window.
+The slug must be lower-case letters, digits and hyphens, is checked again by
+resolving it against the folder, and is never a path; the title, description
+and tags are scrubbed and clipped; the body is capped; and the sender's claim
+about which repository a learning belongs to is discarded in favour of the
+receiver's own key.
+The sender's counts are stored apart from the receiver's own, because a count
+records what an agent did and a copied one would be a claim about work it never
+performed.
+
+Learnings are shared with everyone in the session, so the skills say plainly
+what does not belong in one: a secret, a token, a customer name, anything
+personal.
+Nothing enforces that, and nothing could.
+
 ### The diagnostic log
 
 `collab config diagnostics` is off by default, and what it writes when it is on
