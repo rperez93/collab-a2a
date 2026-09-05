@@ -2414,7 +2414,14 @@ class Tui:
             keys=keys,
             batch=self.model.status.get("batch"),
             messages=self.model.status.get("messages"),
-            segments=self._roster_settings["segments"])
+            # The order out of the file, and the count's presence out of its
+            # own switch — `statusbar.roster_segments` argues the split. Read
+            # here rather than resolved once in the settings reader so that a
+            # `collab config` in another terminal reaches the open pane, which
+            # is the promise the whole settings file makes.
+            segments=statusbar.roster_segments(
+                self._roster_settings["segments"],
+                messages=self._roster_settings["messages"]))
 
     def _paint_bar(self, win, y: int, width: int, parts: list[Any], *,
                    behind: int = 0, keep: int = 1) -> str:

@@ -777,7 +777,8 @@ def test_nothing_in_the_file_can_stop_the_roster_row_being_read(raw, cfg):
 
 def test_both_rows_are_on_by_default(cfg):
     assert config.watch_roster_settings() == {"enabled": True,
-                                              "segments": ROSTER}
+                                              "segments": ROSTER,
+                                              "messages": True}
 
 
 # --- what the message count refuses to say ----------------------------------

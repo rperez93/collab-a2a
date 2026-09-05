@@ -384,6 +384,36 @@ def compose(*, notice: str = "", keys: Any = "", batch: Any = None,
     return parts
 
 
+def roster_segments(segments: Sequence[str], *, messages: bool) -> tuple[str, ...]:
+    """The roster row's segments, with the count's own switch applied over them.
+
+    Two keys govern one segment, and they govern DIFFERENT THINGS: the list is
+    an order and the switch is a presence. Keeping them apart is what the
+    function is for, because conflating them cost the reader both ways round.
+
+    Somebody who wanted the count gone had to retype the whole order to say so,
+    naming two figures they were perfectly happy with in order to drop the
+    third — and somebody who had once typed an order of their own, before the
+    count existed or without thinking to mention it, silently lost a figure
+    they had never asked to lose. `["batch"]` in a file written a version ago
+    means «the bar, in this position», not «and no count»; the switch is what
+    now carries the second half of that sentence, and it is on.
+
+    So: the switch decides whether the count is drawn at all, and the list
+    decides where it goes when it is. A list that names `messages` keeps it
+    exactly where it was named. A list that does not gets it in its default
+    place — after the batch, which is where the default order puts it and
+    where `fit` narrows the pair together, and first when there is no batch on
+    the row to sit behind. Off, it is removed even from a list that names it,
+    because a switch that the order could overrule is not a switch.
+    """
+    kept = [name for name in segments if name != "messages" or messages]
+    if not messages or "messages" in kept:
+        return tuple(kept)
+    at = kept.index("batch") + 1 if "batch" in kept else 0
+    return tuple(kept[:at] + ["messages"] + kept[at:])
+
+
 def _forms(piece: Any) -> tuple[str, ...]:
     """One segment's renderings, widest first, with the empty ones dropped."""
     if isinstance(piece, str):

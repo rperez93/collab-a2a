@@ -56,7 +56,8 @@ def _draws_a_row(*, personal: bool, session: bool) -> bool:
     tui._settings = {"enabled": personal, "segments": ("batch", "keys")}
     tui._roster_settings = {"enabled": session, "segments": ("batch",
                                                              "messages",
-                                                             "keys")}
+                                                             "keys"),
+                            "messages": True}
     tui.model = _Model()
     tui.chat = _Chat()
     tui._command = _Command()
