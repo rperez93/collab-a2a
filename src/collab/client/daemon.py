@@ -76,6 +76,14 @@ STATS_REASSERT = 60.0
 #: the session. Nothing was typed when it failed, so nothing is lost by waiting.
 COMPACT_RETRY = 60.0
 
+#: How many learnings, and how many requests for ours, may wait in memory for
+#: the heartbeat to file them. The feed appends and a timer drains, so anything
+#: that stops the timer — a slow disk, a bundle that cannot be written — leaves
+#: the appending side running unopposed against whatever the room sends. Two
+#: hundred is far above a real sync, which answers with twenty at most, and far
+#: below a number that costs a daemon anything: each entry is one envelope.
+MAX_QUEUED_LEARNINGS = 200
+
 #: Event kinds that change what the snapshot says, and so must pull a fresh one
 #: rather than waiting for the timer.
 #:
@@ -348,8 +356,13 @@ class Daemon:
         self._arrived: list[Envelope] = []
         self._sync_asks: list[Envelope] = []
         self._sync_wanted = 0
+        #: When each asker was last answered, so a loop asking every turn is
+        #: answered once per cooldown. Pruned as it is read: an entry older
+        #: than the cooldown decides nothing, and a session that runs all day
+        #: meets a name for every join.
         self._answered_sync: dict[str, float] = {}
         self._learning_error = ""
+        self._learnings_dropped = 0
         #: A fingerprint of this agent's usage figures, and when they last
         #: actually CHANGED. The file is rewritten on every prompt whether or
         #: not the numbers moved, so its timestamp says «this agent exists»
@@ -497,7 +510,12 @@ class Daemon:
         from .. import learnings
 
         waiting = len(learnings.pending(self.profile.dir))
-        return {"pending": waiting, "last_error": self._learning_error or None}
+        return {"pending": waiting, "last_error": self._learning_error or None,
+                # Only when it has happened. A zero here on every status file
+                # would be one more figure to read past on the way to the two
+                # that mean something.
+                **({"dropped": self._learnings_dropped}
+                   if self._learnings_dropped else {})}
 
     def _stats_file_mtime(self) -> float:
         try:
@@ -1389,11 +1407,45 @@ class Daemon:
             from .. import learnings
 
             if learnings.is_learning(env):
-                self._arrived.append(env)
+                self._keep_newest(self._arrived, env)
             elif learnings.is_sync_request(env) and env.sender != self.profile.name:
-                self._sync_asks.append(env)
+                self._keep_newest(self._sync_asks, env)
         except Exception as exc:                              # noqa: BLE001
             logger.warning("could not note a learning (%r)", exc)
+
+    def _keep_newest(self, queue: list[Envelope], env: Envelope) -> None:
+        """Add one, and drop the oldest if the queue has run away.
+
+        BOUNDED, because everything in these two lists arrived from the room.
+        The heartbeat drains them every few seconds and in ordinary use they
+        hold nothing; but the writer is the feed and the reader is a timer, so
+        a heartbeat that is slow, wedged on a disk, or failing on a bundle it
+        cannot write leaves the feed appending with nobody taking anything
+        away. Each envelope carries a body of up to `MAX_BODY`, and a
+        participant sending them in a loop would grow this daemon's memory for
+        as long as it went on.
+
+        The newest are what is kept. A learning is a fact about a repository
+        rather than a message in a conversation, so the ones to lose under
+        pressure are the ones that have already waited longest without being
+        filed — and losing one costs a fact somebody can send again, which is
+        the cheapest thing here to be wrong about.
+        """
+        queue.append(env)
+        if len(queue) > MAX_QUEUED_LEARNINGS:
+            dropped = len(queue) - MAX_QUEUED_LEARNINGS
+            del queue[:dropped]
+            was = self._learnings_dropped
+            self._learnings_dropped += dropped
+            # Not one line per envelope. The thing that fills this queue is
+            # something sending in a loop, so a line each would answer a flood
+            # of messages with a flood of log — and the count in `status.json`
+            # is the figure anybody acts on. The first says it is happening;
+            # the rest say it is still happening.
+            if was == 0 or self._learnings_dropped // 100 != was // 100:
+                logger.warning("the learning queue is full at %d; %d dropped"
+                               " in total", MAX_QUEUED_LEARNINGS,
+                               self._learnings_dropped)
 
     async def _do_the_learning_work(self) -> None:
         """Everything about learnings that touches a disk or the network.
@@ -1534,6 +1586,23 @@ class Daemon:
                             f" from {scrub(env.sender or 'somebody')}.")
             logger.info("learning %s: %s", what, one.slug)
 
+    def _forget_answered(self, now: float) -> None:
+        """Drop the askers the cooldown has already released.
+
+        The map answers one question — «was this one answered in the last five
+        minutes» — so an entry older than that decides nothing. Nothing removed
+        one, and the map takes an entry for every name that has ever asked: a
+        session running for a week, with agents rejoining under new names, grew
+        it without any bound but the room's patience.
+        """
+        from .. import learnings
+
+        if not self._answered_sync:
+            return
+        self._answered_sync = {
+            who: when for who, when in self._answered_sync.items()
+            if (now - when) < learnings.SYNC_COOLDOWN}
+
     async def _answer_sync_requests(self) -> None:
         """Send our own repository's best learnings to whoever asked.
 
@@ -1544,6 +1613,14 @@ class Daemon:
         """
         from .. import learnings
 
+        # BEFORE ANYTHING ELSE, and not beside the loop that reads the map.
+        # This runs on the heartbeat whether or not anybody asked, and every
+        # early return below is a heartbeat on which nobody did — which is
+        # almost all of them. Pruning further down was pruning only on the
+        # rare pass, and the entries pile up on the common one.
+        now = time.time()
+        self._forget_answered(now)
+
         asks, self._sync_asks = self._sync_asks, []
         if self._sync_wanted:
             await self._publish_learning_requests()
@@ -1552,7 +1629,6 @@ class Daemon:
         key, bundle = self._bundle()
         if bundle is None:
             return
-        now = time.time()
         for env in asks:
             who = env.sender or ""
             if (now - self._answered_sync.get(who, 0.0)) < learnings.SYNC_COOLDOWN:

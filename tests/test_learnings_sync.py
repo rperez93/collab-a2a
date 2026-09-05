@@ -56,15 +56,19 @@ def agent(tmp_path, monkeypatch):
     profile.save()
     monkeypatch.setattr(L, "_git", lambda *a, **k: "git@host:owner/A.git")
 
+    # Built without `__init__`, which would open a bridge and take the lock.
+    # The cost is that this list has to be kept level with the constructor's
+    # learnings half by hand — `_to_publish` sat here for a while after the
+    # daemon stopped having one — so anything added there is added here.
     daemon = d.Daemon.__new__(d.Daemon)
     daemon.profile = profile
     daemon.paths = d.DaemonPaths(profile.dir)
     daemon._arrived = []
     daemon._sync_asks = []
-    daemon._to_publish = []
     daemon._sync_wanted = 0
     daemon._answered_sync = {}
     daemon._learning_error = ""
+    daemon._learnings_dropped = 0
     daemon._http = _Http()
     return daemon
 
