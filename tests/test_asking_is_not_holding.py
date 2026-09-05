@@ -20,12 +20,20 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 
 from collab.client import daemon as d
 from collab.client import exclusive
 
-PROBERS = 3
+#: Eight rather than three. Three passed on an idle machine and failed in the
+#: full suite, which is the only load this ever runs under that resembles a
+#: real one; eight with the suite alongside is the configuration the defect
+#: below was measured at, so it is the configuration it is held to.
+PROBERS = 8
 PROBES = 2000
+#: Starts attempted against that crowd. Longer than it was, for the same
+#: reason there are more probers.
+STARTS = 500
 
 
 def _in_parallel(work, workers=PROBERS):
@@ -121,7 +129,7 @@ def test_a_daemon_can_still_start_while_the_lock_is_being_probed(profile):
         t.start()
     try:
         refused = 0
-        for _ in range(300):
+        for _ in range(STARTS):
             lock = exclusive.DaemonLock(profile.dir)
             if lock.acquire():
                 lock.release()
@@ -132,4 +140,69 @@ def test_a_daemon_can_still_start_while_the_lock_is_being_probed(profile):
         for t in noise:
             t.join()
 
-    assert refused == 0, f"{refused} of 300 daemons stood down for nobody"
+    assert refused == 0, f"{refused} of {STARTS} daemons stood down for nobody"
+
+
+def test_a_real_holder_is_still_refused(profile):
+    """The other direction, and the reason the deadline is what it is.
+
+    Waiting rather than sampling would be worthless if the wait always ended
+    in a yes. A lock somebody holds is never let go inside the deadline, so a
+    second daemon for one session is refused exactly as before."""
+    holder = exclusive.DaemonLock(profile.dir)
+    assert holder.acquire()
+    try:
+        for _ in range(5):
+            second = exclusive.DaemonLock(profile.dir)
+            assert second.acquire() is False
+            assert second.held is False
+    finally:
+        holder.release()
+
+
+def test_a_refusal_costs_about_the_deadline_and_not_a_hang(profile):
+    """A blocking wait with nothing bounding it is a start-up that never
+    returns. What bounds it is the only thing that constant now decides."""
+    holder = exclusive.DaemonLock(profile.dir)
+    assert holder.acquire()
+    try:
+        began = time.monotonic()
+        assert exclusive.DaemonLock(profile.dir).acquire() is False
+        waited = time.monotonic() - began
+    finally:
+        holder.release()
+
+    assert exclusive.ACQUIRE_WAIT <= waited < exclusive.ACQUIRE_WAIT + 2.0
+
+
+def test_a_wait_that_was_given_up_on_does_not_keep_the_lock(profile,
+                                                            monkeypatch):
+    """The instant the whole handover exists for.
+
+    The wait runs in a thread, and it can be granted the lock a moment after
+    the caller has given up on it and reported that it has none. If both sides
+    simply believed themselves, the lock would then be held for the life of the
+    process by somebody who has already said it is not theirs — and no daemon
+    could ever start in that directory again.
+    """
+    monkeypatch.setattr(exclusive, "ACQUIRE_WAIT", 0.01)
+    holder = exclusive.DaemonLock(profile.dir)
+    assert holder.acquire()
+
+    refused = [exclusive.DaemonLock(profile.dir).acquire() for _ in range(30)]
+    assert refused == [False] * 30
+
+    holder.release()
+    # Whatever those waits were granted after they were abandoned, they gave
+    # straight back. Retried because the handover is a thread and this is the
+    # one place a test has to wait for one.
+    for _ in range(200):
+        if exclusive.taken(profile.dir) is False:
+            break
+        time.sleep(0.01)
+    assert exclusive.taken(profile.dir) is False, \
+        "an abandoned wait is still holding the lock"
+
+    after = exclusive.DaemonLock(profile.dir)
+    assert after.acquire() is True
+    after.release()

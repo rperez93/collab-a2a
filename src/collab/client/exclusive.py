@@ -72,7 +72,7 @@ import contextlib
 import errno
 import os
 import subprocess
-import time
+import threading
 from pathlib import Path
 
 try:                                        # not on Windows
@@ -105,12 +105,26 @@ _HAVE_PROC = os.path.isdir("/proc/self")
 #: across separate PROCESSES, and 55 in 300 against three spinning threads,
 #: which is what the test here does and is the harsher of the two.
 #:
-#: A fifth of a second of retrying survives that — three attempts did not, and
-#: the number is measured rather than chosen. A genuine holder refuses every
-#: attempt in it and costs a start-up that has already spent longer than this
-#: importing itself one more fifth of a second, once.
-ACQUIRE_ATTEMPTS = 40
-ACQUIRE_PAUSE = 0.005
+#: HOW LONG TO WAIT, and the word is «wait» rather than «retry» — that is the
+#: correction. Retrying is sampling: forty non-blocking attempts five
+#: milliseconds apart, each an instant that either found the lock free or did
+#: not. It survived three spinning probers on an idle machine and it does not
+#: survive a busy one, because probers that are being descheduled hold their
+#: shared locks across the gaps, and every sample can land inside one. Measured
+#: at eight probers with forty CPU burners alongside: one to three refusals in
+#: 300, every one of them having spent the whole sampling budget.
+#:
+#: A blocking `LOCK_EX` is not a sample. The kernel queues the request and
+#: wakes it the moment the last shared holder lets go, before a prober can ask
+#: again — so a probe in flight is something to stand behind rather than
+#: something to race. The deadline is what keeps that from being a hang, and it
+#: is the only thing this constant now decides.
+#:
+#: A quarter of a second. A genuine holder never lets go inside it, so a real
+#: second daemon is still refused; and a start-up that has already spent longer
+#: than this importing itself spends it once, at most, and only when something
+#: really is contending.
+ACQUIRE_WAIT = 0.25
 
 
 class UnsupportedPlatform(RuntimeError):
@@ -202,7 +216,11 @@ class DaemonLock:
             return True                     # unwritable state dir: still serve
         got = self._flock(fd)
         if got is False:
-            os.close(fd)
+            # NOT CLOSED HERE. `_flock` owns the descriptor once it has one:
+            # on a refusal it may have handed it to a wait that is still inside
+            # the syscall, and closing a descriptor another thread is blocked
+            # in `flock` on is undefined — the lock can be granted afterwards,
+            # on a number the kernel has since given to a different file.
             return False
         self._fd, self.enforced = fd, got is True
         self._write_pid()
@@ -211,19 +229,113 @@ class DaemonLock:
     def _flock(self, fd: int) -> bool | None:
         """True if we took it, False if it is somebody's, None if we cannot ask.
 
-        Retried a few times because `taken` holds a shared lock for the
-        instant it takes to ask its question, and a daemon starting into that
-        instant would otherwise stand down for a session nobody holds.
+        Asked twice, and the two questions are different. The first is
+        non-blocking and answers the ordinary case — nothing is contending, the
+        lock is free, one syscall and no thread. It also separates «somebody
+        has it» from «this filesystem cannot lock», which only a non-blocking
+        attempt can do: a blocking one on a filesystem with no locking would
+        hang instead of failing.
+
+        The second WAITS. `taken` holds a shared lock for the instant it takes
+        to ask its question, and a daemon starting into that instant used to
+        stand down for a session nobody holds. Sampling for a gap between
+        probes is what that instant defeats; queueing behind them is not, and
+        the kernel does the queueing.
+
+        OWNS THE DESCRIPTOR from here on. On False the wait may still be
+        running, in which case the descriptor belongs to it and the caller must
+        not touch it — see `_wait_for_it`.
         """
-        for attempt in range(ACQUIRE_ATTEMPTS):
+        got = self._try_once(fd)
+        if got is not False:
+            return got
+        return self._wait_for_it(fd)
+
+    @staticmethod
+    def _try_once(fd: int) -> bool | None:
+        """The lock right now, without waiting for it."""
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError as exc:
+            if exc.errno not in _BUSY:
+                return None                 # a filesystem that cannot lock
+            return False
+
+    def _wait_for_it(self, fd: int) -> bool:
+        """Queue behind whoever has it, and give up after `ACQUIRE_WAIT`.
+
+        The blocking `flock` runs in a thread because there is no portable way
+        to put a deadline on the syscall itself: `alarm` is process-wide and
+        single-threaded, and a signal handler installed by a library that other
+        people's code imports is not a thing to reach for.
+
+        WHICH LEAVES THE DESCRIPTOR, and it is the whole of the care here. A
+        thread blocked in `flock` on a descriptor somebody else closes is
+        undefined: the lock may still be granted afterwards, on a number the
+        kernel has since handed to a different file. So the descriptor is not
+        shared. Up to the deadline it is ours and the waiter is merely running
+        in it; past the deadline it is the waiter's, and the waiter closes it —
+        which releases whatever it was granted, since a `flock` lives on the
+        open file description and dies with the last descriptor naming it.
+
+        The waiter unlocks the instant it wakes into an abandoned wait, so a
+        probe arriving in that window sees a lock held for one syscall by
+        somebody who is not a daemon. That window is one syscall wide against
+        the fifth of a second the old sampling could spend being wrong, and
+        closing it entirely would need a cancellable `flock`, which POSIX does
+        not have.
+        """
+        done = threading.Event()
+        guard = threading.Lock()
+        #: None while nobody has decided; then "won", "failed" or "abandoned".
+        #: WHOEVER WRITES IT TAKES THE DESCRIPTOR WITH IT. Read and written
+        #: under `guard`, because the interesting instant is the one where the
+        #: wait succeeds and the deadline expires together — and a handover
+        #: settled by two unsynchronised flags loses the lock there: the waiter
+        #: believing it won and the caller believing it gave up leaves an
+        #: exclusive lock held by a process that has just reported it has none.
+        state: dict[str, str | None] = {"outcome": None}
+
+        def wait() -> None:
+            got = True
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                return True
-            except OSError as exc:
-                if exc.errno not in _BUSY:
-                    return None             # a filesystem that cannot lock
-            if attempt + 1 < ACQUIRE_ATTEMPTS:
-                time.sleep(ACQUIRE_PAUSE)
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            except OSError:
+                # We already know this filesystem locks — the try above came
+                # back EWOULDBLOCK — so anything from here is «did not get it»
+                # rather than «cannot ask», which is the safe way round: the
+                # other answer would start a second daemon unenforced.
+                got = False
+            with guard:
+                mine = state["outcome"] is not None
+                if not mine:
+                    state["outcome"] = "won" if got else "failed"
+            done.set()
+            if mine:
+                # Abandoned while we were in the syscall, so the descriptor is
+                # ours to put back. Unlocked first and at once: until this
+                # returns, a probe would read a daemon that is not there.
+                with contextlib.suppress(OSError):
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+
+        # A daemon thread, so a caller that gave up and is on its way out is
+        # never held open by a wait on a lock a live daemon is keeping.
+        threading.Thread(target=wait, daemon=True,
+                         name="collab-lock-wait").start()
+        done.wait(ACQUIRE_WAIT)
+        with guard:
+            outcome = state["outcome"]
+            if outcome is None:
+                state["outcome"] = "abandoned"
+        if outcome == "won":
+            return True
+        if outcome is None:
+            return False                    # the waiter has the descriptor now
+        with contextlib.suppress(OSError):  # "failed": nobody else will
+            os.close(fd)
         return False
 
     def release(self) -> None:
