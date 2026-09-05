@@ -2414,6 +2414,11 @@ class Tui:
             keys=keys,
             batch=self.model.status.get("batch"),
             messages=self.model.status.get("messages"),
+            # THE ONE FIGURE HERE THAT IS THE READER'S OWN, and the exception
+            # is argued in `config.WATCH_ROSTER_SEGMENTS`: the roster is where
+            # somebody looks to find out what people are doing, and the
+            # reader's own line is the one line of it they cannot see.
+            activity=self.model.status.get("activity"),
             # The order out of the file, and the count's presence out of its
             # own switch — `statusbar.roster_segments` argues the split. Read
             # here rather than resolved once in the settings reader so that a

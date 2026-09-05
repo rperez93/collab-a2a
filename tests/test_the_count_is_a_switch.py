@@ -66,7 +66,7 @@ def test_the_count_is_on_when_nobody_has_said_otherwise(cfg):
 
 def test_turning_the_switch_off_removes_the_count(cfg):
     config.setting("watch_status_messages").write(False)
-    assert _resolved() == ("batch", "keys")
+    assert _resolved() == ("batch", "activity", "keys")
     assert not any("message" in text for text in _row(_resolved()))
 
 

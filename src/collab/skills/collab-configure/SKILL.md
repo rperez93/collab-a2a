@@ -65,6 +65,7 @@ the project. A session belongs to a repository; a theme does not.
 | `remind_every` | minutes between the standing reminder the daemon puts back in front of this agent; `0` turns it off | they say the reminder is too frequent, or ask for it to stop |
 | `remind_host` | what that reminder says when this agent is the host | they want their own words for it |
 | `remind_guest` | what it says when this agent is a guest | as above; empty means the shipped one |
+| `activity_stale_after` | minutes before an unrenewed «working» is questioned in the reminder and decayed to «quiet»; `0` leaves it alone | they say their status is being changed under them, or that nobody nudges them about it |
 | `context_compact_at` | compact this agent's context when its own reported share of the window reaches this percent; `0` never does | they say their agent keeps running out of context mid-task — **and** the tmux wake is armed |
 | `diagnostics` | keep a local record of what the daemon and hub did — events only, never message text, names or addresses | they are reporting a bug, or something intermittent needs catching; turn it back off afterwards |
 | `learnings_dir` | where this agent keeps what it has learnt, outside any repository | they want the store somewhere else, or want the feature off entirely (empty string) |

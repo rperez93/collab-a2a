@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
 from .. import __version__
+from .. import activity as act
 from .. import batch as batch_progress
 from ..config import candidate_homes
 from ..protocol import scrub
@@ -207,6 +208,53 @@ def messages_segment(figures: Any, *, now: float | None = None,
     return f"{total} {word}" + ("" if total == 1 else "s")
 
 
+#: How much of an objective survives onto a status bar. Long enough to
+#: recognise which piece of work it is, short enough that it never crowds out
+#: the figures beside it — the bar's job is to remind, not to restate.
+MAX_ACTIVITY_TEXT = 28
+
+
+def activity_segment(activity: Any, *, now: float | None = None,
+                     narrow: bool = False) -> str:
+    """What this agent last said it was doing, and how long ago it said it.
+
+    THE AGE IS THE POINT. «working: the parser» is what the agent published,
+    and it stays true-looking for ever: an agent that finished at eleven and
+    never said `idle` reads at four o'clock exactly as it did at eleven. The
+    figure that makes it checkable is how long the statement has stood, and it
+    costs six characters — so it is never the part that is dropped.
+
+    THIS AGENT'S OWN, on a surface that otherwise shows the session's. The
+    roster a few lines up carries everybody's line except the reader's, which
+    is the one they cannot see; and the coding agent's status line is the one
+    place its own claim is in front of it while it works.
+
+    Nothing at all when nothing was ever declared. An agent whose user has
+    never run `collab working` would otherwise get an empty label for ever.
+    """
+    if not isinstance(activity, dict) or activity.get("state") not in act.STATES:
+        return ""
+    state = str(activity["state"])
+    what = scrub(str(activity.get("what") or "")).strip()
+    age = act.ago({"since": activity.get("updated_at")}, now=now) \
+        if activity.get("updated_at") else ""
+    if state == act.QUIET:
+        # Already a statement about staleness, so its own age adds nothing:
+        # what a reader needs from a decayed line is what it replaced.
+        until = act.at_clock(activity.get("until"))
+        return f"quiet since {until}" if until else "quiet"
+    head = state if narrow or not what else f"{state}: {_clip_words(what)}"
+    return f"{head} · {age}" if age else head
+
+
+def _clip_words(text: str) -> str:
+    """Cut an objective at a word boundary, so it reads as short rather than cut."""
+    if len(text) <= MAX_ACTIVITY_TEXT:
+        return text
+    kept = text[:MAX_ACTIVITY_TEXT].rsplit(" ", 1)[0]
+    return (kept or text[:MAX_ACTIVITY_TEXT]) + "…"
+
+
 def _counted(raw: Any) -> int | None:
     """A count the hub gave, or None for anything that is not one.
 
@@ -346,6 +394,7 @@ def hub_note(status: Any) -> str:
 
 def compose(*, notice: str = "", keys: Any = "", batch: Any = None,
             stats: Any = None, command: str = "", messages: Any = None,
+            activity: Any = None,
             segments: Sequence[str] = DEFAULT_SEGMENTS,
             now: float | None = None) -> list[Any]:
     """The row's pieces, notice first, in the order they were asked for.
@@ -376,6 +425,8 @@ def compose(*, notice: str = "", keys: Any = "", batch: Any = None,
         "messages": lambda: forms(messages_segment(messages, now=now),
                                   messages_segment(messages, now=now, narrow=True)),
         "stats": lambda: stats_segment(stats),
+        "activity": lambda: forms(activity_segment(activity, now=now),
+                                  activity_segment(activity, now=now, narrow=True)),
         "command": lambda: command,
         "keys": lambda: keys,
     }

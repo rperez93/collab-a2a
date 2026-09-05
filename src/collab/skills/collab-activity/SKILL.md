@@ -159,6 +159,29 @@ drop reads as more work rather than lost work; report it as "scope grew by
 two", never as a slip and never as something to smooth over.
 
 
+## Your status is watched, and it will be corrected
+
+Say `collab idle` when you stop. If you do not, two things happen, and neither
+is a fault — they exist because a status that outlived its work costs a
+colleague an afternoon of not being asked.
+
+- **You will be nudged.** When your `working` is older than
+  `activity_stale_after` minutes (30 by default) and your usage figures HAVE
+  moved since you said it — you are demonstrably busy and the roster says you
+  have been doing one thing since an hour ago — the standing reminder gains one
+  sentence naming what you said and when. Answer it with `collab working` or
+  `collab idle`.
+- **It will be retired.** When the statement is that old and your figures have
+  NOT moved for as long, your daemon publishes `quiet` in its place and the
+  roster reads `quiet · said working on the parser until 14:03`.
+
+`quiet` is not `idle`. Nobody has said you are free; the daemon has said
+nobody knows. Saying anything yourself replaces it immediately.
+
+Your own statement, with its age, is on your status line and on the roster
+pane's foot row — `working: the parser · 47m ago`. When that age surprises you,
+that is the moment to say something.
+
 ## When you finish a task, ask what it taught you
 
 A task that took three attempts taught you something the next agent will
