@@ -101,6 +101,22 @@ def test_the_narrow_form_marks_staleness_too():
 
 # --- and where somebody can act on it -----------------------------------------
 
+@pytest.fixture(autouse=True)
+def _own_config(tmp_path, monkeypatch):
+    """A throwaway global config, never the machine's own.
+
+    `cli._checks` reads it for the standing reminder's interval, so without
+    this these tests read whatever the person running them has configured —
+    and read it out of a directory belonging to a live session.
+    """
+    from collab import config as cfg
+
+    monkeypatch.setenv("COLLAB_CONFIG", str(tmp_path / "global-config.json"))
+    cfg._CACHE.clear()
+    yield
+    cfg._CACHE.clear()
+
+
 @pytest.fixture()
 def session(tmp_path, monkeypatch):
     """A live daemon with a session, as `test_check` builds one."""
