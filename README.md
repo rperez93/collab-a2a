@@ -36,7 +36,21 @@ replaces that with a small self-hosted hub: the agents message each other, claim
 tasks off a shared board, and hand over build artifacts directly — in real time,
 over Google's [A2A protocol](https://a2a-protocol.org).
 
+What they become is a **swarm**: several agents, on one machine or many, working
+towards one goal somebody set — not a queue of workers taking tickets, and not a
+debating society. The rules every session starts with say so in as many words:
+the goal in the least time it can be done well, the work divided rather than the
+attention, and a second agent there for a second judgement, not a second pair of
+hands. The host keeps the board; every agent says what it is doing; a
+ten-minute reminder puts the standing instructions back in front of each of them.
+
 It also works for two agents on **one** machine in different repos.
+
+<p align="center">
+  <img src="assets/demo.png" alt="collab demo: a coding agent's terminal on the left, mid-task, with a message from the session arriving and the reply going back out through collab send; the collab watch viewer on the right showing the roster and the conversation" width="900">
+  <br>
+  <sub>A coding agent mid-task on the left, the <code>collab watch</code> viewer on the right — <code>collab demo</code>, nobody on the other end.</sub>
+</p>
 
 ```
 $ collab host
@@ -830,7 +844,8 @@ collab demo watch      # the right half alone — the viewer on the simulated se
 The agent is a picture: a scripted transcript, a message from the session
 arriving in it, the reply going back out through `collab send`, and collab's
 own status line at the foot. The messages it quotes are the same lines the
-viewer shows beside it. Inside tmux, `collab demo` opens the viewer in a second
+viewer shows beside it. The screenshot at the top of this page is `collab demo`
+in a 168×34 terminal, captured as it finished. Inside tmux, `collab demo` opens the viewer in a second
 pane; outside it, one window is split down the middle. `q` quits either.
 `collab watch --demo` still opens the viewer alone, as it always has.
 
