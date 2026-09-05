@@ -43,6 +43,7 @@ from .config import (
     held_homes,
     ensure_home,
     GITIGNORE_BODY,
+    layout_view,
     reminder_settings,
     resolve_name,
     sibling_homes,
@@ -1931,17 +1932,9 @@ def cmd_discover(args: argparse.Namespace) -> int:
 
 
 def _view_for(layout: str, view: str) -> str:
-    """Which half of the viewer a layout asks for.
-
-    In one place because two callers decide it — the real session and the
-    simulated one — and a `--layout chat` that showed the roster in the demo
-    would be a difference between them that nothing would catch.
-    """
-    if layout == "chat":
-        return "chat"
-    if layout == "roster":
-        return "roster"
-    return view
+    """Which half of the viewer a layout asks for — see `config.layout_view`,
+    which the viewer itself reads when the setting changes under it."""
+    return layout_view(layout, view)
 
 
 # --- demo: the simulated session, and the fake agent beside it ------------------
@@ -1954,22 +1947,30 @@ def _view_for(layout: str, view: str) -> str:
 NEEDS_TERMINAL = "needs a terminal: it opens the full-screen viewer"
 
 
-def _demo_watch(*, layout: str, roster_size: int, view: str,
+def _demo_watch(*, layout: str | None, roster_size: int | None, view: str,
                 limit: int | None) -> int:
     """The viewer on the simulated session. Nothing here touches the network
-    or the disk: the model reads a log that lives in memory."""
+    or the disk: the model reads a log that lives in memory.
+
+    `layout` and `roster_size` are what the command line said, and None when
+    it said nothing — then the saved setting applies, and keeps applying
+    while the viewer is open, the same as for a real session.
+    """
     from . import demo as demo_session
     from .client import tui
 
-    tui.ROSTER_SHARE = max(5, min(roster_size, 90)) / 100
+    tui.ROSTER_SHARE_PINNED = (max(5, min(roster_size, 90)) / 100
+                               if roster_size else None)
     # `--layout tmux` splits a real session across two panes, each rejoining
     # by id. There is no session to rejoin here, so it reads as the built-in
     # split — which is the same two panes, in one window.
-    view = _view_for("split" if layout == "tmux" else layout, view)
+    chosen = layout or watch_settings()["layout"]
+    view = _view_for(chosen, view)
     opening = tui.OPEN_WITH if limit is None else max(limit, 0)
     try:
         return tui.run(demo_session.profile(), view=view, limit=opening,
-                       model=demo_session.model())
+                       model=demo_session.model(),
+                       follow_layout=not layout and view == "both")
     except KeyboardInterrupt:
         return 0
 
@@ -1995,9 +1996,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
         fail(f"demo {NEEDS_TERMINAL}")
         return 1
     if args.what == "watch":
-        saved = watch_settings()
-        return _demo_watch(layout=saved["layout"], roster_size=saved["roster_size"],
-                           view="both", limit=None)
+        return _demo_watch(layout=None, roster_size=None, view="both", limit=None)
 
     from .client import demo_agent, watch as w
 
@@ -2055,7 +2054,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
         if not sys.stdout.isatty():
             fail(f"--demo {NEEDS_TERMINAL}")
             return 1
-        return _demo_watch(layout=layout, roster_size=roster_size,
+        return _demo_watch(layout=args.layout, roster_size=args.roster_size,
                            view=args.view, limit=args.limit)
 
     profile = _require_profile(args)
@@ -2118,12 +2117,22 @@ def cmd_watch(args: argparse.Namespace) -> int:
         from .client import tui
 
         try:
-            tui.ROSTER_SHARE = max(5, min(roster_size, 90)) / 100
+            # PINNED ONLY BY THE COMMAND LINE. Said with `--roster-size` or
+            # `--layout`, the choice is for this pane and stays. Taken from
+            # the config, it stays with the config: `collab config
+            # watch_roster_size 45` or `watch_layout chat` in another
+            # terminal reaches this pane on its next frame, the same way the
+            # theme and the status row do. A tmux pair is pinned on both
+            # sides — each pane was opened to show one half, and `--view`
+            # above says which.
+            tui.ROSTER_SHARE_PINNED = (max(5, min(roster_size, 90)) / 100
+                                       if args.roster_size else None)
+            follow = not args.layout and args.view == "both"
             # `--limit` reached the plain renderer only, so the full view
             # opened on the last 500 messages however much was asked for —
             # asking for more got you less, and silently.
             opening = tui.OPEN_WITH if args.limit is None else max(args.limit, 0)
-            return tui.run(profile, view=view, limit=opening)
+            return tui.run(profile, view=view, limit=opening, follow_layout=follow)
         except KeyboardInterrupt:
             return 0
         except Exception as exc:
@@ -3762,9 +3771,17 @@ def cmd_color(args: argparse.Namespace) -> int:
             set_default_color(chosen)
         ok(f"your colour is {c(str(chosen), '1')}")
 
-    # Published NOW, not at the next start: stored only in the config, whoever
-    # is looking at you would keep seeing the old colour with no way to know
-    # why.
+    return _publish_colour(chosen, args)
+
+
+def _publish_colour(chosen: Any, args: argparse.Namespace) -> int:
+    """Tell the session the colour, now.
+
+    Published NOW, not at the next start: stored only in the config, whoever
+    is looking at you would keep seeing the old colour with no way to know
+    why. Shared by `collab color` and `collab config color`, so the two ways
+    of setting it cannot differ in whether the room hears about it.
+    """
     if _acting_as_a_stranger(args):
         return 1
     profile = SessionProfile.current()
@@ -3804,8 +3821,17 @@ def cmd_name(args: argparse.Namespace) -> int:
     else:
         final = set_default_name(args.value)
         ok(f"default display name is now {c(final, '1')}")
-    # The rename above is ours whatever happens; the one on the hub is not,
-    # unless the session it reaches is provably ours.
+    return _rename_in_session(final, args)
+
+
+def _rename_in_session(final: str, args: argparse.Namespace) -> int:
+    """Carry a new name into the session that is open, if one is.
+
+    The rename on disk is ours whatever happens; the one on the hub is not,
+    unless the session it reaches is provably ours. Shared by `collab name`
+    and `collab config display_name`: a name that changed in the file but not
+    in the room is a change nobody else can see.
+    """
     if _acting_as_a_stranger(args):
         return 1
     profile = SessionProfile.current()
@@ -3890,7 +3916,7 @@ def cmd_config(args: argparse.Namespace) -> int:
             return 2
         unset_setting(item.name)
         ok(f"{item.name} is back to its default, {_shown(item.default)}")
-        return 0
+        return _settle_in_the_session(item.name, args)
 
     if args.value is None:
         # Bare, on its own line, so `$(collab config theme)` is worth writing.
@@ -3905,6 +3931,43 @@ def cmd_config(args: argparse.Namespace) -> int:
         fail(f"{item.name}: {exc}")
         return 2
     ok(f"{item.name} is now {c(_shown(item.read()), '1')}")
+    return _settle_in_the_session(item.name, args)
+
+
+def _settle_in_the_session(name: str, args: argparse.Namespace) -> int:
+    """After a setting is written: what the session that is open has to hear.
+
+    Nearly every setting is read live by whatever consults it — the viewer
+    re-reads the config on each frame, the daemon on each tick — so writing
+    the file is the whole change. Two are different, because what the room
+    sees is held BY THE HUB and was told once, at join: the name and the
+    colour. `collab name` and `collab color` publish theirs on the spot, and
+    this is the same publish for the same keys, so that setting one through
+    `collab config` is not the one route that leaves the room out of date.
+
+    Both are the machine-wide defaults. An agent answering to a name or a
+    colour of its own —its identity file, or COLLAB_NAME— is not showing the
+    default, so there is nothing of it to publish; that is said rather than
+    published wrongly.
+    """
+    if name == "display_name":
+        wanted = resolve_name()
+        default = setting("display_name")
+        if default is None or wanted != _slug(str(default.read())):
+            print(dim(f"  this agent answers to {wanted} on its own account; "
+                      "the default is for agents without one"))
+            return 0
+        return _rename_in_session(wanted, args)
+    if name == "color":
+        from . import identity as ident
+
+        if str(ident.load(collab_home()).get("color") or "").strip():
+            print(dim("  this agent has a colour of its own (`collab color`); "
+                      "the default is for agents without one"))
+            return 0
+        return _publish_colour(default_color(), args)
+    if name == "share_stats" and not share_stats_enabled():
+        print(dim("       others will keep seeing whatever you last shared"))
     return 0
 
 

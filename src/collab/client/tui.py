@@ -18,8 +18,9 @@ import subprocess
 from ..columns import clip as _columns_clip, width as _columns_width
 
 from ..config import (HEADER_SEPARATOR, default_color, fold_override,
-                      parse_color, resolve_name,
-                      hex_to_rgb, rgb_to_256, theme)
+                      layout_view, parse_color, resolve_name,
+                      hex_to_rgb, rgb_to_256, theme, timezone_name,
+                      watch_settings)
 import datetime as _dt
 import re
 import json
@@ -61,9 +62,13 @@ from .statusbar import money_text
 from .daemon_files import DaemonPaths, effective_state, is_running, read_status
 from .inbox import Inbox
 
-#: How much of the window the roster gets. The conversation is the thing you
-#: read continuously, so it keeps the majority.
+#: How much of the window the roster gets when nothing says otherwise. The
+#: conversation is the thing you read continuously, so it keeps the majority.
 ROSTER_SHARE = 0.30
+#: A share fixed by `--roster-size` on the command line. That is the reader
+#: saying «this pane, this size», and the saved setting does not overrule it.
+#: None, the ordinary case, follows `watch_roster_size` as it changes.
+ROSTER_SHARE_PINNED: float | None = None
 MIN_ROSTER_ROWS = 3
 #: Lines per wheel notch. Three is what terminals and pagers settled on.
 WHEEL_LINES = 3
@@ -549,6 +554,20 @@ def _theme_version() -> int:
     """Bumped whenever the resolved theme changes. Cheap enough per frame."""
     _current_theme()
     return int(_THEME_CACHE.get("version", 0))
+
+
+def roster_share() -> float:
+    """The roster's share of the window, as it is RIGHT NOW.
+
+    Read from the config on every frame, like the theme and the status row,
+    so `collab config watch_roster_size 45` in another terminal moves the
+    split in a pane that is already open. `load_config` re-reads only when
+    the file's stamp moves, so this is a stat per frame and nothing else.
+    The command line wins when it spoke: see ROSTER_SHARE_PINNED.
+    """
+    if ROSTER_SHARE_PINNED is not None:
+        return ROSTER_SHARE_PINNED
+    return max(5, min(int(watch_settings()["roster_size"]), 90)) / 100
 
 
 def _fmt_pct(value: Any, label: str) -> str:
@@ -1783,9 +1802,16 @@ class Tui:
     and move them with the keys they already know.
     """
 
-    def __init__(self, model: Model, view: str = "both") -> None:
+    def __init__(self, model: Model, view: str = "both",
+                 follow_layout: bool = False) -> None:
         self.model = model
         self.view = view if view in ("both", "chat", "roster") else "both"
+        #: Whether `watch_layout` may change the view under us. True for a
+        #: viewer that took its layout from the config, so that changing the
+        #: setting reaches a pane that is already open; False for one told
+        #: `--layout` or `--view` on the command line, and for each half of a
+        #: tmux pair, which was opened to show one pane and must keep to it.
+        self.follow_layout = follow_layout
         # The roster reads from the top — following its tail would hide whoever
         # joined first, including yourself. Only the conversation tails.
         self.roster = Pane(follow=False)
@@ -1849,9 +1875,15 @@ class Tui:
     def _conversation(self, width: int) -> list[Row]:
         """The conversation as rows, rebuilt only when something moved."""
         events = self.model.events
+        # THE FOLD AND THE TIMEZONE ARE PART OF THE KEY. Both are read live
+        # while the rows are laid out, so a change did reach the viewer — but
+        # only once something else moved. `collab fold 2` with nobody talking
+        # showed nothing until the next message arrived, and looked like a
+        # command that does nothing. Each is a stat of the config per frame.
         key = (width, len(events), int(getattr(events[-1], "seq", 0) or 0) if events else 0,
                frozenset(self.expanded), _theme_version(),
-               self.model.profile.name, _colour_stamp())
+               self.model.profile.name, _colour_stamp(),
+               effective_fold(), timezone_name())
         if key != self._rows_key:
             self._rows_key = key
             self._chat_width = width
@@ -1989,6 +2021,7 @@ class Tui:
         self._settings = watch_status_settings()
         self._bar = bool(self._settings["enabled"])
         self._roster_settings = watch_roster_settings()
+        self.adopt_layout()
         if self._bar:
             self._command.poll(self._settings["command"],
                                self._settings["interval"])
@@ -2079,7 +2112,7 @@ class Tui:
         # instead of a line of conversation.
         foot = 1 if self._bar else 0
         body_height = height - body_top - foot
-        roster_h = max(int(body_height * ROSTER_SHARE), MIN_ROSTER_ROWS)
+        roster_h = max(int(body_height * roster_share()), MIN_ROSTER_ROWS)
         # Leave the conversation room to exist, but never squeeze the roster
         # out entirely: at MIN_ROSTER_ROWS-1 visible rows it renders nothing at
         # all, and a pane you cannot see is a pane you cannot scroll.
@@ -2468,6 +2501,25 @@ class Tui:
 
     # -- input --------------------------------------------------------------
 
+    def adopt_layout(self) -> bool:
+        """Take the view from `watch_layout`, when this viewer follows it.
+
+        Once per frame, beside the status row's settings, so that `collab
+        config watch_layout chat` in another terminal folds the roster away
+        in a pane that is already open, and `--unset` brings it back. A viewer
+        pinned by the command line keeps what it was told. True when the
+        view changed — the focus moves with it, since a pane that is no
+        longer on screen cannot hold it.
+        """
+        if not self.follow_layout:
+            return False
+        wanted = layout_view(watch_settings()["layout"], "both")
+        if wanted == self.view:
+            return False
+        self.view = wanted
+        self.focus = "roster" if wanted == "roster" else "chat"
+        return True
+
     def pane_at(self, y: int) -> str:
         """Which pane is under this screen row.
 
@@ -2795,9 +2847,11 @@ def _init_colors() -> None:
 
 
 def run(profile: SessionProfile, view: str = "both", limit: int = OPEN_WITH,
-        model: "Model | None" = None) -> int:
+        model: "Model | None" = None, follow_layout: bool = False) -> int:
     """The viewer. ``model`` is for the simulated session: hand one in and the
-    conversation comes from there instead of from this machine's log."""
+    conversation comes from there instead of from this machine's log.
+    ``follow_layout`` lets `watch_layout` change the view while it is open —
+    see `Tui.adopt_layout`."""
     # MI PROPIO COLOR, DE LA CONFIG LOCAL, ANTES DE MIRAR EL ROSTER.
     #
     # Chosen colours arrive through the roster, which comes from the hub. Mine
@@ -2813,7 +2867,7 @@ def run(profile: SessionProfile, view: str = "both", limit: int = OPEN_WITH,
                           for n in my_names(profile.name)])
     model = model if model is not None else Model(profile=profile)
     model.load_initial(limit=limit)
-    tui = Tui(model, view=view)
+    tui = Tui(model, view=view, follow_layout=follow_layout)
 
     def loop(win) -> int:
         # The mouse, for the «show more» button and the wheel. mouseinterval(0)

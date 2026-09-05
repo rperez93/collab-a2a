@@ -354,6 +354,17 @@ value that is the wrong type there is not an error message but a terminal left
 in a broken state.
 A setting collab does not understand is ignored rather than fatal.
 
+The file is read live, not at start-up.
+The reader caches it on the file's stamp, so asking on every frame costs a
+stat, and a change made in one terminal reaches the viewer and the daemon
+already running in another without a restart.
+What the hub holds about you — the name and the colour — cannot be read from a
+file by anyone else, so a change to either is published to the open session at
+the moment it is made, whichever command made it.
+Only what is settled at a start stays settled: the rules, printed at `host` and
+`join`; a second tmux pane, opened at the next `collab watch`; and a layout
+given on the command line, which is for that pane.
+
 ### The roster's status row
 
 There is one status row per pane, at the foot of what it describes.

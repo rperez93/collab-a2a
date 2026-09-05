@@ -205,7 +205,7 @@ def _split_geometry(height: int) -> tuple[int, int]:
     the roster panel has under its own header. The arithmetic the viewer has
     always used for the panel's size — nothing at the foot may change it."""
     body_height = height - 2 - 1                      # title rows, bottom bar
-    roster_h = max(int(body_height * tui.ROSTER_SHARE), tui.MIN_ROSTER_ROWS)
+    roster_h = max(int(body_height * tui.roster_share()), tui.MIN_ROSTER_ROWS)
     roster_h = min(roster_h, max(body_height - 4, 2))
     return 2 + roster_h, roster_h - 1
 

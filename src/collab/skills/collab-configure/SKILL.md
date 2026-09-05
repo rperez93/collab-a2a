@@ -82,6 +82,25 @@ checkout — has its own name and colour, and those are set by `collab name` and
 those two commands instead, or you will change the wrong one.
 
 
+## When a change takes effect: now
+
+Never tell the user to restart anything. The viewer re-reads the file on every
+frame and the daemon on every tick, so a theme, a fold, a timezone, the
+roster's size, the built-in layout, the status rows and the reminder all land
+in the panes and daemons already running. `display_name` and `color` are held
+by the hub, and `collab config` publishes them to the open session on the spot,
+as `collab name` and `collab color` do — the command says `published to the
+session` when it did, and `no active session` when there was none to tell.
+
+Three things are settled at a start, and the right answer is to say so:
+
+- `rules` is read at `host` and `join`.
+- `watch_layout tmux` and `watch_roster_position` open and place a second tmux
+  pane, at the next `collab watch`.
+- A layout the user gave on the `collab watch` command line is for that pane,
+  and the setting does not overrule it while the pane is open.
+
+
 ## The bottom rows of `collab watch`
 
 `collab watch` is the human's view of the session, and it has **two** status
