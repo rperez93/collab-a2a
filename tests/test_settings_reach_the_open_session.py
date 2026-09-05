@@ -344,3 +344,93 @@ def test_a_file_just_written_is_re_read_until_its_stamp_settles(isolated):
 
     assert len(reads) == 5
     assert config.STAMP_SETTLES > 1.0, "longer than a whole-second tick"
+
+
+# --- and a read taken inside the window is not believed after it ------------------
+#
+# Re-reading inside the window closes the case where nobody looked until it had
+# passed. It does not close the one where somebody looked DURING it, which is
+# the ordinary case rather than a narrow one: a viewer polls four times a second
+# and a daemon beats every three, so a poll inside a second-and-a-half window is
+# what usually happens.
+#
+#   write A · a poll lands inside the window, reads A, caches it
+#   write B, same second, same size — the stamp does not move
+#   the next poll is past the window: matching stamp, settled stamp, and the
+#   cached A trusted for good, until some unrelated write moved the stamp
+#
+# So an entry remembers whether the stamp was still moving when it was filled,
+# and such an entry is read again on the first call after the stamp settles.
+
+@pytest.fixture
+def coarse_clock(monkeypatch):
+    """A filesystem that stamps whole seconds, which is where this bites."""
+    real = Path.stat
+
+    def floored(self, **kw):
+        st = real(self, **kw)
+
+        class Coarse:
+            st_mtime = float(int(st.st_mtime))
+            st_size = st.st_size
+
+        return Coarse()
+
+    monkeypatch.setattr(Path, "stat", floored)
+
+
+def test_a_value_read_during_the_window_is_not_trusted_after_it(isolated,
+                                                                coarse_clock):
+    """The sequence, in order. The middle read is the one that used to poison
+    the cache, and it is the read a running session actually takes."""
+    path = isolated / "config.json"
+
+    path.write_text(json.dumps({"new_when": "idle"}))
+    assert config.new_when() == "idle"          # a poll inside the window
+
+    path.write_text(json.dumps({"new_when": "task"}))   # same second, same size
+    _settle()
+
+    assert config.new_when() == "task"
+
+
+def test_the_same_holds_for_a_colour(isolated, coarse_clock):
+    """Seven characters whatever it is, so the size never moves either."""
+    path = isolated / "config.json"
+
+    path.write_text(json.dumps({"color": "#00cccc"}))
+    assert config.default_color() == "#00cccc"
+
+    path.write_text(json.dumps({"color": "#ff8800"}))
+    _settle()
+
+    assert config.default_color() == "#ff8800"
+
+
+def test_the_re_read_after_the_window_happens_once_and_not_again(isolated,
+                                                                 coarse_clock):
+    """One extra read per write, and then the cache is a cache again — which is
+    the whole reason the entry is marked rather than the window widened."""
+    path = isolated / "config.json"
+    path.write_text(json.dumps({"theme": "classic"}))
+    config.load_config()                        # filled inside the window
+    _settle()
+
+    reads = []
+    real = Path.read_text
+
+    def counted(self, *a, **kw):
+        if self.name == "config.json":
+            reads.append(1)
+        return real(self, *a, **kw)
+
+    with mock.patch.object(Path, "read_text", counted):
+        for _ in range(50):
+            config.load_config()
+
+    assert len(reads) == 1, "the first call after it settles, and no other"
+
+
+def _settle():
+    """Wait for the stamp to be old enough to believe."""
+    time.sleep(config.STAMP_SETTLES + 0.2)

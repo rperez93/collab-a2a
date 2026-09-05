@@ -2145,9 +2145,11 @@ hub, so `collab config` publishes those to the open session the same way
 
 A change is seen even when it does not change the file's size — two colours are
 both seven characters, and `new_when` moves between `idle` and `task` without
-moving a byte. Where the filesystem stamps only whole seconds, that used to
-hide the second of two quick changes; a stamp is now believed only once it is a
-second and a half old.
+moving a byte. Where the filesystem stamps only whole seconds that used to hide
+the second of two quick changes, so the file is read again until its timestamp
+is a second and a half old, and again once on the first read after that. Your
+change is seen on the first read that happens after the file settles, and never
+later than that.
 
 Three things are settled at a start rather than read live, and say so:
 

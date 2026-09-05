@@ -691,9 +691,15 @@ length apart when both are written inside one mtime tick: a colour is always
 seven characters, and `new_when` moves between `idle` and `task` without moving
 a byte.
 On a filesystem stamping whole seconds the second of such a pair used to be
-invisible, so a stamp is believed only once it is a second and a half old — a
-read per call in the second somebody is changing something, and the cache
-exactly as before in every other second.
+invisible, so a stamp is believed only once it is a second and a half old.
+That alone is not enough, because a reader polling four times a second lands
+inside that window on its own: what it read there may already have been
+overtaken by a write the stamp did not record.
+So a value read while the stamp was still moving is read again on the first
+call after it settles, and only that reading is kept.
+The promise is therefore exact — a change is seen on the first read that
+happens after the file settles, and no later — and it costs one read per call
+during that second and a half, plus one after it.
 
 What the hub holds about you — the name and the colour — cannot be read from a
 file by anyone else, so a change to either is published to the open session at

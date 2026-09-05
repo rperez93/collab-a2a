@@ -312,6 +312,21 @@ def load_config() -> dict[str, Any]:
 
     A future mtime falls in the window too, and should: a clock that has gone
     backwards is a reason to trust a stamp less, not more.
+
+    AND WHAT WAS READ INSIDE THE WINDOW IS NOT TRUSTED AFTERWARDS, which is the
+    half that re-reading alone does not give. A reader polling at four frames a
+    second lands inside the window on its own: it reads the file, caches what it
+    found, and the second write of the pair arrives after that read and before
+    the stamp settles. Its next poll then has a matching stamp AND a settled
+    one, and would trust a value that was already stale when it was cached —
+    for good, until some unrelated write moved the stamp. Measured with the
+    daemon's three-second heartbeat, whose beats straddle the window, that is
+    the ordinary case rather than a narrow one.
+
+    So an entry remembers whether it was filled while the stamp was still
+    moving. Such an entry is read again on the first call after the stamp
+    settles, and only that read is believed. One extra read per write, and the
+    entry becomes trustworthy at exactly the moment the stamp does.
     """
     p = global_config_path()
     try:
@@ -320,7 +335,8 @@ def load_config() -> dict[str, Any]:
     except OSError:
         _CACHE.clear()
         return {}
-    if _CACHE.get("stamp") == stamp and (time.time() - st.st_mtime) > STAMP_SETTLES:
+    settled = (time.time() - st.st_mtime) > STAMP_SETTLES
+    if _CACHE.get("stamp") == stamp and settled and _CACHE.get("trusted"):
         return _CACHE["data"]
     try:
         data = json.loads(p.read_text())
@@ -328,7 +344,10 @@ def load_config() -> dict[str, Any]:
         data = {}
     if not isinstance(data, dict):
         data = {}
-    _CACHE.update(stamp=stamp, data=data)
+    # `trusted` is the whole of the second half: an entry read while the stamp
+    # was still moving is worth answering from now and not once the stamp has
+    # settled, because a write may have landed behind this read.
+    _CACHE.update(stamp=stamp, data=data, trusted=settled)
     return data
 
 

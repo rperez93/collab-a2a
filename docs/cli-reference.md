@@ -1042,7 +1042,10 @@ settings, the activity decay, the diagnostic log or the learnings store takes to
 reach a daemon that is already running — the wake at every delivery, and your
 agent's status line each time it renders. `display_name` and `color` are
 published to the open session as `collab name` and `collab color` publish
-theirs. It holds when the change does not alter the file's size, too.
+theirs. It holds when the change does not alter the file's size, too: the file
+is read again until its timestamp is a second and a half old and once more
+after that, so a change lands on the first read that follows the file settling
+and never later.
 
 The exceptions are `rules`, read at `host` and `join`; `watch_layout tmux` and
 `watch_roster_position`, which open a second tmux pane at the next
