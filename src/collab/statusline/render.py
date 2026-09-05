@@ -41,6 +41,34 @@ COLORS = {
 
 GLYPHS = {"live": "●", "reconnecting": "◐", "offline": "○"}
 
+#: Why the line is empty, when it is. Four ways to draw nothing, told apart by
+#: name — `--json` reports whichever it was, and «my status line vanished» is
+#: otherwise a question with four answers and no way to choose between them.
+NO_PROFILE = "no-profile"       # no session in this checkout at all
+NO_DAEMON = "no-daemon"         # a session, and nothing running behind it
+NO_STATUS = "no-status"         # a daemon, and a status file saying nothing
+ERROR = "error"                 # something raised; `main` swallows everything
+KEPT = "kept-last-line"         # none of the above was drawable, so the last
+
+#: Where the last line that WAS drawable is kept, beside the daemon's own files.
+LAST_LINE_FILE = "statusline-last.json"
+
+#: How long that line may stand in for one that could not be built.
+#:
+#: This is a flicker guard and nothing more. The status line is re-rendered on
+#: every prompt, and the three blanking causes above are momentary far more
+#: often than they are permanent: `status.json` is replaced by an atomic
+#: rename, `is_running` asks a lock that a restarting daemon holds for a
+#: fraction of a second, and a sandboxed process can fail to read either.
+#: Every one of those blanked the whole segment for a redraw, and a segment
+#: that disappears and comes back reads as broken.
+#:
+#: Sixty seconds because a genuinely dead session must still disappear, and
+#: quickly enough that nobody acts on it. Nothing is appended to a kept line —
+#: no «(stale)», no age — because it is the last thing that was true and
+#: annotating it would make it a different claim.
+KEEP_LAST_FOR = 60.0
+
 
 def _use_color() -> bool:
     return not os.environ.get("NO_COLOR")
@@ -175,20 +203,37 @@ def cwd_from_session_json(raw: str) -> Path | None:
 def render(status: dict[str, Any] | None = None, *, width: int | None = None,
            cwd: Path | None = None) -> str:
     """Build the segment.  Returns '' when there is nothing worth showing."""
+    return reasoned(status, width=width, cwd=cwd)[0]
+
+
+def reasoned(status: dict[str, Any] | None = None, *, width: int | None = None,
+             cwd: Path | None = None,
+             profile: Any = None) -> tuple[str, str]:
+    """The segment, and WHY it is empty when it is.
+
+    The reason used to be thrown away, and there are four of them: no session
+    here at all, no daemon behind the one there is, a status file that says
+    nothing, and — through `main`'s bare except — anything that raised. All
+    four blanked the line identically, so «my status line disappeared» was a
+    question with four answers and no way to tell which. It is a string rather
+    than an exception because every caller here has to keep going regardless;
+    what it needed was a name, not a failure.
+    """
     where = ""
     if status is None:
-        profile = SessionProfile.current(cwd)
         if profile is None:
-            return ""
+            profile = SessionProfile.current(cwd)
+        if profile is None:
+            return "", NO_PROFILE
         # No live daemon means the session is over, not that it is offline.
         # "offline" is for a daemon that is running but cannot reach the hub —
         # something you can act on. A dead session should simply disappear
         # instead of leaving a stale badge on the status line forever.
         if is_running(profile) is None:
-            return ""
+            return "", NO_DAEMON
         status = read_status(profile)
         if not status:
-            return ""
+            return "", NO_STATUS
         # Which agent's file this is, when the checkout holds more than one.
         # `SessionProfile.current` answers with the repo's default directory
         # when the process tree cannot prove which agent is asking, so in a
@@ -196,7 +241,7 @@ def render(status: dict[str, Any] | None = None, *, width: int | None = None,
         # naming the directory is what lets the reader notice.
         where = state_dir_label(profile.home, cwd)
     if not status:
-        return ""
+        return "", NO_STATUS
 
     state = _effective_state(status)
     version = str(status.get("version") or "")
@@ -282,7 +327,7 @@ def render(status: dict[str, Any] | None = None, *, width: int | None = None,
         # was given and then exceeded is not a width at all.
         if _visible_len(line) > limit:
             line = _clip_visible(line, limit)
-    return line
+    return line, ""
 
 
 def _clip_visible(line: str, limit: int) -> str:
@@ -460,13 +505,103 @@ def _batch_payload(status: dict[str, Any]) -> dict[str, Any] | None:
             "age": batch_progress.age(figures)}
 
 
-def _read_stdin_if_ready(timeout: float = 0.15) -> str:
+def remember_line(profile: Any, line: str) -> None:
+    """Keep the last line that could be drawn, for the next one that cannot.
+
+    Beside the daemon's own files rather than anywhere global: it is a fact
+    about ONE session, and two agents in one checkout must not hand each other
+    a line describing the other's.
+
+    Never raises. This runs on the redraw path of somebody's prompt, and a
+    read-only state directory is a reason to lose the flicker guard and not a
+    reason to lose the status line.
+    """
+    if profile is None or not line:
+        return
+    try:
+        path = Path(profile.dir) / LAST_LINE_FILE
+        path.write_text(json.dumps({"at": time.time(), "line": line,
+                                    "color": _use_color()}))
+    except (OSError, TypeError, ValueError):
+        return
+
+
+def last_line(profile: Any, *, now: float | None = None) -> str:
+    """The last drawable line, if it is recent enough to still be true.
+
+    THE COLOUR MODE HAS TO MATCH, and it is asked of `_use_color` rather than
+    of a flag a caller passed: `--plain` and a `NO_COLOR` in the environment
+    are the same fact by the time a line is built, and keying on the flag would
+    make two identical renders refuse each other's keepsake. `--plain` exists
+    for a bar that cannot render escapes, and handing one of those a line kept
+    from a coloured render would paint raw escape codes into somebody's prompt
+    — the exact failure it is there to avoid, arriving only on the redraws
+    where something else had already gone wrong.
+    """
+    if profile is None:
+        return ""
+    try:
+        kept = json.loads((Path(profile.dir) / LAST_LINE_FILE).read_text())
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(kept, dict) or bool(kept.get("color")) != _use_color():
+        return ""
+    try:
+        age = (now or time.time()) - float(kept.get("at") or 0)
+    except (TypeError, ValueError):
+        return ""
+    # A stamp in the future is not a fresh one — the same answer `batch.is_stale`
+    # gives, for the same backward-clock reasons, and the same refusal to treat
+    # an age it cannot compute as evidence of youth.
+    if age < 0 or age > KEEP_LAST_FOR:
+        return ""
+    return str(kept.get("line") or "")
+
+
+def draw(cwd: Path | None = None, width: int | None = None) -> tuple[str, str]:
+    """The line to print and the reason it is what it is.
+
+    The one place the last-line fallback is applied, so that the rendered line
+    and the `--json` verdict cannot disagree about what the reader is seeing.
+
+    A PROFILE THAT NO LONGER EXISTS STILL BLANKS. That is not a hiccup: it is a
+    session that has ended, and a status bar still carrying it after the fact
+    is the stale-badge problem this module already refuses elsewhere. The three
+    other causes are momentary far more often than they are permanent, which is
+    what the kept line is for.
+    """
+    profile = None
+    try:
+        profile = SessionProfile.current(cwd)
+        line, why = reasoned(cwd=cwd, width=width, profile=profile)
+    except Exception:                                         # noqa: BLE001
+        line, why = "", ERROR
+    if line:
+        remember_line(profile, line)
+        return line, ""
+    if why == NO_PROFILE or profile is None:
+        return "", NO_PROFILE
+    if kept := last_line(profile):
+        return kept, KEPT
+    return "", why
+
+
+def _read_stdin_if_ready(timeout: float = 1.0) -> str:
     """Read piped session JSON, but never wait on a pipe that stays open.
 
     Claude Code pipes its session JSON in; other hosts pipe nothing. Reading
     unconditionally hangs whenever stdin is an inherited pipe that is never
     closed — and a status line command that blocks stalls the whole bar, which
     is the one thing this must not do. So only read when data is already there.
+
+    A SECOND, not the sixth of one this waited before. Nothing is paid for it
+    where nothing is piped: a terminal short-circuits on `isatty` and a closed
+    stdin short-circuits on `closed`, both before the wait. What was paying for
+    it was the host that DOES pipe — a payload arriving a fraction late was
+    read as no payload at all, which loses the agent's usage figures for that
+    prompt and, with them, whichever `cwd` the payload named. Measured against
+    the loss: 0.15 s of headroom to save a hundredth of a second on a path that
+    already returns instantly.
     """
     try:
         if sys.stdin is None or sys.stdin.closed or sys.stdin.isatty():
@@ -502,11 +637,16 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.plain:
             os.environ["NO_COLOR"] = "1"
+        # DRAWN EVEN FOR `--json`, and the verdict taken from the same call.
+        # A host that formats its own line has to be told what the rendered
+        # one would have shown — including that it is a kept line — and two
+        # code paths asking the question separately would have been two
+        # answers that could differ.
+        line, why = draw(cwd=cwd, width=args.width)
         if args.json:
-            sys.stdout.write(json.dumps(status_payload(cwd)))
+            sys.stdout.write(json.dumps({**status_payload(cwd), "why": why}))
             return 0
-        line = render(cwd=cwd, width=args.width)
-    except Exception:
+    except Exception:                                         # noqa: BLE001
         return 0
     if line:
         sys.stdout.write(line)
