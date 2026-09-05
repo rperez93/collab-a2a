@@ -958,8 +958,17 @@ collab statusline [--agent {auto,claude-code,tmux,generic}] [--scope {global,pro
 `install` puts a `# >>> COLLAB-STATUS-LINE` block at the top of the Claude Code
 status line script and leaves every other segment in it byte for byte. Run with
 `COLLAB_HOME` set, it carries that into the block, so the usage figures the hook
-receives are attributed to that session whatever the process tree says. The
-block ends its line: collab takes the first row of the status line and every
+receives are attributed to that session whatever the process tree says.
+
+`render` prints nothing when there is nothing worth showing, and keeps the last
+line it *could* build for up to a minute so that a status file being rewritten,
+a daemon restarting, or a sandboxed read that failed does not blank the segment
+for a redraw. Nothing is appended to a kept line. A session that has actually
+ended blanks at once. `render --json` names the case in a `why` field: `""`
+when a line was drawn, else `no-profile`, `no-daemon`, `no-status`, `error`, or
+`kept-last-line`. See [the status line](../README.md#status-line).
+
+The block ends its line: collab takes the first row of the status line and every
 segment after it starts on the next, so a long status line no longer runs past
 the terminal. When there is no session it prints nothing, not even the line
 break. Running `install` again replaces an existing block in place, which is

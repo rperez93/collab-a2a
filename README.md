@@ -1619,6 +1619,24 @@ how many others are connected**:
 
 It prints nothing at all when there is no session.
 
+**It does not flicker.** The segment is rebuilt on every prompt, and three of
+the four ways it can come out empty are momentary far more often than they are
+permanent: `status.json` is replaced by an atomic rename, the daemon's lock is
+held for a fraction of a second across a restart, and a sandboxed process can
+fail to read either. Each of those used to blank the whole segment for a
+redraw, which reads as broken software rather than as a file being written. So
+the last line that *was* drawable stands in for up to a minute, exactly as it
+was — nothing is appended to it, because it is the last thing that was true and
+an `(stale)` would make it a different claim.
+
+The fourth cause is not covered, deliberately: when the session itself is gone
+the segment disappears at once. A status bar still carrying a session that
+ended is the stale badge everything else here refuses.
+
+`collab statusline render --json` says which of the four it was, in a `why`
+field: `""` when a line was drawn, or `no-profile`, `no-daemon`, `no-status`,
+`error`, or `kept-last-line` when you are looking at the one kept from before.
+
 The envelope counts **messages** — things somebody said — and not joins,
 presence or file notices, which the daemon counts separately. It counts the
 ones **not yet delivered to your agent**: a message is read once `collab recv`
