@@ -91,6 +91,27 @@ refused on read when the stamp is not this agent's.
 | `files/` | Blobs the hub is holding for their recipients, each named by a server-generated id. |
 | `wake/config.json` | The armed wake command and its settings. |
 
+## Added since the pin
+
+Five more paths exist in a session that uses the features that write them. They
+are listed apart from the measured tree above, which is what a real session
+held at `23db6d0`.
+
+| Path | What it holds |
+|---|---|
+| `wake/state.json` | The wake's durable throttle: failures, the three attempt clocks, and the reminder's own — including `reminded_via`, the route the last one took. |
+| `wake/remind-now` | A marker `collab remind now` leaves for the daemon. Consumed when the reminder reaches a route, not when something asks whether one is due. |
+| `wake/reminder.txt` | The reminder as a delivery that can only carry a pointer needs it. One fixed name, unlike a batch's: every reminder is the same standing instructions and the newest copy is always the right one. |
+| `statusline-last.json` | The last status line that could be built, with its timestamp and colour mode, so a status file mid-rewrite does not blank the segment for a redraw. Sixty seconds. |
+| `diagnostics/YYYY-MM-DD.jsonl` | Off by default. Events only — never message text, names, invites, addresses, or paths under the reader's home. Kept seven days. See [the trust model](/operating/security-model.md). |
+
+One more lives in the **shared** `.collab/` rather than in a session directory
+or a per-agent home: `learnings.md`, with a `learnings.d/` beside it holding one
+empty file per learning already written down. Two agents in one checkout are
+working on one repository, so a file each would give them two half-answers with
+no way to know it, and the claim file is how exactly one of the two daemons
+wins the right to append a given line.
+
 # The permissions, stated honestly
 
 The directory is `0700`, re-asserted on every call to `ensure_home` rather than

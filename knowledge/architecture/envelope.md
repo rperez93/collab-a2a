@@ -114,6 +114,21 @@ is stale, so a guest could make the whole room re-pull the roster at will.
 executor restamps the timestamp and resolves the recipient id from `to`,
 never reading either from the part. Before it, only the message route did.
 
+## A chat's body is no longer always empty
+
+Later than the pin. A `chat` carrying `{learning: true}` in its body is a fact
+meant to outlive the session, with its `text` prefixed `learning:`. The two
+halves do different work: the prefix is for a receiver that has never heard of
+this and still sees a sentence saying what it is, and the body is what a
+receiver that has acts on — because anybody can type a message beginning
+`learning:`, and a message that merely looks like one is not a fact about
+anybody's repository.
+
+The hub is unchanged by it. The marker is sequenced, fanned out and stored like
+any other body, and nothing hub-side reads it; acting on it is entirely
+client-side, which is why the rule above still holds — one kind a client may
+send, and a body it may put things in.
+
 # Bounds, applied on the way in
 
 Every one of these arrives from an untrusted joiner, is stored, and is then

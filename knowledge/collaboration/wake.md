@@ -155,6 +155,54 @@ when the wake was armed.
 It also sends a *pointer* to the batch rather than the batch itself, because
 pasting many lines into a TUI submits at the first newline.
 
+# The three clocks, and where to read them
+
+Later than the pin: `collab wake show` prints them, and `collab status` carries
+the last two facts in two lines.
+
+An agent that has not been woken is being held by exactly one of three things,
+and they are separate questions. `settle` is the burst window before a first
+turn, measured from the oldest unread message. `min_gap` is how often other
+people's messages may start a turn, and only message turns spend it. The retry
+pause is what a failure buys, growing with each consecutive one and clearing on
+the first delivery that works. `timeout` is not a fourth clock but a ceiling on
+a turn that has started.
+
+So the page prints all three, with what each is doing now, when a delivery was
+last *attempted* and when one last *arrived* — different facts, and reporting
+the attempt as an arrival is how a wake that had never once succeeded looked
+healthy — and the reason `due()` gives at this moment.
+
+Asking is read-only. The reminder's interval starts the first time the daemon
+asks whether one is due, so that «never reminded» and «reminded an hour ago»
+are not the same stored zero; a command that asked while printing would have
+started a clock by being looked at, and an agent polling it on a loop would
+have pushed its own reminder over the horizon every time.
+
+# The standing reminder's route, and asking for one now
+
+Also later than the pin. The reminder rides this wake for an agent that cannot
+hold a monitor, and a followed stream for one that can. Both routes used to
+work invisibly: the monitor's drop file is overwritten by the next reminder,
+the interval restarts either way, and nothing named the route — so «my agent is
+not being reminded» could not be told from «it is, by the route you forgot it
+had».
+
+The route is now recorded in the wake's state as `reminded_via`, written where
+the interval restarts and for the same reason: a reminder is handed to a
+delivery rather than confirmed by one, and counting a failed delivery as «not
+yet reminded» would pile the same paragraph onto every retry of a batch that is
+already failing.
+
+`collab remind now` makes one due immediately. It asks rather than delivering —
+it leaves a marker the daemon picks up on its next heartbeat, and the daemon
+decides which route carries it, so an agent holding both still gets exactly
+one. A marker rather than a wound-back interval because the daemon reads its
+state once, at construction, and holds it for its whole life. The request is
+spent when the reminder reaches a route, not when something asks whether one is
+due: that question is asked twice on the way to one delivery, and by two
+commands that only report.
+
 # Arming something unreviewed
 
 `collab wake set '<command>'` accepts any command, but one that is not a

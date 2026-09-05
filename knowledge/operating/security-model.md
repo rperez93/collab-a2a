@@ -136,6 +136,34 @@ model.[^security-doc]
 - **The local user.** collab runs commands you configure and reads files you
   own. It does not sandbox you from your own machine.
 
+# The diagnostic log
+
+Later than the pin, and off unless somebody turns it on. With `diagnostics` on,
+the daemon and the hub append events to `diagnostics/YYYY-MM-DD.jsonl` under
+the session directory, kept seven days and swept at every start and once a day
+after.
+
+It is written to be pasted into a public issue, which is the whole of its
+design. It records events and never content: no line of any message, no
+participant name, no invite or token, no URL with an address in it, and no path
+under the reader's home — those become `~/…`. An exception's text is dropped
+and its type and traceback are kept, because the text is where the addresses
+and the paths are. The rule is held at both ends: the callers pass
+classifications rather than free text, and the writer scrubs whatever reaches
+it anyway, control characters included, because the file is read with `cat` and
+pasted into a browser.
+
+Two places that costs something and is paid anyway. A dropped feed records the
+exception's TYPE and not its message, because an httpx error carries the URL it
+was talking to. A failed wake records the exit code and not the output, because
+a woken agent prints what it was woken about, which is the conversation.
+
+`collab issue draft` assembles it into a report and prints the `gh issue create`
+command that would post it. It never posts: partly because it is usually run by
+an agent, and opening an issue on somebody's repository is not a thing to do
+unasked, and mostly because a file built out of a machine's own records is one
+its owner should read before publishing.
+
 # On disk
 
 The state directory is `0700`, and the individually sensitive files are `0600`.

@@ -278,7 +278,17 @@ other agent keeps waiting in theirs.
 .venv/bin/collab file get f_71d13ac99020
 .venv/bin/collab stats --json     # who has quota left
 .venv/bin/collab discover         # agents on this machine
+.venv/bin/collab learn --list     # what this repo has already learnt
+.venv/bin/collab learn "the staging bucket needs the eu-west key"
 ```
+
+Read `collab learn --list` when you arrive: it is what earlier sessions in this
+checkout found out and said out loud, one line each, and it is the cheapest way
+not to rediscover something at your own expense. Use `collab learn` for a fact
+that outlives this session — a command that only works one way here, a service
+that wants a particular key. It goes to the room like any message and every
+agent's daemon also writes it into the repository. Anything you want answered
+now is still `collab send`.
 
 ## 5a. Reporting your own usage
 
@@ -474,6 +484,23 @@ on a free tunnel.
 
 `no active collab session` means you are in a different repo — state is stored
 per repository, in `<repo>/.collab/`.
+
+If your own context window is filling up and you cannot compact yourself, ask
+collab to type it for you — it needs the tmux wake armed against your pane:
+
+```bash
+.venv/bin/collab wake set --agent tmux    # from inside your own pane
+.venv/bin/collab context compact
+```
+
+If something in collab itself is misbehaving, turn on the local record,
+reproduce it, and write the report. It never posts anything; it prints the
+command that would, for the user to run:
+
+```bash
+.venv/bin/collab config diagnostics on
+.venv/bin/collab issue draft
+```
 
 If the other side says the link stopped working, their free tunnel probably
 expired and returned on a new address. The hub relaunches it automatically and

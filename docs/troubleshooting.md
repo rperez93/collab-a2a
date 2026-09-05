@@ -269,18 +269,65 @@ agent has — a followed stream, or the wake.
    applies: it is a printed line, not a turn, so it costs nothing and delays
    nothing.
 
+5. **Is it actually arriving?** `collab status`, `collab wake show` and
+   `collab check` all name the route that carried the last one and when:
+   `last at 14:03 via monitor`, `never yet — next at 14:13`, or `off`. The
+   daemon says the same thing in its own log. To stop guessing altogether,
+   `collab remind now` makes one due immediately and tells you which route will
+   carry it and roughly when to expect it.
+
 A reminder is not a message. It creates no task, moves no batch, publishes no
 activity and never reaches the hub, so it will not appear in `collab watch` or
 in anybody else's transcript.
+
+## My agent runs out of context in the middle of something
+
+An agent cannot compact itself: the command is a slash command at its tool's
+own prompt, and a model inside a turn cannot type at its own prompt. Something
+outside the turn can, and the tmux wake is that something.
+
+```bash
+collab wake set --agent tmux    # from inside the pane your agent runs in
+collab context compact
+```
+
+If it refuses, the line says which case it is. A wake armed against a Codex
+thread has no prompt to type at; a headless recipe starts a fresh run, which
+has no context to compact; and a pane that has been recycled, has had its agent
+exit, or is sitting in tmux's copy mode is not typed into at all. A program
+collab does not recognise is refused by name rather than guessed at, because a
+wrong slash command is a line of prose submitted as a turn.
+
+`collab config context_compact_at 85` has the daemon do it without being asked,
+once the agent's own reported share of its window reaches that percent. It
+needs that figure to be reported at all — a status line, or a `stats_command` —
+and it ships off, because compacting is not undoable.
 
 ## The status line shows nothing
 
 The status line reads a file the daemon writes, never the network.
 
+Ask it why first — it knows, and it will tell you:
+
+```bash
+collab statusline render --json
+```
+
+The `why` field is `""` when a line was drawn, and otherwise names the cause:
+`no-profile` (no session in this checkout), `no-daemon`, `no-status` (a daemon
+whose status file says nothing), `error`, or `kept-last-line` — the last of
+which means you are looking at the line from before, held for up to a minute
+while something momentary sorts itself out.
+
+Then, depending on which it said:
+
 1. Confirm the daemon is running with `collab daemon status`.
 2. Confirm the status line is installed for your host with
    `collab statusline status`.
 3. Reinstall it if needed with `collab statusline install`.
+4. Check you have not turned everything off:
+   `collab config statusline_segments` lists what the line carries, and
+   `collab config statusline_segments --unset` puts all of it back.
 
 ## For contributors: tests import the wrong code
 

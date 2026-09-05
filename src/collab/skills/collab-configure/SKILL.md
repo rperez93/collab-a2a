@@ -260,9 +260,15 @@ Three things worth knowing before you change any of it:
   (`collab listen --follow`) carries it as a line of its own for no turn at
   all; an agent that cannot hold one between turns gets it on the wake
   instead. With both, the daemon delivers one per interval and not two. With
-  neither, nothing arrives — if the user asks why the reminder is not coming,
-  run `collab check`: once a reminder is configured, it says exactly that and
-  names both routes.
+  neither, nothing arrives.
+- **You can find out rather than guess.** `collab check`, `collab status` and
+  `collab wake show` all name the route that will carry it and the route that
+  carried the last one, with the time: `last at 14:03 via monitor`,
+  `never yet — next at 14:13`, or `off`. With no route at all, `collab check`
+  says exactly that and names both. `collab remind now` makes one due
+  immediately, which is the fastest way to show a user that a change they just
+  made works — it asks the daemon rather than delivering, so an agent with both
+  routes still gets one.
 - **The role decides the text**, and the role is host or guest as the session
   assigned it — not the agent's name. Setting `remind_host` on a guest's
   machine changes nothing that machine will ever see.
@@ -281,9 +287,14 @@ loud — and an instruction to act would be acted on every time it arrived.
 These belong to the user, and changing them without being asked is changing
 what their session looks like to *other people*:
 
-- **Never turn `watch_status` off** to tidy the row. Turning it off hides the
-  scrolled-back notice, which is the reader's only sign that what they are
-  looking at is not live. Drop a segment instead.
+- **Never turn `watch_status` off** to tidy the row, and never drop `notice`
+  from `watch_status_segments`. Either hides the scrolled-back notice, which is
+  the reader's only sign that what they are looking at is not live. Drop one of
+  the other segments instead. `notice` is on the list so that somebody who
+  genuinely wants it gone can say so; it is not a piece to trim on their behalf.
+- **Never turn `diagnostics` on and leave it on.** It is for catching something
+  that is going wrong, and a log nobody asked for grows on the user's disk for
+  the life of every session. Turn it off once the report is written.
 - **Never turn `watch_status_roster` off** to buy the roster a line. It costs
   the roster nothing when there is nothing to say, and turning it off takes
   away the one place the shared batch and the session's message count are

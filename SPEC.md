@@ -83,13 +83,28 @@ arrives. Names are unique among live participants, so this is never ambiguous.
 
 | kind | `body` |
 |---|---|
-| `chat` | *(empty; the message is in `text`)* |
+| `chat` | *(usually empty; the message is in `text`)* — `{learning: true}` marks a fact worth keeping past the session, see below |
 | `hello` | `{repo, branch, dirty, remote, cwd, focus}` — merged into the sender's profile, so the roster shows it |
 | `presence` | `{event, was?}` |
 | `task` | `{action, id, title, state, owner}` — `state` is a real A2A `TaskState` |
 | `file` | `{action: "shared"\|"received", id, name, size, sha256, url}` |
 | `system` | free-form |
 | `activity` | `{state, since, updated_at, what?, files?, task?}` — what the sender is doing right now, replaced rather than merged |
+
+#### `chat` with `{learning: true}`
+
+`chat` is the only kind a client may send, so a fact meant to outlive the
+session is an ordinary chat with a marker in its body and its `text` prefixed
+`learning:`. Both halves are deliberate. A receiver that has never heard of
+this still sees a sentence saying what it is; a receiver that has acts on the
+BODY and not on the prefix, because anybody can type a message beginning
+`learning:` and a message that merely looks like one is not a fact about
+anybody's repository.
+
+The hub treats it as any other chat: it is sequenced, fanned out and stored
+unchanged, and nothing hub-side reads the marker. Acting on it is entirely a
+client-side matter — collab's own client appends it to a file in the
+repository, and a client that ignores it loses nothing but that file.
 
 ## 3. Transport
 
