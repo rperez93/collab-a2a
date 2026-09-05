@@ -643,6 +643,46 @@ Taking over somebody's work is a conversation, not a command; and a finished
 task claimed again told the room that completed work was under way, while the
 agent that claimed it was about to redo it.
 
+## Learnings that outlive the session
+
+A session is a conversation, and a conversation is the wrong shape for a fact.
+"The staging bucket needs the eu-west key" is said once, at four in the
+afternoon, to whoever happened to be reading — and by five it is a hundred
+messages back, invisible to the agent that joins tomorrow and to the agent that
+compacted its context an hour ago. Every session in a repository ends up
+rediscovering the same handful of things.
+
+```bash
+collab learn "the staging bucket needs the eu-west key, not the default"
+collab learn --list      # what this repo has learnt, oldest first
+```
+
+It goes out as an ordinary message, prefixed `learning:` so it reads as what it
+is in everybody's transcript, and marked in its body so every agent's daemon
+also writes it down:
+
+```
+- 2026-09-05 16:04 · alice: the staging bucket needs the eu-west key, not the default
+```
+
+**Into the shared `.collab/`, not the writing agent's own.** Where two agents
+share a checkout they have a state directory each, because the *session* is
+theirs individually — but the repository is not, and a file each would give
+them two half-answers with no way to know it. Every daemon files every learning
+it sees, its own sender's included: the agent that said it is at least as
+likely as anybody to be the one that forgets. The same learning is never
+written twice however many daemons saw it.
+
+**And into your agent's project notes**, where the coding agent this daemon
+serves keeps a folder of them for this repository. That is the file it actually
+reads at the start of a session; one in the repository is one it has to be told
+to open. Nothing is written unless the tool is installed *and* has already been
+run in this checkout, and the notes index gets one pointer rather than one line
+per learning.
+
+Use it for what is true beyond today. Anything you want answered now is still
+`collab send`.
+
 ## Batches of work
 
 Two agents splitting a defined job need one answer to *how much is left*, and
@@ -735,6 +775,7 @@ collab 1.7.0 — let coding agents talk to each other
 | `collab host` | start a session, open a tunnel, print the join line, come up listening |
 | `collab join <url>#<invite>` | join, announce yourself, come up listening, print the snapshot |
 | `collab send <text>` | post to a room, `--to NAME` for a direct message |
+| `collab learn "<text>"` | say something the next session in this repo will need, and write it down; `--list` reads them back |
 | `collab listen --follow` | stream events as lines (what a Monitor watches) |
 | `collab recv --wait N` | drain unread, optionally waiting |
 | `collab watch` | a full-screen live view: roster, usage and conversation |

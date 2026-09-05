@@ -1098,6 +1098,71 @@ def cmd_send(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_learn(args: argparse.Namespace) -> int:
+    """Say something the next agent in this repository will need to know.
+
+    A session is a conversation, and a conversation is the wrong shape for a
+    fact: said once, at four in the afternoon, to whoever happened to be
+    reading, and then a hundred messages back. This says it AND writes it down,
+    in the shared state directory where every agent in the checkout can find
+    it and where a fresh session starts by reading it.
+
+    It goes out as an ordinary chat, marked in the body. Nothing else is a kind
+    a client may send, and it should not be: a participant whose client knows
+    nothing about any of this still sees the sentence, prefixed with what it
+    is.
+    """
+    from . import learnings
+
+    if args.list:
+        # A READ, so `_require_profile` and not `_require_own_profile`: asking
+        # what this repository has learnt is not acting as anybody.
+        profile = _require_profile(args)
+        found = learnings.read(profile.home)
+        if args.json:
+            print(learnings.as_json(profile.home))
+            return 0
+        if not found:
+            print(dim(f"nothing learnt here yet — {Path(sys.argv[0]).name}"
+                      ' learn "<what you found out>"'))
+            return 0
+        heading(f"learnt in this repository ({len(found)})")
+        for line in found:
+            print(f"  {scrub(line)}")
+        print()
+        print(dim(f"  {learnings.path_for(profile.home)}"))
+        return 0
+
+    profile = _require_own_profile(args)
+    text = " ".join(args.text).strip()
+    if not text:
+        fail("say what you learnt: collab learn \"<what you found out>\"")
+        print(dim("  or collab learn --list to read what this repo already"
+                  " knows"))
+        return 1
+    env = Envelope(
+        kind=KIND_CHAT,
+        # The prefix is for the human and the other agents' transcripts; the
+        # body is what any daemon actually decides on. Both, because either
+        # alone is a half-feature: a body nobody can see, or a prefix anybody
+        # can type by accident.
+        text=f"{learnings.PREFIX} {text}",
+        sender=profile.name, room=args.room or profile.room,
+        body={learnings.MARKER: True},
+        stats=_current_stats(profile),
+    )
+    try:
+        with _client(profile) as client:
+            client.send(env)
+    except HubError as exc:
+        fail(str(exc))
+        return 1
+    ok(f"learnt: {scrub(text)}")
+    print(dim("  said in the room, and every agent's daemon writes it into"))
+    print(dim(f"  {learnings.path_for(profile.home)}"))
+    return 0
+
+
 def cmd_listen(args: argparse.Namespace) -> int:
     """Stream events as lines.  This is what a Monitor watches."""
     profile = _require_profile(args)
@@ -4506,6 +4571,18 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--thread", help="thread id to reply in")
     add_session_flag(s)
     s.set_defaults(func=cmd_send)
+
+    ln = sub.add_parser("learn",
+                        help="say something the next agent in this repo will"
+                             " need, and write it down where they will find it")
+    ln.add_argument("text", nargs="*", help="what you found out, in one line")
+    ln.add_argument("--list", action="store_true",
+                    help="print what this repo has learnt, instead of adding to it")
+    ln.add_argument("--room", help="room to say it in (default: your current room)")
+    ln.add_argument("--json", action="store_true",
+                    help="with --list, emit raw JSON")
+    add_session_flag(ln)
+    ln.set_defaults(func=cmd_learn)
 
     l = sub.add_parser("listen", help="stream events as lines (arm a Monitor on this)")
     l.add_argument("--follow", "-f", action="store_true", help="keep streaming as events arrive")

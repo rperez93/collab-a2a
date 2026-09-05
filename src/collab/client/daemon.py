@@ -1216,6 +1216,31 @@ class Daemon:
             if batch is not None:
                 await self._wake_is_broken(tail)
 
+    def _file_any_learning(self, env: Envelope) -> None:
+        """Write down a learning that came past, including one we sent.
+
+        OUR OWN TOO. The sender is at least as likely as anybody to be the one
+        that forgets: it compacts its context an hour later and the thing it
+        found out is gone, while the file in the repository is not. Every
+        daemon files every learning it sees, and the claim in
+        `learnings.record` is what keeps two agents in one checkout from
+        writing the same one twice.
+
+        Never raises. This runs inside the feed loop, where an exception is a
+        dropped connection and a reconnect, and a learning is not worth that.
+        """
+        try:
+            from .. import learnings
+
+            written = learnings.record(self.profile.home, env,
+                                       session_id=self.profile.session_id)
+        except Exception as exc:                              # noqa: BLE001
+            logger.warning("could not write down a learning (%r)", exc)
+            return
+        if written:
+            logger.info("wrote a learning down in %s",
+                        learnings.path_for(self.profile.home))
+
     def _log_wake(self, outcome: str, why: str, batch: wake.Batch | None,
                   reminder: str) -> None:
         """One `wake_attempt` record, with nothing in it anybody said.
@@ -1749,6 +1774,7 @@ class Daemon:
                     logger.warning("skipping unparseable event")
                     continue
                 if self.inbox.record(env):
+                    self._file_any_learning(env)
                     self.waker.note(env, own_name=self.profile.name)
                     await self.bridge.broadcast(env)
                     if env.kind in REFRESHES_THE_SNAPSHOT:
