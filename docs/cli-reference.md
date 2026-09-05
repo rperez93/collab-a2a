@@ -426,6 +426,15 @@ report, the route gone quiet, or the listener not carrying a fresh file. It
 says nothing when no route was ever set up. `collab stats` prints the same
 reason under your own row.
 
+The `count` check appears when the daemon is live and the message count on the
+roster row has stopped being refreshed — it says how old that count is and that
+the daemon has not refreshed the snapshot. The viewer already marks the count
+with its age where it is drawn; this is the same fact said where it names the
+process responsible. It stays quiet while the daemon is down, because the
+`listener` check has already said so, and while no count has arrived yet,
+because a daemon waiting for its first snapshot is starting up rather than
+stuck.
+
 The `reminder` check appears only when you have configured a standing reminder
 and neither route can carry it — nothing following the stream and no wake armed
 — which is the one state in which that setting is present, correct and certain
