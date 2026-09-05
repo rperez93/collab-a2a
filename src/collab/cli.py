@@ -2297,6 +2297,34 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
     else:
         add("listener", CHECK_OK, f"connected as {profile.name}")
 
+    # 1b. Is the figure the roster row shows everybody actually current?
+    #
+    #     The count on that row is the hub's own count of the whole log, copied
+    #     out on the snapshot — the one number on screen that claims to be the
+    #     same for every participant. When the snapshot stops being refreshed
+    #     it freezes, and a frozen count looks exactly like a quiet room.
+    #     `statusbar.messages_segment` marks it with its age where it is drawn,
+    #     which the person watching can see and cannot act on; this is the same
+    #     fact said where it names the process responsible.
+    #
+    #     ONLY WHILE THE DAEMON IS LIVE. A daemon that is reconnecting, or not
+    #     running at all, has already been reported two lines above, and saying
+    #     it twice in different words invites somebody to go looking for a
+    #     second fault. And only when there is a count at all: a daemon that
+    #     has not yet had its first snapshot is starting up, not stuck.
+    counted = status.get("messages")
+    if state == "live" and isinstance(counted, dict) \
+            and batch_progress.is_stale(counted):
+        how_old = batch_progress.age(counted)
+        add("count", CHECK_WARN,
+            (f"the message count on the roster row is {how_old} old"
+             if how_old else
+             "the message count on the roster row is not stamped with when it"
+             " was counted")
+            + " — the daemon has not refreshed the snapshot",
+            f"{exe} status says whether the hub is still answering; if it is,"
+            f" {exe} daemon stop && {exe} daemon start")
+
     # 2. Is anything READING what arrives?
     armed = len(watchers(profile)) + int(status.get("ws_clients") or 0)
     since_poll = time.time() - last_poll(profile)

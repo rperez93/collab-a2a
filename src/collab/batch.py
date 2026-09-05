@@ -215,7 +215,16 @@ def is_stale(figures: Any, *, now: float | None = None) -> bool:
         # start, which left the two functions disagreeing about what a negative
         # gap means. An age we cannot compute is an age we cannot vouch for.
         return True
-    return gap > STALE_AFTER
+    # AT THE THRESHOLD IT IS ALREADY STALE, not one moment later. `>` left a
+    # single instant in which a figure exactly `STALE_AFTER` old was drawn
+    # plainly, and the whole point of the window is that past it the figure may
+    # no longer be true. Where the two readings differ by one instant, the one
+    # that draws a possibly-wrong number is not the one to keep: this is the
+    # only figure on screen that claims to speak for everybody, and a wrong
+    # shared figure is worse than an unknown one. It is a boundary nobody will
+    # ever land on by hand, which is exactly why it should be settled here
+    # rather than left to whoever next reads the comparison and wonders.
+    return gap >= STALE_AFTER
 
 
 def age(figures: Any, *, now: float | None = None) -> str:
