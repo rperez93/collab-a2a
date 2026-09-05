@@ -371,6 +371,16 @@ collab wake [--to KIND] [--expect-command NAME] [--expect-pid PID]
 | `--json` | Emit raw JSON. |
 | `--session SESSION` | Act on this session id instead of the current one. |
 
+`collab wake show`, and `collab wake` with no action, print what is armed and
+then **the three clocks it runs on**: `settle`, `min gap` and `timeout`, the
+retry pause with however much of it is left, when a delivery was last attempted
+and when one last arrived, the reason `due` gives right now, and the standing
+reminder's own interval with the last one's time and route and the next one's
+time. `collab status` carries the last two of those in two lines. Neither
+command starts the reminder's interval by being read, so an agent polling
+either on a loop does not push its own reminder over the horizon. See
+[When the wake fires](concepts.md#when-the-wake-fires).
+
 The wake is one of the two routes for the **standing reminder**: with nothing
 unread, the daemon spends a turn every `remind_every` minutes putting the
 standing instructions back in front of its own agent. It has no flags of its

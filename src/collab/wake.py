@@ -53,7 +53,7 @@ from typing import Any, Callable, Iterable, Sequence
 _WRITES = itertools.count()
 
 from .config import reminder_settings
-from .protocol import Envelope, scrub_block
+from .protocol import Envelope, scrub, scrub_block
 
 #: Kinds worth a turn. Presence, hello and the roster churn behind them are
 #: bookkeeping — waking an agent to be told that somebody's name is now shown in
@@ -973,13 +973,22 @@ class Waker:
 
     # --- deciding --------------------------------------------------------------
 
-    def due(self, config: WakeConfig | None = None) -> tuple[bool, str]:
+    def due(self, config: WakeConfig | None = None, *,
+            start_clock: bool = True) -> tuple[bool, str]:
         """Is a turn owed right now — and if not, why not?
 
         The reason comes back rather than being logged and lost: «why did
         nothing wake» is the only question anyone ever asks of this, and
         answering it from status output beats answering it from a log file that
         may not have been kept.
+
+        `start_clock=False` makes the whole question READ-ONLY, and it exists
+        because `collab wake show` and `collab status` now ask it. The one
+        write hiding in here is `reminder_due` starting the reminder's interval
+        the first time it is asked; a command printing the state would then
+        have started a clock by looking at it, and an agent that ran `collab
+        status` on a loop would have pushed its own reminder over the horizon
+        every time.
         """
         config = config or self.config()
         if not config.enabled:
@@ -1020,7 +1029,7 @@ class Waker:
             # can keep an agent working on the agent's behalf, so gating on it
             # would mean a `collab watch` pane left open all afternoon quietly
             # turned the reminder off.
-            if self.reminder_due():
+            if self.reminder_due(start=start_clock):
                 return True, "a reminder is due"
             return False, "nothing unread"
         # CHECKED FOR THE RETRY TOO, which it was not. The gate sat below the
@@ -1109,7 +1118,7 @@ class Waker:
         """
         return reminder_settings(self.is_host)
 
-    def reminder_due(self) -> bool:
+    def reminder_due(self, *, start: bool = True) -> bool:
         """Is the reminder owed — and start its clock if it has none yet.
 
         The clock starts at the first ASK rather than at the first delivery,
@@ -1126,9 +1135,70 @@ class Waker:
         now = self.now()
         last = self._state["reminded_at"]
         if not last:
-            self._set(reminded_at=now)
+            # `start=False` is a reader asking, and a reader must not start
+            # anything. Answering «not due» without writing is the truth from
+            # its point of view too: nothing has been sent and nothing is owed
+            # until the daemon itself asks.
+            if start:
+                self._set(reminded_at=now)
             return False
         return (now - last) >= every * 60
+
+    def next_reminder_at(self) -> float:
+        """When the next reminder falls due, or 0 when there will not be one.
+
+        0 for «off» AND for «the clock has not started», which are different
+        facts and are told apart by the caller from `reminder()["every"]`. They
+        are one value here because neither of them is a time, and inventing one
+        — «now», or one interval from now — would be a prediction printed as a
+        reading.
+        """
+        every = self.reminder()["every"]
+        last = self._state["reminded_at"]
+        return (last + every * 60) if (every > 0 and last) else 0.0
+
+    def explain(self, config: WakeConfig | None = None) -> dict[str, Any]:
+        """Every clock this thing runs on, for something that prints them.
+
+        READ-ONLY, which is the whole reason it is a method rather than four
+        attribute reads at the caller: `due` starts the reminder's interval the
+        first time it is asked, and a command that printed the wake's state
+        would have changed it by printing it.
+
+        The three clocks are separate facts and are returned separately: the
+        burst window before a first turn, the gap between message turns, and
+        the backoff after a failure. Somebody asking «why has nothing woken»
+        gets a different answer from each, and a single «not yet» would send
+        them looking in the wrong one.
+        """
+        config = config or self.config()
+        now = self.now()
+        waited = now - self.failed_at
+        remind = self.reminder()
+        due, why = self.due(config, start_clock=False)
+        return {
+            "armed": config.enabled,
+            "settle": config.settle,
+            "min_gap": config.min_gap,
+            "timeout": config.timeout,
+            "retry_pause": self.retry_pause,
+            # How much of the backoff is LEFT, and 0 when none is running. The
+            # pause itself grows with the failures, so the length alone does
+            # not say whether anything is being held right now.
+            "backing_off_for": (max(0.0, self.retry_pause - waited)
+                                if self.failed_at else 0.0),
+            "failures": self.failures,
+            "last_attempt": self.last_attempt,
+            "last_delivery": self.last_delivery,
+            "due": due,
+            "why": why,
+            "reminder": {
+                "every": remind["every"],
+                "last_at": self._state["reminded_at"],
+                "via": self.reminded_via,
+                "next_at": self.next_reminder_at(),
+            },
+        }
 
     @property
     def reminder_drop(self) -> Path:
@@ -1382,6 +1452,14 @@ class Waker:
         "reminded_at": 0.0,     # when the standing reminder last went out
     }
 
+    #: The state that is NOT a number, kept apart because everything above is
+    #: read through `float()` and a string put in that list would be replaced
+    #: by its default on every load — silently, and only in the file, which is
+    #: the shape of bug this whole loader exists to refuse.
+    _STATE_TEXT = {
+        "reminded_via": "",     # which route carried the last reminder
+    }
+
     def _load_state(self) -> dict[str, float]:
         """Read the throttle, and fail CLOSED when it cannot be read.
 
@@ -1399,7 +1477,7 @@ class Waker:
         comparison against NaN is False, so the backoff simply falls through.
         """
         path = self.home / "state.json"
-        defaults = dict(self._STATE_FIELDS)
+        defaults: dict[str, Any] = {**self._STATE_FIELDS, **self._STATE_TEXT}
         try:
             raw = path.read_text()
         except OSError:
@@ -1414,9 +1492,15 @@ class Waker:
             now = self.now()
             return {**defaults, "attempted_at": now, "messaged_at": now,
                     "failed_at": now}
-        out = {}
+        out: dict[str, Any] = {}
+        for name, blank in self._STATE_TEXT.items():
+            value = stored.get(name, blank)
+            # Clipped and scrubbed on the way IN. It is written by us, but the
+            # file is on disk and a hand-edited one reaches a terminal through
+            # `collab wake show` like anything else here.
+            out[name] = scrub(str(value))[:40] if isinstance(value, str) else blank
         damaged = False
-        for name, default in defaults.items():
+        for name, default in self._STATE_FIELDS.items():
             try:
                 value = float(stored.get(name, default))
             except (TypeError, ValueError):
@@ -1458,6 +1542,17 @@ class Waker:
     @property
     def failures(self) -> int:
         return int(self._state["failures"])
+
+    @property
+    def reminded_via(self) -> str:
+        """Which route carried the last reminder, or '' for «not yet known».
+
+        Empty is a real answer and not a missing one: a state file written
+        before this was recorded knows a reminder went out and does not know
+        how, and «monitor» guessed there would be a reading invented to fill
+        the sentence.
+        """
+        return str(self._state.get("reminded_via") or "")
 
     @property
     def last_attempt(self) -> float:
