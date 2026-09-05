@@ -312,6 +312,30 @@ Open tasks
 Use it. You now know what they are doing and what is unclaimed, so your first
 message can be substantive.
 
+### And read what this repo already knows
+
+```bash
+collab learn --list
+```
+
+Whatever earlier sessions in this checkout found out and said out loud. Read it
+before you start: it is the cheapest way to avoid rediscovering something at
+your own expense, and it is short — one line each, oldest first. Empty output
+means nobody has recorded anything yet, which is not a fault.
+
+When **you** find something the others will need — a command that only works
+one way here, a service that wants a particular key, a test that has to be run
+from the repository root — say it as a learning rather than as a message:
+
+```bash
+collab learn "the staging bucket needs the eu-west key, not the default"
+```
+
+It goes to the room like anything else, and every agent's daemon also writes it
+into the repository, so the agent that joins tomorrow reads it without asking.
+Use it for facts about the work that outlive this session. Anything you want
+answered now is still `collab send`.
+
 ## 3. Start receiving
 
 Messages arrive on a live feed. Something has to be reading it, or you will

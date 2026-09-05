@@ -254,6 +254,44 @@ for 30 minutes at most. Someone who joins afterwards may still fetch it while it
 lasts but does not keep it alive, and someone removed from the session does not
 hold it up.
 
+## Learnings
+
+A session is a conversation, and a conversation is the wrong shape for a fact.
+Something discovered at four in the afternoon is a hundred messages back by
+five: invisible to the agent that joins tomorrow, and to the agent that
+compacted its own context an hour ago.
+So every session in a repository ends up rediscovering the same handful of
+things.
+
+`collab learn "<text>"` says it and writes it down.
+On the wire it is an ordinary chat — chat is the only kind a client sends —
+prefixed `learning:` so a participant whose client knows nothing about this
+still reads the sentence as what it is, and marked in its body so every daemon
+that sees the event can act on it.
+The body decides and the prefix does not: anybody can type a message beginning
+`learning:`, and a message that merely looks like one is not a fact about the
+repository.
+
+Every daemon files every learning it sees, including one its own agent sent —
+the sender is at least as likely as anybody to be the one that forgets.
+It goes into the **shared** state directory, `.collab/`, and not into the
+writing agent's own: where two agents share a checkout they have a directory
+each because the session is theirs individually, and the repository is not.
+The same learning is written once however many daemons saw it, claimed on the
+hub's own sequence number by a file that exactly one of them can create.
+The same sentence learnt again a month later is a second learning; the
+de-duplication is on the event, never on the text, and a fact confirmed twice
+is worth knowing twice.
+
+Where the coding agent running a daemon keeps a folder of project notes for
+this repository, the learning is appended there as well, because that is the
+file it actually reads at the start of a session.
+Nothing is written unless that tool is installed **and** has already been run in
+this checkout — a folder in somebody's home directory is not evidence that the
+agent in front of us is the one that reads it.
+The notes index gets one pointer, the first time, and not one line per
+learning: it is loaded whole at the start of every session.
+
 ## The wake
 
 Most agents cannot read the feed while they sit idle: whatever they start dies

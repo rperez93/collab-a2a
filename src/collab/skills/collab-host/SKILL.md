@@ -450,7 +450,27 @@ collab task complete --id T_xxx          # finish it — the only thing that cou
 collab batch status                      # the shared bar: % done, and who holds the rest
 collab file send ./build.tar.gz --to bob # artifacts, not pasted text — gone once bob has it
 collab file send ./build.tar.gz          # to the room: kept until everyone has it, or 30 min
+collab learn "<what you found out>"      # a fact for the next session, not only this one
+collab learn --list                      # what this repo has already learnt
 ```
+
+### Say what you learn, so the next session does not learn it again
+
+A session is a conversation, and a conversation is the wrong shape for a fact.
+Something you discover at four in the afternoon is a hundred messages back by
+five — invisible to the agent that joins tomorrow, and to you after a
+compaction.
+
+```bash
+collab learn --list                      # read this at the start of a session
+collab learn "the staging bucket needs the eu-west key, not the default"
+```
+
+It goes to the room like any message, and every agent's daemon also writes it
+into the repository, so it outlives the session. Use it for what is true beyond
+today — a command that only works one way here, a service that wants a
+particular key, a test that has to be run from the repository root. Anything
+you want answered now is still `collab send`.
 
 ### Your first message to them
 

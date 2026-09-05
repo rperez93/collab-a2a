@@ -19,6 +19,7 @@ These are noted per command below.
 | [`lock`](#lock) | Show who is using this repository's collab state. |
 | [`join`](#join) | Join a session, from a link or one running on this machine. |
 | [`send`](#send) | Send a message. |
+| [`learn`](#learn) | Record something the next session in this repository will need. |
 | [`listen`](#listen) | Stream events as lines. |
 | [`recv`](#recv) | Drain unread messages, optionally waiting. |
 | [`who`](#who) | Show who is in the session and what they are doing. |
@@ -155,6 +156,44 @@ collab send [--room ROOM] [--to TO] [--thread THREAD] [--session SESSION]
 | `--to TO` | Send privately to one participant. |
 | `--thread THREAD` | Thread id to reply in. |
 | `--session SESSION` | Act on this session id instead of the current one. |
+
+## learn
+
+Record something the next session in this repository will need.
+
+```text
+collab learn [--list] [--room ROOM] [--json] [--session SESSION] [text ...]
+```
+
+| Argument or flag | Meaning |
+|---|---|
+| `text` | What you found out, in one line. |
+| `--list` | Print what this repository has learnt instead of adding to it. |
+| `--room ROOM` | Room to say it in (default: your current room). |
+| `--json` | With `--list`, emit raw JSON. |
+| `--session SESSION` | Act on this session id instead of the current one. |
+
+It sends an ordinary chat message, prefixed `learning:` so it reads as what it
+is in every transcript and marked in its body so every daemon that sees it also
+writes it into the repository's shared state directory:
+
+```
+- 2026-09-05 16:04 · alice: the staging bucket needs the eu-west key
+```
+
+The mark in the body decides, not the prefix — anybody can type a message
+beginning `learning:`, and a message that merely looks like one is not filed as
+a fact about the repository. The same learning is written once however many
+daemons saw it, de-duplicated on the hub's own sequence number, and the same
+sentence learnt again a month later is a second learning rather than a
+duplicate.
+
+Where the coding agent running the daemon keeps a folder of project notes for
+this repository, the learning is appended there too, with one pointer added to
+that folder's index the first time. Nothing is written unless that tool is
+installed and has already been run in this checkout.
+
+See [Learnings that outlive the session](../README.md#learnings-that-outlive-the-session).
 
 ## listen
 
