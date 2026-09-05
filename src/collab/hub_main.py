@@ -15,7 +15,7 @@ from pathlib import Path
 
 import uvicorn
 
-from . import peers
+from . import __version__, diagnostics, peers
 from .server.app import create_app
 from .server.session import HubConfig
 from .server.store import Store
@@ -63,6 +63,12 @@ class RegistryHeartbeat:
     def _loop(self) -> None:
         while not self._stop.is_set():
             self.beat()
+            # The hub has no heartbeat of its own — uvicorn owns the main
+            # thread — so the one loop it does have carries the housekeeping.
+            # Both of these rate-limit themselves, so a thirty-second beat does
+            # not mean a sample every thirty seconds.
+            diagnostics.sample_memory()
+            diagnostics.sweep()
             self._stop.wait(self.interval)
 
     def start(self) -> None:
@@ -94,6 +100,14 @@ def main() -> int:
         return 1
 
     cfg.pid = os.getpid()
+    # The SAME directory the daemon writes into, and one file per day shared
+    # between them — a fault is nearly always a conversation between the two
+    # processes, and two files would have to be interleaved by hand before
+    # anybody could read it as one.
+    diagnostics.begin(cfg.dir, "hub")
+    diagnostics.sweep(force=True)
+    diagnostics.log("start", version=__version__, tunnel=bool(
+        os.environ.get("COLLAB_NO_TUNNEL") != "1"))
 
     supervisor = None
     if os.environ.get("COLLAB_NO_TUNNEL") != "1":
@@ -142,11 +156,23 @@ def main() -> int:
     registry.start()
     try:
         uvicorn.run(app, host=cfg.bind, port=cfg.port, log_level="warning", access_log=False)
+    except BaseException as exc:            # noqa: BLE001
+        # Re-raised immediately: this changes nothing about how the hub dies,
+        # it only leaves a line saying that it died rather than was stopped.
+        # From outside, a hub that crashed and a hub somebody killed look
+        # identical — a gone process and a session nobody can join.
+        import traceback
+
+        diagnostics.log("crash", where="hub", kind=type(exc).__name__,
+                        traceback=[line.strip() for line
+                                   in traceback.format_tb(exc.__traceback__)[-6:]])
+        raise
     finally:
         registry.stop()
         if supervisor is not None:
             supervisor.stop()
         store.close()
+        diagnostics.log("stop")
     return 0
 
 

@@ -845,6 +845,30 @@ def save_reminder(*, every: int | None = None, host: str | None = None,
     return reminder_settings()
 
 
+#: OFF, because a log nobody asked for is a file that grows on somebody's disk
+#: to answer a question they may never ask. See `collab.diagnostics` for what it
+#: does and does not record.
+DIAGNOSTICS_DEFAULT = False
+
+
+def diagnostics_enabled() -> bool:
+    """Whether the daemon and the hub keep a record of what they did.
+
+    Read live — `load_config` caches on the file's stamp — so turning it on
+    reaches the daemon and hub already running, which is the whole point: the
+    session you want a record of is the one that is already misbehaving.
+    """
+    value = load_config().get("diagnostics")
+    return DIAGNOSTICS_DEFAULT if value is None else bool(value)
+
+
+def set_diagnostics(on: bool) -> bool:
+    cfg = load_config()
+    cfg["diagnostics"] = bool(on)
+    save_config(cfg)
+    return diagnostics_enabled()
+
+
 #: OFF, and the reason it ships off is that the act is not undoable. Compacting
 #: a session replaces everything the agent was holding with a summary of it,
 #: and a summary is lossy by construction — a threshold nobody chose, firing in
@@ -1401,6 +1425,16 @@ def settings() -> tuple[Setting, ...]:
                 CONTEXT_COMPACT_OFF, _compact_at,
                 context_compact_at,
                 lambda v: set_context_compact_at(v)),
+        # WITH THEM, for the same reason they are with each other: this is the
+        # third thing the daemon does on its own, and the one that writes a
+        # file. Somebody asking «what does collab record about me» should find
+        # it beside the two acts it records.
+        Setting("diagnostics",
+                "keep a local record of what your daemon and hub did — events"
+                " only, never message text, names or addresses",
+                DIAGNOSTICS_DEFAULT, _as_bool,
+                diagnostics_enabled,
+                lambda v: set_diagnostics(v)),
         Setting("watch_layout", "how `collab watch` arranges its two panes",
                 DEFAULT_WATCH_LAYOUT, _one_of(WATCH_LAYOUTS),
                 lambda: watch_settings()["layout"],

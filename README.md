@@ -757,6 +757,7 @@ collab 1.7.0 — let coding agents talk to each other
 | `collab check [--json]` | run on a loop: silent when all is well, says what to fix when it is not |
 | `collab wake show\|set\|off\|agents` | be woken by the daemon, for agents that cannot hold a watcher |
 | `collab context compact\|clear` | compact or clear this agent's own context window, through the pane its wake is armed on |
+| `collab issue draft` | write a bug report from this machine's own records, and print the command that would post it |
 | `collab status [--json]` | connection state, Monitor wiring, state paths |
 | `collab url [--rotate]` | reprint the join line, or `--rotate` to retire it and mint a new one without ending the session (host) |
 | `collab kick <name>` | remove one participant (host) |
@@ -1703,6 +1704,45 @@ A session URL is public once tunnelled. The token is what protects it — treat
 the join line like a password, and `collab kick` anyone who should no longer
 have it.
 
+### Diagnostics
+
+Everything else collab prints is about the present: `status.json` says what is
+true now, `collab check` says what is wrong now. So the one question a bug
+report is made of — what was happening an hour ago — had no answer, and the
+report that arrived was "it stopped working".
+
+```bash
+collab config diagnostics on     # off by default
+# reproduce the problem, then:
+collab issue draft
+```
+
+With it on, the daemon and the hub append to `diagnostics/YYYY-MM-DD.jsonl`
+under the session directory: one JSON object per line, carrying the time, which
+process wrote it, the event, and a few small classified fields. The events are
+starts, stops, crashes with a traceback, feed drops and reconnects, wake
+attempts with their outcome, reminders with the route that carried them, memory
+samples every five minutes, and context compactions.
+
+**What it never records**: a line of any message, a participant's name, an
+invite or a token, a URL with an address in it, or a path under your home
+directory — those become `~/…`. Exception text is dropped and the exception's
+type and traceback are kept, because the text is where the addresses and paths
+are and the traceback is what locates the bug. The rule is kept at both ends:
+what the code passes is classifications rather than text, and the writer scrubs
+whatever arrives anyway.
+
+**It keeps seven days.** Files older than that are deleted when a daemon or hub
+starts, and once a day after that for a session that stays open.
+
+`collab issue draft` turns all of it into a markdown file — versions, platform,
+uptime, whether a wake is armed and which recipe (never its target), memory
+min/max/last per process, a count of each event, and the last 200 records — and
+then prints the `gh issue create` command that would post it. **It never posts
+anything.** Read the file before you do: it is assembled from your own machine's
+records, and no amount of scrubbing entitles anybody to publish it unseen. With
+diagnostics off it still writes the header and tells you how to capture a log.
+
 ## Settings
 
 Two kinds of state, deliberately split: **who you are and how you like things**
@@ -1739,6 +1779,7 @@ collab config --json              # the same table, for an agent to read
 | `remind_host` | what that reminder says when you are the host; empty for the shipped one | — | none |
 | `remind_guest` | what it says when you are a guest; empty for the shipped one | — | none |
 | `context_compact_at` | compact your agent's context when its own reported share of the window reaches this percent; `0` never does | — | `0` |
+| `diagnostics` | keep a local record of what your daemon and hub did — events only | — | `off` |
 | `watch_status` | show the viewer's bottom status row | — | `on` |
 | `watch_status_segments` | what that row carries, in order | — | `stats,command,keys` |
 | `watch_status_command` | a command of your own for that row | — | none |

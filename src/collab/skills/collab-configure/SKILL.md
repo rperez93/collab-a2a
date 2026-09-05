@@ -66,6 +66,7 @@ the project. A session belongs to a repository; a theme does not.
 | `remind_host` | what that reminder says when this agent is the host | they want their own words for it |
 | `remind_guest` | what it says when this agent is a guest | as above; empty means the shipped one |
 | `context_compact_at` | compact this agent's context when its own reported share of the window reaches this percent; `0` never does | they say their agent keeps running out of context mid-task — **and** the tmux wake is armed |
+| `diagnostics` | keep a local record of what the daemon and hub did — events only, never message text, names or addresses | they are reporting a bug, or something intermittent needs catching; turn it back off afterwards |
 | `watch_layout` | `split`, `tmux`, `chat` or `roster` | they want tmux to own the panes |
 | `watch_roster_size` | the roster's share of the window, in percent | the roster is too small to read |
 | `watch_roster_position` | `top`, `bottom`, `left` or `right` | they ask for it beside rather than above |
@@ -194,6 +195,29 @@ Say what it costs before turning it on. Compaction is **not undoable**: it
 replaces what the agent was holding with a summary, so a threshold set too low
 throws away reasoning the user was relying on. If they only want it once, now,
 that is `collab context compact` and no setting at all.
+
+## When something is broken and needs reporting
+
+`diagnostics` turns on a local record of what the daemon and the hub did — a
+JSONL file per day under the session directory, kept seven days, deleted on its
+own. It records **events only**: starts, stops, crashes with a traceback, feed
+drops and reconnects, wake attempts with their outcome, reminders with their
+route, memory samples, compactions. Never a line of a message, never a
+participant's name, never an invite or a token, never a URL with an address in
+it, and no path under the user's home directory.
+
+Turn it on, reproduce the problem, then:
+
+```bash
+collab config diagnostics on
+collab issue draft
+```
+
+`collab issue draft` writes a markdown file and prints the `gh issue create`
+command that would post it. **It never posts anything.** Tell the user to read
+the file before posting it: it is assembled from their own machine's records,
+and nothing collab does entitles anybody to publish it unseen. Offer to turn
+the setting back off afterwards.
 
 ## The standing reminder
 

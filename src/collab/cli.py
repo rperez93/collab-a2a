@@ -4076,6 +4076,164 @@ def cmd_context(args: argparse.Namespace) -> int:
     return 0
 
 
+#: Where a report goes. Named here rather than built into the command's output
+#: so that a fork changing it changes it once.
+ISSUE_REPO = "rperez93/collab-a2a"
+
+#: How much of the log a report carries. Enough to hold a fault and its lead-up
+#: — a wake failing every two minutes shows up inside ten — and few enough that
+#: the issue is still readable in a browser.
+ISSUE_LINES = 200
+
+
+def _issue_header(profile: SessionProfile) -> list[str]:
+    """The facts that are true whether or not anything was being recorded.
+
+    Every one of them is something a maintainer asks for in the first reply —
+    which version, which Python, which platform, how long it had been up, and
+    whether a wake was involved — and every one is a round trip if it is not
+    here. The wake's RECIPE is named and its target is not: the target is a
+    Codex thread id or a tmux pane, and neither belongs in a public issue.
+    """
+    import platform
+
+    status = read_status(profile)
+    paths = DaemonPaths(profile.dir)
+    pid = is_running(profile)
+    try:
+        _pid, began = exclusive.parse(paths.pid.read_text())
+    except OSError:
+        began = 0.0
+    config = wake.read_config(paths.root)
+    if not config.enabled:
+        armed = "not armed"
+    else:
+        named = wake.recipe_of(config.command)
+        armed = f"armed, {named} recipe" if named else "armed, a command of your own"
+    every = reminder_settings(bool(profile.is_host))["every"]
+    uptime = (f", up {_ago_seconds(time.time() - began)}"
+              if began and pid else "")
+    return [
+        "## Versions",
+        "",
+        f"- collab `{__version__}`",
+        f"- hub `{status.get('hub_version') or 'unknown'}`",
+        f"- python `{platform.python_version()}`",
+        f"- platform `{platform.system()} {platform.release()}`",
+        "",
+        "## This session",
+        "",
+        f"- role: {'host' if profile.is_host else 'guest'}",
+        f"- daemon: {'running' if pid else 'not running'}{uptime}",
+        f"- state: {daemon_state(status, running=pid is not None)}",
+        f"- wake: {armed}",
+        f"- reminder: {f'every {every} min' if every else 'off'}",
+        f"- context compaction: {_shown_threshold()}",
+    ]
+
+
+def _shown_threshold() -> str:
+    from .config import context_compact_at
+
+    at = context_compact_at()
+    return f"at {at}%" if at else "off"
+
+
+def _issue_body(profile: SessionProfile) -> str:
+    """The whole report, as markdown.
+
+    Header first and always, because the header alone is a usable bug report
+    and the log is the part that may not exist. Somebody who has just hit a
+    fault has not had diagnostics on for the week before it; telling them to
+    turn it on and come back is right, and refusing to give them anything in
+    the meantime is not.
+    """
+    from . import diagnostics as diag
+
+    parts = ["<!-- Written by `collab issue draft`. Nothing was sent anywhere."
+             " Read it before you post it. -->", ""]
+    parts += _issue_header(profile)
+    parts += ["", "## What happened", "",
+              "<!-- What you did, what you expected, what happened instead. -->",
+              ""]
+
+    root = DaemonPaths(profile.dir).root
+    if not diag.enabled():
+        parts += [
+            "## Diagnostics", "",
+            "The diagnostic log is **off**, so there is no record of what the"
+            " daemon and the hub were doing. To capture one:", "",
+            "```bash",
+            "collab config diagnostics on",
+            "# reproduce the problem, then:",
+            "collab issue draft",
+            "```", "",
+            "It records events only — never message text, participant names,"
+            " invites, tokens, addresses, or paths under your home directory —"
+            " and keeps seven days.", ""]
+        return "\n".join(parts) + "\n"
+
+    rows = diag.records(root)
+    tally = diag.counts(rows)
+    parts += ["## Diagnostics", "",
+              f"{len(rows)} records on file, over"
+              f" {len(list((root / diag.DIRNAME).glob('*.jsonl')))} day(s).", ""]
+    if tally:
+        parts += ["| event | count |", "|---|---|"]
+        parts += [f"| `{name}` | {count} |" for name, count in tally.items()]
+        parts.append("")
+    for proc, span in diag.memory_span(rows).items():
+        parts.append(f"- {proc} memory: min {span['min']} MB, max"
+                     f" {span['max']} MB, last {span['last']} MB"
+                     f" ({span['samples']} samples)")
+    if diag.memory_span(rows):
+        parts.append("")
+    tail = rows[-ISSUE_LINES:]
+    parts += [f"### Last {len(tail)} records", "", "```json"]
+    parts += [json.dumps(row, ensure_ascii=False) for row in tail]
+    parts += ["```", ""]
+    return "\n".join(parts) + "\n"
+
+
+def cmd_issue(args: argparse.Namespace) -> int:
+    """Write a bug report to a file, and print the command that would post it.
+
+    IT NEVER POSTS. Two reasons, and the second is the important one. The
+    obvious one is that this is usually run by an agent, and an agent opening
+    an issue on somebody's repository under their credentials is not a thing to
+    do without being asked. The real one is that the file has to be READ first:
+    it is assembled from a machine's own records, and no amount of scrubbing
+    here entitles anybody to publish it unseen.
+    """
+    from . import diagnostics as diag
+
+    profile = _require_profile(args)
+    body = _issue_body(profile)
+    if args.out:
+        path = Path(args.out).expanduser()
+    else:
+        path = (DaemonPaths(profile.dir).root / diag.DIRNAME
+                / f"issue-{time.strftime('%Y-%m-%d')}.md")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    except OSError as exc:
+        fail(f"could not write {path}: {exc}")
+        return 1
+    ok(f"wrote {path}")
+    if not diag.enabled():
+        warn("the diagnostic log is off, so this carries the header only")
+        print(dim("  collab config diagnostics on, reproduce it, then run"
+                  " this again"))
+    print()
+    print(dim("  read it, fill in «What happened», then post it with:"))
+    print(f'  gh issue create --repo {ISSUE_REPO} --title "<one line>"'
+          f' --body-file {path}')
+    print()
+    print(dim("  nothing has been sent anywhere."))
+    return 0
+
+
 def cmd_skills(args: argparse.Namespace) -> int:
     from . import skills as sk
 
@@ -4444,6 +4602,15 @@ def build_parser() -> argparse.ArgumentParser:
     wa.add_argument("--json", action="store_true")
     add_session_flag(wa)
     wa.set_defaults(func=cmd_wake)
+
+    iss = sub.add_parser("issue",
+                         help="write a bug report from this machine's own"
+                              " records, and print the command that posts it")
+    iss.add_argument("action", nargs="?", default="draft", choices=["draft"])
+    iss.add_argument("--out", metavar="FILE",
+                     help="write it here instead of beside the diagnostics")
+    add_session_flag(iss)
+    iss.set_defaults(func=cmd_issue)
 
     cx = sub.add_parser("context",
                         help="compact or clear this agent's own context window,"
