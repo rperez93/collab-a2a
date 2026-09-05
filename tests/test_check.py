@@ -383,3 +383,103 @@ def test_a_watcher_records_which_process_it_is(session):
         stamp = (d.watchers_dir(session) / str(os.getpid())).read_text().strip()
 
     assert stamp == d._started_at(os.getpid()) != ""
+
+
+# --- a fact that arrived and was never filed --------------------------------
+
+def test_a_dropped_learning_is_named_with_its_count(session):
+    """The queue the feed fills and the heartbeat empties is bounded, so a
+    drop is a real event rather than a theoretical one — and it is silent by
+    construction. The sender was told the room had its fact and this end never
+    filed it, so nothing but this says otherwise."""
+    _status(session, learnings={"pending": 0, "last_error": None, "dropped": 7})
+    with _healthy(session):
+        code, out = _run()
+
+    assert "7 learnings or sync answers dropped" in out
+    assert "learn sync" in out, "and what to do once the flood has passed"
+    assert code == 0, "a warning, not a failure: the session still works"
+
+
+def test_one_dropped_learning_reads_as_one(session):
+    _status(session, learnings={"dropped": 1})
+    with _healthy(session):
+        _code, out = _run()
+
+    assert "1 learning or sync answer dropped" in out
+
+
+def test_nothing_dropped_says_nothing(session):
+    """Silence is the whole point of this command, and a zero here would be a
+    line every run for a thing that has not happened."""
+    _status(session, learnings={"pending": 0, "last_error": None})
+    with _healthy(session):
+        code, out = _run()
+
+    assert code == 0 and out == ""
+
+
+def test_dropped_and_waiting_are_two_separate_answers(session):
+    """One is our own writing not going out, the other is somebody else's not
+    coming in. A session can have either without the other, so they are not
+    folded into one line."""
+    _status(session, learnings={"pending": 3, "dropped": 2,
+                                "last_error": "read-only file system"})
+    with _healthy(session):
+        _code, out = _run()
+
+    assert "3 learnings waiting to be published" in out
+    assert "2 learnings or sync answers dropped" in out
+
+
+def test_the_count_reaches_the_json_as_its_own_check(session):
+    """An agent reads this command as JSON, so the row has to be there and not
+    only in the printed form."""
+    _status(session, learnings={"dropped": 4})
+    with _healthy(session):
+        _code, out = _run(json=True)
+
+    rows = [r for r in json.loads(out)["checks"] if r["check"] == "learnings"]
+    assert len(rows) == 1
+    assert rows[0]["verdict"] == cli.CHECK_WARN
+    assert "4 learnings" in rows[0]["detail"]
+
+
+# --- and the same three figures on the status page --------------------------
+
+def _status_page(as_json=False):
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        cli.cmd_status(argparse.Namespace(json=as_json))
+    return out.getvalue()
+
+
+def test_the_status_page_carries_the_learnings_figures(session):
+    """`collab check` is the loop and this is the page somebody reads. The
+    daemon kept three figures about what became of the facts and showed a
+    person none of them."""
+    _status(session, learnings={"pending": 2, "dropped": 5,
+                                "last_error": "read-only file system"})
+    line = [ln for ln in _status_page().splitlines()
+            if ln.strip().startswith("learnings")]
+
+    assert len(line) == 1, _status_page()
+    assert "2 waiting to publish" in line[0]
+    assert "5 dropped" in line[0]
+    assert "read-only file system" in line[0]
+
+
+def test_the_status_page_says_nothing_when_there_is_nothing_to_say(session):
+    """One line and only when there is one to print. A row of zeroes on every
+    run is a row people learn to skip."""
+    _status(session, learnings={"pending": 0, "last_error": None})
+
+    assert "learnings" not in _status_page()
+
+
+def test_the_figures_reach_the_status_json(session):
+    """An agent reads this as JSON, and a figure that prints and is not in the
+    payload is a figure only a human can act on."""
+    _status(session, learnings={"dropped": 3})
+
+    assert json.loads(_status_page(as_json=True))["learnings"] == {"dropped": 3}

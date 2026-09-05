@@ -423,6 +423,17 @@ spool file, so a retry republishes that learning rather than recording a second
 copy of it.
 `collab check` reports what is still waiting and why.
 
+What arrives is queued the same way and in the opposite direction: the feed
+appends and the heartbeat files, so nothing about a bundle write ever happens
+on the event loop.
+That queue is bounded, because the feed is the writer and a timer is the
+reader and a heartbeat that is slow leaves the appending side running
+unopposed against whatever the room sends.
+A drop is therefore possible, and it is silent from both ends — the sender was
+told the room had its fact and this end never filed it — so the count is kept
+for the life of the listener and reported by `collab check` and
+`collab status`, with `collab learn sync` as the way to ask again.
+
 ## The wake
 
 Most agents cannot read the feed while they sit idle: whatever they start dies
