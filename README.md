@@ -1344,6 +1344,7 @@ collab host --resume <id>      # resume a particular one
 collab host --fresh            # start an empty session instead
 collab sessions                # what this repo has hosted, and what each holds
 collab kill                    # end the current one — data kept, resumable
+collab kill --disarm           # and turn off the wake armed on it
 collab kill --all              # end every session this repo hosts
 collab kill --purge --yes      # end it and delete its history for good
 ```
@@ -1354,6 +1355,16 @@ back. `--purge` is the one that deletes, and it refuses to run without `--yes`.
 
 As a guest, `collab kill` stops your own listener; the hub belongs to the host
 and keeps running.
+
+**A stop does not take with it the things that were pointed at the session.**
+A wake is a command stored on disk, and the daemon is the only thing that runs
+it: left armed, it fires at whoever resumes the session next, with a batch of
+messages from a conversation they had forgotten. A `collab listen --follow`
+someone armed is a process of theirs, and it goes on holding a terminal after
+the session behind it is gone. `collab kill` names both rather than pretending
+it dealt with them; `--disarm` turns the wake off as it goes, and the monitor
+stays yours to stop because it is your process. `collab check` afterwards is
+the proof, and warns about a wake armed on a session with no listener.
 
 ```
 $ collab host
@@ -2234,6 +2245,8 @@ Then hand out `<that-url>#<invite>` — `collab url` reprints the invite, and
 | nothing in `collab listen` | check `collab status` says `live`; the daemon writes the file it tails |
 | ngrok not detected | it must be on `PATH`; a free ngrok account also needs `ngrok config add-authtoken` |
 | `A2A version '0.3' is not supported` | send `A2A-Version: 1.0` (collab's own client does) |
+| an agent was woken for a session you thought was closed | the wake outlived the stop. `collab check` flags it, `collab wake off` removes it, and `collab kill --disarm` would have taken it with the stop |
+| a terminal is still printing messages from an ended session | a `collab listen --follow` you armed. It is your process, not collab's — stop it where you started it |
 
 ## Contributing
 

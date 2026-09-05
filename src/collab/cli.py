@@ -2154,6 +2154,61 @@ def cmd_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+def _still_armed(profile: SessionProfile) -> list[tuple[str, str]]:
+    """What is still pointed at this session, and the command that removes it.
+
+    A session that has stopped is not a session that has been left. The wake is
+    a command stored on disk and the daemon is the only thing that runs it, so
+    a wake armed against a stopped session fires nothing and looks like nothing
+    — until somebody resumes the session weeks later and their agent is woken
+    by a batch of messages from a conversation they had forgotten. And a
+    followed stream is a process somebody started that nothing here can stop:
+    it goes on holding a terminal, and its reader goes on believing it is being
+    told things.
+
+    Neither is removed by stopping, and neither said so. This is what says so.
+    """
+    left: list[tuple[str, str]] = []
+    exe = Path(sys.argv[0]).name
+    try:
+        if wake.read_config(DaemonPaths(profile.dir).root).enabled:
+            left.append(("a wake is still armed for this session",
+                         f"{exe} wake off"))
+    except OSError:
+        pass
+    # `watchers` prunes the dead as it counts, so what is left is a process
+    # that is genuinely still running and genuinely still reading.
+    alive = watchers(profile)
+    if alive:
+        left.append((f"{plural(len(alive), 'reader')} still following the feed"
+                     f" (pid {', '.join(str(p) for p in alive)})",
+                     "stop the monitor you armed on `listen --follow`"))
+    return left
+
+
+def _say_what_is_left(profile: SessionProfile, disarm: bool = False) -> None:
+    """Print what a stop did not take with it, and offer to take it."""
+    left = _still_armed(profile)
+    if not left:
+        return
+    if disarm:
+        with contextlib.suppress(OSError):
+            wake.write_config(DaemonPaths(profile.dir).root, wake.WakeConfig())
+        ok("wake disarmed")
+        # The watcher records are pruned by reading them, so the only thing
+        # left to say about a reader is that it is a process, and a process is
+        # not ours to signal: it belongs to whatever armed it.
+        for what, how in _still_armed(profile):
+            warn(what)
+            print(dim(f"  {how}"))
+        return
+    warn("this session is stopped, and these are not")
+    for what, how in left:
+        print(f"  {what}")
+        print(dim(f"    {how}"))
+    print(dim(f"  or re-run with --disarm to turn off the wake here"))
+
+
 def cmd_kill(args: argparse.Namespace) -> int:
     """End a session: stop its hub and its listener.
 
@@ -2188,6 +2243,7 @@ def cmd_kill(args: argparse.Namespace) -> int:
                if stopped else "nothing was running")
             print(dim("  you are a guest here, so the hub belongs to "
                       f"{current.host_name} and keeps running"))
+            _say_what_is_left(current, getattr(args, "disarm", False))
             _retire_state_dir(current.home)
             return 0
 
@@ -2223,6 +2279,13 @@ def cmd_kill(args: argparse.Namespace) -> int:
     if targets and not args.purge:
         print(f"       {dim('delete it for good with: collab kill --purge --yes')}")
     if targets:
+        # AFTER THE HUB, because this is about what a stop does NOT take with
+        # it: a wake armed on disk and a reader still holding a terminal both
+        # outlive the session they were pointed at, silently, and neither is
+        # anything `stop_session` touches.
+        here = SessionProfile.current()
+        if here is not None:
+            _say_what_is_left(here, getattr(args, "disarm", False))
         _retire_state_dir(targets[0].home)
     return 0
 
@@ -2706,6 +2769,16 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
     if pid is None:
         add("listener", CHECK_FAIL, "the listener is not running",
             f"{exe} daemon start")
+        # AND WHAT IS STILL POINTED AT IT. The wake is a command stored on
+        # disk; the daemon is the only thing that runs it, so one armed against
+        # a session nothing is serving fires nothing and looks like nothing —
+        # until somebody resumes the session weeks later and their agent is
+        # woken by a conversation they had forgotten. Stopping does not remove
+        # it, and until now nothing said so.
+        if wake.read_config(DaemonPaths(profile.dir).root).enabled:
+            add("wake", CHECK_WARN,
+                "a wake is still armed for a session with no listener",
+                f"{exe} wake off, or {exe} daemon start if you meant to carry on")
     elif state == "offline":
         # Its pid is alive and its heartbeat is not: a wedged process, which
         # will not retry itself out of it. A warning here exits 0, so a hook
@@ -4615,6 +4688,7 @@ def cmd_daemon(args: argparse.Namespace) -> int:
         return 0
     if args.action == "stop":
         print("stopped" if stop_daemon(profile) else "was not running")
+        _say_what_is_left(profile, getattr(args, "disarm", False))
         return 0
     status = onboard.ensure_daemon(profile)
     ok(f"daemon {_effective(profile, status)}")
@@ -5061,6 +5135,8 @@ def build_parser() -> argparse.ArgumentParser:
     kl = sub.add_parser("kill", help="end a session (its data is kept unless --purge)")
     kl.add_argument("session_id", nargs="?",
                     help="which session (default: the one you are in)")
+    kl.add_argument("--disarm", action="store_true",
+                    help="also turn off the wake armed for this session")
     kl.add_argument("--all", action="store_true",
                     help="every session this repo hosts")
     kl.add_argument("--purge", action="store_true",
@@ -5460,6 +5536,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     d = sub.add_parser("daemon", help="manage the listener")
     d.add_argument("action", choices=["start", "stop", "status"], nargs="?", default="status")
+    d.add_argument("--disarm", action="store_true",
+                   help="with `stop`: also turn off the wake for this session")
     add_session_flag(d)
     d.set_defaults(func=cmd_daemon)
 
