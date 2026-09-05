@@ -538,13 +538,21 @@ def save_watch_settings(*, layout: str | None = None, roster_size: int | None = 
 #: What the viewer's bottom row CAN carry, and the order it carries it in.
 #: `command` is the user's own; the rest are described in client.statusbar,
 #: which is also where the order is argued for.
-WATCH_STATUS_SEGMENTS = ("batch", "stats", "command", "keys")
+#: `notice` IS ONE OF THEM, and it was not. «⏸ 4 new below» is the only thing
+#: on that row that tells the reader their view is not live, so it was written
+#: in as unconditional — which made it the one item on either bar somebody
+#: could not turn off. Being undroppable for WIDTH and being unhideable by
+#: CHOICE are different promises, and only the first was ever argued for: `fit`
+#: still refuses to trade it for a progress bar, and a reader who does not want
+#: it can now leave it out of this list. Its position is not the list's to
+#: decide; see `statusbar.compose`.
+WATCH_STATUS_SEGMENTS = ("notice", "batch", "stats", "command", "keys")
 #: And what it carries when nobody has said otherwise. `batch` is permitted
 #: and not default: the roster row below carries it for the session and the
 #: host agent's status line carries it again, so on this row it was a third
 #: copy of one figure. `collab config watch_status_segments batch,stats,keys`
 #: puts it back for anyone who wants all three.
-DEFAULT_WATCH_STATUS_SEGMENTS = ("stats", "command", "keys")
+DEFAULT_WATCH_STATUS_SEGMENTS = ("notice", "stats", "command", "keys")
 #: What the ROSTER panel's bottom row can carry. A shorter list than the one
 #: above, and the omissions are the design rather than an oversight: this row
 #: speaks for the session, so every figure on it must be one the hub counted
@@ -555,6 +563,25 @@ DEFAULT_WATCH_STATUS_SEGMENTS = ("stats", "command", "keys")
 #: them credit they had not earned. `keys` is a legend rather than a figure and
 #: is drawn only where this row is the pane's only one.
 WATCH_ROSTER_SEGMENTS = ("batch", "messages", "keys")
+#: What the coding agent's OWN status line can carry, in the order it is drawn.
+#: The third bar in the project and the last to get a list of its own: the two
+#: in `collab watch` belong to a window somebody opened on purpose, and this one
+#: is in the prompt of every turn, which makes it the one where an item nobody
+#: wants is paid for most often.
+#:
+#: `state` and `who` are in the list, and that is deliberate rather than an
+#: oversight. They are the two items this bar was built around, and the request
+#: was for every item to be a choice — a list that quietly excepted the two
+#: biggest ones would be answering a different question. A reader who hides
+#: both gets `✉ 2  batch ███░░░ 60%`, which is a perfectly reasonable thing to
+#: want from a bar that shares a row with everything else in their prompt.
+#:
+#: `version` carries the two version WARNINGS as well as the number, because
+#: they are the same fact: a daemon or a hub on other code than this, drawn in
+#: the place the version would otherwise be.
+STATUSLINE_SEGMENTS = ("state", "label", "version", "who", "others", "unread",
+                       "batch", "update")
+
 #: How often to re-run the bottom row's command. Thirty seconds because the row
 #: is glanced at rather than watched: a branch name, a build state or a ticket
 #: count does not change faster than that, and the alternative is a shell every
@@ -651,6 +678,35 @@ def watch_roster_settings() -> dict[str, Any]:
         # `statusbar.roster_segments`, which puts the two together.
         "messages": True if messages is None else bool(messages),
     }
+
+
+def statusline_settings() -> dict[str, Any]:
+    """The coding agent's own status line, validated the same way as the rows.
+
+    Same reader shape as `watch_status_settings` above and for a stronger
+    version of the same reason: the status line runs on every prompt, inside a
+    script whose whole contract is «always exit 0 and print one line», so a
+    TypeError out of a hand-edited value here is not an error message, it is a
+    prompt with a Python traceback in it — or, given the bare except that wraps
+    it, a segment that silently disappears with nothing anywhere saying why.
+    """
+    raw = load_config().get("statusline_segments")
+    if not isinstance(raw, (list, tuple)):
+        return {"segments": STATUSLINE_SEGMENTS}
+    seen: list[str] = []
+    for item in raw:
+        name = str(item).strip().lower()
+        if name in STATUSLINE_SEGMENTS and name not in seen:
+            seen.append(name)
+    return {"segments": tuple(seen)}
+
+
+def save_statusline(*, segments: Any = None) -> dict[str, Any]:
+    cfg = load_config()
+    if segments is not None:
+        cfg["statusline_segments"] = [str(s) for s in segments]
+    save_config(cfg)
+    return statusline_settings()
 
 
 def save_watch_roster(*, enabled: bool | None = None,
@@ -1319,6 +1375,20 @@ def _write_roster_segments(value: list[str]) -> Any:
     return save_watch_roster(segments=value)
 
 
+def _write_statusline_segments(value: list[str]) -> Any:
+    unknown = [name for name in value if name not in STATUSLINE_SEGMENTS]
+    if unknown:
+        # Refused here and ignored in the reader, the split both rows above
+        # make. This one has the sharpest version of the reason: the status
+        # line prints on every prompt and swallows its own errors, so a typo
+        # obeyed here would be a segment that never appears with nothing
+        # anywhere to say a setting was why.
+        raise ValueError("not a segment of the status line: "
+                         + ", ".join(unknown) + " — have "
+                         + ", ".join(STATUSLINE_SEGMENTS))
+    return save_statusline(segments=value)
+
+
 def _name_fallback() -> str:
     """What `resolve_name` lands on with nothing in the config or the identity.
 
@@ -1487,6 +1557,14 @@ def settings() -> tuple[Setting, ...]:
                 True, _as_bool,
                 lambda: watch_roster_settings()["messages"],
                 lambda v: save_watch_roster(messages=v)),
+        # THE THIRD BAR, after the two that belong to `collab watch`. Last
+        # because it is the one somebody meets last: the viewer is a window
+        # they opened, and this is a line their coding agent draws for them.
+        Setting("statusline_segments",
+                "what your agent's own status line carries, in order",
+                list(STATUSLINE_SEGMENTS), _as_list,
+                lambda: list(statusline_settings()["segments"]),
+                _write_statusline_segments),
     )
 
 

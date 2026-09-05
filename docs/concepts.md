@@ -546,11 +546,30 @@ The conversation's row is the reader's own, and which segments it carries is
   host agent's status line both carry it already, and on this row it was a
   third drawing of one number.
 
-The scrolled-back notice is not a segment.
-It is the only thing on that row that says the view is not live, so it goes
-first and is never given up for width; the segments are given up from the
-right until what is left fits, and the batch figure, when it is on, is the last
-to go because it is the one number two agents are both steering by.
+- `notice` — the scrolled-back notice, the only thing on that row that says the
+  view is not live.
+
+`notice` is never given up for WIDTH: it goes first when it is on, and the
+other segments are given up from the right until what is left fits, with the
+batch figure last to go because it is the one number two agents are both
+steering by.
+It can still be turned off, by leaving it out of the list, and for a while it
+could not — it was written in unconditionally, which made it the one item on
+either row nobody could choose about.
+Undroppable for width and unhideable by choice are different promises, and only
+the first was ever argued for.
+Its position is not the list's to decide: the rule that protects it holds the
+first parts of the row, so a `notice` moved to the end of somebody's list would
+have been moved out from under its own protection without being told.
+
+The coding agent's own status line has a third list of its own,
+`statusline_segments`, over `state`, `label`, `version`, `who`, `others`,
+`unread`, `batch` and `update`.
+Every item there is a choice too, `state` and `who` included, and the two
+version warnings ride `version` because they are the same fact drawn where the
+number would be.
+It is read on every render, and the narrow fallback for a cramped terminal
+keeps the same filter — a segment turned off is off at every width.
 
 Both rows are composed and fitted by the same code in `collab.client.statusbar`
 and painted by the same method, so there is one batch renderer rather than two

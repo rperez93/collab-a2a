@@ -11,10 +11,15 @@ testing it through a screen that has to be stood up first.
 So the composition is here and the painting stays in `Tui._hint`. Two rules
 this module exists to keep:
 
-* **The scrolled-back notice is not a segment.** «⏸ 4 new below» is the only
-  thing on that row that tells the reader their view is not live, and a bar
-  that dropped it to make room for a progress bar would be lying by omission.
-  It goes first and it is never discarded.
+* **The scrolled-back notice is never discarded for WIDTH.** «⏸ 4 new below» is
+  the only thing on that row that tells the reader their view is not live, and
+  a bar that dropped it to make room for a progress bar would be lying by
+  omission. It goes first and `fit` never trades it away.
+
+  It IS a named segment, and it was not — which made it the one item on either
+  bar nobody could turn off. Undroppable for width and unhideable by choice are
+  different promises, and only the first was ever argued for. So the list says
+  whether it appears; nothing but `fit` says where.
 * **Nothing here runs a subprocess on the draw path.** `Tui.draw` runs four
   times a second; a command run inside it stops the pane for as long as the
   command takes. See `CommandSegment`.
@@ -59,7 +64,7 @@ from ..stats import quota_summary
 #: It stays a segment a reader can ask for: `collab config watch_status_segments
 #: batch,stats,keys` puts it back, and when it is on, it is the last to go for
 #: width, for the reason the ranking gives it.
-DEFAULT_SEGMENTS = ("stats", "command", "keys")
+DEFAULT_SEGMENTS = ("notice", "stats", "command", "keys")
 
 SEPARATOR = " · "
 
@@ -374,7 +379,14 @@ def compose(*, notice: str = "", keys: Any = "", batch: Any = None,
         "command": lambda: command,
         "keys": lambda: keys,
     }
-    parts: list[Any] = [notice] if notice else []
+    # THE LIST DECIDES WHETHER, AND NOT WHERE, for this one segment. It goes
+    # first when it goes at all, because the promise `fit` keeps about it —
+    # never traded away for width — is kept by holding the first `keep` parts,
+    # and a reader who moved `notice` to the end of their list would have moved
+    # it out from under that protection without being told. Turning it off is a
+    # choice somebody can make; losing it to a progress bar on a narrow pane is
+    # the failure this module's docstring exists to name.
+    parts: list[Any] = [notice] if (notice and "notice" in segments) else []
     for name in segments:
         make = built.get(name)
         if make is None:

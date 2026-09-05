@@ -1637,6 +1637,22 @@ ended is the stale badge everything else here refuses.
 field: `""` when a line was drawn, or `no-profile`, `no-daemon`, `no-status`,
 `error`, or `kept-last-line` when you are looking at the one kept from before.
 
+**Every item on it is a choice.** `statusline_segments` names what the line
+carries and in what order:
+
+```bash
+collab config statusline_segments state,who,unread,batch
+collab config statusline_segments --unset          # back to all of it
+```
+
+It takes `state` (the ● glyph), `label` (the word `collab`), `version`, `who`,
+`others` (`+3`, `alone`, `reconnecting…`, `offline`), `unread`, `batch` and
+`update`. Every one of them can be left out, `state` and `who` included. The
+two version warnings ride `version`, because they are the same fact in the
+place the number would be. It is read on every render, so a change lands on the
+next prompt, and a name it does not recognise costs that segment and not the
+line. The narrow fallback for a cramped terminal keeps the same filter.
+
 The envelope counts **messages** — things somebody said — and not joins,
 presence or file notices, which the daemon counts separately. It counts the
 ones **not yet delivered to your agent**: a message is read once `collab recv`
@@ -1845,12 +1861,13 @@ collab config --json              # the same table, for an agent to read
 | `context_compact_at` | compact your agent's context when its own reported share of the window reaches this percent; `0` never does | — | `0` |
 | `diagnostics` | keep a local record of what your daemon and hub did — events only | — | `off` |
 | `watch_status` | show the viewer's bottom status row | — | `on` |
-| `watch_status_segments` | what that row carries, in order | — | `stats,command,keys` |
+| `watch_status_segments` | what that row carries, in order | — | `notice,stats,command,keys` |
 | `watch_status_command` | a command of your own for that row | — | none |
 | `watch_status_interval` | how often to run it, in seconds | — | `30` |
 | `watch_status_roster` | show the roster panel's own row of session-wide figures | — | `on` |
 | `watch_status_roster_segments` | what that row carries, in order | — | `batch,messages,keys` |
 | `watch_status_messages` | show the session's message count on that row, wherever the order puts it | — | `on` |
+| `statusline_segments` | what your agent's own status line carries, in order | — | `state,label,version,who,others,unread,batch,update` |
 
 `display_name` and `color` here are the machine-wide defaults. Where two agents
 share one checkout each has its own name and colour in its own state directory,
@@ -1941,11 +1958,14 @@ there is something to say about:
  ⏸ 4 new below — End (or G) jumps to the newest · quota 5h 88% · $3.10 · wheel/tab: pane · …
 ```
 
-The **scrolled-back notice** is not a segment and is never dropped: it is the
-only thing on the row that says the view is not live. After it come `stats`,
-your own quota and spend; `command`, the first line of whatever
-`watch_status_command` prints; and `keys`, the legend. Narrow the pane and they
-are given up from the right.
+`notice` is the **scrolled-back notice**, the only thing on the row that says
+the view is not live. It is first when it is on and is never given up for
+width, whatever else is competing for the columns — but it is a named segment
+like any other, so leaving it out of the list turns it off. Being undroppable
+for width and unhideable by choice are different promises, and only the first
+is one collab makes. After it come `stats`, your own quota and spend;
+`command`, the first line of whatever `watch_status_command` prints; and
+`keys`, the legend. Narrow the pane and they are given up from the right.
 
 The batch is not on this row by default: the roster's row above carries it for
 the session, and the host agent's status line carries it again. A fourth
@@ -1955,7 +1975,7 @@ steering by.
 
 ```bash
 collab config watch_status_command "git rev-parse --abbrev-ref HEAD"
-collab config watch_status_segments batch,stats,keys   # add the batch, drop the command
+collab config watch_status_segments notice,batch,stats,keys   # add the batch, drop the command
 ```
 
 The command runs on a timer in a thread of its own, never on the redraw path,

@@ -77,6 +77,7 @@ the project. A session belongs to a repository; a theme does not.
 | `watch_status_roster` | show the roster pane's row of session-wide figures | **almost never — see below** |
 | `watch_status_roster_segments` | what that row carries, in order | they want a figure moved, or the bar off that row |
 | `watch_status_messages` | show the session's message count on that row | they want the count gone — **this** key, not the order above |
+| `statusline_segments` | what the agent's own status line carries, in order | they want something off their prompt's collab segment, or want it shorter |
 
 `display_name` and `color` here are the **machine-wide** defaults. An agent
 with a state directory of its own — `.collab-alice`, when two agents share a
@@ -148,8 +149,10 @@ Its last line carries, left to right, whichever of these exist:
  ⏸ 4 new below — End (or G) jumps to the newest · quota 5h 88% · $3.10 · wheel/tab: pane · …
 ```
 
-- **the scrolled-back notice** — not a setting and never dropped. It is the
-  only thing on the row saying the view is not live.
+- `notice` — the scrolled-back notice, the only thing on the row saying the
+  view is not live. It is first when it is on and `fit` never drops it for
+  width; leave it out of the list to turn it off, which almost nobody should
+  want.
 - `stats` — this agent's own quota and spend.
 - `command` — the first line of `watch_status_command`, if set.
 - `keys` — the key legend.
@@ -177,8 +180,25 @@ used. A command that needs the network is a poor choice.
 To drop a segment, add the batch, or reorder them:
 
 ```bash
-collab config watch_status_segments batch,stats,keys
+collab config watch_status_segments notice,batch,stats,keys
 ```
+
+### The agent's own status line — a third bar
+
+The segment collab draws in the coding agent's prompt is separate from both
+rows above and has its own list:
+
+```bash
+collab config statusline_segments state,who,unread,batch
+collab config statusline_segments --unset      # back to all of it
+```
+
+It takes `state`, `label`, `version`, `who`, `others`, `unread`, `batch` and
+`update`, in the order given. Every one of them can be left out, `state` and
+`who` included. `version` carries the two version warnings as well as the
+number — a daemon or a hub running other code than this one — so turning it off
+turns those off too, which is worth saying out loud before doing it. It is read
+on every render, so a change lands on the next prompt.
 
 
 ## Compacting a context that is filling up
