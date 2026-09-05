@@ -1974,6 +1974,7 @@ collab config --json              # the same table, for an agent to read
 | `watch_status_interval` | how often to run it, in seconds | — | `30` |
 | `watch_status_roster` | show the roster panel's own row of session-wide figures | — | `on` |
 | `watch_status_roster_segments` | what that row carries, in order | — | `batch,messages,activity,keys` |
+| `watch_status_roster_rows` | how many rows that foot may grow to; the roster gives them up | — | `3` |
 | `watch_status_messages` | show the session's message count on that row, wherever the order puts it | — | `on` |
 | `statusline_segments` | what your agent's own status line carries, in order | — | `state,label,version,who,others,unread,batch,activity,update` |
 
@@ -2007,16 +2008,52 @@ how the **session** is going; the conversation's says how **you** are going.
 ```
  ○ alice                     online
      nothing shared yet
-──────────────────────────────────────────────
- batch ███░░░ 60% 6/10 · 128 messages
+
+── STATUS ────────────────────────────────────
+ batch ███████████████████░░░░░░░ 60% 6/10
+ 128 messages    working: the parser · 12m ago
 ```
 
-A rule sits above it, drawn like the section headers, so the figures read as
-the foot of the panel and not as one more line of the list. The rule costs a
-row and is paid for last: it is drawn only while the roster keeps at least two
-rows of participants — one whole person — after it, and on a shorter pane the
-rule is what goes, never a participant and never the row. With the row off
-there is no rule either, and the conversation pane never moves for it.
+**It is a grid of four columns.** Each segment declares how many it takes: the
+batch takes all four, so its bar runs the width of the panel and its glyph
+count scales with it; `messages` takes one, because it is six characters;
+`activity` and `keys` take two each. Segments fill left to right in the order
+the list gives, a segment that will not fit in what is left of a row starts the
+next, and rows are added up to `watch_status_roster_rows`. Past that limit
+segments are dropped from the right. No borders are drawn; two blank columns
+separate neighbours.
+
+The layout depends only on the spans, never on the text, which is the point of
+declaring them: a foot that reflowed as a percentage went from 9% to 10% would
+move every figure four times a minute.
+
+```bash
+collab config watch_status_roster_segments batch:4,messages:1,keys:2
+collab config watch_status_roster_rows 2
+```
+
+A bare name keeps its default span. A span outside 1 to 4 costs that segment
+its span and not its place, and is refused out loud rather than corrected in
+silence.
+
+**On a pane too narrow or too short for it**, the foot falls back to the single
+fitted row it had before — everything narrowed, nothing dropped. The grid drops
+from the right past *its* row limit, and a cramped terminal never chose that
+limit.
+
+**Each figure carries its own colour**: the batch in the accent, the activity
+bold while working, the count and the legend dim. A row that was uniformly dim
+read as one undifferentiated strip, and the figure two agents are steering by
+looked exactly like the words `q: quit`.
+
+A rule sits above the foot, drawn like the section headers, so the figures read
+as a section of the panel and not as one more line of the list, with a blank row
+above the rule. Every row of all this costs the roster a row and is paid for in
+order: the figures first, then the rule, then the padding, each taken only while
+enough participants still fit after it — two whole people for the padding, one
+for the rest. On a shorter pane the padding goes first, then the rule, never a
+participant and never the figures. With the row off there is none of it, and the
+conversation pane never moves for any of it.
 
 Two figures, and both of them are counted by the hub and handed out whole, so
 **every participant reads exactly the same row**. That is the whole rule, and

@@ -172,11 +172,15 @@ def test_the_count_is_on_the_row_for_host_and_guest_at_every_pane_width(
     assert head, "nothing drawn"
     assert not win.overruns, win.overruns[:1]
     y = (_split_geometry(height)[0] - 1) if view == "both" else height - 1
-    # The row is the panel's last row, or the one above the bottom padding.
-    rows = [win.row(y), win.row(y - 1)]
-    line = next((r for r in rows if "4/9" in r), None)
-    assert line is not None, f"no roster row near the foot: {rows!r}"
-    assert "2 message" in line or "2 msgs" in line, f"the count is missing: {line!r}"
+    # THE FOOT, NOT A ROW. It is a grid of four columns now: the batch takes a
+    # whole row so its bar can run the width of the panel, and the count sits
+    # on the next one. What this test has always been about is that the count
+    # is THERE — it was going missing entirely on a narrow pane — and that is
+    # a question about the foot rather than about any one line of it.
+    foot = [win.row(y - n) for n in range(4) if y - n >= 0]
+    assert any("4/9" in r for r in foot), f"no batch anywhere at the foot: {foot!r}"
+    assert any("2 message" in r or "2 msgs" in r for r in foot), \
+        f"the count is missing from the whole foot: {foot!r}"
 
 
 # --- the other leads, ruled out and pinned -----------------------------------

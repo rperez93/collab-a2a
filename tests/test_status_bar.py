@@ -666,10 +666,10 @@ def test_turning_the_row_off_returns_its_line_in_a_single_pane_view(
     win = _Pane()
     _draw(viewer, win)
     assert 29 not in win.rows, "the row is gone"
-    # The roster's row brings a rule above it and a blank row above that, so
-    # that pane gets three lines back; the conversation's row has neither and
-    # gives back one.
-    grew = 3 if view == "roster" else 1
+    # The roster's foot is a grid: two rows of figures, a rule above them and
+    # a blank row above that, so that pane gets four lines back. The
+    # conversation's row has neither a rule nor padding and gives back one.
+    grew = 4 if view == "roster" else 1
     assert pane.rows == with_row + grew, "and the pane grew into it"
 
 
@@ -778,6 +778,8 @@ def test_nothing_in_the_file_can_stop_the_roster_row_being_read(raw, cfg):
 def test_both_rows_are_on_by_default(cfg):
     assert config.watch_roster_settings() == {"enabled": True,
                                               "segments": ROSTER,
+                                              "spans": {},
+                                              "rows": config.DEFAULT_ROSTER_ROWS,
                                               "messages": True}
 
 
@@ -843,13 +845,15 @@ def test_the_roster_panel_has_a_row_of_its_own_at_the_foot_of_the_roster(
     viewer.model.status = _roster_row()
     _draw(viewer, win)
 
-    # Row 8, not 9: the foot keeps a blank row under the status row at this
-    # height, so the figures sit one above the conversation's header.
-    assert "6/10" in win.rows[8] and "128 messages" in win.rows[8]
-    assert not any(name in win.rows[8] for name in ("bob", "alice")), \
-        f"a participant was painted onto this row: {win.rows[8]!r}"
-    assert 9 not in win.rows, "a blank row under it"
-    assert "CONVERSATION" in win.rows[10], "and the chat header right below that"
+    # TWO ROWS, 8 and 9. The foot is a four-column grid: the batch takes a
+    # whole row so its bar can run the width of the panel, and the count takes
+    # the first column of the next.
+    assert "6/10" in win.rows[8], win.rows[8]
+    assert "128 messages" in win.rows[9], win.rows[9]
+    assert not any(name in win.rows[8] + win.rows[9]
+                   for name in ("bob", "alice")), \
+        "a participant was painted onto the foot"
+    assert "CONVERSATION" in win.rows[10], "and the chat header right below it"
 
 
 def test_the_conversation_row_keeps_the_readers_own_figures(tmp_path, cfg):
@@ -875,7 +879,7 @@ def test_turning_it_off_gives_the_row_back_to_the_roster(tmp_path, cfg):
     win = _Pane()
     _draw(viewer, win)
     assert "6/10" not in win.rows.get(8, ""), "the row is gone"
-    assert viewer.roster.rows == with_row + 4, \
+    assert viewer.roster.rows == with_row + 3, \
         "and the roster grew into it, the rule above it, and the padding round both"
 
 
@@ -887,13 +891,13 @@ def test_a_session_with_nothing_to_say_does_not_reserve_the_row(tmp_path, cfg):
     win = _Pane()
     _draw(viewer, win)
     empty = viewer.roster.rows
-    assert 8 not in win.rows and 9 not in win.rows
+    assert not any(y in win.rows for y in (7, 8, 9))
 
     viewer.model.status = _roster_row()
     win = _Pane()
     _draw(viewer, win)
-    assert viewer.roster.rows == empty - 4, \
-        "the row, the rule above it and the padding are taken only when used"
+    assert viewer.roster.rows == empty - 3, \
+        "the rows, the rule above them and the padding are taken only when used"
 
 
 def test_a_hub_gone_quiet_takes_the_row_with_it(tmp_path, cfg):
@@ -911,8 +915,9 @@ def test_a_hub_gone_quiet_takes_the_row_with_it(tmp_path, cfg):
     win = _Pane()
     _draw(viewer, win)
 
-    assert "6/10" not in win.rows[8] and "128 messages" not in win.rows[8]
-    assert "batch ? 10m old" in win.rows[8] and "messages ? 10m old" in win.rows[8]
+    foot = win.rows[8] + " " + win.rows.get(9, "")
+    assert "6/10" not in foot and "128 messages" not in foot
+    assert "batch ? 10m old" in foot and "messages ? 10m old" in foot
 
 
 def test_it_gives_up_its_row_before_squeezing_the_roster(tmp_path, cfg):
@@ -980,11 +985,13 @@ def test_the_roster_only_view_puts_the_session_figures_on_its_one_row(
     win = _Pane()
     _draw(viewer, win)
 
-    assert "6/10" in win.rows[29] and "128 messages" in win.rows[29]
-    assert "$3.10" not in win.rows[29], \
-        "the reader's own spend does not belong on a row that speaks for all"
+    foot = win.rows[28] + " " + win.rows[29]
+    assert "6/10" in foot and "128 messages" in foot
+    assert "$3.10" not in foot, \
+        "the reader's own spend does not belong on a foot that speaks for all"
     assert "128 messages" not in " ".join(
-        row for y, row in win.rows.items() if y != 29), "and only on that row"
+        row for y, row in win.rows.items() if y not in (28, 29)), \
+        "and only at the foot"
 
 
 def test_the_roster_only_view_spends_no_extra_row_on_it(tmp_path, cfg):
@@ -1000,7 +1007,7 @@ def test_the_roster_only_view_spends_no_extra_row_on_it(tmp_path, cfg):
     # The bottom row stays — it was never an extra one — and only the rule
     # above it and the blank row above that, which are the roster's and not
     # the reader's, are given back.
-    assert viewer.roster.rows == with_figures + 2, "the row was never an extra one"
+    assert viewer.roster.rows == with_figures + 3, "the row was never an extra one"
     assert "$3.10" in win.rows[29], "and it goes back to being the reader's"
 
 

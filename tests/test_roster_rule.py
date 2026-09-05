@@ -143,10 +143,21 @@ def _is_any_rule(line: str) -> bool:
 
 
 def _is_roster_row(line: str) -> bool:
-    """Both figures, because both are what the row is for: a row that carried
-    the batch and had lost the count is the defect this panel was reported
-    for. The count may be in its narrow form on a narrow pane."""
-    return "6/10" in line and ("128 messages" in line or "128 msgs" in line)
+    """A line of the roster's foot: it carries one of the session's figures.
+
+    Both figures were once asked of one line, because a row that carried the
+    batch and had lost the count is the defect this panel was reported for.
+    The foot is a grid now — the batch takes a whole row so its bar can run the
+    width of the panel, and the count sits on the next — so «both, together» is
+    no longer the shape of the claim. That both are PRESENT is still asserted,
+    across the foot, by `test_roster_row_keeps_the_count`.
+    """
+    return "6/10" in line or "128 messages" in line or "128 msgs" in line
+
+
+def _foot_of(win, last_y: int, deep: int = 4) -> list[str]:
+    """The rows the foot may occupy, bottom-most first."""
+    return [win.row(last_y - n) for n in range(deep) if last_y - n >= 0]
 
 
 def _blank(line: str) -> bool:
@@ -184,17 +195,73 @@ def _participants_shown(screen: Screen, top: int, rows: list, content: int) -> i
     return shown
 
 
-def _foot(panel: int, roster_row: bool) -> dict[str, bool]:
+#: How many rows the foot wants in these fixtures. The split view's foot
+#: carries the batch and the count and no legend, and the batch takes a whole
+#: row of the four-column grid — so two. Stated rather than computed, because a
+#: test that asked the code how many rows it wanted would agree with it however
+#: wrong it was.
+WANTS = 2
+#: The roster-only pane's foot carries the key legend as well, and `messages`
+#: and `keys` share the second row: still two.
+ROSTER_ONLY_WANTS = 2
+
+
+#: The shortest form of each segment, in columns, measured: `60% 6/10`,
+#: `128 msgs`, and the short key legend. A pane whose cells cannot hold these
+#: is a pane the grid cannot carry the figures on, and the foot falls back to
+#: the one fitted row it had before the grid existed — which narrows everything
+#: and drops nothing.
+NARROWEST = {"batch": 8, "messages": 8, "activity": 8, "keys": 27}
+SPANS = {"batch": 4, "messages": 1, "activity": 2, "keys": 2}
+
+
+def _cell(width: int, col: int, span: int) -> int:
+    """The columns a cell gets. The foot is drawn into `width - 1`, divided
+    into four with two blank between neighbours."""
+    room = max(width - 1, 0)
+    unit = (room + 2) / 4
+    return int(round((col + span) * unit)) - int(round(col * unit)) - 2
+
+
+def _grid_fits(width: int, names=("batch", "messages")) -> bool:
+    """Whether every segment's shortest form fits the cell the grid gives it.
+
+    The legend is what fails first and by a long way — twenty-seven columns in
+    a half-row — so a pane can be wide enough for the figures and too narrow
+    for the roster-only view's foot, which carries the legend too.
+    """
+    row, used = 0, 0
+    for name in names:
+        span = SPANS[name]
+        if used + span > 4:
+            row, used = row + 1, 0
+        if _cell(width, used, span) < NARROWEST[name]:
+            return False
+        used += span
+    return True
+
+
+def _foot(panel: int, roster_row: bool, width: int = 120,
+          want: int = WANTS) -> dict[str, int]:
     """What the panel's foot is made of, given `panel` rows under its header.
 
     Paid for in this order, each only while two participant rows survive it:
-    the status row, the rule, the padding above the rule, the padding below
-    the row. Given up in the reverse order.
+    each row of the status grid, then the rule, then the padding above the rule,
+    then the padding below it. Given up in the reverse order.
+
+    The two paddings ask for FOUR rows to survive them rather than two: they
+    are the only things down there that say nothing, so they are the first to
+    have to justify themselves, and on a panel showing one person a blank row
+    is a quarter of what the reader came for.
     """
-    bar = roster_row and panel - 1 >= 2
-    rule = bar and panel - 2 >= 2
-    pad_top = rule and panel - 3 >= 2
-    pad_bottom = pad_top and panel - 4 >= 2
+    wanted = want if _grid_fits(width) else 1
+    bar = 0
+    if roster_row:
+        while bar < wanted and panel - 1 - bar >= 2:
+            bar += 1
+    rule = 1 if bar and panel - 1 - bar >= 2 else 0
+    pad_top = 1 if rule and panel - 2 - bar >= 4 else 0
+    pad_bottom = 1 if pad_top and panel - 3 - bar >= 4 else 0
     return {"bar": bar, "rule": rule, "pad_top": pad_top, "pad_bottom": pad_bottom}
 
 
@@ -245,7 +312,7 @@ def test_the_split_view_pays_for_the_foot_only_out_of_a_roster_that_can(
             assert shown == viewer.roster.rows, \
                 f"{where}: {viewer.roster.rows} rows reserved, {shown} drawn intact"
 
-            foot = _foot(panel, roster_row)
+            foot = _foot(panel, roster_row, width)
             for k in seen:
                 if foot["bar"]:
                     seen[k].add(foot[k])
@@ -260,11 +327,14 @@ def test_the_split_view_pays_for_the_foot_only_out_of_a_roster_that_can(
             if foot["pad_bottom"]:
                 assert _blank(win.row(y)), f"{where}: no blank row under the status row"
                 y -= 1
-            assert _is_roster_row(win.row(y)) is foot["bar"], \
-                f"{where}: status row {'missing' if foot['bar'] else 'drawn'}: {win.row(y)!r}"
-            if foot["bar"]:
+            for _n in range(foot["bar"]):
+                assert _is_roster_row(win.row(y)), \
+                    f"{where}: a row of the foot is empty: {win.row(y)!r}"
                 y -= 1
-            assert _is_status_rule(win.row(y)) is foot["rule"], \
+            if not foot["bar"]:
+                assert not _is_roster_row(win.row(y)), \
+                    f"{where}: a status row nobody asked for: {win.row(y)!r}"
+            assert _is_status_rule(win.row(y)) is bool(foot["rule"]), \
                 f"{where}: rule {'missing' if foot['rule'] else 'drawn'} above the row: {win.row(y)!r}"
             if foot["rule"]:
                 y -= 1
@@ -295,10 +365,16 @@ def test_the_foot_is_pinned_to_the_panel_when_the_list_is_short(tmp_path, cfg):
     assert "PARTICIPANTS" in win.row(2)
     chat_top, _ = _split_geometry(40)
     assert _blank(win.row(chat_top - 1)), "a blank row under the status row"
-    assert _is_roster_row(win.row(chat_top - 2))
-    assert _is_status_rule(win.row(chat_top - 3))
+    # The foot is two rows here — the batch takes one to itself so its bar can
+    # run the width of the panel, and the count takes the next — and the rule
+    # sits above both of them, not above the last of them.
+    foot = _foot(_split_geometry(40)[1], True, 120)
+    for n in range(foot["bar"]):
+        assert _is_roster_row(win.row(chat_top - 2 - n)), n
+    assert _is_status_rule(win.row(chat_top - 2 - foot["bar"]))
     assert " bob" in win.row(3)
-    assert all(_blank(win.row(y)) for y in range(5, chat_top - 3)), \
+    assert all(_blank(win.row(y))
+               for y in range(5, chat_top - 2 - foot["bar"] - foot["pad_top"])), \
         "the rows between the list and the rule are blank"
 
 
@@ -340,7 +416,6 @@ def test_the_roster_only_view_rules_off_its_own_row_and_no_other(
             assert not win.overruns, f"drawn past the last column {where}: {win.overruns[0]}"
 
             bottom = win.row(height - 1)
-            row = roster_row or personal
             if roster_row:
                 assert _is_roster_row(bottom), f"{where}: the session's row is missing: {bottom!r}"
             elif personal:
@@ -350,12 +425,23 @@ def test_the_roster_only_view_rules_off_its_own_row_and_no_other(
                 assert not _is_roster_row(bottom) and "$3.10" not in bottom, \
                     f"{where}: a row nobody asked for"
 
-            rule = roster_row and height - 3 >= 2
-            pad = rule and height - 4 >= 2
-            assert _is_status_rule(win.row(height - 2)) is rule, \
-                f"{where}: rule {'missing' if rule else 'drawn'}: {win.row(height - 2)!r}"
+            # The foot is a grid, so `row` is a COUNT of rows: as many as the
+            # segments need, never more than the pane can spare, and one when
+            # the pane is too narrow for four columns to hold a figure each.
+            foot_rows = 0
+            if roster_row:
+                wanted = (ROSTER_ONLY_WANTS
+                          if _grid_fits(width, ("batch", "messages", "keys"))
+                          else 1)
+                foot_rows = max(1, min(wanted, max(height - 3, 1)))
+            row = foot_rows or (1 if personal else 0)
+            rule = bool(foot_rows) and height - 2 - foot_rows >= 2
+            pad = rule and height - 3 - foot_rows >= 4
+            rule_y = height - 1 - row
+            assert _is_status_rule(win.row(rule_y)) is rule, \
+                f"{where}: rule {'missing' if rule else 'drawn'}: {win.row(rule_y)!r}"
             if pad:
-                assert _blank(win.row(height - 3)), f"{where}: no blank row above the rule"
+                assert _blank(win.row(rule_y - 1)), f"{where}: no blank row above the rule"
             if roster_row:
                 saw["rule"].add(rule)
                 saw["pad"].add(pad)
@@ -365,7 +451,7 @@ def test_the_roster_only_view_rules_off_its_own_row_and_no_other(
             shown = _participants_shown(win, 1, rows, content)
             assert shown == viewer.roster.rows, \
                 f"{where}: {viewer.roster.rows} rows reserved, {shown} drawn intact"
-            assert shown == height - 1 - (1 if row else 0) - (1 if rule else 0) - (1 if pad else 0), \
+            assert shown == height - 1 - row - (1 if rule else 0) - (1 if pad else 0), \
                 f"{where}: {shown} participant rows"
             for y in range(1, 1 + shown):
                 assert not _is_any_rule(win.row(y)), f"{where}: a rule at row {y}"

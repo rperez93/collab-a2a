@@ -681,6 +681,44 @@ The conversation's row is the reader's own, and which segments it carries is
 - `notice` — the scrolled-back notice, the only thing on that row that says the
   view is not live.
 
+### The roster's foot is a grid
+
+Four equal columns across the panel, with every segment declaring how many of
+them it takes: the batch four, so its bar runs the width and its glyph count
+scales with the cell; `messages` one; `activity` and `keys` two.
+Segments fill left to right in the order the list gives, a segment that will
+not fit in what is left of a row starts the next, and rows are added up to
+`watch_status_roster_rows`.
+
+The layout depends only on the spans and never on the text.
+That is the point of declaring them: a foot that reflowed as a percentage went
+from 9% to 10% would move every figure on it four times a minute, and the eye
+would have nowhere to rest.
+It is also what makes the row count knowable before the panel's height is
+divided up, which it has to be — every row of the foot is a row the roster
+gives up.
+
+The conversation's row gives things up from the right and is right to: it
+carries a legend and a user's command, and losing those costs a reminder.
+This foot has no legend to spend, so a figure it dropped for width was the
+feature not working.
+On a pane too narrow for four columns to hold a figure each, or too short for
+the rows, it falls back to the single fitted row it had before the grid — which
+narrows everything and drops nothing.
+Dropping from the right happens only past the grid's own row limit, which a
+reader chose and a cramped terminal did not.
+
+Each figure carries its own attribute rather than the row being uniformly dim:
+the batch in the accent, the activity bold while working, the count and the
+legend dim.
+A segment's text may arrive carrying escape codes — one of them is a status
+line rendered for a terminal — so the codes are converted to curses attributes
+rather than printed, and everything that is not a colour, a bold or a dim is
+removed whole.
+A cursor movement in a segment is not a colour; it is a command to the
+terminal, and the rule `protocol.scrub` keeps for a name is kept here for
+anything a subprocess printed.
+
 `notice` is never given up for WIDTH: it goes first when it is on, and the
 other segments are given up from the right until what is left fits, with the
 batch figure last to go because it is the one number two agents are both

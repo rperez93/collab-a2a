@@ -176,8 +176,10 @@ _default_status = status
 
 # --- the status line, from ANSI to curses -------------------------------------
 
-_SGR = re.compile(r"\033\[([0-9;]*)m")
-#: The colours `statusline.COLORS` speaks, as the viewer's pairs.
+#: The colours `statusline.COLORS` speaks, as the viewer's pairs. The walk over
+#: the codes themselves lives in `client.statusbar`, which is where the other
+#: caller is: the roster's foot paints per segment and has the same problem
+#: with the same answer, and two walks over one escape grammar is one too many.
 _SGR_PAIR = {"32": C_ONLINE, "33": C_WARN, "31": C_OFFLINE, "36": C_ACCENT}
 
 
@@ -189,28 +191,17 @@ def status_segments(status: dict[str, Any], width: int) -> list[tuple[str, int]]
     with the pair each run should be painted in, so the green dot stays green
     and no escape reaches the screen as characters.
     """
+    from .statusbar import sgr_runs
+
     line = statusline.render({"heartbeat": time.time(), **status}, width=width)
-    out: list[tuple[str, int]] = []
-    pos, pair, dim = 0, 0, False
-    for m in _SGR.finditer(line):
-        if m.start() > pos:
-            out.append((line[pos:m.start()], _attr(pair, dim)))
-        for code in m.group(1).split(";"):
-            if code in ("", "0"):
-                pair, dim = 0, False
-            elif code == "2":
-                dim = True
-            elif code in _SGR_PAIR:
-                pair = _SGR_PAIR[code]
-        pos = m.end()
-    if pos < len(line):
-        out.append((line[pos:], _attr(pair, dim)))
-    return out
+    return [(run, _attr(_SGR_PAIR.get(colour, 0), dim, bold))
+            for run, colour, bold, dim in sgr_runs(line)]
 
 
-def _attr(pair: int, dim: bool) -> int:
+def _attr(pair: int, dim: bool, bold: bool = False) -> int:
     attr = curses.color_pair(pair) if pair else 0
-    return attr | (curses.A_DIM if dim else 0)
+    return (attr | (curses.A_DIM if dim else 0)
+            | (curses.A_BOLD if bold else 0))
 
 
 # --- rows -----------------------------------------------------------------------

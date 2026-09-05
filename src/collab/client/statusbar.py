@@ -35,9 +35,11 @@ disagreed would be worse than either — the reader has both on screen at once.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
@@ -79,6 +81,85 @@ MAX_COMMAND_TEXT = 200
 #: behind it and this one is refreshed six times as often.
 COMMAND_TIMEOUT = 5.0
 
+#: A ceiling on the batch bar however wide the panel is. Past about this many
+#: blocks the eye stops reading a proportion and starts reading a line, and the
+#: percentage beside it is doing the work anyway.
+MAX_BAR_WIDTH = 48
+
+
+#: An SGR escape: the only kind of escape anything here is allowed to carry.
+_SGR = re.compile(r"\033\[([0-9;]*)m")
+
+#: Every OTHER escape sequence, removed WHOLE rather than left as text. Taking
+#: out the escape byte alone — which is all `protocol.scrub` does, correctly,
+#: for a name — turns `ESC[2J` into a visible `[2J` in the middle of a figure.
+#: What is wanted here is that the sequence never happened: CSI and OSC in
+#: full, the OSC to its terminator.
+#: NOT ending in `m`: that is SGR, which is the one sequence honoured rather
+#: than removed, and a pattern that ate it would take every colour with it.
+_ESCAPES = re.compile(r"\033\][^\007\033]*(?:\007|\033\\)?"
+                      r"|\033\[[0-9;?]*[A-Za-ln-z]"
+                      r"|\033[@-Z\\-_]")
+
+#: What SGR codes a segment may express, and nothing else. Colour, bold and
+#: dim, plus the reset. Everything unlisted is DROPPED rather than passed
+#: through, which is the whole point of converting rather than printing: a
+#: segment's text can be a user's command output, and a cursor movement or a
+#: screen clear in it is not a colour, it is a command to the terminal — the
+#: rule `protocol.scrub` keeps for text that arrived from somebody else, kept
+#: here for text that arrived from a subprocess.
+SGR_COLOURS = {"30", "31", "32", "33", "34", "35", "36", "37",
+               "90", "91", "92", "93", "94", "95", "96", "97"}
+SGR_BOLD, SGR_DIM, SGR_RESET = "1", "2", "0"
+
+
+def sgr_runs(text: str) -> list[tuple[str, str, bool, bool]]:
+    """Split text where its colour changes: (run, colour, bold, dim).
+
+    The pieces this module builds are plain, but one of them is whatever a
+    user's command printed and another is a status line rendered for a
+    terminal — both of which speak in escape codes while curses speaks in
+    attributes. Walking the codes is what lets a green dot stay green without
+    an escape reaching the screen as three visible characters.
+
+    Colour, bold and dim are honoured; everything else is dropped on the floor.
+    """
+    # EVERY OTHER ESCAPE FIRST, and whole. What is left is text and SGR, so
+    # the walk below has one grammar to know rather than two.
+    text = _ESCAPES.sub("", text or "")
+    out: list[tuple[str, str, bool, bool]] = []
+    pos, colour, bold, dim = 0, "", False, False
+    for found in _SGR.finditer(text or ""):
+        if found.start() > pos:
+            out.append((text[pos:found.start()], colour, bold, dim))
+        for code in found.group(1).split(";"):
+            if code in ("", SGR_RESET):
+                colour, bold, dim = "", False, False
+            elif code == SGR_BOLD:
+                bold = True
+            elif code == SGR_DIM:
+                dim = True
+            elif code in SGR_COLOURS:
+                colour = code
+        pos = found.end()
+    if pos < len(text or ""):
+        out.append((text[pos:], colour, bold, dim))
+    # And the control characters an escape sequence never accounted for. This
+    # text can be a subprocess's output, and a bare carriage return paints a
+    # forged line over a real one — the rule `protocol.scrub` keeps.
+    return [(scrub(run), colour, bold, dim)
+            for run, colour, bold, dim in out if scrub(run)]
+
+
+def strip_sgr(text: str) -> str:
+    """The same text with every escape gone, for measuring and for clipping.
+
+    A row's width is its COLUMNS, and an escape occupies none of them; measured
+    with the codes in it, a coloured segment reserves twenty columns it does
+    not use and the figure beside it is dropped for a width nobody was using.
+    """
+    return _SGR.sub("", _ESCAPES.sub("", text or ""))
+
 
 def money_text(value: Any) -> str:
     """Spend, as money, or nothing at all when it is not a number.
@@ -94,7 +175,7 @@ def money_text(value: Any) -> str:
 
 
 def batch_segment(figures: Any, *, now: float | None = None,
-                  narrow: bool = False) -> str:
+                  narrow: bool = False, room: int = 0) -> str:
     """How much of the shared batch is done — or nothing, when nothing is true.
 
     Deliberately the same four refusals as the host agent's status line, in
@@ -129,7 +210,19 @@ def batch_segment(figures: Any, *, now: float | None = None,
     if narrow:
         text = f"{pct}% {counts}"
     else:
-        text = f"batch {batch_progress.bar(pct)} {pct}% {counts}"
+        # THE BAR GROWS INTO THE ROOM IT IS GIVEN. Six glyphs were the right
+        # answer when this shared a line with three other figures; on the
+        # roster's foot it has a row to itself, and a picture of a proportion
+        # is the one figure here that gets better with width — six blocks in
+        # eighty columns is a smaller, less readable bar than the number beside
+        # it. `room` is the cell; everything else on the line is measured out
+        # of it first, so the bar takes what is genuinely left and never one
+        # column more.
+        glyphs = batch_progress.BAR_WIDTH
+        if room:
+            spare = room - len(f"batch  {pct}% {counts}")
+            glyphs = max(batch_progress.BAR_WIDTH, min(spare, MAX_BAR_WIDTH))
+        text = f"batch {batch_progress.bar(pct, glyphs)} {pct}% {counts}"
     if moved := batch_progress.delta_note(figures, now=now):
         text += f" {moved}"
     if batch_progress.is_complete(figures):
@@ -392,7 +485,18 @@ def hub_note(status: Any) -> str:
     return f"hub {shown} — the host runs collab kill, then collab host --resume"
 
 
-def compose(*, notice: str = "", keys: Any = "", batch: Any = None,
+def compose(**kwargs: Any) -> list[Any]:
+    """The row's pieces, without their names. See `compose_named`.
+
+    The single row does not care which segment a piece came from — it joins
+    them and gives them up from the right — so it keeps the shape it always
+    had, and the grid below takes the named one.
+    """
+    return [piece(0) if callable(piece) else piece
+            for _name, piece in compose_named(**kwargs)]
+
+
+def compose_named(*, notice: str = "", keys: Any = "", batch: Any = None,
             stats: Any = None, command: str = "", messages: Any = None,
             activity: Any = None,
             segments: Sequence[str] = DEFAULT_SEGMENTS,
@@ -420,8 +524,13 @@ def compose(*, notice: str = "", keys: Any = "", batch: Any = None,
         return kept if len(kept) > 1 else (kept[0] if kept else "")
 
     built = {
-        "batch": lambda: forms(batch_segment(batch, now=now),
-                               batch_segment(batch, now=now, narrow=True)),
+        # A CALLABLE, because this is the one segment whose rendering depends
+        # on the room it is given: the bar's glyph count scales to the cell.
+        # `compose` resolves it at zero room for the single row, where six
+        # glyphs beside three other figures is still the right answer.
+        "batch": lambda: (lambda room=0: forms(
+            batch_segment(batch, now=now, room=room),
+            batch_segment(batch, now=now, narrow=True))),
         "messages": lambda: forms(messages_segment(messages, now=now),
                                   messages_segment(messages, now=now, narrow=True)),
         "stats": lambda: stats_segment(stats),
@@ -437,13 +546,21 @@ def compose(*, notice: str = "", keys: Any = "", batch: Any = None,
     # it out from under that protection without being told. Turning it off is a
     # choice somebody can make; losing it to a progress bar on a narrow pane is
     # the failure this module's docstring exists to name.
-    parts: list[Any] = [notice] if (notice and "notice" in segments) else []
+    parts: list[tuple[str, Any]] = ([("notice", notice)]
+                                   if (notice and "notice" in segments) else [])
     for name in segments:
         make = built.get(name)
         if make is None:
             continue
-        if piece := make():
-            parts.append(piece)
+        piece = make()
+        # A CALLABLE IS ALWAYS TRUTHY, so it is asked whether it has anything
+        # to say before it is kept: a batch that is closed, absent or unstale
+        # renders to nothing, and a cell drawn for it would be an empty column
+        # where the reader expects a figure.
+        if callable(piece) and not _forms(piece(0)):
+            continue
+        if piece:
+            parts.append((name, piece))
     return parts
 
 
@@ -475,6 +592,191 @@ def roster_segments(segments: Sequence[str], *, messages: bool) -> tuple[str, ..
         return tuple(kept)
     at = kept.index("batch") + 1 if "batch" in kept else 0
     return tuple(kept[:at] + ["messages"] + kept[at:])
+
+
+# --- the roster foot, as a grid ------------------------------------------------
+#
+# The conversation's row is one line that gives things up from the right. The
+# roster's foot is not: every part of it is a figure, there is no legend to
+# spend, and a figure it dropped for width was the feature not working — which
+# is what `fit(keep=…)` was doing about it, by clipping instead. Clipping a
+# batch bar and a message count into forty columns is a row nobody can read.
+#
+# So it is a GRID: four equal columns across the panel, each segment declaring
+# how many of them it occupies. The batch takes all four and draws its bar
+# across the whole width, which is the one figure that gets better with room;
+# the count takes one, because it is six characters; the rest take two.
+#
+# The layout depends only on the spans, never on the text. That is the point of
+# declaring them: a row that reflowed as a percentage went from 9% to 10% would
+# move every figure on the foot four times a minute, and the reader's eye would
+# have nowhere to rest.
+
+#: The columns the foot is divided into, and the blank between two cells. No
+#: rules are drawn between them: a border costs a column of every cell and the
+#: alignment already says where one figure ends and the next begins.
+GRID_COLUMNS = 4
+GRID_GAP = 2
+
+#: What each segment takes when nobody has said otherwise. The batch is a whole
+#: row so its bar can run the width of the panel; `messages` is a number and a
+#: word; `activity` and `keys` are sentences and get half a row each.
+DEFAULT_SPANS = {"batch": 4, "messages": 1, "activity": 2, "keys": 2}
+
+
+@dataclass(frozen=True)
+class Cell:
+    """One segment, placed: which row, which columns, and the text that fits."""
+
+    name: str
+    text: str
+    row: int
+    x: int
+    width: int
+
+
+def column_edges(width: int, columns: int = GRID_COLUMNS,
+                 gap: int = GRID_GAP) -> list[int]:
+    """Where each column starts, and where the last one ends.
+
+    Computed from the whole width rather than by multiplying a rounded cell
+    width, so the columns stay level with each other on a pane whose width does
+    not divide by four — the alternative leaves up to three unused columns at
+    the right, which on an eighty-column pane is visible as a ragged edge.
+    """
+    if width <= 0 or columns <= 0:
+        return [0]
+    unit = (width + gap) / columns
+    return [int(round(i * unit)) for i in range(columns + 1)]
+
+
+def place(names: Sequence[str], spans: dict[str, int], *,
+          columns: int = GRID_COLUMNS, rows: int = 3) -> list[tuple[str, int, int]]:
+    """Which row and column each segment lands on: (name, row, column).
+
+    Left to right in the order the list gives, and a segment that does not fit
+    in what is left of a row starts the next one — never split across two,
+    because half a batch bar on one row and half on the next is not a figure.
+
+    Past the row limit a segment is dropped, from the right, which is `fit`'s
+    rule and is right for the same reason: the list is an order of preference,
+    so the thing somebody put last is the thing they can most afford to lose.
+    """
+    placed: list[tuple[str, int, int]] = []
+    row, used = 0, 0
+    for name in names:
+        span = max(1, min(int(spans.get(name, 1)), columns))
+        if used + span > columns:
+            row, used = row + 1, 0
+        if row >= max(1, rows):
+            break                           # no room left; drop the rest
+        placed.append((name, row, used))
+        used += span
+    return placed
+
+
+def grid(pieces: Sequence[tuple[str, Any]], width: int,
+         measure: Callable[[str], int], clip: Callable[[str, int], str], *,
+         spans: dict[str, int] | None = None, columns: int = GRID_COLUMNS,
+         rows: int = 3, gap: int = GRID_GAP) -> list[Cell]:
+    """Lay the foot out. Returns every cell that is actually drawn.
+
+    Each segment is fitted INTO its cell by the rule the single row already
+    used: the widest form that fits, then the narrower one, then a clip with an
+    ellipsis — a clip is visible and a drop is not.
+
+    Nothing is dropped for width here. Width is decided by the spans, so a
+    segment that does not fit its cell is one whose cell is too narrow for any
+    of its forms, and the honest answer to that is the clipped text rather than
+    a blank column where a figure was.
+    """
+    spans = {**DEFAULT_SPANS, **(spans or {})}
+    edges = column_edges(width, columns, gap)
+    out: list[Cell] = []
+    for name, row, col in place([n for n, _ in pieces], spans,
+                                columns=columns, rows=rows):
+        span = max(1, min(int(spans.get(name, 1)), columns))
+        span = min(span, columns - col)
+        cell_w = max(0, edges[col + span] - edges[col] - gap)
+        piece = next(p for n, p in pieces if n == name)
+        text = _best_form(piece, cell_w, measure, clip)
+        if text:
+            out.append(Cell(name, text, row, edges[col], cell_w))
+    return out
+
+
+def fits_the_grid(pieces: Sequence[tuple[str, Any]], width: int,
+                  measure: Callable[[str], int], *,
+                  spans: dict[str, int] | None = None,
+                  columns: int = GRID_COLUMNS, rows: int = 3,
+                  gap: int = GRID_GAP) -> bool:
+    """Can every segment's NARROWEST form fit the cell the grid would give it?
+
+    The grid divides the panel into four whatever the panel is, so on a
+    twenty-seven-column pane a one-column cell is five characters and `128
+    msgs` arrives as `128…`. That is worse than the single fitted row this foot
+    had before, which narrows everything and clips nothing until it must.
+
+    So the grid is used where it fits and the row is used where it does not.
+    Asked of the narrowest form because that is the last thing the grid would
+    fall back to inside a cell: a segment whose shortest rendering does not fit
+    is one the grid can only answer with an ellipsis.
+    """
+    spans = {**DEFAULT_SPANS, **(spans or {})}
+    edges = column_edges(width, columns, gap)
+    for name, row, col in place([n for n, _ in pieces], spans,
+                                columns=columns, rows=rows):
+        span = min(max(1, int(spans.get(name, 1))), columns - col)
+        cell_w = max(0, edges[col + span] - edges[col] - gap)
+        piece = next(p for n, p in pieces if n == name)
+        forms = _forms(piece(cell_w) if callable(piece) else piece)
+        if forms and measure(forms[-1]) > cell_w:
+            return False
+    return True
+
+
+def plain(named: Sequence[tuple[str, Any]]) -> list[Any]:
+    """The pieces without their names, for the single-row `fit`.
+
+    A panel too short for the grid's rows falls back to one fitted row, which
+    is what this foot did before it was a grid and what still never drops a
+    figure. So the two layouts are both reachable and the pieces have to be
+    usable by either.
+    """
+    return [piece(0) if callable(piece) else piece for _name, piece in named]
+
+
+def _best_form(piece: Any, room: int, measure: Callable[[str], int],
+               clip: Callable[[str, int], str]) -> str:
+    """The widest rendering of one segment that fits, else the narrowest clipped.
+
+    A piece may be a CALLABLE taking the room it has been given, for the one
+    segment whose rendering depends on it: the batch bar scales its glyphs to
+    the cell. Everything else is a string or a tuple of forms and ignores the
+    width until it is measured.
+    """
+    if callable(piece):
+        piece = piece(room)
+    forms = _forms(piece)
+    if not forms or room <= 0:
+        return ""
+    for form in forms:
+        if measure(form) <= room:
+            return form
+    return clip(forms[-1], room)
+
+
+def rows_needed(names: Sequence[str], spans: dict[str, int] | None = None, *,
+                columns: int = GRID_COLUMNS, rows: int = 3) -> int:
+    """How many rows this foot will actually use. 0 when it draws nothing.
+
+    Asked before the panel's height is divided up, because the roster gives up
+    the rows this takes and has to know how many that is before it decides how
+    many participants it can show.
+    """
+    spans = {**DEFAULT_SPANS, **(spans or {})}
+    placed = place(names, spans, columns=columns, rows=rows)
+    return (max(row for _n, row, _c in placed) + 1) if placed else 0
 
 
 def _forms(piece: Any) -> tuple[str, ...]:
