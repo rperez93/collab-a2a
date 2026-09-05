@@ -912,8 +912,17 @@ class Daemon:
         if not self.waker.reminder_due():
             return
         if self.waker.offer_reminder(self.waker.reminder()["text"]):
-            self.waker.reminded()
+            self.waker.reminded("monitor")
+            # SAID OUT LOUD, in the daemon's ordinary log as well as the
+            # optional diagnostic one. This route left no trace whatever: the
+            # drop file is overwritten by the next reminder, the interval
+            # restarts, and «my agent is not being reminded» could not be told
+            # from «it is, by the route you forgot it had».
+            logger.info("reminder handed to the monitor")
             diagnostics.log("reminder", route="monitor", outcome="handed over")
+        else:
+            logger.warning("could not leave the reminder for the monitor")
+            diagnostics.log("reminder", route="monitor", outcome="not written")
 
     async def _maybe_compact(self) -> None:
         """Compact the agent's context when its OWN figures say it is nearly full.
@@ -1007,7 +1016,7 @@ class Daemon:
         reminder = ""
         if self.waker.reminder_due():
             reminder = self.waker.reminder()["text"]
-            self.waker.reminded()
+            self.waker.reminded("wake")
         if batch is None and not reminder:
             return
         # Held alongside the task, so shutdown can defer the batch this turn is
@@ -1172,6 +1181,15 @@ class Daemon:
         if proc.returncode == 0:
             self.waker.succeeded(batch)
             self._log_wake("delivered", "", batch, reminder)
+            if reminder:
+                # THE RECIPE, NEVER THE CHILD'S OUTPUT. A headless recipe's
+                # stdout is the agent's whole turn, and a delivery into a pane
+                # prints the pane's id — one of those is the conversation and
+                # the other is somebody's terminal. The recipe is the fact
+                # worth having: it says which route carried it.
+                logger.info("reminder delivered with the wake (%s)",
+                            wake.recipe_of(config.command)
+                            or "a command of your own")
             self._wake_note = (
                 f"woke the agent with {wake.summarise(batch.events())}"
                 if batch is not None

@@ -29,6 +29,7 @@ These are noted per command below.
 | [`wake`](#wake) | Let the daemon start a turn for an agent that cannot watch the feed. |
 | [`context`](#context) | Compact or clear this agent's own context window. |
 | [`issue`](#issue) | Write a bug report from this machine's own records. |
+| [`remind`](#remind) | Make the standing reminder due now. |
 | [`check`](#check) | Report what to fix when something is wrong. |
 | [`working`](#working) | Say what you are doing. |
 | [`idle`](#idle) | Say you have stopped. |
@@ -454,6 +455,34 @@ own checks, not a second set.
 when the agent's own reported share of its window reaches that percent. It is
 `0` — off — unless you ask, because compacting is not undoable.
 
+## remind
+
+Make the standing reminder due now, rather than at the end of its interval.
+
+```text
+collab remind now [--session SESSION]
+```
+
+| Argument or flag | Meaning |
+|---|---|
+| `now` | The only action. Ask for a reminder immediately. |
+| `--session SESSION` | Act on this session id instead of the current one. |
+
+For the moment you have just changed `remind_host` or just armed the route, and
+want to see the thing arrive rather than wait ten minutes to find out whether
+it works. It prints which route will carry it and roughly when.
+
+**It asks; it does not deliver.** The daemon holds the clock, the batch queue
+and the knowledge of which route is cheapest, so this leaves a marker the
+daemon picks up on its next heartbeat and the daemon decides the rest — an
+agent with a monitor *and* an armed wake still gets exactly one. With no daemon
+running the wake cannot fire at all, so the command writes the monitor's drop
+directly and says so, or tells you to start the listener when the monitor is
+not the route.
+
+It refuses, with the way to fix it, when the reminder is off
+(`collab config remind_every 0`) and when neither route exists.
+
 ## issue
 
 Write a bug report from this machine's own records, and print the command that
@@ -522,12 +551,14 @@ process responsible. It stays quiet while the daemon is down, because the
 because a daemon waiting for its first snapshot is starting up rather than
 stuck.
 
-The `reminder` check appears only when you have configured a standing reminder
-and neither route can carry it — nothing following the stream and no wake armed
-— which is the one state in which that setting is present, correct and certain
-never to fire. Its fix names `collab listen --follow` first, then
-`collab wake agents`, and `collab config remind_every 0` if you would rather
-decline it.
+The `reminder` check appears once you have configured a standing reminder, and
+says **which route will carry it** — your monitor, or your wake — together with
+when the last one went and by which route, or when the next one is due. It is a
+passing verdict, so the loop stays silent about it unless you pass `--verbose`.
+It becomes a warning in the one state where the setting is present, correct and
+certain never to fire: nothing following the stream and no wake armed. That
+fix names `collab listen --follow` first, then `collab wake agents`, and
+`collab config remind_every 0` if you would rather decline it.
 
 ## working
 

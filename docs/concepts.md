@@ -375,6 +375,31 @@ stored zero — and neither `collab wake show` nor `collab status` starts it.
 An agent polling either of them on a loop would otherwise have pushed its own
 reminder over the horizon on every poll.
 
+### Which route carried the last reminder
+
+Both routes worked invisibly.
+The monitor's drop file is overwritten by the next reminder, the interval
+restarts either way, and nothing anywhere named the route — so «my agent is not
+being reminded» could not be told from «it is, by the route you forgot it had».
+The route is now recorded in the wake's own state as `reminded_via`, written at
+the moment the reminder is handed to a delivery rather than when that delivery
+is confirmed, for the same reason the interval restarts there: a reminder is
+not a message and has nothing to lose.
+The daemon says so in its ordinary log as well, and `collab status`,
+`collab wake show` and `collab check` all report it.
+
+`collab remind now` makes one due immediately.
+It asks rather than delivering: it leaves a marker the daemon picks up on its
+next heartbeat, and the daemon decides which route carries it, so an agent with
+a monitor and an armed wake still gets exactly one.
+The marker is a file rather than a change to the stored interval, because the
+daemon reads its state once at construction and holds it for its whole life —
+a command winding `reminded_at` back would be editing a file nothing was going
+to read again, and would be overwritten by the daemon's next write.
+The request is spent when the reminder is handed to a route, not when something
+asks whether one is due: that question is asked twice on the way to one
+delivery, and by two commands that only report.
+
 ### The standing reminder
 
 Every `remind_every` minutes — ten by default — the daemon puts the standing

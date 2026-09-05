@@ -470,10 +470,15 @@ def _checks(profile, monkeypatch, *, monitors, armed):
     return {r["check"]: r for r in cli._checks(profile)}
 
 
-def test_the_check_is_quiet_when_a_monitor_can_carry_it(profile, monkeypatch,
-                                                        isolated):
+def test_the_check_names_the_monitor_as_the_route_carrying_it(profile, monkeypatch,
+                                                              isolated):
+    """A passing verdict, so `collab check` still prints nothing — and it now
+    says WHICH route, because that is the thing nobody can see. Both routes
+    work invisibly, and «which one is carrying this» had no answer anywhere."""
     write_config(isolated, remind_every=10)
-    assert "reminder" not in _checks(profile, monkeypatch, monitors=1, armed=False)
+    said = _checks(profile, monkeypatch, monitors=1, armed=False)["reminder"]
+    assert said["verdict"] == cli.CHECK_OK
+    assert "via your monitor" in said["detail"]
 
 
 def test_the_check_warns_with_neither_a_monitor_nor_a_wake(profile, monkeypatch,

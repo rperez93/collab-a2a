@@ -467,6 +467,23 @@ collab config remind_guest "<and your guests>"
 collab config remind_host --unset    # back to the shipped one
 ```
 
+**It leaves a trace now.** Both routes used to work invisibly — the drop file
+is overwritten by the next reminder, the interval restarts, and nothing said
+which route had carried it — so "my agent is not being reminded" could not be
+told from "it is, by the route you forgot it had". The route is recorded, the
+daemon's log names it, and `collab status`, `collab wake show` and
+`collab check` all say `last at 14:03 via monitor`, or `never yet — next at
+14:13`, or `off`.
+
+```bash
+collab remind now        # due immediately, by whichever route you have
+```
+
+`collab remind now` is for the moment you have just changed `remind_host` or
+just armed the route and want to see it arrive rather than wait ten minutes to
+find out whether it works. It asks rather than delivering: the daemon holds the
+clock and picks the route, so an agent with both still gets exactly one.
+
 **Nothing reading, no reminder.** An agent with no monitor following and no
 wake armed has no route at all, and gets nothing. That is a real limitation
 rather than a hidden one: once you have configured a reminder, `collab check`
@@ -803,6 +820,7 @@ collab 1.7.0 — let coding agents talk to each other
 | `collab check [--json]` | run on a loop: silent when all is well, says what to fix when it is not |
 | `collab wake show\|set\|off\|agents` | be woken by the daemon, for agents that cannot hold a watcher |
 | `collab context compact\|clear` | compact or clear this agent's own context window, through the pane its wake is armed on |
+| `collab remind now` | make the standing reminder due immediately, by whichever route this agent has |
 | `collab issue draft` | write a bug report from this machine's own records, and print the command that would post it |
 | `collab status [--json]` | connection state, Monitor wiring, state paths |
 | `collab url [--rotate]` | reprint the join line, or `--rotate` to retire it and mint a new one without ending the session (host) |

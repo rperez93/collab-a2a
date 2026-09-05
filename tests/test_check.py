@@ -28,6 +28,24 @@ from collab.client import daemon as d
 from collab.config import SessionProfile
 
 
+@pytest.fixture(autouse=True)
+def _own_config(tmp_path, monkeypatch):
+    """A throwaway global config, never the machine's own.
+
+    `collab check` reads it: the standing reminder's interval lives there, and
+    the reminder check now reports the route that will carry it whenever
+    somebody has configured one. Without this, whether these tests pass depends
+    on what the person running them happens to have in their own config — the
+    isolation `test_wake.py` already takes for the same reason.
+    """
+    from collab import config as cfg
+
+    monkeypatch.setenv("COLLAB_CONFIG", str(tmp_path / "global-config.json"))
+    cfg._CACHE.clear()
+    yield
+    cfg._CACHE.clear()
+
+
 @pytest.fixture()
 def session(tmp_path, monkeypatch):
     home = tmp_path / "collab"
