@@ -1118,6 +1118,32 @@ class Waker:
         """
         return reminder_settings(self.is_host)
 
+    @property
+    def remind_now_marker(self) -> Path:
+        """Where `collab remind now` asks for one, for the daemon to find.
+
+        A FILE AND NOT THE STATE. The daemon reads `state.json` once, at
+        construction, and holds it in memory for its whole life — so a command
+        winding `reminded_at` back would change a file the daemon is not going
+        to read again, and would be overwritten by the daemon's next write.
+        A marker the daemon LOOKS for is the only thing that crosses that
+        boundary, and it is the shape this codebase already uses for the
+        reminder drop beside it.
+        """
+        return self.home / "remind-now"
+
+    def ask_for_a_reminder_now(self) -> bool:
+        """Leave the marker. The daemon fires on its next heartbeat."""
+        try:
+            self.ensure()
+            self.remind_now_marker.write_text(str(self.now()))
+        except OSError:
+            return False
+        return True
+
+    def _asked_for_one_now(self) -> bool:
+        return self.remind_now_marker.exists()
+
     def reminder_due(self, *, start: bool = True) -> bool:
         """Is the reminder owed — and start its clock if it has none yet.
 
@@ -1133,6 +1159,16 @@ class Waker:
         if every <= 0:
             return False                    # `remind_every 0` — off
         now = self.now()
+        if self._asked_for_one_now():
+            # SOMEBODY ASKED, so the interval does not get a vote. Asking is
+            # not what consumes it — `reminded` is, at the moment the reminder
+            # is actually handed to a route. This question is asked twice on
+            # the way to one delivery (`due` decides there is a turn, then
+            # `_maybe_wake` decides what it carries) and by two readers that
+            # only report; consuming it here meant the first ask answered yes
+            # and the second, a line later, answered no, and the turn went out
+            # carrying nothing at all.
+            return True
         last = self._state["reminded_at"]
         if not last:
             # `start=False` is a reader asking, and a reader must not start
@@ -1235,7 +1271,7 @@ class Waker:
             return False
         return True
 
-    def reminded(self) -> None:
+    def reminded(self, via: str = "") -> None:
         """It has been put in front of the agent; start the interval again.
 
         Called when the reminder is handed to a delivery rather than when that
@@ -1243,8 +1279,21 @@ class Waker:
         lose: the next one is one interval away either way, and counting a
         failed delivery as «not yet reminded» would pile the same paragraph
         onto every retry of a batch that is already failing.
+
+        `via` is the ROUTE, and recording it is most of why anybody asks about
+        this feature. Two routes deliver it, only one of them exists for any
+        given agent, and neither left a trace — so «my agent is not being
+        reminded» could not be told from «it is, by the route you forgot it
+        had». The empty string is a caller that does not know, which is a
+        different thing from either route and is printed as neither.
         """
-        self._set(reminded_at=self.now())
+        # AND THE REQUEST IS SPENT HERE, which is the moment it was asking
+        # about. Left until now on purpose: everything upstream merely decides,
+        # and a decision taken twice on the way to one delivery would have
+        # consumed the request before anything acted on it.
+        with contextlib.suppress(OSError):
+            self.remind_now_marker.unlink()
+        self._set(reminded_at=self.now(), reminded_via=via)
 
     def reminder_prompt(self, text: str) -> str:
         """The reminder, framed as what it is: nobody's message."""
@@ -1535,7 +1584,7 @@ class Waker:
             tmp.write_text(json.dumps(self._state))
             os.replace(tmp, path)
 
-    def _set(self, **values: float) -> None:
+    def _set(self, **values: Any) -> None:
         self._state.update(values)
         self._save_state()
 

@@ -2534,16 +2534,32 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
     #     never armed a wake is the noise that gets this loop ignored — the
     #     same rule the stats check below follows for a route never set up.
     remind = reminder_settings(bool(profile.is_host))
-    monitored = bool(watchers(profile))
-    if remind["configured"] and remind["every"] and not monitored \
-            and not woken.get("armed"):
-        add("reminder", CHECK_WARN,
-            f"your {remind['every']}-minute reminder cannot be delivered —"
-            " nothing is following the stream and no wake is armed, and those"
-            " are the only two ways it reaches you",
-            f"{exe} listen --follow, or {exe} wake agents then"
-            f" {exe} wake set --agent <name>"
-            f" — or turn it off with {exe} config remind_every 0")
+    if remind["configured"] and remind["every"]:
+        route, _why = _reminder_route(profile, bool(woken.get("armed")))
+        if not route:
+            add("reminder", CHECK_WARN,
+                f"your {remind['every']}-minute reminder cannot be delivered —"
+                " nothing is following the stream and no wake is armed, and those"
+                " are the only two ways it reaches you",
+                f"{exe} listen --follow, or {exe} wake agents then"
+                f" {exe} wake set --agent <name>"
+                f" — or turn it off with {exe} config remind_every 0")
+        else:
+            # NAMED EVEN WHEN IT IS FINE, which every other passing check here
+            # also is — `--verbose` is what shows them and the loop stays
+            # silent otherwise. Worth saying because the route is the thing
+            # nobody can see: both of them work invisibly, and «which one is
+            # carrying this» had no answer anywhere until now.
+            told = wake.Waker(DaemonPaths(profile.dir).root, profile.session_id,
+                              is_host=bool(profile.is_host)).explain()
+            last = told["reminder"]
+            when = (f"last at {_clock(last['last_at'])}"
+                    + (f" via {last['via']}" if last["via"] else "")
+                    if last["last_at"] else
+                    f"never yet — next at {_clock(last['next_at'])}"
+                    if last["next_at"] else "never yet")
+            add("reminder", CHECK_OK,
+                f"every {remind['every']}m via your {route} · {when}")
 
     # 3. Has anything been left undrained? ONLY MEANINGFUL WHILE POLLING.
     #
@@ -3093,6 +3109,86 @@ def cmd_wake(args: argparse.Namespace) -> int:
     if not status:
         warn("the daemon is not running, so nothing is watching to wake you")
     print()
+    return 0
+
+
+def _reminder_route(profile: SessionProfile, armed: bool) -> tuple[str, str]:
+    """Which route will carry this agent's next reminder, and why not if none.
+
+    Two routes, and most agents have exactly one. The monitor is named first
+    because it is the one that costs no turn and the one the daemon offers
+    first, so an agent holding both is reminded on it and the wake carries
+    nothing extra.
+    """
+    if watchers(profile):
+        return "monitor", ""
+    if armed:
+        return "wake", ""
+    exe = Path(sys.argv[0]).name
+    return "", (f"nothing is following the stream and no wake is armed —"
+                f" `{exe} listen --follow`, or `{exe} wake agents` then"
+                f" `{exe} wake set --agent <name>`")
+
+
+def cmd_remind(args: argparse.Namespace) -> int:
+    """Make the standing reminder due now, rather than at the end of its interval.
+
+    For the moment somebody has just changed `remind_host`, or has just armed
+    the route, and wants to see the thing arrive rather than wait ten minutes
+    to find out whether it works.
+
+    IT ASKS; IT DOES NOT DELIVER. The daemon holds the clock, the batch queue
+    and the knowledge of which route is cheapest, and a command that delivered
+    on its own would be a second opinion about all three — an agent with a
+    monitor and an armed wake would get one from each. So this leaves a marker
+    the daemon picks up on its next heartbeat, and the daemon decides the rest.
+
+    With no daemon running there is nothing to pick it up, and the command does
+    the one thing that still works: leaves the drop where a followed stream
+    finds it. Nothing else is keeping an interval in that state either.
+    """
+    profile = _require_own_profile(args)
+    root = DaemonPaths(profile.dir).root
+    remind = reminder_settings(bool(profile.is_host))
+    exe = Path(sys.argv[0]).name
+    if not remind["every"]:
+        fail("the standing reminder is off")
+        print(dim(f"  {exe} config remind_every 10   turns it back on"))
+        return 1
+
+    waker = wake.Waker(root, profile.session_id, is_host=bool(profile.is_host))
+    armed = wake.read_config(root).enabled
+    route, why = _reminder_route(profile, armed)
+    if not route:
+        fail("no route can carry a reminder to this agent")
+        print(dim(f"  {why}"))
+        return 1
+
+    if is_running(profile) is None:
+        # Nothing will pick a marker up. The monitor route is the only one that
+        # works without a daemon — the wake IS the daemon — so say so plainly
+        # rather than leaving a request nothing is going to answer.
+        if route != "monitor":
+            fail("the listener is not running, so nothing can start a turn")
+            print(dim(f"  {exe} daemon start"))
+            return 1
+        if not waker.offer_reminder(remind["text"]):
+            fail("could not leave the reminder for the monitor")
+            return 1
+        waker.reminded("monitor")
+        ok("reminder left for your followed stream — it prints on the next event")
+        return 0
+
+    if not waker.ask_for_a_reminder_now():
+        fail("could not ask the listener for one")
+        return 1
+    ok(f"asked for a reminder now — it will arrive via your {route}")
+    if route == "monitor":
+        print(dim("  within a few seconds, as a line on `collab listen --follow`"))
+    else:
+        print(dim("  on the next heartbeat, unless the wake is inside its"
+                  " min-gap or backing off"))
+        print(dim(f"  {exe} wake show   says which of the two, and for how long"))
     return 0
 
 
@@ -4795,6 +4891,14 @@ def build_parser() -> argparse.ArgumentParser:
     wa.add_argument("--json", action="store_true")
     add_session_flag(wa)
     wa.set_defaults(func=cmd_wake)
+
+    rn = sub.add_parser("remind",
+                        help="make the standing reminder due now instead of at"
+                             " the end of its interval")
+    rn.add_argument("action", choices=["now"],
+                    help="ask for one immediately")
+    add_session_flag(rn)
+    rn.set_defaults(func=cmd_remind)
 
     iss = sub.add_parser("issue",
                          help="write a bug report from this machine's own"

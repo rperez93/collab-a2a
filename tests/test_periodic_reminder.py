@@ -714,14 +714,20 @@ def test_the_check_says_a_configured_reminder_cannot_be_delivered(profile, monke
     assert "remind_every 0" in said["fix"], "and the way to decline it"
 
 
-def test_the_check_is_quiet_once_a_wake_is_armed(profile, monkeypatch, isolated):
+def test_the_check_names_the_wake_as_the_route_once_one_is_armed(
+        profile, monkeypatch, isolated):
+    """A passing verdict, so the loop stays silent — and it says which route,
+    because an agent with no monitor is reminded by the wake and nothing
+    anywhere said so."""
     write_config(isolated, remind_every=10)
     (profile.dir / "status.json").write_text(json.dumps({
         "state": "live", "heartbeat": time.time(), "unread_messages": 0,
         "wake": {"armed": True, "last_wake": time.time()}}))
     monkeypatch.setattr(cli, "is_running", lambda p: 4242)
     monkeypatch.setattr(cli, "watchers", lambda p: [])
-    assert "reminder" not in {r["check"] for r in cli._checks(profile)}
+    said = {r["check"]: r for r in cli._checks(profile)}["reminder"]
+    assert said["verdict"] == cli.CHECK_OK
+    assert "via your wake" in said["detail"]
 
 
 def test_the_check_is_quiet_when_the_reminder_is_off(profile, monkeypatch, isolated):
