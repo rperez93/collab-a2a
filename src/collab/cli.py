@@ -3991,6 +3991,63 @@ def cmd_daemon(args: argparse.Namespace) -> int:
     return 0
 
 
+def _profile_in_home(home: Path) -> SessionProfile | None:
+    """The session a given state directory is currently pointed at.
+
+    `SessionProfile.current` reads the pointer in whichever home the resolver
+    lands on, which is the right answer for a command with no `--agent` and the
+    wrong one for a command that was given one.
+    """
+    try:
+        session_id = (Path(home) / "current").read_text().strip()
+    except OSError:
+        return None
+    if not session_id:
+        return None
+    return SessionProfile.load_from(Path(home) / "sessions" / session_id)
+
+
+def cmd_context(args: argparse.Namespace) -> int:
+    """Compact or clear the agent's own context, from outside its turn.
+
+    The command an agent runs when it can see its context filling up and has no
+    way to do anything about it: compaction is a slash command typed at the
+    tool's own prompt, and a model inside a turn cannot type at its own prompt.
+    Something outside the turn can, and the wake already is that something —
+    it holds a pane, a process and the program that was in it.
+
+    It prints what was typed and where, rather than only «done». The whole
+    class of failure here is a line going somewhere other than where it was
+    meant to, and «/compact into %3 (running claude)» is checkable by a person
+    in a way that «compacted» is not.
+    """
+    from . import compaction
+
+    if getattr(args, "agent", ""):
+        home = _which_agent(args, "the wake", "context")
+        if home is None:
+            return 1
+        profile = _profile_in_home(home)
+    else:
+        profile = (SessionProfile.load(args.session)
+                   if getattr(args, "session", None) else SessionProfile.current())
+    if profile is None:
+        fail("no active session — `collab join` or `collab host` first")
+        return 1
+    root = DaemonPaths(profile.dir).root
+    code, detail = compaction.apply(root, args.action)
+    if code != 0:
+        fail(detail)
+        if not wake.read_config(root).command:
+            print(dim("  this needs the tmux recipe: run `collab wake set"
+                      " --agent tmux` from inside your agent's own pane"))
+        return code
+    ok(detail)
+    print(dim("  the agent sees it as though you had typed it; it takes a"
+              " moment and costs a turn"))
+    return 0
+
+
 def cmd_skills(args: argparse.Namespace) -> int:
     from . import skills as sk
 
@@ -4359,6 +4416,18 @@ def build_parser() -> argparse.ArgumentParser:
     wa.add_argument("--json", action="store_true")
     add_session_flag(wa)
     wa.set_defaults(func=cmd_wake)
+
+    cx = sub.add_parser("context",
+                        help="compact or clear this agent's own context window,"
+                             " through the pane its wake is armed on")
+    cx.add_argument("action", choices=["compact", "clear"],
+                    help="compact summarises the session and keeps it; clear"
+                         " starts a new one and keeps nothing")
+    cx.add_argument("--agent", metavar="NAME",
+                    help="which agent in this checkout, when it holds more"
+                         " than one")
+    add_session_flag(cx)
+    cx.set_defaults(func=cmd_context)
 
     ck = sub.add_parser("check",
                         help="run on a loop: silent when all is well, says what"

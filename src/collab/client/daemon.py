@@ -69,6 +69,12 @@ ACTIVITY_REFRESH = 300.0
 #: no new information; once a minute keeps the stamp inside any threshold
 #: that calls a figure old, and a CHANGED figure never waits for this.
 STATS_REASSERT = 60.0
+#: How long to leave a failed automatic compaction before probing the pane
+#: again. The heartbeat runs every three seconds and an agent sitting over its
+#: threshold sits there for a long time, so without this a pane in copy mode
+#: would mean a `tmux display-message` twenty times a minute for the rest of
+#: the session. Nothing was typed when it failed, so nothing is lost by waiting.
+COMPACT_RETRY = 60.0
 
 #: Event kinds that change what the snapshot says, and so must pull a fresh one
 #: rather than waiting for the timer.
@@ -310,6 +316,15 @@ class Daemon:
         #: What we put on the roster on the woken turn's behalf, so that we
         #: retract that and nothing the agent said for itself.
         self._wake_activity: dict[str, Any] | None = None
+        #: The three moments `_maybe_compact` reasons from: when a compaction
+        #: last worked, when one was last attempted at all, and since when the
+        #: agent's reported share has been under the threshold. Held in memory
+        #: rather than on disk on purpose — a restarted daemon is entitled to
+        #: compact a full context again, and the alternative is a state file
+        #: whose staleness would have to be judged in its own right.
+        self._context_compacted_at = 0.0
+        self._context_tried_at = 0.0
+        self._context_under_since = 0.0
 
     @property
     def inbox(self) -> Inbox:
@@ -390,6 +405,12 @@ class Daemon:
             "messages": self._message_figures(),
             # Where our own usage figures got to. See `_stats_figures`.
             "stats": self._stats_figures(),
+            # When this daemon last compacted its own agent's context, or None
+            # for never. Written because the act is invisible from inside the
+            # agent — a session comes back shorter and nothing says who did it
+            # — and a feature that silently rewrites somebody's context has to
+            # leave a mark somewhere they can find it.
+            "context_compacted_at": self._context_compacted_at or None,
             "heartbeat": time.time(),
             "connected_since": self.connected_since,
             "failures": self.failures,
@@ -876,6 +897,73 @@ class Daemon:
         if self.waker.offer_reminder(self.waker.reminder()["text"]):
             self.waker.reminded()
 
+    async def _maybe_compact(self) -> None:
+        """Compact the agent's context when its OWN figures say it is nearly full.
+
+        The agent reports the share of its window in use — a status line hands
+        it over, or a `stats_command` prints it — and past a threshold the user
+        chose, the daemon types the compaction command into the same pane the
+        wake types into. Nobody else's number decides this: `read_stats` gives
+        back only figures stamped as ours, so two agents in one checkout cannot
+        compact each other.
+
+        OFF UNLESS ASKED. Compacting is not undoable; it replaces what the
+        agent was holding with a summary of it, and doing that unbidden takes
+        away work somebody was in the middle of relying on.
+
+        TWO CONDITIONS BEFORE A SECOND ONE, and both are needed because either
+        alone fires forever. The share must have fallen back under the
+        threshold — a figure that stops being reported keeps its last value, so
+        «still over» is also what a dead status line looks like — and ten
+        minutes must have passed, because a compaction that frees very little
+        leaves the share hovering on the line, crossing it on every heartbeat.
+
+        Never raises: it is called from the guarded half of the heartbeat, but
+        a delivery that failed is a thing to write down rather than a thing to
+        take the wake down with.
+        """
+        from ..config import CONTEXT_COMPACT_GAP, context_compact_at
+
+        threshold = context_compact_at()
+        if not threshold:
+            return
+        try:
+            share = float(read_stats(self.profile).get("context_pct"))
+        except (TypeError, ValueError):
+            return                          # the agent reports no such figure
+        now = time.time()
+        if share < threshold:
+            # BELOW THE LINE IS THE ONLY THING THAT RE-ARMS IT. Recorded here
+            # rather than inferred later, because the daemon is the only thing
+            # that watches the figure over time.
+            self._context_under_since = self._context_under_since or now
+            return
+        if (now - self._context_tried_at) < COMPACT_RETRY:
+            # A failed attempt must not become a `tmux display-message` every
+            # three seconds for as long as the agent stays full. Nothing was
+            # typed, so nothing is lost by asking again in a minute.
+            return
+        if self._context_compacted_at and (
+                not self._context_under_since
+                or (now - self._context_compacted_at) < CONTEXT_COMPACT_GAP):
+            return
+        from .. import compaction
+
+        self._context_tried_at = now
+        code, detail = await asyncio.to_thread(
+            compaction.apply, self.paths.root, "compact")
+        if code == 0:
+            self._context_compacted_at = now
+            self._context_under_since = 0.0
+            logger.info("context at %.0f%% of the window, over the %s%%"
+                        " threshold — %s", share, threshold, detail)
+        else:
+            # Not counted against the wake. The pane being in copy mode is the
+            # same story here as it is for a batch, and it is not evidence that
+            # messages are going unread.
+            logger.warning("could not compact the context at %.0f%%: %s",
+                           share, detail)
+
     async def _maybe_wake(self) -> None:
         """Start a turn in an agent that cannot start one for itself.
 
@@ -1179,6 +1267,11 @@ class Daemon:
                     # interval, so the other finds nothing due.
                     self._remind_the_monitor()
                     await self._maybe_wake()
+                    # AFTER THE WAKE, because a turn that was about to start is
+                    # more urgent than a window that is nearly full, and
+                    # compacting first would hand the woken turn a summary in
+                    # place of the conversation it was about to answer.
+                    await self._maybe_compact()
                 except asyncio.CancelledError:
                     raise
                 except Exception:           # noqa: BLE001

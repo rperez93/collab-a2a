@@ -447,10 +447,27 @@ def deliver_to_tmux(target: str, prompt_path: str, *, runner=None,
                      or "not an agent" in what)
         return (TRY_AGAIN if transient else 1), what
     line = (f"collab: {about} — read {prompt_path} and act on it")
+    code, said = send_keys(target, line, runner=runner)
+    if code != 0:
+        return 1, said
+    return 0, f"typed into {target} (running {what})"
+
+
+def send_keys(target: str, line: str, *, runner=None) -> tuple[int, str]:
+    """Type one line into a pane and submit it. NOTHING IS CHECKED HERE.
+
+    Split out of `deliver_to_tmux` when a second caller appeared — compacting
+    an agent's context types a slash command into the same pane — so that the
+    `--` that stops tmux reading a leading dash as a flag, and the `Enter` that
+    submits, are written once. Both callers do their own
+    `pane_holds_an_agent` first, and this deliberately does not: a function
+    that sometimes checks and sometimes does not is worse than one that never
+    claims to.
+    """
     code, said = _tmux(["send-keys", "-t", target, "--", line, "Enter"], runner)
     if code != 0:
         return 1, f"send-keys failed — {said}"
-    return 0, f"typed into {target} (running {what})"
+    return 0, f"typed into {target}"
 
 
 def deliver_to_codex(target: str, prompt: str, *, runner=None) -> tuple[int, str]:

@@ -159,6 +159,26 @@ drop reads as more work rather than lost work; report it as "scope grew by
 two", never as a slip and never as something to smooth over.
 
 
+## When your own context is filling up
+
+You cannot compact yourself: the command is a slash command at your tool's own
+prompt, and you cannot type at your own prompt from inside a turn. Collab can,
+through the tmux pane your wake is armed on.
+
+```bash
+collab context compact       # summarise this session, keep working in it
+collab context clear         # start again, keep nothing
+```
+
+Say what you are doing first — `collab working "…"` — and finish the piece of
+work you are on. A compaction lands as a turn, so anything you were part-way
+through is what gets summarised. If it refuses, read the line: it says whether
+the wake is armed against something with no prompt to type at, or whether the
+pane has changed under it. `collab config context_compact_at <percent>` makes
+the user's own daemon do this without being asked; that is theirs to set, not
+yours.
+
+
 ## What not to do
 
 - **Do not narrate.** One line per piece of work, not per file you open.

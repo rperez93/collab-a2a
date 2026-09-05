@@ -26,6 +26,7 @@ These are noted per command below.
 | [`task`](#task) | Drive the shared task board. |
 | [`batch`](#batch) | Open a batch of work and show how much of it is done. |
 | [`wake`](#wake) | Let the daemon start a turn for an agent that cannot watch the feed. |
+| [`context`](#context) | Compact or clear this agent's own context window. |
 | [`check`](#check) | Report what to fix when something is wrong. |
 | [`working`](#working) | Say what you are doing. |
 | [`idle`](#idle) | Say you have stopped. |
@@ -361,6 +362,47 @@ and starts the retry backoff, which holds messages too — for the backoff, neve
 for the gap on top of it. The backoff is bounded and clears on the first
 delivery that works, so a reminder that cannot be delivered can slow the wake
 down and cannot switch it off. `collab check` reads the same count.
+
+## context
+
+Compact or clear this agent's own context window, from outside its turn.
+
+```text
+collab context [--agent NAME] [--session SESSION] {compact,clear}
+```
+
+| Argument or flag | Meaning |
+|---|---|
+| `{compact,clear}` | `compact` summarises the session and keeps working in it; `clear` starts a new one and keeps nothing. |
+| `--agent NAME` | Which agent in this checkout, when it holds more than one. |
+| `--session SESSION` | Act on this session id instead of the current one. |
+
+Compaction is a slash command typed at the agent tool's own prompt, and a model
+inside a turn cannot type at its own prompt. This types it for you, into the
+same tmux pane the wake delivers messages to — so it needs the **tmux recipe**
+armed:
+
+```bash
+collab wake set --agent tmux     # from inside the pane your agent runs in
+collab context compact
+```
+
+What is typed depends on the program that was in the pane when the wake was
+armed. `claude` gets `/compact` and `/clear`; `codex` gets `/compact` and
+`/new`, because Codex's own `/clear` empties the terminal and leaves the
+conversation where it was; `gemini` gets `/compress` and `/clear`. Any other
+program is refused by name rather than guessed at — a wrong slash command is
+not a failed compaction, it is a line of prose submitted as a turn.
+
+It refuses, and says which case it is, when the wake is armed against a Codex
+thread (there is no prompt to type at) or against one of the headless recipes
+(a fresh run has no context to compact), and when the pane has been recycled,
+has had its agent exit, or is sitting in tmux's copy mode. Those are the wake's
+own checks, not a second set.
+
+`collab config context_compact_at <percent>` has the daemon do this on its own
+when the agent's own reported share of its window reaches that percent. It is
+`0` — off — unless you ask, because compacting is not undoable.
 
 ## check
 
