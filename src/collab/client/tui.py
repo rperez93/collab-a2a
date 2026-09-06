@@ -43,16 +43,15 @@ from ..protocol import (
     KIND_TASK,
     task_line,
 )
-try:
-    from ..protocol import file_outcome
-except ImportError:
-    # UNTIL THE ROOM-FILE BRANCH LANDS. `protocol.file_outcome` is the one
-    # wording for what an ack did to the host's copy — «deleted from the
-    # host», or how many are still to collect — shared with `watch` so the
-    # pane and the transcript cannot disagree. A protocol from before it only
-    # ever deleted. Remove this fallback with the merge.
-    def file_outcome(body: dict) -> str:
-        return "deleted from the host"
+# THE FALLBACK IS GONE, AND IT WAS WORSE THAN DEAD. A `try`/`except
+# ImportError` stood here with a shim returning «deleted from the host»,
+# labelled «until the room-file branch lands. Remove this fallback with the
+# merge». The branch landed and the fallback did not go. A same-package import
+# of a name that exists cannot raise ImportError, so it was unreachable — and
+# had it ever run it would have hardcoded the pre-merge answer while `watch`
+# reported how many were still to collect, which is the exact disagreement
+# `protocol.file_outcome` exists to prevent.
+from ..protocol import file_outcome
 from .. import activity, peers
 from .. import themes
 from ..config import watch_roster_settings, watch_status_settings

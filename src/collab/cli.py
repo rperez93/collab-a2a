@@ -997,7 +997,6 @@ def _publish_global_settings(profile: SessionProfile) -> None:
     and a warning about a colour would be noise in front of what matters. The
     daemon retries on reconnect.
     """
-    from . import identity as ident
 
     payload = {}
     color = default_color()
@@ -1245,7 +1244,6 @@ def _print_learnings(hits: list, *, key: str, bundle: Any) -> None:
     if not hits:
         print(dim(f"  nothing yet — `{exe} learn sync` asks the others"))
         return
-    from . import learnings
 
     for hit in hits:
         print(_learning_line(hit))
@@ -4343,7 +4341,6 @@ def cmd_agent(args: argparse.Namespace) -> int:
     files they are working on stay shared, which is the point of them being
     here together.
     """
-    from . import identity as ident
 
     action = args.action
     if action == "list":
