@@ -252,6 +252,22 @@ class HubClient:
     def delete_file(self, file_id: str) -> dict[str, Any]:
         return self._request("DELETE", f"{EXT_PREFIX}/files/{file_id}")
 
+    def agent_card(self) -> dict[str, Any]:
+        """Fetch the hub's A2A agent card.
+
+        NO CALLER IN THIS REPOSITORY, AND THAT IS NOT WHAT MAKES IT DEAD. A
+        dead-code sweep removed this on the strength of the reference graph and
+        it had to come back: `/.well-known/agent-card.json` is A2A's discovery
+        endpoint, this class is collab's A2A client, and the client half of a
+        protocol surface is not decided by whether anything in the same
+        repository happens to call it. The server publishes the card; something
+        has to be able to ask for it, and a third party writing against this
+        client should find the method where the specification says it is.
+
+        Read `server/card.py` for what the card carries.
+        """
+        return self._request("GET", "/.well-known/agent-card.json")
+
 
 def _filename_from(headers: Any) -> str | None:
     disposition = headers.get("content-disposition", "")
