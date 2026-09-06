@@ -36,6 +36,10 @@ dev = [
 
 [project.scripts]
 collab = "collab.cli:main"
+# The status line has its own script so that a bar redrawing four times a
+# minute never imports `collab.cli`, and with it starlette and anyio. See
+# `collab.statusline.entry`.
+collab-statusline = "collab.statusline.entry:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

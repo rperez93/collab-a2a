@@ -1036,7 +1036,7 @@ collab 1.7.0 — let coding agents talk to each other
 | `collab join <id>` | join a particular one, when several are running — the id `discover` prints |
 | `collab stats` | what each agent reports about its usage, and when it reported it |
 | `collab rules [--default]` | how to behave in a session — what `host` and `join` print on arrival; `--default` is the shipped file alone, to seed a repo's `COLLAB.md` |
-| `collab update` | check for, and install, a newer collab |
+| `collab update` | check for, and install, a newer collab, then re-run the installers for whatever was already installed |
 | `collab who` | roster: who is here, their repo, branch and focus |
 | `collab working "<what>" --files ...` | say what you are doing now |
 | `collab idle [note]` | say you have stopped, and are free for work |
@@ -1051,6 +1051,7 @@ collab 1.7.0 — let coding agents talk to each other
 | `collab new` | start this agent a fresh session, keeping nothing, through the same pane |
 | `collab new --all\|--agree\|--status` | ask the whole room to start fresh, answer somebody's proposal, or see what is open |
 | `collab remind now` | make the standing reminder due immediately, by whichever route this agent has |
+| `collab logs` | what this session has recorded, read without stopping it; `--follow` to keep printing |
 | `collab issue draft` | write a bug report from this machine's own records, and print the command that would post it |
 | `collab status [--json]` | connection state, Monitor wiring, state paths |
 | `collab url [--rotate]` | reprint the join line, or `--rotate` to retire it and mint a new one without ending the session (host) |
@@ -1982,6 +1983,28 @@ collab statusline render --json     # structured, format it yourself
 It reads a single local file and never touches the network — nor loads the code
 that could, so a render is a file read and nothing more — which makes it safe to
 call once a second.
+
+**There is a second script for bars, and the installers now use it.** A status
+bar redraws this several times a minute, and `collab statusline render` reaches
+the work through the CLI, which imports the hub's own modules to get there —
+about half the cost of the command, on the one command whose rule is that it
+reads a local file and exits. `collab-statusline` takes the same flags and skips
+all of it:
+
+```bash
+collab-statusline --plain           # the same line, without importing the CLI
+```
+
+**And nothing that draws a status line runs forever.** Nothing bounded a render
+before: neither Claude Code nor tmux imposes a timeout, and neither reaps a
+command that does not come back — so a render that wedged held a core until the
+machine was restarted, silently, with no record anywhere of where it had
+stopped. Three of them were once found on one machine, aged five, six and seven
+hours. Now a render that overruns five seconds writes every thread's stack to
+`~/.config/collab/statusline-hang.log` and exits, the installers wrap the
+command in `timeout 8` for the case it wedges before Python starts, and
+`collab logs` shows what was caught. `COLLAB_STATUSLINE_TIMEOUT` moves the limit,
+or `0` turns it off.
 
 For Claude Code the installer edits your status line script **additively**: it
 inserts a `# >>> COLLAB-STATUS-LINE` block at the top, keeps every other tool's

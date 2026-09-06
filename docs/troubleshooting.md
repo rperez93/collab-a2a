@@ -375,6 +375,50 @@ Then, depending on which it said:
    `collab config statusline_segments` lists what the line carries, and
    `collab config statusline_segments --unset` puts all of it back.
 
+## A `collab statusline` process is using a whole core
+
+It hung, and until it was bounded nothing would have stopped it. A status bar
+respawns the command every few seconds and reaps nothing, so a render that does
+not return holds a core for as long as the machine is up — silently, having
+written no output.
+
+Look at what it recorded:
+
+```bash
+collab logs
+```
+
+A render that overruns five seconds writes every thread's stack to
+`~/.config/collab/statusline-hang.log` and exits, and `collab logs` prints those
+first. The stack names the line it stopped on, which is the thing that is
+otherwise unknowable after the fact.
+
+If a process is already stuck, end that pid — and only that pid. It has
+produced no output and holds nothing anybody needs, so nothing is lost. A
+process in uninterruptible state (`D` in `ps`) takes no signal at all and clears
+only when the machine restarts.
+
+The installers wrap the command in `timeout 8` where the machine has it, which
+catches a wedge that happens before Python starts and therefore before the
+in-process guard can exist. Re-run `collab statusline install` to pick that up
+if your hook was written by an older collab; `collab update` now does it for
+you.
+
+To move the limit, or to turn it off on a machine where the bar is being killed
+wrongly:
+
+```bash
+export COLLAB_STATUSLINE_TIMEOUT=15   # seconds
+export COLLAB_STATUSLINE_TIMEOUT=0    # off
+```
+
+It has to be **exported into the environment the bar runs in** — the tmux
+server's, or the shell Claude Code launches your status line from — not merely
+set in a terminal. It moves both bounds at once: the in-process guard reads it,
+and the installed hook passes it to `timeout`, where `0` means no limit. A hook
+written by an older collab has a fixed number in it and ignores the variable;
+re-run `collab statusline install` to replace that hook.
+
 ## For contributors: tests import the wrong code
 
 collab is installed as an editable package, so a bare `pytest` imports whichever

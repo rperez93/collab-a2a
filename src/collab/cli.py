@@ -74,10 +74,12 @@ from .client.context import gather as ctx_gather
 from .protocol import (DEFAULT_ROOM, MAX_FILE_BYTES, ROOM_FILE_TTL_SECONDS,
                        Envelope, KIND_CHAT, KIND_HELLO, file_outcome, scrub,
                        scrub_block, short_state)
-from .server.session import (HubConfig, create_session, hosted_sessions,
-                             join_line, resume_session, rotate_invite,
-                             session_summary, stop_session)
-from .server.tunnel import NO_NGROK_HELP, free_port, local_ip, ngrok_version
+# NOT AT THE TOP. `server.session` reaches starlette and `server.tunnel`
+# reaches the tunnel client, and between them they were 57 of the 125 ms it
+# took to import this module — paid by `collab status`, by `collab who`, and
+# until it was given its own console script by every redraw of the status
+# line. Seven functions here host, kill, list or re-advertise a session and
+# they import what they need where they need it. See `statusline.entry`.
 
 # --- output helpers ----------------------------------------------------------
 
@@ -541,6 +543,11 @@ def _wake_clock_lines(told: dict[str, Any]) -> list[str]:
 # --- commands -----------------------------------------------------------------
 
 def cmd_host(args: argparse.Namespace) -> int:
+    from .server.session import (HubConfig, create_session,
+                                 hosted_sessions, join_line,
+                                 resume_session, session_summary)
+    from .server.tunnel import NO_NGROK_HELP, free_port, local_ip, ngrok_version
+
     _warn_outside_venv()
     _preflight_update(args)
     if (code := _own_state_dir(args, resolve_name(args.name))) is not None:
@@ -2218,6 +2225,8 @@ def cmd_kill(args: argparse.Namespace) -> int:
     Stopping is not losing. The conversation and the task board stay on disk
     and `collab host` brings them back, unless --purge is given.
     """
+    from .server.session import hosted_sessions, session_summary, stop_session
+
     sessions = hosted_sessions()
     if args.all:
         targets = sessions
@@ -2304,6 +2313,8 @@ def _retire_state_dir(home: Path | str) -> None:
     A directory that *hosts* a session holds the only copy of that
     conversation, so it stays: stopping is not losing.
     """
+    from .server.session import hosted_sessions
+
     home = Path(home)
     if home.name == COLLAB_DIRNAME:
         return                            # the repo's own, never removed
@@ -2322,6 +2333,8 @@ def _retire_state_dir(home: Path | str) -> None:
 
 def cmd_sessions(args: argparse.Namespace) -> int:
     """Previous sessions in this repo, and what resuming one would bring back."""
+    from .server.session import hosted_sessions, session_summary
+
     found = hosted_sessions()
     if args.json:
         print(json.dumps([{"session_id": cfg.session_id, "title": cfg.title,
@@ -4029,6 +4042,10 @@ def _readvertise(cfg: HubConfig) -> None:
     under our pid would leave a phantom host behind the moment this command
     exits.
     """
+    # NO `HubConfig` IMPORT. `from __future__ import annotations` makes the
+    # parameter annotation above a string, so nothing in this body ever needs
+    # the name — and importing it for the annotation's sake pulled starlette in
+    # behind it, about 85 ms on `collab url --rotate`, to accomplish nothing.
     if not cfg.pid or not lockfile.process_alive(cfg.pid):
         return  # nothing is serving; the next `host` will announce afresh
     try:
@@ -4043,6 +4060,8 @@ def _readvertise(cfg: HubConfig) -> None:
 
 
 def cmd_url(args: argparse.Namespace) -> int:
+    from .server.session import HubConfig, join_line, rotate_invite
+
     rotate = getattr(args, "rotate", False)
     profile = _require_profile(args)
     cfg = HubConfig.load(profile.session_id, profile.home)
@@ -5386,6 +5405,203 @@ def cmd_issue(args: argparse.Namespace) -> int:
     return 0
 
 
+#: How many diagnostic records `collab logs` shows without being asked. Enough
+#: to cover the minutes around a fault somebody has just hit, short enough to
+#: read in a terminal without scrolling past the thing they came for.
+LOG_LINES = 40
+
+
+def cmd_logs(args: argparse.Namespace) -> int:
+    """What this session has recorded, read while it keeps running.
+
+    THE POINT IS THAT IT DOES NOT DISTURB ANYTHING. Every file here is opened
+    read-only and nothing is signalled, stopped or restarted: the daemon writes
+    `daemon.log` and its diagnostics as it goes, and reading them is the same
+    act as `tail`. Until this existed the only reader was `collab issue draft`,
+    which writes a markdown file to post somewhere — the wrong shape entirely
+    for «what has it been doing for the last ten minutes».
+
+    THREE SOURCES, AND THE THIRD IS THE ONE NOBODY HAD. The diagnostic record
+    is the daemon and the hub. `daemon.log` is the same processes at more
+    length. The status-line hang log is neither: it is written by a process
+    that is not part of the session and cannot be, and it exists because three
+    status lines once hung for hours on one machine with no record anywhere of
+    where they had stopped. It is written whether or not diagnostics are on,
+    because a hang is precisely the case where nobody turned them on first.
+    """
+    from . import diagnostics as diag
+    from .statusline import watchdog
+
+    lines = max(0, int(args.lines or 0))
+
+    # BEFORE THE PROFILE IS REQUIRED, and that ordering is not cosmetic. The
+    # hang log is global and is written by a process that is not part of any
+    # session; `troubleshooting.md` sends somebody here when their status line
+    # has wedged, and they may well have no session open — that is one of the
+    # ways it wedges. Demanding a session first answered exactly that person
+    # with «no active collab session» instead of the traceback they came for.
+    hangs = watchdog.records()
+    if hangs:
+        # FIRST, and loudly. Everything else here is a session going about its
+        # business; this is a process that stopped and had to be shot.
+        warn(f"{len(hangs)} status line(s) hung and were stopped")
+        for chunk in _last(hangs, lines):
+            print(dim("  " + chunk.replace("\n", "\n  ")))
+        print()
+
+    profile = _optional_profile(args)
+    if profile is None:
+        print(dim("  no session in this checkout, so there is nothing else to"
+                  " show — the hang log above is global"))
+        return 0
+    root = DaemonPaths(profile.dir).root
+
+    heading(f"logs for {profile.name or 'this session'}")
+
+    if not diag.enabled():
+        warn("the diagnostic record is off, so there is nothing structured to show")
+        print(dim("  collab config diagnostics on  — it reaches the running"
+                  " daemon and hub on their next tick, without a restart"))
+    else:
+        rows = diag.records(root)
+        tally = diag.counts(rows)
+        print(f"  {len(rows)} record(s) on file")
+        for name, count in list(tally.items())[:12]:
+            print(f"      {c(name, '36'):<28} {count}")
+        for line in _rendered_records(_last(rows, lines)):
+            print("  " + line)
+    print()
+
+    for name in ("daemon.log", "hub.log"):
+        path = root / name
+        tail = _tail(path, lines)
+        if tail is None:
+            continue
+        heading(name)
+        for line in tail:
+            print("  " + dim(line))
+        print()
+
+    if args.follow:
+        # THE DIAGNOSTIC PATH IS RE-ASKED FOR, not resolved once. It is named
+        # for the UTC day, so a follow started in the evening was watching a
+        # file that stopped being written at midnight and went silent for the
+        # rest of the night without saying so.
+        _follow([root / "daemon.log", root / "hub.log"],
+                rolling=lambda: diag.path_for(root))
+    return 0
+
+
+def _optional_profile(args: argparse.Namespace) -> SessionProfile | None:
+    """The session, or nothing, without the exit `_require_profile` raises.
+
+    `collab logs` is the one command here that has something worth printing
+    when there is no session at all.
+    """
+    try:
+        return (SessionProfile.load(args.session) if getattr(args, "session", None)
+                else SessionProfile.current())
+    except Exception:                                         # noqa: BLE001
+        return None
+
+
+def _rendered_records(rows: list[dict[str, Any]]) -> list[str]:
+    """One diagnostic record per line, time first, event next, fields after.
+
+    The file is JSON so that it can be read by something other than a person;
+    a person reading it in a terminal wants the timestamp in their own zone and
+    the event where their eye already is.
+    """
+    out = []
+    for row in rows:
+        try:
+            when = datetime.fromtimestamp(float(row.get("ts") or 0)).strftime("%H:%M:%S")
+        except (TypeError, ValueError, OSError):
+            when = "--:--:--"
+        rest = " ".join(f"{k}={v}" for k, v in row.items()
+                        if k not in ("ts", "proc", "event"))
+        out.append(f"{dim(when)} {row.get('proc', '?'):<6}"
+                   f" {c(str(row.get('event', '?')), '36')} {dim(rest)}")
+    return out
+
+
+def _last(rows: list[Any], count: int) -> list[Any]:
+    """The last `count` of them, where zero means none of them.
+
+    NOT `rows[-count:]`, which is the obvious spelling and is wrong at exactly
+    one input: `-0` is `0`, so a slice written that way answers `--lines 0`
+    with the WHOLE file — the opposite of what was asked, and most of a day's
+    diagnostics printed by somebody who wanted a summary.
+    """
+    return rows[-count:] if count > 0 else []
+
+
+def _tail(path: Path, lines: int) -> list[str] | None:
+    """The last `lines` of a file, or None when there is no such file.
+
+    Whole-file rather than a seek from the end: these are a daemon's own logs,
+    they are rotated, and the arithmetic to read backwards through a file
+    somebody is appending to is not worth writing for a few hundred kilobytes.
+    """
+    try:
+        body = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return _last(body.splitlines(), lines)
+
+
+def _follow(paths: list[Path], *, rolling=None) -> None:
+    """Print what is appended to these files, until Ctrl-C.
+
+    Opened at the END, so a follow shows what happens NEXT rather than
+    replaying what the sections above have already printed. A file that does
+    not exist yet is watched anyway — the diagnostic file for today is created
+    by the first record written after somebody turns the setting on, and the
+    whole point of following is to be there when it is.
+
+    `rolling` names a file whose PATH changes over time rather than a fixed
+    one, and is asked on every pass. The diagnostic record is one file per UTC
+    day, so a follow left running overnight was holding a handle on yesterday
+    and reporting the silence as calm.
+    """
+    print(dim("  following — Ctrl-C to stop"))
+    handles: dict[Path, Any] = {}
+    first_pass = True
+    try:
+        while True:
+            wrote = False
+            watching = list(paths)
+            if rolling is not None:
+                watching.append(rolling())
+            for path in watching:
+                fh = handles.get(path)
+                if fh is None:
+                    try:
+                        fh = path.open("r", encoding="utf-8", errors="replace")
+                    except OSError:
+                        continue
+                    # END on the first pass and START afterwards. A file that
+                    # appears while following is one nothing has been read from
+                    # — the day rolled, or the setting was just turned on — and
+                    # seeking past its opening records would drop exactly the
+                    # lines somebody started following in order to see.
+                    if first_pass:
+                        fh.seek(0, os.SEEK_END)
+                    handles[path] = fh
+                while line := fh.readline():
+                    print(f"  {dim(path.name)} {line.rstrip()}")
+                    wrote = True
+            first_pass = False
+            if not wrote:
+                time.sleep(0.3)
+    except KeyboardInterrupt:
+        return
+    finally:
+        for fh in handles.values():
+            with contextlib.suppress(OSError):
+                fh.close()
+
+
 def cmd_skills(args: argparse.Namespace) -> int:
     from . import skills as sk
 
@@ -5523,6 +5739,7 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ("Yourself and this install", [
         ("status", "your connection state and how to watch it"),
         ("check", "silent when all is well; says what to fix when it is not"),
+        ("logs [--follow]", "what this session has recorded, without stopping it"),
         ("name [value]", "show or set your display name"),
         ("config [key] [value]", "every global setting, its value and default"),
         ("url", "reprint the join line (host)"),
@@ -5808,6 +6025,16 @@ def build_parser() -> argparse.ArgumentParser:
                     help="read the text from a file, or - for stdin")
     add_session_flag(rn)
     rn.set_defaults(func=cmd_remind)
+
+    lg = sub.add_parser("logs",
+                        help="what this session has recorded, read without"
+                             " stopping it")
+    lg.add_argument("--lines", type=int, default=LOG_LINES, metavar="N",
+                    help=f"how many of each to show (default {LOG_LINES})")
+    lg.add_argument("--follow", action="store_true",
+                    help="keep printing what is appended, until Ctrl-C")
+    add_session_flag(lg)
+    lg.set_defaults(func=cmd_logs)
 
     iss = sub.add_parser("issue",
                          help="write a bug report from this machine's own"

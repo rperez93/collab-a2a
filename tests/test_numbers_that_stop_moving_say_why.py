@@ -362,8 +362,18 @@ def test_install_carries_collab_home_into_the_hook_when_it_has_one(tmp_path, mon
     monkeypatch.setenv("COLLAB_HOME", "/repo/.collab-bob")
     result = sli.install_claude_code(executable="/opt/collab")
     body = result.script.read_text()
-    assert "COLLAB_HOME=/repo/.collab-bob '/opt/collab' statusline render" in body, body
-    assert body.index("COLLAB_HOME=") < body.index("statusline render")
+    # THE ENV IN FRONT OF THE COMMAND, whatever the command has become. The
+    # words between them are not this test's business and have changed twice:
+    # the hook now prefers `collab-statusline` where it exists and wraps
+    # whatever it runs in `timeout`. What must stay true is that the proof of
+    # which session this hook belongs to is carried into it, ahead of the
+    # command it is proof for.
+    # ON THE INVOCATION LINE, not merely somewhere in the file: the executable
+    # is also named by the `[ -x ... ]` guard above it, and asserting on the
+    # first occurrence anywhere measured the guard rather than the command.
+    line = next(one for one in body.splitlines() if "__collab_seg=" in one)
+    assert "COLLAB_HOME=/repo/.collab-bob " in line, line
+    assert line.index("COLLAB_HOME=") < line.index("/opt/collab")
     assert any("COLLAB_HOME" in note for note in result.notes), result.notes
 
 

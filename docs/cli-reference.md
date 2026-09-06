@@ -28,6 +28,7 @@ These are noted per command below.
 | [`batch`](#batch) | Open a batch of work and show how much of it is done. |
 | [`wake`](#wake) | Let the daemon start a turn for an agent that cannot watch the feed. |
 | [`context`](#context) | Compact or clear this agent's own context window. |
+| [`logs`](#logs) | What this session has recorded, read without stopping it. |
 | [`issue`](#issue) | Write a bug report from this machine's own records. |
 | [`remind`](#remind) | Make the standing reminder due now. |
 | [`check`](#check) | Report what to fix when something is wrong. |
@@ -642,6 +643,44 @@ not the route.
 
 It refuses, with the way to fix it, when the reminder is off
 (`collab config remind_every 0`) and when neither route exists.
+
+## logs
+
+What this session has recorded, read without stopping it.
+
+```text
+collab logs [--lines N] [--follow] [--session SESSION]
+```
+
+| Argument or flag | Meaning |
+|---|---|
+| `--lines N` | How many of each source to show. Default 40. |
+| `--follow` | Keep printing what is appended, until Ctrl-C. |
+| `--session SESSION` | Act on this session id instead of the current one. |
+
+**Nothing here disturbs the session.** Every file is opened read-only and no
+process is signalled, stopped or restarted: the daemon writes as it goes, and
+reading what it wrote is the same act as `tail`. It is safe to run against a
+session in the middle of its work.
+
+Three sources, and the third is one no other command shows:
+
+- **the diagnostic record** — the daemon's and the hub's own events, if
+  `collab config diagnostics` is on. It reports counts first and then the last
+  `--lines` records, which is usually the shape of a fault before any of its
+  detail;
+- **`daemon.log` and `hub.log`** — the same processes at more length;
+- **status lines that hung** — written by a process that is not part of the
+  session and cannot be. Nothing bounded a status line before: a render that
+  wedged held a core until the machine was restarted, with no record anywhere
+  of where it stopped. One that overruns now writes its stack to
+  `~/.config/collab/statusline-hang.log` and exits, and this is where you read
+  it. **It is written whether or not diagnostics are on**, because a hang is
+  exactly the case where nobody turned them on beforehand.
+
+`collab config diagnostics on` reaches a daemon and a hub that are already
+running, on their next tick — you do not have to restart anything to start
+recording.
 
 ## issue
 

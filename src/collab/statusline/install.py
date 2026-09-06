@@ -53,6 +53,56 @@ def settings_path(scope: str = "global") -> Path:
 from ..config import collab_executable  # noqa: E402  (re-exported)
 
 
+def render_words(executable: str, *, plain: bool = False,
+                 seconds: int = 8) -> str:
+    """The shell words that draw one line: the cheap script, under a timeout.
+
+    Derived from the `collab` path the caller already resolved rather than
+    from `config.collab_executable`, because both installers are handed an
+    executable — a test's fake, a `--executable` on the command line — and a
+    helper that ignored it would write a different path into the file from the
+    one it was told to.
+
+    RESOLVED AT INSTALL TIME, which is worth being clear about: the hook names
+    whichever script existed when it was written. An installation that gains
+    `collab-statusline` later keeps the older, slower spelling until the
+    installer is run again — which `collab update` now does.
+
+    TWO GUARDS, AND THEY ARE NOT THE SAME GUARD. `timeout` bounds a process
+    that never reaches Python; `statusline.watchdog` bounds one that reaches it
+    and stops, and leaves a traceback saying where. The outer number is the
+    larger so that the informative one is the one that fires.
+
+    Written bare where `timeout` is missing, which is the honest thing to do:
+    a status line is worth having on a machine without coreutils, and a hook
+    naming a binary that is not there prints an error into somebody's prompt
+    four times a minute.
+    """
+    import shlex
+
+    exe = Path(executable)
+    quick = exe.with_name("collab-statusline")
+    if exe.name.startswith("collab") and quick.exists():
+        words = [shlex.quote(str(quick))]
+    else:
+        words = [shlex.quote(str(exe)), "statusline", "render"]
+    if plain:
+        words.append("--plain")
+    found = shutil.which("timeout")
+    if found:
+        # THE SAME VARIABLE THE IN-PROCESS GUARD READS. A fixed number here
+        # made `COLLAB_STATUSLINE_TIMEOUT` a documented setting that did not
+        # work: raising it left this bound lower, so the shell killed the
+        # render before the guard could write its traceback, and setting it to
+        # 0 to disarm the guard left the shell killing the render anyway.
+        # `timeout 0` means «no limit» to GNU timeout, so the two agree at both
+        # ends. The default stays above `watchdog.HANG_AFTER`, which is what
+        # keeps the informative guard the one that fires.
+        words = [shlex.quote(found),
+                 "${COLLAB_STATUSLINE_TIMEOUT:-%d}" % int(seconds)] + words
+    return " ".join(words)
+
+
 def build_block(executable: str, home: str = "") -> str:
     """The shell we inject.
 
@@ -80,7 +130,7 @@ def build_block(executable: str, home: str = "") -> str:
     return (
         f"{BEGIN}\n"
         f"if [ -x '{executable}' ]; then\n"
-        f"  __collab_seg=\"$(printf '%s' \"${{input:-}}\" | {env}'{executable}' statusline render 2>/dev/null)\"\n"
+        f"  __collab_seg=\"$(printf '%s' \"${{input:-}}\" | {env}{render_words(executable)} 2>/dev/null)\"\n"
         f"  if [ -n \"$__collab_seg\" ]; then\n"
         f"    printf '%s\\n' \"$__collab_seg\"\n"
         f"  fi\n"
@@ -339,8 +389,14 @@ def install_tmux(executable: str | None = None) -> InstallResult:
 
     # tmux renders its own attributes, so ask for plain text.
     # -ag appends, so the padding goes in front of us here rather than after.
+    # DOUBLE QUOTES ROUND THE OPTION, single quotes inside it. tmux parses the
+    # value before the shell ever sees it, so a path with a space in it — which
+    # `render_words` correctly wraps in single quotes for the shell — used to
+    # end tmux's own single-quoted string at the first of them and leave the
+    # rest of the line as tmux syntax. It was broken before the quoting too,
+    # differently: unquoted, `#(/home/a b/collab …)` runs `/home/a`.
     block = _marker_block_for_conf(
-        f"set -ag status-right ' #({exe} statusline render --plain)'"
+        f'set -ag status-right " #({render_words(exe, plain=True)})"'
     )
     TMUX_CONF.write_text((body.rstrip("\n") + "\n\n" if body.strip() else "") + block)
     return InstallResult(
@@ -376,6 +432,15 @@ collab exposes one command that prints a single status line and exits 0:
     {exe} statusline render          # coloured, empty when no session
     {exe} statusline render --plain  # no ANSI, for hosts that don't render it
     {exe} statusline render --json   # structured, if you'd rather format it yourself
+
+A status bar redraws this several times a minute, so there is a second script
+that takes the same flags and skips the CLI — about half the cost, and it arms
+a hang guard before anything else is imported. Prefer it in a bar:
+
+    collab-statusline --plain        # the same line, without importing the CLI
+
+Wrap whichever you use in `timeout 8`: nothing else bounds a status line, and a
+render that never returns holds a core until the machine is restarted.
 
 Any agent or status bar that can run a shell command can display it. Wire it in
 wherever that host takes a command, for example:

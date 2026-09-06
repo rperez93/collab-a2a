@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import __version__
-from .config import global_config_path
+from .config import collab_executable, global_config_path
 
 RELEASES_API = "https://api.github.com/repos/rperez93/collab-a2a/releases/latest"
 REPO_URL = "https://github.com/rperez93/collab-a2a"
@@ -266,6 +266,107 @@ def _update_checkout(repo: Path) -> tuple[bool, str]:
     return True, (pull.stdout or "").strip()
 
 
+#: How long either refresh may take before it is abandoned. Both write a few
+#: small files; a minute is generous, and the update has already succeeded by
+#: the time these run, so a hang here must not be able to hold the terminal.
+REFRESH_TIMEOUT = 60
+
+
+def refresh_installed(*, runner=None) -> list[str]:
+    """Re-run the installers for whatever this machine already had installed.
+
+    An upgrade replaces the package and nothing it wrote into other people's
+    files. The skills are COPIES in each agent's own directory and the status
+    line is a snippet in somebody's settings — neither is touched by
+    `pip install --upgrade`, so a release that changes what a skill says, or
+    what the status line invokes, ships that change to the package and leaves
+    every machine still running the old text.
+
+    ONE TARGET AT A TIME, AND NAMED. The obvious spelling — run `skills
+    install` and `statusline install` with no arguments — is wrong, and wrong
+    in the direction that installs things nobody asked for: both default to
+    `auto`, and `auto` means every host DETECTED ON THE MACHINE rather than
+    every host collab is installed into. A person with the status line in
+    Claude Code and tmux merely present would have had a collab block written
+    into their `~/.tmux.conf` by an update they only meant to apply. So each
+    target is asked about separately and refreshed by name.
+
+    WITH `--force` FOR THE SKILLS, because without it this fixes nothing for
+    the installs that need it. `skills install` refuses to replace a directory
+    it did not symlink itself — right, as a default, for a command somebody
+    types — and a COPIED install is exactly such a directory. Copies are also
+    the only installs that can go stale; a symlink was never out of date. So
+    the one case this exists for is the one the default would skip. The names
+    are collab's own (`collab-host`, `collab-join`, …), which is what makes
+    replacing them safe.
+
+    THROUGH THE NEW EXECUTABLE, NOT THIS PROCESS. The running interpreter still
+    holds the version that was current when it started — `apply_update` says
+    «re-run your command to use it» for exactly that reason — so calling the
+    installers in-process would carefully write the OLD skills out again and
+    report success.
+
+    AND WITHOUT THIS SESSION'S `COLLAB_HOME`. The child inherits our
+    environment, and `statusline install` bakes a `COLLAB_HOME` it finds into
+    the hook it writes. During a `collab host` that variable names one session,
+    and the hook it would be written into is machine-wide: a session-specific
+    home stamped into a global file by an update nobody connected to it.
+
+    Never raises, and never fails the update: the upgrade has already worked by
+    the time this runs.
+    """
+    notes: list[str] = []
+    env = {k: v for k, v in os.environ.items() if k != "COLLAB_HOME"}
+    run = runner or (lambda argv: subprocess.run(
+        argv, capture_output=True, text=True, timeout=REFRESH_TIMEOUT, env=env))
+    exe = collab_executable()
+
+    for what, argv in _refreshable(exe):
+        try:
+            done = run(argv)
+        except (OSError, subprocess.SubprocessError) as exc:
+            notes.append(f"{what} not refreshed ({type(exc).__name__})")
+            continue
+        if getattr(done, "returncode", 1) == 0:
+            notes.append(f"{what} refreshed")
+        else:
+            notes.append(f"{what} not refreshed (exit"
+                         f" {getattr(done, 'returncode', '?')})")
+    return notes
+
+
+def _refreshable(exe: str) -> list[tuple[str, list[str]]]:
+    """Every target that is installed, and the command that reinstalls that one.
+
+    Empty where nothing is installed, which is the whole of the «installs
+    nothing new» promise: a target absent from this list is never named on a
+    command line, so there is no argument for `auto` to widen.
+    """
+    out: list[tuple[str, list[str]]] = []
+    try:
+        from . import skills
+
+        agents = skills.status().get("agents") or {}
+        for key, entry in sorted(agents.items()):
+            if isinstance(entry, dict) and entry.get("installed"):
+                out.append((f"skills for {key}",
+                            [exe, "skills", "install", "--agent", key,
+                             "--force"]))
+    except Exception:                                         # noqa: BLE001
+        pass
+    try:
+        from .statusline import install as sli
+
+        for target, state in (("claude-code", sli.status_claude_code()),
+                              ("tmux", sli.status_tmux())):
+            if state.get("installed"):
+                out.append((f"status line for {target}",
+                            [exe, "statusline", "install", "--agent", target]))
+    except Exception:                                         # noqa: BLE001
+        pass
+    return out
+
+
 def prompt_and_maybe_update(info: UpdateInfo, *, assume_yes: bool = False) -> bool:
     """Offer the update when a human is there to answer. Returns True if applied.
 
@@ -292,6 +393,8 @@ def prompt_and_maybe_update(info: UpdateInfo, *, assume_yes: bool = False) -> bo
         done, output = apply_update()
         if done:
             print(f"  updated to {info.latest} — re-run your command to use it")
+            for note in refresh_installed():
+                print(f"  {note}")
             return True
         # Not fatal, and deliberately not a prompt either: the session the user
         # actually asked for is still perfectly able to run on this version.
@@ -324,4 +427,6 @@ def prompt_and_maybe_update(info: UpdateInfo, *, assume_yes: bool = False) -> bo
         print(f"  update failed: {output}")
         return False
     print(f"  updated to {info.latest} — re-run your command to use it")
+    for note in refresh_installed():
+        print(f"  {note}")
     return True

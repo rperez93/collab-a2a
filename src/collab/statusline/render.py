@@ -702,7 +702,26 @@ def main(argv: list[str] | None = None) -> int:
 
     Never fails loudly and never touches the network, so any host can call it
     as often as it likes without risking a stalled or broken status bar.
+
+    AND NEVER RUNS FOREVER. «As often as it likes» was true of the cost and not
+    of the duration: nothing here bounded a render, and a host that respawns
+    this every few seconds and never reaps what does not return will accumulate
+    processes that hold a core each until the machine is restarted. The guard
+    is armed earlier still in `statusline.entry`, which is where the installed
+    hooks now enter; arming it again here is for `collab statusline render`,
+    whose imports are already done by the time it arrives.
     """
+    from .watchdog import arm, disarm
+
+    arm()
+    try:
+        return _main(argv)
+    finally:
+        disarm()
+
+
+def _main(argv: list[str] | None = None) -> int:
+    """`main` without the guard, so the guard has something to guard."""
     import argparse
 
     parser = argparse.ArgumentParser(prog="collab statusline render", add_help=True)
@@ -739,4 +758,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # sys.argv EXPLICITLY: `main(None)` parses an empty list, which is what
+    # `cmd_statusline` wants and is never what a command line wants.
+    raise SystemExit(main(sys.argv[1:]))
