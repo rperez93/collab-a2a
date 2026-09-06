@@ -50,7 +50,9 @@ DONE_STATE = "TASK_STATE_COMPLETED"
 #: put 100% permanently out of reach for a batch that is genuinely finished.
 WITHDRAWN_STATE = "TASK_STATE_CANCELED"
 
-OPEN = "open"
+#: What the board calls a batch nobody may add to. There is no `OPEN` beside
+#: it: nothing ever compares against that state, it is simply not this one, and
+#: a constant naming it sat here for a year with no reader.
 CLOSED = "closed"
 
 #: The figures are the hub's, fetched over the network and then remembered.

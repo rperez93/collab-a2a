@@ -16,11 +16,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-#: Not used in this file. It is here so `render.__version__` answers, which is
-#: how the status line's own tests stamp the version into a status payload —
-#: through the module they are already holding, rather than by importing the
-#: package a second time to say the same thing.
-from .. import __version__            # noqa: F401
+# NO `__version__` RE-EXPORT. One sat here saying it was «how the status
+# line's own tests stamp the version», and no test ever did: every one of them
+# imports it from `collab` directly. A re-export kept for a reader that does
+# not exist is a claim about the code that is simply untrue.
 from .. import batch as batch_progress
 from ..columns import width as _columns
 from ..config import SessionProfile, claimed_home, statusline_settings

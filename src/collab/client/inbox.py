@@ -469,12 +469,3 @@ class Inbox:
                 (seq, *extra),
             ).fetchone()
         return row is not None
-
-    def gaps(self) -> list[int]:
-        """Missing seq values — used by the tests to prove nothing was dropped."""
-        with self._lock:
-            rows = self._db.execute("SELECT seq FROM inbox ORDER BY seq").fetchall()
-        seqs = [r["seq"] for r in rows]
-        if not seqs:
-            return []
-        return [n for n in range(seqs[0], seqs[-1] + 1) if n not in set(seqs)]

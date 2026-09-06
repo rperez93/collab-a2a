@@ -68,7 +68,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .protocol import MONTHS, local_day_clock  # noqa: F401  MONTHS is read here too
+from .protocol import MONTHS, local_day_clock  # noqa: F401
+#: `MONTHS` is a RE-EXPORT and is not read in this module — the comment here
+#: used to say it was. It is kept because `stats.MONTHS` is how the figures'
+#: own test spells the month table, and one table is the point: a second copy
+#: is what `protocol.MONTHS` exists to prevent.
 
 #: The fields that make up the quota, and that a report carrying `quotas`
 #: REPLACES as one: the windows map, the flat five-hour and seven-day figures

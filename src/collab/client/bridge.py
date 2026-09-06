@@ -7,7 +7,6 @@ pitfalls and keeps a multi-line message as a single frame.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import json
 import logging

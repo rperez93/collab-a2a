@@ -252,9 +252,6 @@ class HubClient:
     def delete_file(self, file_id: str) -> dict[str, Any]:
         return self._request("DELETE", f"{EXT_PREFIX}/files/{file_id}")
 
-    def agent_card(self) -> dict[str, Any]:
-        return self._request("GET", "/.well-known/agent-card.json")
-
 
 def _filename_from(headers: Any) -> str | None:
     disposition = headers.get("content-disposition", "")

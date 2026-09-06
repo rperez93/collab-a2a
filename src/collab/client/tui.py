@@ -159,7 +159,6 @@ C_TEXT = 22      # white · the body of a message that says nothing special
 #: rather than repeated here: two copies of the same number drift apart, and
 #: that already cost a `fold off` broken in one layout and fine in the other.
 FOLD_LINES = themes.DEFAULTS["fold"]
-BUBBLE_SHARE = 0.90
 
 #: AND A HARD CAP. No messaging app widens the bubble when you maximise the
 #: window: it keeps a comfortable width and uses the rest as air. Without this,
@@ -183,7 +182,12 @@ BUBBLE_SHARE = 0.90
 #: live and did nothing.
 
 #: And a floor, because 40 % of a small window comes to nothing. Below this,
-#: BUBBLE_SHARE over the pane decides and this cap does not apply.
+#: the theme's `bubble_share` over the pane decides and this cap does not
+#: apply. It said `BUBBLE_SHARE` and meant this — a module constant of that
+#: name sat here holding 0.90, read by nothing, while `T["bubble_share"]` did
+#: the deciding. That is the failure the two comments above warn about, in the
+#: file that warns about it: a copy of the number that looked live and did
+#: nothing, and a comment that named the copy as though it were the original.
 BUBBLE_MAX_MIN = 40
 
 
@@ -216,7 +220,6 @@ _SCREEN: dict[str, int] = {}
 #: Below this the two-sided chat format is abandoned. 56 columns is where a
 #: bubble at 90 %% stops having room for its frame, its indent and a line anyone
 #: can read.
-NARROW_AT = 56
 
 #: Speaker pairs start well clear of the fixed ones: with a palette of twelve
 #: and a base of 10 they overlapped C_INFO(20), C_BUTTON(21) and C_TEXT(22), and
@@ -1387,7 +1390,7 @@ def event_rows(env: Envelope, width: int, me: str,
     # The floor of 28 must NOT override the pane: between 24 and 37 columns
     # —widths `draw()` does render— the bubble came out at 28 and overflowed. A
     # minimum that ignores the maximum stops being a minimum and becomes a bug.
-    # NARROW MODE: below NARROW_AT the pane has no room for two-sided
+    # NARROW MODE: below the theme's `narrow_at` the pane has no room for two-sided
     # colours on two sides. The right-hand indent eats the width exactly
     # when there is least to spare, and a message broken into twelve-character
     # scraps does not read. So it takes ALL the width and everything goes left:

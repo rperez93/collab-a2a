@@ -54,7 +54,6 @@ Anywhere a variable goes, a literal hex colour works too: `#00cccc`, or
 """
 from __future__ import annotations
 
-import json
 import unicodedata
 from pathlib import Path
 from typing import Any
