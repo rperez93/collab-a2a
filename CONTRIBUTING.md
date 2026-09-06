@@ -228,6 +228,32 @@ SDK, not the docs):
 - The SDK's REST binding mounts a greedy `/{tenant}` at the root, so our routes
   are registered *before* it.
 
+**A name that implements somebody else's specification is read by that
+specification.** This is a rule about removing code, and it was learned by
+breaking it. A dead-code sweep found `HubClient.agent_card` with no caller
+anywhere in the repository — true, and beside the point:
+`/.well-known/agent-card.json` is A2A's discovery endpoint, the hub publishes
+the card, and the client half of a protocol surface does not stop existing
+because nothing here happens to ask for it. A third party writing against this
+client must find the method where the specification says it is.
+
+So before deleting anything unreferenced, ask which of these it is:
+
+- **ours, and unused** — delete it, and say in the commit what claimed to read
+  it, because a comment asserting a reader that does not exist is the more
+  interesting half of the find;
+- **somebody else's protocol** — A2A routes and client methods, the well-known
+  paths, the card's fields, the JSON-RPC method names above — keep it, and give
+  it a docstring saying why it has no caller, or the next sweep reaches the same
+  wrong conclusion;
+- **a re-export** — check where its readers moved to before deciding. Several
+  here exist so an older import path still answers.
+
+A protocol name kept this way needs a test, because a docstring does not make
+the reference graph find a reader and the next sweep is run by a tool, not by
+whoever read the docstring. See
+`tests/test_the_a2a_client_surface_is_not_dead_code.py`.
+
 ## Releasing
 
 Bump the version in `pyproject.toml` and `src/collab/__init__.py`, tag it, and
