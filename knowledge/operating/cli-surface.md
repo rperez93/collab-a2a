@@ -75,7 +75,7 @@ the live parser by `tests/test_okf_bundle.py`, which extends the same list the
 
 ## Added since the pin
 
-Four commands are not in the table above, because that table is the parser's
+Six commands are not in the table above, because that table is the parser's
 own output at `23db6d0` and these arrived after it. They are listed apart
 rather than merged in, so that nothing here claims to have been read off the
 pinned tree when it was not.
@@ -87,6 +87,7 @@ pinned tree when it was not.
 | `new` | start this agent a fresh session, keeping nothing, through the same pane |
 | `remind` | make the standing reminder due now instead of at the end of its interval |
 | `issue` | write a bug report from this machine's own records, and print the command that posts it |
+| `logs` | what this session has recorded, read without stopping it |
 
 `learn` takes sub-verbs of its own — `add`, `list`, `search`, `read`, `used`
 and `sync` — over a store that lives beside the global config rather than in
@@ -95,10 +96,27 @@ no verb, being one act with a switch, a percent and a moment of its own, and
 `new` takes the same three plus `--all`, `--agree`, `--decline` and `--status`
 for the form of it that asks the whole room; `remind` takes `now`; `issue` takes
 `draft` and
-`--out FILE`. None of them posts anything anywhere on its own: `issue` prints a
+`--out FILE`; `logs` takes `--lines N` and `--follow`. None of them posts
+anything anywhere on its own: `issue` prints a
 `gh issue create` line for a person to run, and `learn add` and `learn sync`
 send ordinary chat messages like `send` does, by way of a spool the daemon
 drains rather than from the command itself.
+
+`logs` is the read that `issue` was being used as. Both read the same
+diagnostic record, and `issue` assembles a Markdown file to post somewhere,
+which is the wrong shape for «what has it been doing for the last ten minutes».
+Everything `logs` opens is opened read-only and no process is signalled, so it
+answers about a session in the middle of its work. It also shows one thing no
+other command can: the status line's hang log, which is written by a process
+that is not part of any session, and is therefore printed BEFORE a session is
+required — somebody whose status line has wedged may well have none open, that
+being one of the ways it wedges.
+
+There is a second console script as well, `collab-statusline`, which takes the
+same flags as `collab statusline render` and reaches the same code without
+importing the CLI. The installers write it into the hooks they manage where it
+exists, under a `timeout`; the older spelling keeps working and keeps meaning
+the same thing.
 
 Two flags and one line of output are later than the pin as well. `collab kill`
 and `collab daemon stop` take `--disarm`, which turns off the wake armed on the

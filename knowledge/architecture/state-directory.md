@@ -105,6 +105,17 @@ held at `23db6d0`.
 | `statusline-last.json` | The last status line that could be built, with its timestamp and colour mode, so a status file mid-rewrite does not blank the segment for a redraw. Sixty seconds. |
 | `diagnostics/YYYY-MM-DD.jsonl` | Off by default. Events only — never message text, names, invites, addresses, or paths under the reader's home. Kept seven days. See [the trust model](/operating/security-model.md). |
 
+One record deliberately sits outside this tree, for the same reason as the
+learnings below but a sharper one. `<config dir>/statusline-hang.log` holds the
+stack of any status line that overran its limit and was stopped. It cannot live
+in a session directory: the process that writes it may not have worked out
+which session it belongs to — three of them once hung on one machine, and one
+had not finished importing when it stopped — and a record written where nobody
+will look is not a record. It is written whether or not diagnostics are on,
+because a hang is precisely the case where nobody turned them on beforehand,
+and a run that finished replaces its own header, so a healthy machine's copy is
+one line rather than one per redraw. `collab logs` prints it first.
+
 Learnings are the exception that leaves this tree altogether. They live beside
 the global config — `<config dir>/learnings/<repo key>/`, moved by the
 `learnings_dir` setting — because a learning belongs to the agent that found it
