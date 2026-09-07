@@ -6235,8 +6235,12 @@ def cmd_statusline(args: argparse.Namespace) -> int:
         for b in result.backups:
             print(f"       {dim('backup: ' + str(b))}")
 
-    if args.action == "install" and any(r.action not in ("instructions", "absent")
-                                        for r in results):
+    # NOT AFTER AN INSTALL THAT WROTE NOTHING. «restart those hosts» is advice
+    # about a file that just changed; said over an unchanged one it asks for
+    # work that cannot help, on the path `collab update` takes every time.
+    if args.action == "install" and any(
+            r.action not in ("instructions", "absent", "unchanged")
+            for r in results):
         print(dim("       restart those hosts, or they keep the old status line"))
 
     # Say what was skipped and why: a missing segment should never be a mystery.

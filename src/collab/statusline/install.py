@@ -208,19 +208,30 @@ def install_claude_code(scope: str = "global", *, executable: str | None = None,
         original = script.read_text()
         if BLOCK_RE.search(original):
             action = "updated"
-            body = BLOCK_RE.sub("\n", original, count=1)
+            # EVERY copy, not the first: `count=1` removed one and put one
+            # back, so a script that somehow held two never converged — a
+            # backup and a rewrite on every run, for ever.
+            body = BLOCK_RE.sub("\n", original)
         else:
             action = "appended"
             body = original
-        if (b := _backup(script)) is not None:
-            backups.append(b)
 
         # Other vendors' blocks follow ours, each prefixing its own separator
         # (local-tts ' · ', claude-statusline a newline); they now do so at
         # the start of the second row, since our block ends the first.
         block = build_block(exe, home)
-        script.write_text(_insert_at_top(body, block))
-        _make_executable(script)
+        wanted = _insert_at_top(body, block)
+        if wanted == original:
+            action = "unchanged"
+        else:
+            # NOT BEFORE A WRITE THAT WOULD CHANGE NOTHING. `refresh_installed`
+            # re-runs this on every `collab update`, and this is the target on
+            # every machine running Claude Code — the same accumulation the
+            # tmux side was carrying, in the file more people have.
+            if (b := _backup(script)) is not None:
+                backups.append(b)
+            script.write_text(wanted)
+            _make_executable(script)
         notes.append(f"kept every existing segment in {script}")
 
     elif command:
@@ -272,7 +283,13 @@ def install_claude_code(scope: str = "global", *, executable: str | None = None,
         notes.append(f"set refreshInterval to {DEFAULT_REFRESH_INTERVAL}s so connection state stays current")
 
     spath.parent.mkdir(parents=True, exist_ok=True)
-    spath.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n")
+    fresh = json.dumps(settings, indent=2, ensure_ascii=False) + "\n"
+    # Re-serialising settings.json identically is still a write: it moves the
+    # mtime of a file other tools watch, on every update.
+    if not spath.exists() or spath.read_text() != fresh:
+        spath.write_text(fresh)
+    elif action == "unchanged":
+        notes.append("already installed, and current")
     return InstallResult(action, script, spath, backups, notes)
 
 
@@ -373,19 +390,51 @@ def _marker_block_for_conf(body: str) -> str:
     return f"{BEGIN}\n{body}\n{END}\n"
 
 
+def _for_tmux(words: str) -> str:
+    """Shell words, escaped for the inside of a tmux double-quoted option.
+
+    TMUX PARSES THE VALUE BEFORE THE SHELL EVER SEES IT, and its own `${}` is
+    not the shell's: it understands `${NAME}` and rejects everything else. The
+    timeout `render_words` writes is `${COLLAB_STATUSLINE_TIMEOUT:-8}` — correct
+    for Claude Code, whose command really is handed to a shell — and inside a
+    tmux value it is «invalid environment variable». tmux ABORTS THE FILE at
+    that line, so the block did not merely fail to draw: everything after it in
+    `~/.tmux.conf` stopped being read, and the user saw the error on every new
+    session.
+
+    A backslash is how tmux is told to pass a `$` through untouched, and the
+    shell then receives the expression whole. Verified end to end against tmux
+    3.4 with an attached client, which is the only way to see it: `source-file`
+    accepts the escaped form and `show-options` prints it back escaped either
+    way, so both the parse and the display agree with each other while the
+    command never runs.
+
+    The quoting stays double, because `render_words` wraps a path containing a
+    space in SINGLE quotes for the shell — a single-quoted tmux value would end
+    at the first of them.
+
+    AND THEN THE VALUE IS EXPANDED AGAIN, twice, by machinery that runs after
+    the parsing above and has nothing to do with it: `status-right` goes through
+    tmux's FORMATS, where `#` introduces `#h`, `#{...}` and `#(...)`, and then
+    through `strftime`, where `%H` is the hour. A `#` or a `%` anywhere in the
+    path is rewritten there — silently, since the file parsed perfectly well —
+    and `#()` then runs a path that does not exist and yields nothing. Which
+    character it takes decides whether it bites: `#d` survives because tmux has
+    no such format, `#h` does not. tmux's own escapes are `##` and `%%`.
+
+    Left alone, a path containing `#(...)` would be a COMMAND tmux runs, which
+    is the very shape this helper exists to prevent.
+    """
+    words = words.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$")
+    # After the string parse, not before: these two are consumed by the format
+    # and time expansions, which never see a backslash escape.
+    return words.replace("#", "##").replace("%", "%%")
+
+
 def install_tmux(executable: str | None = None) -> InstallResult:
     exe = executable or collab_executable()
     backups: list[Path] = []
     body = TMUX_CONF.read_text() if TMUX_CONF.exists() else ""
-    if BLOCK_RE.search(body):
-        if (b := _backup(TMUX_CONF)) is not None:
-            backups.append(b)
-        body = BLOCK_RE.sub("\n", body, count=1)
-        action = "updated"
-    else:
-        if (b := _backup(TMUX_CONF)) is not None:
-            backups.append(b)
-        action = "appended" if body.strip() else "created"
 
     # tmux renders its own attributes, so ask for plain text.
     # -ag appends, so the padding goes in front of us here rather than after.
@@ -396,9 +445,48 @@ def install_tmux(executable: str | None = None) -> InstallResult:
     # rest of the line as tmux syntax. It was broken before the quoting too,
     # differently: unquoted, `#(/home/a b/collab …)` runs `/home/a`.
     block = _marker_block_for_conf(
-        f'set -ag status-right " #({render_words(exe, plain=True)})"'
+        f'set -ag status-right " #({_for_tmux(render_words(exe, plain=True))})"'
     )
-    TMUX_CONF.write_text((body.rstrip("\n") + "\n\n" if body.strip() else "") + block)
+    found = BLOCK_RE.search(body)
+    if found is not None:
+        # IN PLACE, AND EVERY COPY OF IT.
+        #
+        # In place because for `set -ag status-right` ORDER IS THE SEMANTICS:
+        # this used to delete the block and append the replacement, so anything
+        # the user had written after us moved in front of us. It was survivable
+        # while the rewrite was rare; this release changes the line for every
+        # existing installation at once, so it would have relocated everybody's
+        # block on the same day.
+        #
+        # Every copy because `sub(count=1)` removed one and appended one, so a
+        # file that somehow held two NEVER converged: each run left two blocks,
+        # one more leading newline and one more backup, for ever — on the path
+        # `collab update` takes every time. That is the defect this release is
+        # about, in the one shape an equality check cannot see.
+        rest = BLOCK_RE.sub("", body[found.end():])
+        head = body[:found.start()]
+        # BLOCK_RE swallows the newline BEFORE the block, so it has to be put
+        # back — but only when something precedes us. Re-adding it
+        # unconditionally left a leading blank line on a file that is nothing
+        # but our block, which is what `created` writes, so the very next run
+        # differed from the last and never reported `unchanged`.
+        fresh = (head.rstrip("\n") + "\n\n" if head.strip() else "") + block + rest
+        action = "updated"
+    else:
+        fresh = (body.rstrip("\n") + "\n\n" if body.strip() else "") + block
+        action = "appended" if body.strip() else "created"
+    # NOTHING TO SAY, NOTHING TO COPY. This backed up on every run whether or
+    # not the file was about to change, and `statusline install` is run by the
+    # update path rather than by hand: one machine had 118 backups holding six
+    # distinct contents, three of them written inside the same second. A backup
+    # nobody can tell apart from its neighbours is not a safety net, it is
+    # noise in somebody's home directory.
+    if fresh == body:
+        return InstallResult("unchanged", TMUX_CONF, TMUX_CONF, [],
+                             ["already installed, and current"])
+    if (b := _backup(TMUX_CONF)) is not None:
+        backups.append(b)
+    TMUX_CONF.write_text(fresh)
     return InstallResult(
         action, TMUX_CONF, TMUX_CONF, backups,
         ["appended to status-right; run `tmux source-file ~/.tmux.conf` to apply"],

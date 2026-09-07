@@ -90,6 +90,26 @@ src/collab/
 
 ## Things worth knowing before you change something
 
+**Anything we write into somebody else's host is tested by running that host.**
+Status lines, hooks, shell snippets, `~/.tmux.conf` — a string we believe a host
+will accept is a guess until that host has parsed it. The tmux status line
+shipped `${COLLAB_STATUSLINE_TIMEOUT:-8}`, which is right for Claude Code
+because that command really is handed to a shell, and which tmux rejects: its
+own `${}` knows only `${NAME}`. tmux answered «invalid environment variable»
+and **abandoned the rest of the file**, so the segment never drew and everything
+below our block in the user's config stopped being read. The test beside it
+asserted the block was one line and held the right words. It was, it did, and it
+did not work.
+
+So: `test_tmux_itself_accepts_what_we_write` hands the file to a real `tmux
+source-file` and requires silence; `test_the_claude_code_hook_is_shell_a_shell_will_run`
+pipes the block into `sh` with the JSON Claude Code sends and reads the line
+back. Skip on the host being absent (`shutil.which`), never on it being
+awkward. An assertion about the TEXT of an installed script is a supplement to
+running it, never a substitute — and if a host cannot be run in CI, say so in
+the test rather than asserting on a string and calling it covered.
+
+
 **A file two processes write gets a private temp name.** `path.with_suffix(".tmp")`
 is one name per directory, so two writers share it — and collab has two records
 with two writers by design: `hub.json` (the tunnel watcher and `collab url
