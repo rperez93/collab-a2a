@@ -306,10 +306,19 @@ def _sock(name: str) -> str:
 
 
 def _tmux_accepts(conf: Path, socket: str) -> str:
-    """Ask a real tmux to read `conf`. Returns its complaint, or ''."""
+    """Ask a real tmux to read `conf`. Returns its complaint, or ''.
+
+    `-f /dev/null` because otherwise the server starts by reading the
+    DEVELOPER'S OWN `~/.tmux.conf` — a file this test does not control, may not
+    be able to parse, and which on a machine where collab is installed already
+    contains the very block under test. A test that reads a file it was not
+    given can pass or fail for a reason that has nothing to do with the
+    fixture.
+    """
     subprocess.run(["tmux", "-L", socket, "kill-server"],
                    capture_output=True, timeout=20)
-    subprocess.run(["tmux", "-L", socket, "new-session", "-d", "sleep 30"],
+    subprocess.run(["tmux", "-L", socket, "-f", "/dev/null",
+                    "new-session", "-d", "sleep 30"],
                    capture_output=True, timeout=20)
     try:
         done = subprocess.run(["tmux", "-L", socket, "source-file", str(conf)],
@@ -531,3 +540,60 @@ def test_a_config_holding_two_of_our_blocks_converges_and_keeps_its_place(tmp_pa
     assert again.action == "unchanged", "it never settles"
     assert again.backups == []
     assert (tmp_path / ".tmux.conf").read_text() == settled
+
+
+def test_removing_a_duplicate_block_does_not_weld_the_lines_around_it(tmp_path, monkeypatch):
+    """The block came out right and the file around it did not.
+
+    `BLOCK_RE` eats the newline BEFORE a block and the one AFTER it, so
+    deleting a duplicate with an empty replacement glued the line above it to
+    the line below: `set -g mouse onset -g status-bg red`. tmux answers «too
+    many arguments» and abandons the rest of the file — the very failure this
+    release exists to end, reached by deleting a byte from the user's own
+    config rather than by writing a bad one of ours. And the next run reports
+    `unchanged`, so it never heals.
+
+    The convergence test beside this one counts blocks and passes throughout.
+    Counting what we removed says nothing about what we left.
+    """
+    monkeypatch.setattr(sli, "TMUX_CONF", tmp_path / ".tmux.conf")
+    block = f"{sli.BEGIN}\nset -ag status-right \" #(older)\"\n{sli.END}\n"
+    (tmp_path / ".tmux.conf").write_text(
+        block + "set -g mouse on\n" + block + "set -g status-bg red\n")
+
+    sli.install_tmux(executable="/opt/collab")
+    lines = (tmp_path / ".tmux.conf").read_text().splitlines()
+
+    assert "set -g mouse on" in lines, f"their line was mangled: {lines}"
+    assert "set -g status-bg red" in lines, f"their line was mangled: {lines}"
+    assert not any("onset" in ln for ln in lines), "two of their lines were welded"
+
+
+def test_uninstall_removes_every_block_it_can_still_see(tmp_path, monkeypatch):
+    """It said «removed» and «left the rest of your tmux config untouched»
+    while `status_tmux` still answered installed and the segment still drew.
+    """
+    monkeypatch.setattr(sli, "TMUX_CONF", tmp_path / ".tmux.conf")
+    block = f"{sli.BEGIN}\nset -ag status-right \" #(x)\"\n{sli.END}\n"
+    (tmp_path / ".tmux.conf").write_text(block + "set -g mouse on\n" + block)
+
+    assert sli.uninstall_tmux().action == "removed"
+    assert sli.status_tmux()["installed"] is False
+    assert "set -g mouse on" in (tmp_path / ".tmux.conf").read_text()
+
+
+def test_a_config_that_is_not_utf8_is_still_repaired(tmp_path, monkeypatch):
+    """One accented byte in a `set -g message-text` made status, install and
+    uninstall all raise. `collab statusline status` tracebacked — and
+    `update._refreshable` catches Exception and moves on, so that user was
+    never offered the repair and was told nothing about why.
+    """
+    monkeypatch.setattr(sli, "TMUX_CONF", tmp_path / ".tmux.conf")
+    (tmp_path / ".tmux.conf").write_bytes(
+        b'set -g message-text "caf\xe9"\nset -g mouse on\n')       # latin-1
+
+    assert sli.status_tmux()["installed"] is False        # no traceback
+    assert sli.install_tmux(executable="/opt/collab").action == "appended"
+    after = (tmp_path / ".tmux.conf").read_bytes()
+    assert b'caf\xe9' in after, "their bytes were not written back unchanged"
+    assert sli.BEGIN.encode() in after

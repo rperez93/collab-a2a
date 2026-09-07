@@ -434,7 +434,7 @@ def _for_tmux(words: str) -> str:
 def install_tmux(executable: str | None = None) -> InstallResult:
     exe = executable or collab_executable()
     backups: list[Path] = []
-    body = TMUX_CONF.read_text() if TMUX_CONF.exists() else ""
+    body = _conf_text(TMUX_CONF) if TMUX_CONF.exists() else ""
 
     # tmux renders its own attributes, so ask for plain text.
     # -ag appends, so the padding goes in front of us here rather than after.
@@ -463,7 +463,14 @@ def install_tmux(executable: str | None = None) -> InstallResult:
         # one more leading newline and one more backup, for ever — on the path
         # `collab update` takes every time. That is the defect this release is
         # about, in the one shape an equality check cannot see.
-        rest = BLOCK_RE.sub("", body[found.end():])
+        # `\n`, NEVER "". BLOCK_RE eats the newline before a block AND the one
+        # after it, so an empty replacement WELDS the line above a removed
+        # block to the line below it — `set -g mouse onset -g status-bg red`,
+        # measured. tmux then reports «too many arguments» and abandons the
+        # rest of the file, which is the 1.41.1 failure this release exists to
+        # end, reached this time by deleting a byte from the user's own config.
+        # And the next run says `unchanged`, so it never heals itself.
+        rest = BLOCK_RE.sub("\n", body[found.end():])
         head = body[:found.start()]
         # BLOCK_RE swallows the newline BEFORE the block, so it has to be put
         # back — but only when something precedes us. Re-adding it
@@ -486,27 +493,53 @@ def install_tmux(executable: str | None = None) -> InstallResult:
                              ["already installed, and current"])
     if (b := _backup(TMUX_CONF)) is not None:
         backups.append(b)
-    TMUX_CONF.write_text(fresh)
+    _write_conf(TMUX_CONF, fresh)
     return InstallResult(
         action, TMUX_CONF, TMUX_CONF, backups,
         ["appended to status-right; run `tmux source-file ~/.tmux.conf` to apply"],
     )
 
 
+def _conf_text(path: Path) -> str:
+    """Read a config we did not write, without assuming it is UTF-8.
+
+    A `~/.tmux.conf` holding one accented byte in a `set -g message-text` made
+    `status_tmux`, `install_tmux` and `uninstall_tmux` all raise — `collab
+    statusline status` produced a traceback, and worse, `update._refreshable`
+    catches Exception and moves on, so that user was never offered the repair
+    and was told nothing about why. `surrogateescape` round-trips those bytes
+    unchanged, so what we write back is what they wrote.
+    """
+    return path.read_text(errors="surrogateescape")
+
+
+def _write_conf(path: Path, text: str) -> None:
+    """Write it back the way it was read.
+
+    `write_text` is STRICT, so a file read with `surrogateescape` cannot be
+    written back with it — the round trip has to agree at both ends or the
+    guarded read merely moves the exception to the line after it.
+    """
+    path.write_text(text, errors="surrogateescape")
+
+
 def uninstall_tmux() -> InstallResult:
     if not TMUX_CONF.exists():
         return InstallResult("absent", TMUX_CONF, TMUX_CONF, [], ["no ~/.tmux.conf"])
-    body = TMUX_CONF.read_text()
+    body = _conf_text(TMUX_CONF)
     if not BLOCK_RE.search(body):
         return InstallResult("absent", TMUX_CONF, TMUX_CONF, [], ["no collab block found"])
     backups = [b] if (b := _backup(TMUX_CONF)) is not None else []
-    TMUX_CONF.write_text(BLOCK_RE.sub("\n", body, count=1))
+    # EVERY copy, like `install_tmux`. With `count=1` this said «removed» and
+    # «left the rest of your tmux config untouched» while `status_tmux` still
+    # answered installed and the segment still drew.
+    _write_conf(TMUX_CONF, BLOCK_RE.sub("\n", body))
     return InstallResult("removed", TMUX_CONF, TMUX_CONF, backups,
                          ["left the rest of your tmux config untouched"])
 
 
 def status_tmux() -> dict[str, Any]:
-    installed = TMUX_CONF.exists() and bool(BLOCK_RE.search(TMUX_CONF.read_text()))
+    installed = TMUX_CONF.exists() and bool(BLOCK_RE.search(_conf_text(TMUX_CONF)))
     return {"target": "tmux", "config": str(TMUX_CONF),
             "configured": TMUX_CONF.exists(), "installed": installed}
 
