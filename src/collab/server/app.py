@@ -86,6 +86,13 @@ TASK_STATES = {
 #: it is a figure nobody can account for.
 FINISHED_STATES = frozenset({"TASK_STATE_COMPLETED", "TASK_STATE_CANCELED"})
 
+#: What «open» means, and it is NOT `FINISHED_STATES`. That set is about which
+#: tasks may be reopened; this one is about which are still outstanding, and a
+#: failed task is neither reopenable nor outstanding. Kept beside the store's
+#: own `open_only` filter, which lists exactly these four.
+OPEN_EXCLUDES = frozenset({"TASK_STATE_COMPLETED", "TASK_STATE_CANCELED",
+                           "TASK_STATE_FAILED", "TASK_STATE_REJECTED"})
+
 
 def _on_auth_error(conn, exc: Exception) -> JSONResponse:
     return JSONResponse(
@@ -140,6 +147,16 @@ def _may_change(user, project: dict[str, Any]) -> bool:
     """
     if getattr(user, "is_host", False):
         return True
+    # THE ID FIRST, and the name only where there is no id to ask. A name freed
+    # by a rename or a kick is free for somebody else to claim, so authorising
+    # on the name alone hands the guard to whoever takes the name next — they
+    # would pass the owner check on a project they never owned. Projects
+    # written before the id was kept have none, and fall back to the name they
+    # do have rather than becoming unmanageable.
+    owner_id = project.get("owner_id")
+    if owner_id:
+        return getattr(user, "id", None) == owner_id or user.name == project.get(
+            "created_by")
     return user.name in (project.get("owner"), project.get("created_by"))
 
 
@@ -625,8 +642,13 @@ def create_app(
         for project in found:
             tasks = store.project_tasks(str(project["id"]))
             project["task_count"] = len(tasks)
+            # ONE DEFINITION OF OPEN, shared with `store.tasks(open_only=True)`
+            # and with the board. `FINISHED_STATES` is the narrower set that
+            # governs REOPENING — completed and cancelled — and counting with
+            # it reported a failed task as open while `collab task list` showed
+            # nothing, which is two answers to one question on one screen.
             project["open_count"] = sum(
-                1 for t in tasks if t["state"] not in FINISHED_STATES)
+                1 for t in tasks if t["state"] not in OPEN_EXCLUDES)
         return {"projects": found}
 
     @app.get(EXT_PREFIX + "/projects/{project_id}", tags=["collab"])
@@ -687,17 +709,24 @@ def create_app(
                             " — ask them, or the host can do it"),
                 )
             if action == "delete":
-                await asyncio.to_thread(store.delete_project, project_id)
+                released = await asyncio.to_thread(
+                    store.delete_project, project_id) or []
+                # THE RELEASED TASKS ARE NAMED ON THE WIRE. Every other agent's
+                # board is still showing them inside a project that has gone,
+                # and a delete that only told the caller left those boards
+                # wrong until some unrelated event forced a refresh. The kind
+                # is in the daemon's `REFRESHES_THE_SNAPSHOT`, so saying it is
+                # enough to make every board re-read.
                 await hub.publish(Envelope(
                     kind=KIND_PROJECT, sender=user.name, sender_id=user.id,
                     room=DEFAULT_ROOM, text=str(existing["title"]),
                     body={"action": "delete", "id": project_id,
-                          "title": existing["title"]},
+                          "title": existing["title"], "released": released},
                 ))
                 # ITS TASKS SURVIVE IT, belonging to none. Said back, because
                 # «deleted» about a thing that holds work reads as though the
                 # work went too.
-                return {"project": None, "released": True}
+                return {"project": None, "released": released}
             title = clip(str(body.get("title") or existing["title"]), MAX_TITLE)
             owner, owner_id = (_known_owner(store, body["owner"])
                                if "owner" in body

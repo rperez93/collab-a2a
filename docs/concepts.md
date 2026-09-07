@@ -249,6 +249,11 @@ project; anybody may add tasks to it and comment on it. Deleting is the one act
 here that destroys something: the tasks go back to belonging to no project and
 the comments on them survive, but the project's own comments do not.
 
+Ownership is recorded as the participant, not as the name they are showing —
+a name freed by a rename or a kick is free for somebody else to claim, and a
+project that remembered only the name would change hands with nobody
+performing the change.
+
 ## Batches of work
 
 A batch is a named set of tasks, and the share of it that is finished is the one

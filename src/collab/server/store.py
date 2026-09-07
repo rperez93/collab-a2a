@@ -193,6 +193,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_one_open_batch
 # on start-up. It is created in `_migrate`, once the column is certain.
 
 
+def normalise_pr_url(url: str) -> str:
+    """One spelling of one pull request, so one row holds it.
+
+    A trailing slash is the whole of it in practice: `…/pull/12` and
+    `…/pull/12/` are the same page, arrive from different places, and were two
+    rows keyed by the raw string — so a task showed its pull request twice and
+    `pr-remove` on the other spelling found nothing to remove.
+    """
+    return (url or "").strip().rstrip("/")
+
+
 class UnknownProject(LookupError):
     """A task or a comment named a project that is not there.
 
@@ -968,26 +979,37 @@ class Store:
                 (project_id,)).fetchall()
         return [dict(r) for r in rows]
 
-    def delete_project(self, project_id: str) -> bool:
+    def delete_project(self, project_id: str) -> list[str] | None:
         """Remove a project. Its tasks survive it, belonging to none.
 
         NOT A CASCADE, and deliberately. The tasks are the work; the project is
         a statement about whose it is. Deleting the statement must not delete
         the work — an agent that removed a project and took four claimed tasks
         with it would have destroyed a board nobody could reconstruct.
+
+        Returns the ids of the tasks it released, or None when there was no
+        such project. The caller needs them: releasing a task is a change to
+        that task, and every other agent's board is still showing it inside a
+        project that has gone.
         """
         with self._lock:
             found = self._db.execute(
                 "SELECT id FROM projects WHERE id=?", (project_id,)).fetchone()
             if found is None:
-                return False
-            self._db.execute("UPDATE tasks SET project=NULL WHERE project=?",
-                             (project_id,))
+                return None
+            # `updated_at` MOVES. Releasing a task changes what every board
+            # should show about it, and a row whose stamp did not move is a row
+            # nothing downstream has any reason to re-read.
+            released = [str(r["id"]) for r in self._db.execute(
+                "SELECT id FROM tasks WHERE project=?", (project_id,)).fetchall()]
+            self._db.execute(
+                "UPDATE tasks SET project=NULL, updated_at=? WHERE project=?",
+                (time.time(), project_id))
             self._db.execute("DELETE FROM projects WHERE id=?", (project_id,))
             self._db.execute("DELETE FROM comments WHERE subject='project'"
                              " AND subject_id=?", (project_id,))
             self._db.commit()
-        return True
+        return released
 
     def add_comment(self, comment_id: str, *, subject: str, subject_id: str,
                     author: str, text: str) -> dict[str, Any]:
@@ -1006,8 +1028,14 @@ class Store:
                 f"SELECT 1 FROM {table} WHERE id=?", (subject_id,)).fetchone()
             if known is None:
                 raise UnknownProject(subject_id)
+            # PLAIN INSERT. `INSERT OR REPLACE` let a caller passing an id
+            # that already existed silently overwrite somebody else's comment,
+            # author and all. Ids are server-minted today, so nothing reaches
+            # it — but a store method that destroys another person's words when
+            # handed a duplicate id is a loaded gun waiting for the first
+            # caller that mints its own.
             self._db.execute(
-                "INSERT OR REPLACE INTO comments (id,subject,subject_id,author,"
+                "INSERT INTO comments (id,subject,subject_id,author,"
                 "text,created_at) VALUES (?,?,?,?,?,?)",
                 (comment_id, subject, subject_id, author, text, now),
             )
@@ -1031,6 +1059,17 @@ class Store:
         test, or a rework after review — so this appends rather than replaces.
         Adding the same URL twice is somebody saying the same true thing twice
         and updates the row rather than making a second one.
+
+        THE KEY IS THE NORMALISED URL. `…/pull/12` and `…/pull/12/` are one
+        pull request and were two rows, because the trailing slash was stripped
+        only to derive the number and never to key the row — so «the same URL
+        twice» was true of byte-identical strings and of nothing else.
+
+        AND THE NUMBER IS NOT OVERWRITTEN WITH NOTHING. `SET number =
+        excluded.number` erased a recorded 12 when the same URL came back with
+        an unparseable number, which is the ordinary case: the route derives
+        the number from the URL and yields None when it cannot. A second
+        mention of a pull request must not be able to forget its number.
         """
         now = time.time()
         with self._lock:
@@ -1038,10 +1077,12 @@ class Store:
                 "SELECT 1 FROM tasks WHERE id=?", (task_id,)).fetchone()
             if known is None:
                 raise UnknownProject(task_id)
+            url = normalise_pr_url(url)
             self._db.execute(
                 "INSERT INTO task_prs (task_id,url,number,added_by,added_at)"
                 " VALUES (?,?,?,?,?)"
-                " ON CONFLICT(task_id,url) DO UPDATE SET number=excluded.number",
+                " ON CONFLICT(task_id,url) DO UPDATE SET"
+                " number=COALESCE(excluded.number, task_prs.number)",
                 (task_id, url, number, added_by, now),
             )
             self._db.commit()
@@ -1051,9 +1092,11 @@ class Store:
         return dict(row)
 
     def remove_task_pr(self, task_id: str, url: str) -> bool:
+        """Unlink one. Normalised the same way, or a trailing slash never matches."""
         with self._lock:
             cur = self._db.execute(
-                "DELETE FROM task_prs WHERE task_id=? AND url=?", (task_id, url))
+                "DELETE FROM task_prs WHERE task_id=? AND url=?",
+                (task_id, normalise_pr_url(url)))
             self._db.commit()
         return cur.rowcount > 0
 

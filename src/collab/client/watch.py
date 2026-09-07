@@ -25,7 +25,9 @@ from ..protocol import (
     KIND_FILE,
     KIND_HELLO,
     KIND_PRESENCE,
+    KIND_PROJECT,
     KIND_TASK,
+    project_line,
     task_line,
 )
 from .inbox import Inbox
@@ -44,6 +46,10 @@ KIND_MARK = {
     KIND_HELLO: "→",
     KIND_PRESENCE: "·",
     KIND_TASK: "◆",
+    # A MARK OF ITS OWN. Without one a project line falls through unmarked and
+    # reads as though nobody said it — and the whole reason a project is a kind
+    # rather than a task action is that a reader wants to tell them apart.
+    KIND_PROJECT: "▤",
     KIND_FILE: "▣",
 }
 
@@ -102,6 +108,10 @@ def format_event(env: Envelope, *, me: str | None = None, width: int = 80) -> st
 
     if env.kind == KIND_TASK:
         line = task_line(env.body)
+        return f"{when} {who} {mark} {_paint(line, BOLD if _color_enabled() else '')}"
+
+    if env.kind == KIND_PROJECT:
+        line = project_line(env.body)
         return f"{when} {who} {mark} {_paint(line, BOLD if _color_enabled() else '')}"
 
     if env.kind == KIND_FILE:

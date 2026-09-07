@@ -116,10 +116,40 @@ def task_line(body: dict[str, Any]) -> str:
     `Envelope.render_line` deliberately does NOT use this. It writes the sender
     into the line and has no surrounding layout to lean on, so it says more.
     """
+    action = str(body.get("action", ""))
+    ident = str(body.get("id", ""))
+    # A COMMENT AND A PULL REQUEST ARE NOT STATE CHANGES, and this is the
+    # renderer the viewer and `collab watch` actually use — `render_line` was
+    # taught the same thing and this was left behind, so the pane said
+    # «comment T_1 “a task” []» and dropped what was said. A line about a task
+    # that omits the only new information in it is worse than no line.
+    if action == "comment":
+        return f"commented on {ident}: {body.get('text', '')}"
+    if action in ("pr", "pr-remove"):
+        verb = "linked" if action == "pr" else "unlinked"
+        num = f"#{body['number']}" if body.get("number") else str(
+            body.get("url", ""))
+        return f"{verb} {num} on {ident}"
     state = short_state(body.get("state", ""))
     owner = f" · {body['owner']}" if body.get("owner") else ""
-    return (f"{body.get('action', '')} {body.get('id', '')} "
-            f"“{body.get('title', '')}” [{state}]{owner}")
+    of = f" · {body['project']}" if body.get("project") else ""
+    return (f"{action} {ident} "
+            f"“{body.get('title', '')}” [{state}]{owner}{of}")
+
+
+def project_line(body: dict[str, Any]) -> str:
+    """One line about a project, for the same two renderers.
+
+    Beside `task_line` rather than inside it: a project is not a task, nothing
+    counts it, and a reader scanning a transcript for what the board owes them
+    should be able to tell the two apart at a glance.
+    """
+    action = str(body.get("action", ""))
+    ident = str(body.get("id", ""))
+    if action == "comment":
+        return f"commented on {ident}: {body.get('text', '')}"
+    who = f" · {body['owner']}" if body.get("owner") else ""
+    return f"{action} {ident} “{body.get('title', '')}”{who}"
 
 
 def file_outcome(body: dict[str, Any]) -> str:

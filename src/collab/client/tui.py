@@ -40,7 +40,9 @@ from ..protocol import (
     KIND_FILE,
     KIND_HELLO,
     KIND_PRESENCE,
+    KIND_PROJECT,
     KIND_TASK,
+    project_line,
     task_line,
 )
 # THE FALLBACK IS GONE, AND IT WAS WORSE THAN DEAD. A `try`/`except
@@ -266,6 +268,7 @@ KIND_MARK = {
     KIND_HELLO: "→",
     KIND_PRESENCE: "·",
     KIND_TASK: "◆",
+    KIND_PROJECT: "▤",
     KIND_FILE: "▣",
 }
 
@@ -1259,6 +1262,8 @@ def _body_lines(env: Envelope, width: int) -> list[str]:
         return _wrap(str(env.body.get("event", "")), width)
     if env.kind == KIND_TASK:
         return _wrap(task_line(env.body), width)
+    if env.kind == KIND_PROJECT:
+        return _wrap(project_line(env.body), width)
     if env.kind == KIND_FILE:
         b = env.body
         if b.get("action") == "received":

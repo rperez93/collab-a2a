@@ -28,7 +28,8 @@ from .. import __version__, activity as act, diagnostics, lockfile, peers, wake
 from ..batch import DELTA_SHOWN_FOR
 from ..config import SessionProfile, share_stats_enabled, stats_source
 from ..protocol import (EXT_PREFIX, KIND_CHAT, KIND_HELLO, KIND_PRESENCE,
-                        KIND_SYSTEM, KIND_TASK, Envelope, now_iso, scrub)
+                        KIND_PROJECT, KIND_SYSTEM, KIND_TASK, Envelope,
+                        now_iso, scrub)
 from ..stats import STATS_FILE, read_stats, write_stats
 from . import exclusive
 # THE FILES ARE READ FROM daemon_files, AND RE-EXPORTED FROM HERE. Everything
@@ -112,8 +113,13 @@ PROPOSAL_COOLDOWN = 300.0
 #: shown holding the rest — and opening or closing a batch publishes
 #: KIND_PRESENCE, as does removing a participant. Between them that is
 #: everything that can change the count or who holds it.
+#: `project` is here for a reason that is easy to miss: deleting a project
+#: RELEASES its tasks, so a kind that changes nothing about a task's own row
+#: nonetheless changes what every other agent's board should show. Without it,
+#: those boards kept the tasks inside a project that no longer existed until
+#: some unrelated event forced a refresh.
 REFRESHES_THE_SNAPSHOT = frozenset({
-    KIND_HELLO, KIND_PRESENCE, KIND_SYSTEM, KIND_TASK,
+    KIND_HELLO, KIND_PRESENCE, KIND_SYSTEM, KIND_TASK, KIND_PROJECT,
 })
 
 

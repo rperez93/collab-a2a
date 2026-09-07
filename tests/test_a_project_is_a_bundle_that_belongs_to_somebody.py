@@ -189,7 +189,10 @@ def test_deleting_a_project_does_not_move_the_shared_figure(api):
     _, before = api.get("/batch")
 
     code, out = api.post("/projects", {"action": "delete", "id": made["id"]})
-    assert code == 200 and out["released"] is True
+    # THE IDS, not a bare True. Every other board is still showing these tasks
+    # inside a project that has gone, and naming them is what lets it say so.
+    assert code == 200
+    assert len(out["released"]) == 2
 
     _, after = api.get("/batch")
     assert after["batch"]["total"] == before["batch"]["total"]
@@ -548,3 +551,156 @@ def test_a_project_written_before_ids_were_kept_still_opens(tmp_path):
         assert found["owner"] == "alice"
     finally:
         store.close()
+
+
+# --- what the room is told, and what it renders -------------------------------
+
+def test_the_viewer_and_the_watcher_render_a_comment_as_a_comment(api):
+    """`render_line` was taught this and `task_line` was left behind.
+
+    `task_line` is the renderer the viewer and `collab watch` actually use, and
+    it printed a comment as a state change with the text dropped — a line about
+    a task that omits the only new information in it.
+    """
+    from collab.protocol import project_line, task_line
+
+    said = task_line({"action": "comment", "id": "T_1", "text": "revert this"})
+    assert "revert this" in said
+    assert "[" not in said, "a comment is not a state change"
+
+    linked = task_line({"action": "pr", "id": "T_1", "number": 12, "url": "u"})
+    assert "#12" in linked and "[" not in linked
+
+    assert "Ship it" in project_line({"action": "assign", "id": "P_1",
+                                      "title": "Ship it", "owner": "bob"})
+
+
+def test_a_project_event_makes_every_board_re_read(api):
+    """Deleting a project releases tasks, which changes what others should show."""
+    from collab.client.daemon import REFRESHES_THE_SNAPSHOT
+    from collab.protocol import KIND_PROJECT
+
+    assert KIND_PROJECT in REFRESHES_THE_SNAPSHOT
+
+
+def test_deleting_a_project_names_the_tasks_it_released(api):
+    made = _project(api)
+    a = _task(api, "a", project=made["id"])
+    b = _task(api, "b", project=made["id"])
+
+    _, out = api.post("/projects", {"action": "delete", "id": made["id"]})
+    assert sorted(out["released"]) == sorted([a["id"], b["id"]])
+
+
+def test_a_released_task_looks_changed_to_everything_downstream(session):
+    """A row whose stamp did not move is a row nothing has reason to re-read."""
+    store = session["store"]
+    store.upsert_project("P_1", title="p", owner=None, created_by="alice")
+    store.upsert_task("T_1", title="t", state="TASK_STATE_SUBMITTED", owner=None,
+                      room=None, created_by="alice", project="P_1")
+    before = store.get_task("T_1")["updated_at"]
+
+    store.delete_project("P_1")
+
+    assert store.get_task("T_1")["updated_at"] > before
+
+
+# --- the pull request row -----------------------------------------------------
+
+def test_a_trailing_slash_is_the_same_pull_request(api):
+    task = _task(api, "a")
+    api.post("/task-prs", {"id": task["id"],
+                           "url": "https://github.com/o/r/pull/12"})
+    _, out = api.post("/task-prs", {"id": task["id"],
+                                    "url": "https://github.com/o/r/pull/12/"})
+    assert len(out["prs"]) == 1, "one pull request, one row"
+
+    _, gone = api.post("/task-prs", {"action": "remove", "id": task["id"],
+                                     "url": "https://github.com/o/r/pull/12/"})
+    assert gone["prs"] == [], "and it unlinks by either spelling"
+
+
+def test_mentioning_a_pull_request_again_cannot_forget_its_number(api):
+    """The route derives the number from the url and yields None when it cannot.
+
+    `SET number = excluded.number` then erased a recorded 12 — the ordinary
+    case, not an exotic one.
+    """
+    task = _task(api, "a")
+    api.post("/task-prs", {"id": task["id"],
+                           "url": "https://github.com/o/r/pull/12"})
+    _, out = api.post("/task-prs", {"id": task["id"],
+                                    "url": "https://github.com/o/r/pull/12",
+                                    "number": None})
+    assert out["prs"][0]["number"] == 12
+
+
+# --- one definition of open ---------------------------------------------------
+
+def test_a_failed_task_is_not_counted_as_open(api):
+    """Two answers to one question on one screen.
+
+    `FINISHED_STATES` governs which tasks may be REOPENED — completed and
+    cancelled. Counting «open» with it reported a failed task as outstanding
+    while `collab task list` showed nothing.
+    """
+    made = _project(api)
+    task = _task(api, "a", project=made["id"])
+    api.post("/tasks", {"action": "fail", "id": task["id"]})
+
+    _, out = api.get("/projects")
+    assert out["projects"][0]["open_count"] == 0
+    _, listed = api.get("/tasks", open_only="true")
+    assert listed["tasks"] == []
+
+
+# --- a comment cannot overwrite another person's ------------------------------
+
+def test_a_comment_id_that_already_exists_is_refused(session):
+    """Server-minted ids mean nothing reaches this today.
+
+    A store method that destroys another person's words when handed a duplicate
+    id is a loaded gun waiting for the first caller that mints its own.
+    """
+    import sqlite3
+
+    store = session["store"]
+    store.upsert_project("P_1", title="p", owner=None, created_by="alice")
+    store.add_comment("C_1", subject="project", subject_id="P_1",
+                      author="alice", text="mine")
+    with pytest.raises(sqlite3.IntegrityError):
+        store.add_comment("C_1", subject="project", subject_id="P_1",
+                          author="bob", text="overwritten")
+    kept = store.comments("project", "P_1")
+    assert [(c["author"], c["text"]) for c in kept] == [("alice", "mine")]
+
+
+# --- the guard survives a recycled name ---------------------------------------
+
+def test_taking_a_name_does_not_take_the_projects_that_went_with_it(session, api,
+                                                                    client):
+    """The half of the fix that was missing.
+
+    Keeping `owner_id` is no use if the guard still asks the name. A name freed
+    by a rename or a kick is free to claim, and whoever takes it would pass the
+    owner check on a project they never owned.
+    """
+    from collab.server.auth import new_secret
+
+    made = _project(api, owner="bob")
+    assert made["owner_id"]
+
+    # The original bob leaves the name behind — a rename, or a kick — and
+    # somebody else takes it. This is the sequence, and it needs no writes to
+    # the project at all: no event, no `updated_at` move, nothing on any screen.
+    store = session["store"]
+    impostor = new_secret()
+    store.add_participant("bob~later", impostor, is_host=False, meta={})
+    store._db.execute("UPDATE participants SET name='bob~gone' WHERE name='bob'")
+    store._db.execute("UPDATE participants SET name='bob' WHERE name='bob~later'")
+    store._db.commit()
+
+    r = client.post(EXT + "/projects",
+                    json={"action": "delete", "id": made["id"]},
+                    headers={"Authorization": f"Bearer {impostor}"})
+    assert r.status_code == 403, "the name is not the person"

@@ -347,6 +347,10 @@ and adding the same URL twice is the same true thing said twice. The number is
 read off the end of the URL when you do not give one, because everybody pastes
 the URL and nobody types the number.
 
+A trailing slash is not a second pull request: the URL is normalised, so
+`…/pull/12` and `…/pull/12/` are one row and `pr-remove` unlinks by either
+spelling. Mentioning one again never forgets a number it already had.
+
 ```bash
 collab task propose "the schema" --project P_a1b2
 collab task pr --id T_9f3a --url https://github.com/owner/repo/pull/12
@@ -391,6 +395,12 @@ one.** Anyone may add tasks to it and comment on it. Deleting is the sharp end:
 the tasks survive and go back to belonging to no project, but the comments do
 not, and they are the only thing here that cannot be reconstructed from
 somewhere else.
+
+Ownership is checked against the participant, not the name they are showing.
+A display name freed by a rename or a kick is free for somebody else to claim,
+and whoever took it would otherwise pass the owner's check on a project they
+never owned. Deleting also names the tasks it released, so every other agent's
+board stops showing them inside a project that has gone.
 
 ```bash
 collab project propose "Q3 migration" --owner bob --detail "the whole move"
