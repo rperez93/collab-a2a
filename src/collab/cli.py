@@ -3068,6 +3068,22 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
     health = _stats_health(profile)
     if health is not None:
         add("stats", *health)
+
+    # 8. Did anything the room said never reach this agent?
+    #    A WARN AND NOT A FAIL. The session works; what is wrong is the record
+    #    of it, and the agent cannot tell — a conversation with message 41
+    #    missing reads perfectly, and the only symptom is an agent answering a
+    #    question nobody can see it was asked. Nothing else here can catch it:
+    #    the listener is live, the feed is live, the unread count is a count of
+    #    what arrived. Only the sequence numbers know.
+    missing = _missing_events(profile)
+    if missing:
+        add("messages", CHECK_WARN,
+            f"{len(missing)} message(s) never arrived (seq"
+            f" {', '.join(str(n) for n in missing[:6])}"
+            + (" …" if len(missing) > 6 else "") + ")",
+            f"{exe} watch on another participant shows what this log is"
+            " missing; the room's own copy is complete")
     return out
 
 
@@ -5414,7 +5430,13 @@ def cmd_logs(args: argparse.Namespace) -> int:
     THE POINT IS THAT IT DOES NOT DISTURB ANYTHING. Every file here is opened
     read-only and nothing is signalled, stopped or restarted: the daemon writes
     `daemon.log` and its diagnostics as it goes, and reading them is the same
-    act as `tail`. Until this existed the only reader was `collab issue draft`,
+    act as `tail`. The inbox is opened through a handle that CANNOT write —
+    `Inbox(..., readonly=True)`, which skips the mkdir, the journal mode, the
+    schema and the migrations an ordinary open performs, and refuses to create
+    a database that is not there. The one thing a reader of a WAL database
+    unavoidably brings into existence is sqlite's own `-wal` and `-shm`, which
+    `collab recv` and the viewer create too and which the daemon is holding
+    open anyway; nothing the daemon WROTE is touched. Until this existed the only reader was `collab issue draft`,
     which writes a markdown file to post somewhere — the wrong shape entirely
     for «what has it been doing for the last ten minutes».
 
@@ -5455,6 +5477,21 @@ def cmd_logs(args: argparse.Namespace) -> int:
 
     heading(f"logs for {profile.name or 'this session'}")
 
+    # A HOLE IN THE LOG, WHICH NOTHING ELSE REPORTS. The hub numbers every
+    # event and the daemon resumes with `Last-Event-ID`, so a reconnect should
+    # leave no gap; when one is left the conversation still reads perfectly and
+    # the agent is simply answering a question it was never shown. `last_seq`
+    # and the unread count cannot see it — only the numbers can.
+    missing = _missing_events(profile)
+    if missing:
+        warn(f"{len(missing)} message(s) never arrived: seq"
+             f" {', '.join(str(n) for n in missing[:12])}"
+             + (" …" if len(missing) > 12 else ""))
+        print(dim("  the feed dropped and came back without them; the room's"
+                  " own copy is complete, so `collab watch` on another"
+                  " participant will show what this one is missing"))
+        print()
+
     if not diag.enabled():
         warn("the diagnostic record is off, so there is nothing structured to show")
         print(dim("  collab config diagnostics on  — it reaches the running"
@@ -5487,6 +5524,29 @@ def cmd_logs(args: argparse.Namespace) -> int:
         _follow([root / "daemon.log", root / "hub.log"],
                 rolling=lambda: diag.path_for(root))
     return 0
+
+
+def _missing_events(profile: SessionProfile) -> list[int]:
+    """Sequence numbers this agent's log never received. Never raises.
+
+    Opening the inbox is a read, but it is a read of a SQLite file the daemon
+    is writing to, and `collab logs` promises to disturb nothing. A database
+    that is busy, locked or written by a newer collab is not a reason to refuse
+    the rest of the report — the hang log and the diagnostics above it are
+    often the thing somebody came for.
+    """
+    from .client.inbox import Inbox
+
+    box = None
+    try:
+        box = Inbox(profile.dir, readonly=True)
+        return box.gaps()
+    except Exception:                                         # noqa: BLE001
+        return []
+    finally:
+        if box is not None:
+            with contextlib.suppress(Exception):
+                box.close()
 
 
 def _optional_profile(args: argparse.Namespace) -> SessionProfile | None:

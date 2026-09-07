@@ -663,13 +663,21 @@ process is signalled, stopped or restarted: the daemon writes as it goes, and
 reading what it wrote is the same act as `tail`. It is safe to run against a
 session in the middle of its work.
 
-Three sources, and the third is one no other command shows:
+Four sources, and two of them no other command shows:
 
 - **the diagnostic record** — the daemon's and the hub's own events, if
   `collab config diagnostics` is on. It reports counts first and then the last
   `--lines` records, which is usually the shape of a fault before any of its
   detail;
 - **`daemon.log` and `hub.log`** — the same processes at more length;
+- **messages that never arrived** — the sequence numbers missing from this
+  agent's own log. The hub numbers every event and the daemon resumes with
+  `Last-Event-ID`, so a reconnect should leave no hole; when one is left,
+  nothing else can see it. `last_seq` says how far the log reaches and the
+  unread count says what has not been looked at, while a conversation with one
+  message missing reads perfectly — the only symptom is an agent answering a
+  question nobody can see it was asked. `collab check` warns about the same
+  thing;
 - **status lines that hung** — written by a process that is not part of the
   session and cannot be. Nothing bounded a status line before: a render that
   wedged held a core until the machine was restarted, with no record anywhere
@@ -748,6 +756,15 @@ own usage figures have moved since it spoke: moved means it is busy and its
 status is out of date, so the reminder says so; not moved means nobody is
 there, so the statement decays to `quiet`. See
 [Keeping it current](../README.md#keeping-it-current).
+
+The `messages` check warns when this agent's own log has holes in it — the hub
+numbers every event and the daemon resumes with `Last-Event-ID`, so a reconnect
+should leave none. It is a **warning and not a failure**: the session works,
+what is wrong is the record of it, and the agent cannot tell. A conversation
+with message 41 missing reads perfectly; the only symptom is an agent answering
+a question nobody can see it was asked. Nothing else can catch it — the listener
+is live, the feed is live, and the unread count is a count of what arrived. The
+fix names another participant, because the room's own copy is complete.
 
 The `watching` check names the route that fits **this** tool when nothing is
 reading: a monitor for one that holds a watcher across turns, the wake for one

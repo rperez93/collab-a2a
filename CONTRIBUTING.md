@@ -246,8 +246,23 @@ So before deleting anything unreferenced, ask which of these it is:
   paths, the card's fields, the JSON-RPC method names above — keep it, and give
   it a docstring saying why it has no caller, or the next sweep reaches the same
   wrong conclusion;
+- **a constant naming a value in the data model** — a state, a kind, a key
+  somebody else can see. `batch.OPEN` was removed because only `CLOSED` is
+  compared against here, a batch being open by being not closed. But `"open"`
+  is the schema's `DEFAULT`, it rides in every `--json` payload, and the bundle
+  describes the board in those words: the vocabulary is read whether or not
+  this spelling of it is. Keep both ends of a pair, and pin them to whatever
+  writes them — `tests/test_a_state_constant_is_read_by_its_data_model.py`
+  asserts the constant against the schema so the two cannot drift;
 - **a re-export** — check where its readers moved to before deciding. Several
-  here exist so an older import path still answers.
+  here exist so an older import path still answers;
+- **a check nobody wired up** — `Inbox.gaps` reports sequence numbers that
+  never arrived, and no other surface can: `last_seq` says how far the log
+  reaches, the unread count says what has not been read, and a conversation
+  with one message missing reads perfectly. It was removed for having no
+  caller. The answer was to give it one — it is in `collab check` and
+  `collab logs` now. Before deleting something that can detect a fault, ask
+  whether the fault is worth detecting.
 
 A protocol name kept this way needs a test, because a docstring does not make
 the reference graph find a reader and the next sweep is run by a tool, not by

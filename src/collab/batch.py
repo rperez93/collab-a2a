@@ -50,9 +50,15 @@ DONE_STATE = "TASK_STATE_COMPLETED"
 #: put 100% permanently out of reach for a batch that is genuinely finished.
 WITHDRAWN_STATE = "TASK_STATE_CANCELED"
 
-#: What the board calls a batch nobody may add to. There is no `OPEN` beside
-#: it: nothing ever compares against that state, it is simply not this one, and
-#: a constant naming it sat here for a year with no reader.
+#: The two states a batch is in, as the hub writes them and as `--json` hands
+#: them to anybody reading collab's output. Only `CLOSED` is compared against
+#: in this package — a batch is open by being not closed — and `OPEN` is here
+#: anyway, because it names a value in the data model rather than a branch in
+#: the code. A dead-code sweep removed it on the strength of the reference
+#: graph and it had to come back: the string is in the schema's DEFAULT, in
+#: every `status --json` payload and in the bundle's description of the board,
+#: so the vocabulary is read whether or not this spelling of it is.
+OPEN = "open"
 CLOSED = "closed"
 
 #: The figures are the hub's, fetched over the network and then remembered.

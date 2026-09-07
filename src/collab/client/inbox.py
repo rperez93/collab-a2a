@@ -66,13 +66,46 @@ def _without(kinds: tuple[str, ...]) -> tuple[str, list[Any]]:
 
 
 class Inbox:
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, *, readonly: bool = False) -> None:
+        """Open the inbox. `readonly` opens it WITHOUT WRITING ANYTHING.
+
+        The ordinary path creates the directory, sets the journal mode, runs
+        the schema and the migrations, and commits — four writes before a
+        single row is read, which is right for the daemon and wrong for a
+        reader that has promised to disturb nothing. `collab logs` says every
+        file it opens is opened read-only, and opening an inbox to count the
+        gaps in it broke that promise: its own test caught the mtimes moving.
+
+        A read-only handle raises rather than creating a database that is not
+        there, which is the correct answer for a session that has never
+        received anything — there are no gaps in a log that does not exist.
+        """
         self.dir = Path(directory)
-        self.dir.mkdir(parents=True, exist_ok=True)
+        self.readonly = readonly
+        if not readonly:
+            self.dir.mkdir(parents=True, exist_ok=True)
         self.jsonl = self.dir / "inbox.jsonl"
         self._lock = threading.Lock()
         with self._lock:
-            self._db = self._connect()
+            self._db = self._connect_readonly() if readonly else self._connect()
+
+    def _connect_readonly(self) -> sqlite3.Connection:
+        """A handle that cannot write, for a reader that must not.
+
+        No `mkdir`, no `PRAGMA journal_mode`, no schema, no migration, no
+        commit. `mode=ro` also means the file must already exist: sqlite raises
+        instead of quietly creating an empty database beside a session that
+        merely has not received anything yet.
+
+        `busy_timeout` is still set — it is a property of this connection
+        rather than of the file — because the daemon is writing while this
+        reads, which is the whole reason the file is in WAL mode.
+        """
+        db = sqlite3.connect(f"file:{self.dir / 'inbox.db'}?mode=ro",
+                             uri=True, check_same_thread=False)
+        db.row_factory = sqlite3.Row
+        db.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+        return db
 
     def _connect(self) -> sqlite3.Connection:
         """Open the inbox, set up the way every connection to it must be.
@@ -469,3 +502,29 @@ class Inbox:
                 (seq, *extra),
             ).fetchone()
         return row is not None
+
+    def gaps(self) -> list[int]:
+        """Sequence numbers missing from this log — messages that were dropped.
+
+        The hub numbers every event and the daemon resumes with
+        `Last-Event-ID`, so a reconnect is meant to leave a log with no holes
+        in it. This is how that is checked rather than assumed: the numbers
+        between the lowest and the highest that are not here.
+
+        A HOLE IS NOT VISIBLE FROM ANY OTHER SURFACE. `last_seq` says how far
+        the log reaches and `unread` says what has not been looked at; neither
+        can tell you that message 41 never arrived, and the conversation reads
+        perfectly well without it. Somebody answering a question they were
+        never asked is the failure this catches, and it is silent.
+
+        Empty when there is nothing, and empty is also the healthy answer —
+        `collab check` and `collab logs` both report it, so it has a reader
+        where for a long time it had only a docstring claiming one.
+        """
+        with self._lock:
+            rows = self._db.execute("SELECT seq FROM inbox ORDER BY seq").fetchall()
+        seqs = [r["seq"] for r in rows]
+        if not seqs:
+            return []
+        known = set(seqs)
+        return [n for n in range(seqs[0], seqs[-1] + 1) if n not in known]
