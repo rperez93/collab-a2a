@@ -1853,9 +1853,12 @@ def cmd_task(args: argparse.Namespace) -> int:
             project = getattr(args, "project", None)
             if project is not None:
                 extra["project"] = project
+            # `args.detail` AS IT IS. `or ""` turned «I said nothing about the
+            # detail» into «clear the detail» on every claim, complete and
+            # move. None travels as an absent key; --detail '' still clears.
             task = client.task_action(
                 args.action, task_id=args.id, title=args.title or "",
-                detail=args.detail or "", room=args.room, **extra,
+                detail=args.detail, room=args.room, **extra,
             )
     except HubError as exc:
         fail(str(exc))
@@ -1966,7 +1969,9 @@ def cmd_project(args: argparse.Namespace) -> int:
     try:
         with _client(profile) as client:
             if args.action == "list":
-                found = client.projects(owner=args.owner or "")
+                show_archived = bool(getattr(args, "archived", False))
+                found = client.projects(owner=args.owner or "",
+                                        archived=show_archived)
                 if args.json:
                     print(json.dumps(found, indent=2))
                     return 0
@@ -1978,8 +1983,30 @@ def cmd_project(args: argparse.Namespace) -> int:
                     owner = said(one.get("owner")) or dim("unassigned")
                     counts = dim(f"{one.get('open_count', 0)} open"
                                  f" of {one.get('task_count', 0)}")
+                    # SAID ON THE LINE, because with `--archived` the retired
+                    # ones sit beside the live ones and nothing else tells them
+                    # apart.
+                    retired = dim("  archived") if one.get("archived_at") else ""
                     print(f"  {said(one['id'])}  {said(one['title'])}"
-                          f"  {owner}  {counts}")
+                          f"  {owner}  {counts}{retired}")
+                if not show_archived:
+                    print(dim("  `--archived` includes retired projects"))
+                return 0
+
+            if args.action in ("archive", "unarchive"):
+                if not args.id:
+                    fail(f"say which project: `collab project {args.action}"
+                         " --id P_xxx`")
+                    return 1
+                record = client.project_action(args.action, project_id=args.id)
+                verb = "archived" if args.action == "archive" else "brought back"
+                ok(f"{verb}: {said(record['id'])}  {said(record['title'])}")
+                if args.action == "archive":
+                    # THE ALTERNATIVE TO `delete`, and said so at the moment
+                    # somebody is choosing between them: nothing was lost, and
+                    # the tasks are exactly where they were.
+                    print(dim("  its tasks and comments are kept; `collab"
+                              " project list --archived` still shows it"))
                 return 0
 
             if args.action == "show":
@@ -2007,10 +2034,12 @@ def cmd_project(args: argparse.Namespace) -> int:
                     return 1
                 client.project_action("delete", project_id=args.id)
                 # SAID BACK, because «deleted» about a thing that holds work
-                # reads as though the work went with it. It did not.
+                # reads as though the work went with it. It did not — but its
+                # comments did, which is why the gentler exit is named here.
                 ok(f"removed {said(args.id)}")
                 print(dim("  its tasks are still on the board, belonging to no"
-                          " project"))
+                          " project; its comments are gone — `archive` would"
+                          " have kept them"))
                 return 0
 
             if args.action == "assign":
@@ -2026,17 +2055,24 @@ def cmd_project(args: argparse.Namespace) -> int:
                 if not args.id:
                     fail("say which project: `collab project update --id P_xxx`")
                     return 1
+                # No owner on update: ownership moves through `assign`, which
+                # is the guarded verb. Sending it here was a 200 for a
+                # stranger where `assign` was a 403.
+                if args.owner is not None:
+                    fail("`update` changes the title and description — to"
+                         " change who it belongs to: `collab project assign"
+                         f" --id {args.id} --owner NAME`")
+                    return 1
                 record = client.project_action(
                     "update", project_id=args.id, title=args.title or "",
-                    detail=args.detail or "",
-                    owner=args.owner if args.owner is not None else None)
+                    detail=args.detail)
             else:                                   # propose
                 if not args.title:
                     fail("a project needs a title: `collab project propose"
                          " \"...\" --owner NAME`")
                     return 1
                 record = client.project_action(
-                    "propose", title=args.title, detail=args.detail or "",
+                    "propose", title=args.title, detail=args.detail,
                     owner=args.owner if args.owner is not None else None)
     except HubError as exc:
         fail(str(exc))
@@ -2059,6 +2095,12 @@ def _describe_project(whole: dict[str, Any]) -> int:
     tasks = whole.get("tasks") or []
     notes = whole.get("comments") or []
     heading(f"{said(project.get('id'))}  {said(project.get('title'))}")
+    if project.get("archived_at"):
+        # FIRST, before anything else is read: `list` says it and `--json`
+        # carries it, and the one command for looking AT a project did not.
+        when = activity.elapsed({"since": project.get("archived_at")}) or ""
+        print(f"  {'archived':<12} {when} — nothing it held was touched;"
+              f" `collab project unarchive --id {said(project.get('id'))}`")
     print(f"  {'owner':<12} {said(project.get('owner')) or dim('unassigned')}")
     print(f"  {'proposed by':<12} {said(project.get('created_by')) or '?'}")
     if seen := activity.elapsed({"since": project.get("updated_at")}):
@@ -6234,13 +6276,17 @@ def build_parser() -> argparse.ArgumentParser:
     pj = sub.add_parser("project",
                         help="a bundle of tasks that belongs to somebody")
     pj.add_argument("action", choices=["propose", "list", "show", "assign",
-                                       "update", "delete", "comment"])
+                                       "update", "delete", "comment",
+                                       "archive", "unarchive"])
     pj.add_argument("title", nargs="?",
                     help="title when proposing, or the text when commenting")
-    pj.add_argument("--id", help="project id for show/assign/update/delete")
+    pj.add_argument("--id", help="project id for show/assign/update/delete/"
+                                 "comment/archive/unarchive")
     pj.add_argument("--owner", metavar="NAME",
                     help="who it belongs to; --owner '' leaves it unassigned")
     pj.add_argument("--detail", help="longer description")
+    pj.add_argument("--archived", action="store_true",
+                    help="with list: include retired projects")
     pj.add_argument("--json", action="store_true")
     add_session_flag(pj)
     pj.set_defaults(func=cmd_project)

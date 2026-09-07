@@ -977,10 +977,12 @@ cannot move anybody's figure.
 proposer is very often not the person it is for. The owner must be somebody who
 has joined the session, so a mistyped name is refused rather than filed under a
 person who does not exist, and `--owner ''` leaves it deliberately unassigned.
-Only the owner, whoever proposed it, and the host may reassign or delete one;
-anybody may add tasks to it and comment on it. Deleting keeps the tasks — they
-go back to belonging to no project — but the comments go with it, and they are
-the only thing here that cannot be reconstructed from anywhere else.
+Only the owner, whoever proposed it, and the host may reassign, archive or
+delete one; anybody may add tasks to it and comment on it. A finished project is
+**archived** — one reversible stamp, out of the default listing, everything it
+held kept exactly where it was. Deleting keeps the tasks too — they go back to
+belonging to no project — but the comments go with it, and they are the only
+thing here that cannot be reconstructed from anywhere else.
 
 **Both a project and a task carry comments, and a task carries its pull
 requests.** As many as the work took: a fix and its test, or a rework after

@@ -361,7 +361,12 @@ class Hub:
             # was invisible to any agent that had not gone and asked for it by
             # hand. Carried here for the same reason as the batch figure: one
             # read, so a client's board and the names on it cannot disagree.
-            "projects": self.store.projects(),
+            # ARCHIVED ONES INCLUDED, with `archived_at` set so a client can
+            # dim them. `tasks` above carries open work inside an archived
+            # project — archiving with open work is allowed — and a payload
+            # that carried live projects only broke the promise this key
+            # exists for: the title behind every task's project id.
+            "projects": self.store.projects(include_archived=True),
             # Counted here rather than fetched separately, so the figure a
             # client's status line draws and the roster it draws it beside came
             # out of one read of the board and cannot disagree.

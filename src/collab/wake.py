@@ -58,7 +58,13 @@ from .protocol import Envelope, scrub, scrub_block
 #: Kinds worth a turn. Presence, hello and the roster churn behind them are
 #: bookkeeping — waking an agent to be told that somebody's name is now shown in
 #: a different colour is exactly the noise that gets a feature turned off.
-WAKE_KINDS = ("chat", "task", "request", "response")
+# `project` IS HERE because the same act on a task is. A comment on a project
+# is somebody saying something about work you may own, and it rode
+# KIND_PROJECT past this tuple in silence while the identical comment on a
+# task woke the agent — an asymmetry nothing had decided. What else the kind
+# carries (propose, assign, archive) wakes for the reason a task's propose and
+# claim do: the board changed under you.
+WAKE_KINDS = ("chat", "task", "project", "request", "response")
 
 #: How long a poll counts as somebody reading. The same window the status line
 #: and `collab check` use, so all three agree on what «listening» means rather

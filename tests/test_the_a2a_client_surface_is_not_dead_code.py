@@ -12,17 +12,27 @@ This test exists so the next sweep — mine or anybody's — finds a reader.
 
 from __future__ import annotations
 
-import inspect
-
 from collab.client.hub_client import HubClient
+
+
+def _constants(fn) -> set:
+    """Every string the function's bytecode carries.
+
+    NOT `inspect.getsource`. That reads the file on disk at the line numbers
+    the code object was compiled with, so a file edited after the module was
+    imported hands back a different function's text — this test once failed
+    reporting the neighbouring method's body. The compiled constants are the
+    function as it actually is.
+    """
+    return {c for c in fn.__code__.co_consts if isinstance(c, str)}
 
 
 def test_the_client_can_ask_for_the_agent_card():
     """The method exists, and asks the well-known path A2A defines."""
     assert hasattr(HubClient, "agent_card")
-    source = inspect.getsource(HubClient.agent_card)
-    assert "/.well-known/agent-card.json" in source
-    assert '"GET"' in source
+    consts = _constants(HubClient.agent_card)
+    assert "/.well-known/agent-card.json" in consts
+    assert "GET" in consts
 
 
 def test_it_asks_the_root_and_not_the_extension_prefix():
@@ -35,5 +45,9 @@ def test_it_asks_the_root_and_not_the_extension_prefix():
     """
     from collab.client.hub_client import EXT_PREFIX
 
-    source = inspect.getsource(HubClient.agent_card)
-    assert EXT_PREFIX not in source
+    # Every other route builds its path from EXT_PREFIX; this one must not,
+    # so the prefix must appear in none of the constants and no f-string
+    # fragment may reach for it.
+    for const in _constants(HubClient.agent_card):
+        assert EXT_PREFIX not in const
+    assert "EXT_PREFIX" not in HubClient.agent_card.__code__.co_names

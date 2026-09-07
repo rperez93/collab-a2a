@@ -324,7 +324,7 @@ collab task [--id ID] [--detail DETAIL] [--project ID] [--url URL]
 | `{propose,claim,update,complete,fail,cancel,list,show,comment,pr,pr-remove,move}` | The action. |
 | `title` | Title when proposing, or the text when commenting. |
 | `--id ID` | Task id for `show`, `claim`, `update`, or `complete`. |
-| `--detail DETAIL` | A longer description. |
+| `--detail DETAIL` | A longer description. Left as it is by `claim`, `complete`, `move` and anything else that does not give one; `--detail ''` clears it. |
 | `--project ID` | With `propose`, the project to file it under. With `move`, where to file it — `--project ''` takes it out of the one it is in. |
 | `--url URL` | With `pr` or `pr-remove`, the pull request's URL. |
 | `--number N` | With `pr`, its number, when the URL does not end in one. |
@@ -363,18 +363,19 @@ collab task move --id T_9f3a --project ''      # out of its project
 A bundle of tasks that belongs to somebody.
 
 ```text
-collab project [--id ID] [--owner NAME] [--detail DETAIL] [--json]
+collab project [--id ID] [--owner NAME] [--detail DETAIL] [--archived] [--json]
                [--session SESSION]
-               {propose,list,show,assign,update,delete,comment} [title]
+               {propose,list,show,assign,update,delete,comment,archive,unarchive} [title]
 ```
 
 | Argument or flag | Meaning |
 |---|---|
-| `{propose,list,show,assign,update,delete,comment}` | The action. |
+| `{propose,list,show,assign,update,delete,comment,archive,unarchive}` | The action. |
 | `title` | Title when proposing, or the text when commenting. |
-| `--id ID` | Project id for `show`, `assign`, `update`, `delete`, `comment`. |
-| `--owner NAME` | Who it belongs to. `--owner ''` leaves it unassigned. |
-| `--detail DETAIL` | A longer description. |
+| `--id ID` | Project id for `show`, `assign`, `update`, `delete`, `comment`, `archive`, `unarchive`. |
+| `--owner NAME` | With `propose` or `assign`: who it belongs to. `--owner ''` leaves it unassigned. Refused on `update`, which changes the title and description only. |
+| `--detail DETAIL` | A longer description. Left as it is by any command that does not give one; `--detail ''` clears it. |
+| `--archived` | With `list`, include retired projects. |
 | `--json` | Emit raw JSON. |
 | `--session SESSION` | Act on this session id instead of the current one. |
 
@@ -390,11 +391,24 @@ proposed it, because the proposer is very often not the person it is for, and
 the owner must be somebody who has joined the session — `--owner alise` is
 refused by name rather than filed under a person who does not exist.
 
-**Only the owner, whoever proposed it, and the host may reassign or delete
-one.** Anyone may add tasks to it and comment on it. Deleting is the sharp end:
-the tasks survive and go back to belonging to no project, but the comments do
-not, and they are the only thing here that cannot be reconstructed from
-somewhere else.
+**`archive` is how a finished project leaves the way, and `delete` is not.**
+Archiving is one reversible stamp: the project drops out of the default listing
+and `collab project list --archived` still shows it, with its tasks exactly
+where they were — on the board, in their batch, under this project — and its
+comments intact. `unarchive` brings it back. Until this existed the only exit
+destroyed the comments, so `delete` was doing two jobs.
+
+New work cannot be filed under an archived project — `propose --project` and
+`move` are refused with the verb that fixes it — because it would leave the
+default listing the moment it was written, invisible to the person the project
+belongs to. Work already inside is left exactly alone: it can still be claimed
+and completed.
+
+**Only the owner, whoever proposed it, and the host may reassign, archive or
+delete one.** Anyone may add tasks to it and comment on it. Deleting is the
+sharp end: the tasks survive and go back to belonging to no project, but the
+comments do not, and they are the only thing here that cannot be reconstructed
+from somewhere else. Reach for `archive` first.
 
 Ownership is checked against the participant, not the name they are showing.
 A display name freed by a rename or a kick is free for somebody else to claim,
@@ -408,6 +422,8 @@ collab project assign --id P_a1b2 --owner carol
 collab project comment --id P_a1b2 "blocked on the schema review"
 collab project show --id P_a1b2      # its tasks and its comments
 collab project list --owner bob
+collab project archive --id P_a1b2   # retire it; nothing it holds is touched
+collab project list --archived       # the retired ones too
 ```
 
 ## batch

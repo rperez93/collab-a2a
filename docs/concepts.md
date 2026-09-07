@@ -235,8 +235,9 @@ anybody's figure.
 |---|---|
 | `propose` | Creates a project, unowned unless `--owner` says otherwise. |
 | `assign` | Hands it to somebody. `--owner ''` leaves it belonging to nobody. |
-| `update` | Changes its title or description. |
-| `delete` | Removes it. Its tasks survive, belonging to no project. |
+| `update` | Changes its title or description, and nothing else — ownership moves through `assign`. A write that does not mention the description leaves it as it was. |
+| `archive` / `unarchive` | Retires it, or brings it back. Nothing it holds is touched; it leaves the default listing, and no new work may be filed under it until it is brought back. |
+| `delete` | Removes it. Its tasks survive, belonging to no project; its own comments do not. |
 | `comment` | Keeps something said with the project. |
 | `list` / `show` | The board of projects, or one with its tasks and comments. |
 
@@ -244,9 +245,10 @@ The owner must be somebody who has joined the session. A mistyped name is
 refused rather than filed under a person who does not exist — a project owned by
 nobody that *looks* owned is unfindable by the one reader it was for.
 
-Only the owner, whoever proposed it, and the host may reassign or delete a
-project; anybody may add tasks to it and comment on it. Deleting is the one act
-here that destroys something: the tasks go back to belonging to no project and
+Only the owner, whoever proposed it, and the host may reassign, archive or
+delete a project; anybody may add tasks to it and comment on it. A finished
+project is archived, not deleted — archiving is reversible and keeps everything.
+Deleting is the one act here that destroys something: the tasks go back to belonging to no project and
 the comments on them survive, but the project's own comments do not.
 
 Ownership is recorded as the participant, not as the name they are showing —

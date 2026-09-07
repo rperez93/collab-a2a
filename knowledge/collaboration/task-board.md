@@ -135,12 +135,18 @@ Three rules that fall out of what a project is FOR:
 * the owner is checked against the room. A project filed under a name that never
   joined is a project owned by nobody that LOOKS owned, and it is unfindable by
   the one reader it was for;
-* only the owner, whoever proposed it, and the host may reassign or delete one.
-  Anybody may add work to it and comment on it — the guard is on taking a
-  project away, not on contributing to it;
-* deleting keeps the tasks, which go back to belonging to no project, and takes
-  the project's own comments. Those are the only thing in the feature that
-  cannot be reconstructed from somewhere else.
+* only the owner, whoever proposed it, and the host may reassign, archive or
+  delete one. Anybody may add work to a LIVE project and comment on it — the
+  guard is on taking a project away, not on contributing to it. An archived
+  project takes no new work: it would leave the listing the moment it was
+  filed, invisible to the one person it is for, so `propose --project` and
+  `move` into one are refused naming `unarchive`;
+* a finished project is ARCHIVED rather than deleted: one reversible stamp,
+  out of the default listing, with its tasks exactly where they were and its
+  comments intact. Deleting keeps the tasks, which go back to belonging to no
+  project, and takes the project's own comments — the only thing in the
+  feature that cannot be reconstructed from somewhere else, which is why the
+  gentler exit exists.
 
 Both projects and tasks carry comments. A task also carries the pull requests it
 produced, as many as the work took, keyed by URL rather than by number — `#12`

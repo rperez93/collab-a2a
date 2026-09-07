@@ -123,9 +123,17 @@ CREATE TABLE IF NOT EXISTS tasks (
 -- and what it is for, and it outlives the batch a given task happened to be
 -- proposed in. A task may belong to no project at all; most do not.
 --
--- `owner` is the participant the project belongs to, and it is the whole point
--- of the table. A project without one is a folder; with one it is an
--- assignment, which is what the board was missing.
+-- `owner` is the participant the project belongs to, and it is nullable on
+-- purpose: a project may be proposed before anybody has agreed to take it, and
+-- handing it to whoever typed the command would put half the board under the
+-- host's name by accident.
+--
+-- An earlier version of this comment said a project without an owner is «a
+-- folder» and that an assignment «is what the board was missing». Both
+-- overstate. Tasks already carry owners, so assignment was not missing —
+-- GROUPING was, and a grouping that nobody has claimed yet is a perfectly
+-- ordinary thing for a board to hold. The owner is what a project can carry
+-- that a batch cannot, not a condition of its existing.
 CREATE TABLE IF NOT EXISTS projects (
     id         TEXT PRIMARY KEY,
     title      TEXT NOT NULL,
@@ -134,7 +142,14 @@ CREATE TABLE IF NOT EXISTS projects (
     owner_id   TEXT,
     created_by TEXT NOT NULL,
     created_at REAL NOT NULL,
-    updated_at REAL NOT NULL
+    updated_at REAL NOT NULL,
+    -- AN EXIT THAT IS NOT `delete`. Until this existed the only way to retire
+    -- a finished project destroyed its comments, which are the one thing here
+    -- that cannot be reconstructed — so `delete` was doing two jobs, and the
+    -- 403 on it was the last line of defence rather than a rare one. One
+    -- nullable stamp, no transitions to get wrong: set it and the project
+    -- leaves the listing; clear it and it is back, with everything it held.
+    archived_at REAL
 );
 
 -- ONE TABLE FOR BOTH, KEYED BY WHAT IT IS ABOUT. A comment on a project and a
@@ -211,6 +226,17 @@ def normalise_pr_url(url: str) -> str:
     `pr-remove` on the other spelling found nothing to remove.
     """
     return (url or "").strip().rstrip("/")
+
+
+class ArchivedProject(LookupError):
+    """A task was filed under a project that has been retired.
+
+    New work under an archived project would leave the default listing the
+    moment it was written — invisible to the person the project belongs to,
+    which is the failure `UnknownProject` also exists to prevent. Tasks already
+    inside an archived project are untouched; this refuses only ADDING to one.
+    Raised inside the lock for the same reason `UnknownProject` is.
+    """
 
 
 class UnknownProject(LookupError):
@@ -353,11 +379,13 @@ class Store:
         if tasks and "project" not in tasks:
             self._db.execute("ALTER TABLE tasks ADD COLUMN project TEXT")
 
-        # A project written before the owner's ID was kept beside their name
-        # has the name only. Left NULL rather than resolved: the name it holds
-        # is the name it held THEN, and the participant answering to it now may
-        # be somebody else — which is the whole reason the column exists.
         made = self._columns("projects")
+        # A project written before it could be retired has no `archived_at`.
+        # NULL is the right back-fill: nothing was retired before retiring
+        # existed. Independent of the owner's id below; `made` is a snapshot
+        # of the columns before either ALTER, and each asks about its own.
+        if made and "archived_at" not in made:
+            self._db.execute("ALTER TABLE projects ADD COLUMN archived_at REAL")
         if made and "owner_id" not in made:
             self._db.execute("ALTER TABLE projects ADD COLUMN owner_id TEXT")
             # BACK-FILLED FROM THE LIVE ROSTER ONLY, which is the whole of the
@@ -853,9 +881,12 @@ class Store:
             # has passed.
             if project:
                 known = self._db.execute(
-                    "SELECT 1 FROM projects WHERE id=?", (project,)).fetchone()
+                    "SELECT archived_at FROM projects WHERE id=?",
+                    (project,)).fetchone()
                 if known is None:
                     raise UnknownProject(project)
+                if known["archived_at"] is not None:
+                    raise ArchivedProject(project)
             existing = self._db.execute(
                 "SELECT * FROM tasks WHERE id=?", (task_id,)
             ).fetchone()
@@ -984,8 +1015,14 @@ class Store:
                 "SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
         return dict(row) if row else None
 
-    def projects(self, *, owner: str | None = None) -> list[dict[str, Any]]:
-        """Every project, or the ones belonging to one participant.
+    def projects(self, *, owner: str | None = None,
+                 include_archived: bool = False) -> list[dict[str, Any]]:
+        """Every live project, or the ones belonging to one participant.
+
+        ARCHIVED ONES ARE LEFT OUT unless asked for. Archiving is the exit
+        that keeps everything — the point of it is that a retired project stops
+        being in the way without ceasing to exist — so the default listing is
+        what is current, and `include_archived` is how history is read.
 
         A NAME IS RESOLVED TO AN ID BEFORE IT IS MATCHED. `owner=? OR
         owner_id=?` re-opened the hole the id column was added to close: a
@@ -995,20 +1032,55 @@ class Store:
         NULL — written before the column, by somebody no longer here — is
         matched by name, because for those the name is all there is.
         """
-        sql = "SELECT * FROM projects"
-        params: tuple[Any, ...] = ()
+        clauses: list[str] = []
+        params: list[Any] = []
+        if not include_archived:
+            clauses.append("archived_at IS NULL")
         if owner is not None:
             with self._lock:
                 row = self._db.execute(
                     "SELECT id FROM participants WHERE name=? AND revoked=0",
                     (owner,)).fetchone()
             wanted = str(row["id"]) if row else owner
-            sql += " WHERE owner_id=? OR (owner_id IS NULL AND owner=?)"
-            params = (wanted, owner)
+            clauses.append("(owner_id=? OR (owner_id IS NULL AND owner=?))")
+            params += [wanted, owner]
+        sql = "SELECT * FROM projects"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY created_at"
         with self._lock:
-            rows = self._db.execute(sql, params).fetchall()
+            rows = self._db.execute(sql, tuple(params)).fetchall()
         return [dict(r) for r in rows]
+
+    def archive_project(self, project_id: str, *, archived: bool) -> dict[str, Any] | None:
+        """Retire a project, or bring it back. Nothing it holds is touched.
+
+        The tasks stay exactly where they are — on the board, in their batch,
+        under this project — and so do the comments. What changes is that the
+        project leaves the default listing. Archiving twice is idempotent
+        rather than an error: the stamp is «when it was retired», and a second
+        request is the same true thing said again.
+        """
+        now = time.time()
+        with self._lock:
+            found = self._db.execute(
+                "SELECT archived_at FROM projects WHERE id=?",
+                (project_id,)).fetchone()
+            if found is None:
+                return None
+            already = found["archived_at"] is not None
+            if archived and not already:
+                self._db.execute(
+                    "UPDATE projects SET archived_at=?, updated_at=? WHERE id=?",
+                    (now, now, project_id))
+            elif not archived and already:
+                self._db.execute(
+                    "UPDATE projects SET archived_at=NULL, updated_at=? WHERE id=?",
+                    (now, project_id))
+            self._db.commit()
+            row = self._db.execute(
+                "SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        return dict(row)
 
     def project_counts(self, open_excludes: Iterable[str]) -> dict[str, tuple[int, int]]:
         """How many tasks each project holds, and how many are still open.
@@ -1040,10 +1112,18 @@ class Store:
     def delete_project(self, project_id: str) -> list[str] | None:
         """Remove a project. Its tasks survive it, belonging to none.
 
-        NOT A CASCADE, and deliberately. The tasks are the work; the project is
-        a statement about whose it is. Deleting the statement must not delete
-        the work — an agent that removed a project and took four claimed tasks
-        with it would have destroyed a board nobody could reconstruct.
+        NOT A CASCADE FOR THE TASKS, and deliberately. The tasks are the work;
+        the project is a statement about whose it is. Deleting the statement
+        must not delete the work — an agent that removed a project and took
+        four claimed tasks with it would have destroyed a board nobody could
+        reconstruct.
+
+        **IT IS A CASCADE FOR THE PROJECT'S OWN COMMENTS, and this docstring
+        used to enumerate the survivors and omit the casualty.** They are gone,
+        they are the one thing in this feature that cannot be reconstructed
+        from anywhere else, and saying so is the whole reason `_may_change`
+        guards this call. Comments on the RELEASED TASKS are not touched: the
+        tasks outlive the project and so does what was said about them.
 
         Returns the ids of the tasks it released, or None when there was no
         such project. The caller needs them: releasing a task is a change to

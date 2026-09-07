@@ -130,7 +130,7 @@ class HubClient:
         )["tasks"]
 
     def task_action(self, action: str, *, task_id: str | None = None, title: str = "",
-                    detail: str = "", room: str | None = None,
+                    detail: str | None = None, room: str | None = None,
                     project: str | None = None) -> dict[str, Any]:
         """One action on one task.
 
@@ -140,7 +140,13 @@ class HubClient:
         check would have run «say nothing about it» and «take it out» together,
         and there would be no way to express the second.
         """
-        payload: dict[str, Any] = {"action": action, "title": title, "detail": detail}
+        # `detail` IS SENT ONLY WHEN THE CALLER SAID SOMETHING. Always sending
+        # it — `""` by default — reached the route as «clear it», and a claim
+        # or a move erased the description the claimant had just read. None
+        # means the key is absent; "" is a real request to clear.
+        payload: dict[str, Any] = {"action": action, "title": title}
+        if detail is not None:
+            payload["detail"] = detail
         if task_id:
             payload["id"] = task_id
         if room:
@@ -155,16 +161,22 @@ class HubClient:
     # interact with a batch: see `batch` below, which counts every task in its
     # window whether or not the task is in a project.
 
-    def projects(self, *, owner: str = "") -> list[dict[str, Any]]:
+    def projects(self, *, owner: str = "",
+                 archived: bool = False) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {}
+        if owner:
+            params["owner"] = owner
+        if archived:
+            params["archived"] = "true"
         return self._request("GET", f"{EXT_PREFIX}/projects",
-                             params={"owner": owner} if owner else None)["projects"]
+                             params=params or None)["projects"]
 
     def project(self, project_id: str) -> dict[str, Any]:
         """One project with its tasks and its comments, in a single request."""
         return self._request("GET", f"{EXT_PREFIX}/projects/{project_id}")
 
     def project_action(self, action: str, *, project_id: str | None = None,
-                       title: str = "", detail: str = "",
+                       title: str = "", detail: str | None = None,
                        owner: str | None = None) -> dict[str, Any] | None:
         """propose / update / assign / delete.
 
@@ -177,7 +189,7 @@ class HubClient:
             payload["id"] = project_id
         if title:
             payload["title"] = title
-        if detail:
+        if detail is not None:            # "" is a real request: clear it
             payload["detail"] = detail
         if owner is not None:
             payload["owner"] = owner

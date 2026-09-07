@@ -99,9 +99,12 @@ the two are wired together so you do not have to say the same thing twice:
 
 ```bash
 collab task list --open              # what is on the board
-collab task show --id T_9d63         # READ IT BEFORE YOU TAKE IT
+collab task show --id T_9d63         # READ IT BEFORE YOU TAKE IT — its comments and pull requests are here
 collab task claim --id T_9d63 --files src/api/auth.py
 collab task complete --id T_9d63
+collab task comment --id T_9d63 "<what you decided>"   # keep it with the work, not in the room
+collab task pr --id T_9d63 --url <pull request>        # as many as the work took
+collab project list --owner <you>    # bundles of work somebody is answerable for
 ```
 
 - **Claiming a task sets your activity** to working on it, with its id, and

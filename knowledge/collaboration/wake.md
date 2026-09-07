@@ -60,7 +60,7 @@ Each has its own way of going wrong.[^wake-src]
 
 **Nothing to say, nothing to do.** A wake costs the user a turn of their
 agent's time and money. It fires only when there is unread substance **and** no
-live watcher **and** no recent poll. `WAKE_KINDS` is `chat`, `task`, `request`,
+live watcher **and** no recent poll. `WAKE_KINDS` is `chat`, `task`, `project` — later than the pin — `request`,
 `response` — presence, hello and the roster churn behind them are bookkeeping,
 and waking an agent to be told that somebody's name is now shown in a different
 colour is exactly the noise that gets a feature turned off.

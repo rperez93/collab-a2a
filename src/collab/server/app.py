@@ -59,7 +59,7 @@ from .card import build_agent_card
 from .events import event_stream
 from .executor import CollabAgentExecutor
 from .hub import Hub
-from .store import Store, UnknownProject
+from .store import ArchivedProject, Store, UnknownProject
 
 #: How often to confirm the tunnel is still forwarding.
 TUNNEL_CHECK_SECONDS = 15.0
@@ -614,7 +614,11 @@ def create_app(
                 store.upsert_task, task_id,
                 title=title, state=state, owner=owner,
                 room=body.get("room") or DEFAULT_ROOM, created_by=user.name,
-                detail=clip(str(body.get("detail") or ""), MAX_DETAIL),
+                # Absent means leave it. `or ""` here wiped the description
+                # on every claim, complete and move — the verb that reads the
+                # detail before taking the work deleted it for everyone after.
+                detail=(clip(str(body["detail"]), MAX_DETAIL)
+                        if "detail" in body else None),
                 join_open_batch=joins_a_batch,
                 project=(project or None) if action == "propose" else project,
             )
@@ -623,6 +627,14 @@ def create_app(
                 status_code=404,
                 detail=f"no such project {str(gone)!r} — `collab project list`"
                        " shows them, or propose one first") from gone
+        except ArchivedProject as retired:
+            # 409, NOT 404: the project exists, and the person asking may well
+            # be able to fix it themselves. Naming the verb is the point.
+            raise HTTPException(
+                status_code=409,
+                detail=f"{str(retired)} is archived — `collab project unarchive"
+                       f" --id {str(retired)}` first, or file the task elsewhere",
+            ) from retired
         await hub.publish(Envelope(
             kind=KIND_TASK, sender=user.name, sender_id=user.id,
             room=body.get("room") or DEFAULT_ROOM,
@@ -643,7 +655,8 @@ def create_app(
     # or neither without one constraining the other.
 
     @app.get(f"{EXT_PREFIX}/projects", tags=["collab"])
-    async def list_projects(request: Request, owner: str = "") -> dict[str, Any]:
+    async def list_projects(request: Request, owner: str = "",
+                            archived: bool = False) -> dict[str, Any]:
         _require(request)
         # THE TASK COUNTS COME WITH IT. A list of projects with no sense of
         # how much work each holds is a list of names, and the first thing
@@ -654,7 +667,8 @@ def create_app(
         # projects was thirty round trips against a lock every write wants,
         # stalling the feeds of everybody in the session.
         found, counts = await asyncio.gather(
-            asyncio.to_thread(store.projects, owner=owner or None),
+            asyncio.to_thread(store.projects, owner=owner or None,
+                              include_archived=archived),
             asyncio.to_thread(store.project_counts, OPEN_EXCLUDES),
         )
         for project in found:
@@ -686,7 +700,8 @@ def create_app(
         user = _require(request)
         body = await request.json()
         action = str(body.get("action") or "propose")
-        if action not in ("propose", "update", "assign", "delete"):
+        if action not in ("propose", "update", "assign", "delete", "archive",
+                          "unarchive"):
             raise HTTPException(status_code=400,
                                 detail=f"unknown action {action!r}")
 
@@ -718,13 +733,37 @@ def create_app(
             # bottom of this function. A guard placed with the other checks
             # below it was never consulted for the one act it most needed to
             # cover, and the test said so.
-            if action in ("assign", "delete") and not _may_change(user, existing):
+            # GUARDED WITH `delete`, because retiring a project takes it out of
+            # everybody's view just as surely, if reversibly. `unarchive` is
+            # guarded too: bringing back somebody's retired work is theirs to do.
+            if action in ("assign", "delete", "archive", "unarchive") \
+                    and not _may_change(user, existing):
                 raise HTTPException(
                     status_code=403,
                     detail=(f"{project_id} belongs to"
                             f" {existing['owner'] or existing['created_by']}"
                             " — ask them, or the host can do it"),
                 )
+            if action in ("archive", "unarchive"):
+                record = await asyncio.to_thread(
+                    store.archive_project, project_id,
+                    archived=(action == "archive"))
+                # ONLY WHEN SOMETHING CHANGED. The store is idempotent — a
+                # second archive writes nothing — and the route published
+                # regardless, so archiving twice put two lines in every
+                # transcript and forced two snapshot refreshes for one act.
+                # The wire says what happened; nothing happened.
+                was = existing["archived_at"] is not None
+                if was == (action == "archive"):
+                    return {"project": record}
+                await hub.publish(Envelope(
+                    kind=KIND_PROJECT, sender=user.name, sender_id=user.id,
+                    room=DEFAULT_ROOM, text=str(existing["title"]),
+                    body={"action": action, "id": project_id,
+                          "title": existing["title"],
+                          "owner": existing["owner"]},
+                ))
+                return {"project": record}
             if action == "delete":
                 released = await asyncio.to_thread(
                     store.delete_project, project_id) or []
@@ -745,14 +784,34 @@ def create_app(
                 # work went too.
                 return {"project": None, "released": released}
             title = clip(str(body.get("title") or existing["title"]), MAX_TITLE)
+            # OWNERSHIP MOVES THROUGH `assign` AND NOTHING ELSE. `update` read
+            # `owner` from the body too, and `update` is not in the guarded
+            # list — so a stranger could reassign a project to themselves with
+            # `update --owner me` and then archive it, while the same request
+            # spelled `assign` was refused. One verb owns the transfer, and it
+            # is the guarded one; `update` refuses the key rather than
+            # ignoring it, so nobody believes a change landed that did not.
+            if action == "update" and "owner" in body:
+                raise HTTPException(
+                    status_code=400,
+                    detail="`update` changes the title and description; to"
+                           " change who it belongs to, use `assign`")
             owner, owner_id = (_known_owner(store, body["owner"])
-                               if "owner" in body
+                               if action == "assign" and "owner" in body
                                else (existing["owner"], existing["owner_id"]))
 
+        # THREE VALUES, CARRIED ALL THE WAY DOWN. `body.get("detail") or ""`
+        # manufactured a clear on every write that did not mention the
+        # description — `assign` and `update --title` wiped it — because the
+        # store's None sentinel could not be reached by any caller. Absent
+        # means leave it; present and empty means clear it. Third time this
+        # class has failed here; the test now posts every verb and checks.
+        detail = (clip(str(body["detail"]), MAX_DETAIL)
+                  if "detail" in body else None)
         record = await asyncio.to_thread(
             store.upsert_project, project_id, title=title,
-            detail=clip(str(body.get("detail") or ""), MAX_DETAIL),
-            owner=owner, owner_id=owner_id, created_by=user.name,
+            detail=detail, owner=owner, owner_id=owner_id,
+            created_by=user.name,
         )
         await hub.publish(Envelope(
             kind=KIND_PROJECT, sender=user.name, sender_id=user.id,

@@ -704,3 +704,272 @@ def test_taking_a_name_does_not_take_the_projects_that_went_with_it(session, api
                     json={"action": "delete", "id": made["id"]},
                     headers={"Authorization": f"Bearer {impostor}"})
     assert r.status_code == 403, "the name is not the person"
+
+
+# --- an exit that is not delete --------------------------------------------------
+
+def test_archiving_retires_a_project_and_keeps_everything_it_held(api):
+    """The only way to retire a finished project used to destroy its comments.
+
+    That made `delete` do two jobs and made the 403 on it the last line of
+    defence rather than a rare one. Archiving is one nullable stamp: the
+    project leaves the listing, and nothing it held is touched.
+    """
+    made = _project(api, owner="bob")
+    task = _task(api, "a", project=made["id"])
+    api.post("/comments", {"subject": "project", "id": made["id"],
+                           "text": "worth keeping"})
+
+    code, out = api.post("/projects", {"action": "archive", "id": made["id"]})
+    assert code == 200
+    assert out["project"]["archived_at"] is not None
+
+    _, listed = api.get("/projects")
+    assert listed["projects"] == [], "retired means out of the default listing"
+    _, with_history = api.get("/projects", archived="true")
+    assert [p["id"] for p in with_history["projects"]] == [made["id"]]
+
+    _, whole = api.get(f"/projects/{made['id']}")
+    assert [c["text"] for c in whole["comments"]] == ["worth keeping"]
+    assert [t["id"] for t in whole["tasks"]] == [task["id"]]
+    _, still = api.get("/tasks")
+    assert still["tasks"][0]["project"] == made["id"], \
+        "the tasks stay exactly where they were"
+
+
+def test_an_archived_project_can_be_brought_back(api):
+    made = _project(api)
+    api.post("/projects", {"action": "archive", "id": made["id"]})
+    _, out = api.post("/projects", {"action": "unarchive", "id": made["id"]})
+    assert out["project"]["archived_at"] is None
+    _, listed = api.get("/projects")
+    assert [p["id"] for p in listed["projects"]] == [made["id"]]
+
+
+def test_archiving_twice_is_the_same_true_thing_said_again(api):
+    made = _project(api)
+    _, first = api.post("/projects", {"action": "archive", "id": made["id"]})
+    _, second = api.post("/projects", {"action": "archive", "id": made["id"]})
+    assert first["project"]["archived_at"] == second["project"]["archived_at"]
+
+
+def test_archiving_is_guarded_like_deleting(api, client, as_bob):
+    """It takes the project out of everybody's view just as surely."""
+    made = _project(api, owner="alice")
+    r = client.post(EXT + "/projects",
+                    json={"action": "archive", "id": made["id"]}, headers=as_bob)
+    assert r.status_code == 403
+
+
+def test_the_snapshot_carries_archived_projects_marked_rather_than_dropped(session, api):
+    """This test used to assert the opposite, and the opposite was wrong.
+
+    A payload of live projects only broke the promise the key exists for —
+    the title behind every task's project id — the moment somebody archived a
+    project with open work in it, which nothing prevents. So the archived one
+    is carried, with `archived_at` set, and a client dims it rather than
+    failing to name it.
+    """
+    live = _project(api, title="live")
+    gone = _project(api, title="retired")
+    api.post("/projects", {"action": "archive", "id": gone["id"]})
+
+    from collab.server.hub import Hub
+
+    shot = Hub(session["store"], session_id="s", host_name="alice").snapshot()
+    by_title = {p["title"]: p for p in shot["projects"]}
+    assert set(by_title) == {"live", "retired"}
+    assert by_title["live"]["archived_at"] is None
+    assert by_title["retired"]["archived_at"] is not None
+
+
+def test_an_archived_project_still_counts_in_the_batch(api):
+    """Retiring a grouping changes nothing about the work it grouped."""
+    api.post("/batch", {"action": "start", "name": "sprint"})
+    made = _project(api)
+    _task(api, "a", project=made["id"])
+    _task(api, "b")
+    api.post("/projects", {"action": "archive", "id": made["id"]})
+    _, fig = api.get("/batch")
+    assert fig["batch"]["total"] == 2
+
+
+def test_new_work_cannot_be_filed_under_an_archived_project(api):
+    """It would leave the default listing the moment it was written.
+
+    Invisible to the person the project belongs to — the failure the unknown-
+    project check also exists to prevent. Refused with the verb that fixes it,
+    because the person asking can usually fix it themselves.
+    """
+    made = _project(api)
+    api.post("/projects", {"action": "archive", "id": made["id"]})
+
+    code, out = api.post("/tasks", {"action": "propose", "title": "new",
+                                    "project": made["id"]})
+    assert code == 409, out
+    assert "unarchive" in out["detail"]
+
+    loose = _task(api, "loose")
+    code, out = api.post("/tasks", {"action": "move", "id": loose["id"],
+                                    "project": made["id"]})
+    assert code == 409, out
+    _, still = api.get("/tasks")
+    assert next(t for t in still["tasks"] if t["id"] == loose["id"])["project"] is None
+
+
+def test_work_already_inside_an_archived_project_is_left_alone(api):
+    """Refusing to ADD is not the same as evicting what is there."""
+    made = _project(api)
+    inside = _task(api, "inside", project=made["id"])
+    api.post("/projects", {"action": "archive", "id": made["id"]})
+
+    _, out = api.post("/tasks", {"action": "claim", "id": inside["id"]})
+    assert out["task"]["project"] == made["id"], "a claim must not orphan it"
+    _, out = api.post("/tasks", {"action": "complete", "id": inside["id"]})
+    assert out["task"]["state"] == "TASK_STATE_COMPLETED"
+
+
+# --- the update branch, which had no test at all -------------------------------
+
+def test_update_cannot_change_who_a_project_belongs_to(api, client, as_bob):
+    """Ownership moves through `assign`, the guarded verb, and nothing else.
+
+    `update` read `owner` from the body and was not in the guarded list, so a
+    stranger could send `update --owner me` and get a 200 where the same
+    request spelled `assign` was a 403 — and then archive it. Refused with the
+    verb to use, rather than ignored, so nobody believes a change landed.
+    """
+    made = _project(api, owner="alice")
+    r = client.post(EXT + "/projects",
+                    json={"action": "update", "id": made["id"], "owner": "bob2"},
+                    headers=as_bob)
+    assert r.status_code == 400, r.json()
+    assert "assign" in r.json()["detail"]
+    _, still = api.get(f"/projects/{made['id']}")
+    assert still["project"]["owner"] == "alice"
+
+    # Even the owner goes through `assign` — one verb owns the transfer.
+    code, out = api.post("/projects", {"action": "update", "id": made["id"],
+                                       "owner": "bob"})
+    assert code == 400
+
+
+def test_a_write_that_says_nothing_about_the_description_keeps_it(api):
+    """`assign` and `update --title` wiped it, on every project, every time.
+
+    The route manufactured «clear it» from an absent key with `or ""`, so the
+    store's None sentinel could not be reached by any caller. Third failure of
+    this class; this test posts every verb.
+    """
+    made = _project(api, owner="bob", detail="the whole bundle")
+    api.post("/projects", {"action": "assign", "id": made["id"], "owner": "carol"})
+    api.post("/projects", {"action": "update", "id": made["id"], "title": "renamed"})
+    api.post("/projects", {"action": "archive", "id": made["id"]})
+    api.post("/projects", {"action": "unarchive", "id": made["id"]})
+
+    _, whole = api.get(f"/projects/{made['id']}")
+    assert whole["project"]["detail"] == "the whole bundle"
+    assert whole["project"]["title"] == "renamed"
+    assert whole["project"]["owner"] == "carol"
+
+
+def test_the_description_can_still_be_cleared_on_purpose(api):
+    made = _project(api, detail="to be removed")
+    _, out = api.post("/projects", {"action": "update", "id": made["id"],
+                                    "detail": ""})
+    assert out["project"]["detail"] == ""
+
+
+def test_claiming_a_task_does_not_delete_the_detail_you_just_read(api):
+    """The skill tells an agent to read the detail before claiming.
+
+    The claim then deleted it for everyone after — and so did `complete` and
+    `move`, because the client always sent `detail` and the route read an
+    empty one as «clear».
+    """
+    made = _project(api)
+    _, out = api.post("/tasks", {"action": "propose", "title": "t",
+                                 "detail": "WHY THIS WORK MATTERS"})
+    tid = out["task"]["id"]
+    for step in ({"action": "claim", "id": tid},
+                 {"action": "move", "id": tid, "project": made["id"]},
+                 {"action": "complete", "id": tid}):
+        _, out = api.post("/tasks", step)
+        assert out["task"]["detail"] == "WHY THIS WORK MATTERS", step["action"]
+
+
+def test_a_task_description_can_still_be_cleared_on_purpose(api):
+    _, out = api.post("/tasks", {"action": "propose", "title": "t",
+                                 "detail": "gone soon"})
+    _, out = api.post("/tasks", {"action": "update", "id": out["task"]["id"],
+                                 "detail": ""})
+    assert out["task"]["detail"] == ""
+
+
+def test_the_client_sends_detail_only_when_it_was_given(monkeypatch):
+    """The layer that manufactured the clear, pinned at the layer."""
+    from collab.client.hub_client import HubClient
+
+    sent = {}
+    client = HubClient("http://h", "t")
+    monkeypatch.setattr(client, "_request",
+                        lambda m, p, **kw: sent.update(kw.get("json") or {}) or {"task": {}, "project": {}})
+    client.task_action("claim", task_id="T_1")
+    assert "detail" not in sent, "an absent key, not an empty one"
+    sent.clear()
+    client.task_action("update", task_id="T_1", detail="")
+    assert sent.get("detail") == "", "an explicit empty string travels"
+    sent.clear()
+    client.project_action("assign", project_id="P_1", owner="bob")
+    assert "detail" not in sent
+
+
+# --- the snapshot promise, and the wake ---------------------------------------
+
+def test_the_snapshot_never_carries_a_task_whose_project_it_cannot_name(session, api):
+    """Archiving with open work is allowed, so the projects key must cover it."""
+    made = _project(api)
+    _task(api, "still open", project=made["id"])
+    api.post("/projects", {"action": "archive", "id": made["id"]})
+
+    from collab.server.hub import Hub
+
+    shot = Hub(session["store"], session_id="s", host_name="alice").snapshot()
+    named = {t["project"] for t in shot["tasks"]} - {None}
+    known = {p["id"] for p in shot["projects"]}
+    assert named <= known, "a task names a project the payload cannot resolve"
+    assert any(p["archived_at"] for p in shot["projects"]), \
+        "the archived one is carried, marked, so a client can dim it"
+
+
+def test_a_comment_on_a_project_wakes_the_agent_as_one_on_a_task_does():
+    from collab import wake
+    from collab.protocol import KIND_PROJECT, KIND_TASK
+
+    assert KIND_TASK in wake.WAKE_KINDS
+    assert KIND_PROJECT in wake.WAKE_KINDS
+
+
+def test_show_says_when_a_project_is_archived(capsys):
+    from collab import cli
+
+    cli._describe_project({"project": {"id": "P_1", "title": "old",
+                                       "archived_at": 1.0, "owner": None},
+                           "tasks": [], "comments": []})
+    out = capsys.readouterr().out
+    assert "archived" in out
+    assert "unarchive" in out
+
+
+def test_archiving_twice_puts_one_line_on_the_wire(session, api):
+    """The store is idempotent; the route used to publish regardless.
+
+    Two `archive` lines in every transcript, and two snapshot refreshes, for
+    one act. The wire says what happened, and the second time nothing did.
+    """
+    made = _project(api)                       # one `project` event: propose
+    store = session["store"]
+    api.post("/projects", {"action": "archive", "id": made["id"]})
+    assert store.count_kind("project") == 2    # a second: archive
+    api.post("/projects", {"action": "archive", "id": made["id"]})
+    assert store.count_kind("project") == 2, "nothing happened; nothing said"
