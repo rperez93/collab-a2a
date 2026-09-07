@@ -36,10 +36,14 @@ file safe here; a longer record, or one written in pieces, would not be.
 
 from __future__ import annotations
 
+import atexit
 import json
+import logging
 import os
 import re
+import threading
 import time
+from collections import deque
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -74,6 +78,40 @@ MAX_FIELDS = 20
 #: «https» versus «http» is occasionally the fault itself.
 _URL = re.compile(r"\b([a-z][a-z0-9+.-]*)://[^\s\"']*")
 
+#: How many records may wait in memory for the writer. Five hundred is some
+#: minutes of a busy daemon and a few tens of kilobytes; past it the oldest go,
+#: because a queue that grows without limit while the disk is unwritable turns
+#: the fault it was reporting into a larger one.
+BUFFER_MAX = 500
+
+#: How long a record may sit in that queue before it is written anyway. The
+#: writer wakes on every record, so this is the ceiling on a quiet process
+#: rather than the usual case.
+FLUSH_EVERY = 5.0
+
+#: How long `flush` waits for the disk. Bounded because it runs on a shutdown
+#: path, and a diagnostic that hangs the shutdown it is describing is worse
+#: than an incomplete file.
+FLUSH_WAIT = 2.0
+
+#: How much may go into one `write`. Small enough that a short write is not a
+#: thing to reason about, and cut at line boundaries so a record is never in
+#: two pieces — see `_chunks`.
+WRITE_CAP = 8192
+
+#: Events whose caller WAITS for the disk. Not «events that matter»: the writer
+#: is notified on every record and `FLUSH_EVERY` is only the ceiling for a
+#: process that has gone quiet, so an ordinary record is on its way to the disk
+#: immediately either way. What this adds is the wait for confirmation, and the
+#: only reason to pay for that is that the process may not exist a moment later.
+#:
+#: So: the two that precede a death, and nothing else. `error` was in this set
+#: and was taken out — the logging bridge turns every `logger.exception` into
+#: one, including the guarded ones inside the daemon's heartbeat, and each
+#: would have held that loop for up to `FLUSH_WAIT` waiting on the very disk
+#: this queue exists to stop it waiting on.
+URGENT = frozenset({"crash", "stop"})
+
 #: Which process is writing, and where. Set once by `begin`; until then every
 #: call is a no-op, so a module that imports this and never attaches costs
 #: nothing.
@@ -81,6 +119,23 @@ _root: Path | None = None
 _proc = ""
 _swept_at = 0.0
 _sampled_at = 0.0
+
+#: The queue, the writer, and the two events that coordinate them. `_ready`
+#: guards `_pending` and `_dropped` and is what the writer sleeps on; `_written`
+#: is how `flush` learns that a batch has landed.
+#:
+#: `_queued` and `_written` are counters rather than a flag, because a flag
+#: cannot tell «nothing is waiting» from «the writer has taken it and is still
+#: in the middle of the write» — and `flush` returning in that second case is
+#: `flush` not flushing, which is exactly what a shutdown path must not get.
+_pending: deque[tuple[Path, str]] = deque()
+_dropped = 0
+_queued = 0
+_written = 0
+_ready = threading.Condition()
+_writer: threading.Thread | None = None
+_writer_lock = threading.Lock()
+_registered = False
 
 
 def begin(root: Path | str, proc: str) -> None:
@@ -161,30 +216,249 @@ def path_for(root: Path | str, when: float | None = None) -> Path:
 
 
 def log(event: str, **fields: Any) -> None:
-    """Write one record, or do nothing at all.
+    """Record one event, or do nothing at all.
 
     Nothing at all when no process has attached, when the setting is off, and
-    when anything whatever goes wrong. This is called from an exception handler
-    and from a shutdown path; there is no failure here worth propagating, and
-    the one thing it must never do is become the reason a daemon stopped.
+    when anything whatever goes wrong. This is called from an exception handler,
+    from a daemon heartbeat and from a shutdown path; there is no failure here
+    worth propagating, and the one thing it must never do is become the reason
+    a daemon stopped.
+
+    IT DOES NOT TOUCH THE DISK. The record is put on a queue and a writer thread
+    puts it on the disk — see `_writer_loop`. The caller's share of that is a
+    lock and a list append, measured at 0.3 µs against 9.9 µs for the `open`,
+    `write` and `close` it replaces (5,000 iterations each, ext4, this machine).
+
+    THE MICROSECONDS ARE NOT THE POINT, and quoting them without saying so
+    would be misleading: encoding the record and scrubbing its fields cost
+    about 34 µs either way, so the whole call is barely faster. What changes is
+    what the caller is exposed to. This runs from inside an asyncio event loop
+    several times a second — the daemon logs while it is holding the feed — and
+    on the direct path a filesystem that pauses paused the feed with it. A 9p
+    mount over /mnt/c, a network share, a disk waking up: the queue makes those
+    the writer thread's problem, and the writer thread holds nothing.
     """
     if _root is None or not enabled():
         return
     try:
         now = time.time()
-        record = {"ts": round(now, 3), "proc": _proc, "event": str(event)[:40]}
+        record = {"ts": round(now, 3), "proc": _proc, "pid": os.getpid(),
+                  "event": str(event)[:40]}
         for name, value in list(fields.items())[:MAX_FIELDS]:
             record[str(name)[:40]] = _safe(value)
-        path = path_for(_root, now)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        line = json.dumps(record, ensure_ascii=False, default=str)
-        with open(path, "a", encoding="utf-8") as fh:
-            # ONE WRITE, ONE LINE. Two processes share this file, and a record
-            # split across two `write` calls is a record another process can
-            # land in the middle of.
-            fh.write(line + "\n")
+        _enqueue(path_for(_root, now),
+                 json.dumps(record, ensure_ascii=False, default=str))
+        if str(event) in URGENT:
+            # A process that is stopping or has just crashed may not be here
+            # when the writer next wakes, and those are the two records
+            # somebody actually goes looking for.
+            flush()
     except Exception:                                         # noqa: BLE001
         return
+
+
+def exception(where: str, exc: BaseException, *, event: str = "error",
+              **fields: Any) -> None:
+    """One failure, recorded the same way wherever it happened.
+
+    THE TYPE AND THE TRACEBACK, NEVER THE TEXT. An exception's message is where
+    the addresses and the paths are — an httpx error carries the URL it was
+    talking to, which is the host's tunnel — and the traceback is what locates
+    the bug. This is the shape three places had written out separately, kept
+    here so a fourth cannot get it subtly different.
+
+    It sits alongside what `Handler` records rather than replacing it: the
+    handler says a warning of this kind fired at this line, cheaply and for
+    every one collab logs, and this says what the stack looked like when it
+    did. A crash writes both, which is two small records for one failure and
+    the right way round — the counting one is complete, the detailed one is not.
+    """
+    import traceback
+
+    log(event, where=str(where)[:40], kind=type(exc).__name__,
+        traceback=[line.strip() for line
+                   in traceback.format_tb(exc.__traceback__)[-6:]],
+        **fields)
+
+
+class Handler(logging.Handler):
+    """Every warning collab logs, counted in the record — without its words.
+
+    The plain logs hold what was said; this holds THAT it was said, which is the
+    half that answers «has this been happening all night». Attached to the
+    `collab` tree at WARNING, so every `logger.warning` and `logger.exception`
+    already written lands here without fifty call sites being touched.
+
+    NO MESSAGE TEXT, and that is the whole of the care. This record is written
+    to be pasted into a public issue and its one promise is that it holds events
+    rather than content; a formatted log message is content, and routing those
+    in would have quietly broken the promise everything else here keeps. What is
+    kept instead identifies the warning exactly and says nothing about the
+    session: the logger's name, the line it was raised on, and the type of any
+    exception attached to it.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            kind = record.exc_info[0].__name__ if record.exc_info else ""
+            log("warning" if record.levelno < logging.ERROR else "error",
+                where=record.name.replace("collab.", "", 1)[:40],
+                at=record.lineno, kind=kind)
+        except Exception:                                     # noqa: BLE001
+            return
+
+
+def _enqueue(path: Path, line: str) -> None:
+    """Put one line in the queue, dropping the oldest if nobody is draining.
+
+    BOUNDED, because the alternative is a queue that grows without limit while
+    a disk is unwritable — which is to say, the failure it was supposed to be
+    reporting turns into a second, larger one. What is dropped is counted and
+    the count is written out with the next batch, so a gap in the record says
+    it is a gap.
+    """
+    global _dropped, _queued
+    with _ready:
+        if len(_pending) >= BUFFER_MAX:
+            _pending.popleft()
+            _dropped += 1
+        _pending.append((path, line))
+        _queued += 1
+        _ready.notify()
+    _start_writer()
+
+
+def _start_writer() -> None:
+    """Start the writer thread once, on the first record anybody logs.
+
+    Lazily, rather than in `begin`: a process that attaches and never logs —
+    every command that imports this module — should not pay for a thread, and
+    the two that do log start it on their first line.
+    """
+    global _writer
+    if _writer is not None and _writer.is_alive():
+        return
+    with _writer_lock:
+        if _writer is not None and _writer.is_alive():
+            return
+        # A DAEMON THREAD, with `atexit` behind it. Nothing here may hold a
+        # process open on its way out — a daemon that has been asked to stop and
+        # is waiting on its own diagnostics is worse than a lost line — so the
+        # thread does not keep the interpreter alive, and the flush registered
+        # below is what gets the tail on to the disk during an ordinary exit.
+        _writer = threading.Thread(target=_writer_loop, daemon=True,
+                                   name="collab-diagnostics")
+        _writer.start()
+        _register_the_final_flush()
+
+
+def _register_the_final_flush() -> None:
+    """Ask for one last flush at exit, once however often the writer restarts.
+
+    The loop below is self-healing — an unexpected exception kills the thread
+    and the next record starts another — so registering from the start would
+    add an `atexit` entry per restart. Flushing twice is harmless and a growing
+    list of identical exit hooks is the kind of thing that is only ever noticed
+    as a mystery.
+    """
+    global _registered
+    if _registered:
+        return
+    _registered = True
+    atexit.register(flush)
+
+
+def _writer_loop() -> None:
+    global _dropped, _written
+    while True:
+        with _ready:
+            if not _pending:
+                _ready.wait(FLUSH_EVERY)
+            batch, dropped, upto = list(_pending), _dropped, _queued
+            _pending.clear()
+            _dropped = 0
+        if batch:
+            _write(batch, dropped)
+        with _ready:
+            # AFTER THE WRITE, not after taking the batch. Anything else says
+            # «done» to a `flush` whose records are still in this thread's
+            # hands.
+            _written = upto
+            _ready.notify_all()
+
+
+def _write(batch: list[tuple[Path, str]], dropped: int = 0) -> None:
+    """One batch on to the disk, grouped so a file is opened once per flush."""
+    by_file: dict[Path, list[str]] = {}
+    for path, line in batch:
+        by_file.setdefault(path, []).append(line)
+    if dropped:
+        note = json.dumps({"ts": round(time.time(), 3), "proc": _proc,
+                           "pid": os.getpid(), "event": "dropped",
+                           "records": dropped})
+        by_file[batch[-1][0]].append(note)
+    for path, lines in by_file.items():
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as fh:
+                for chunk in _chunks(lines):
+                    fh.write(chunk)
+        except Exception:                                     # noqa: BLE001
+            continue
+
+
+def _chunks(lines: list[str], cap: int = WRITE_CAP) -> list[str]:
+    """The batch as writes that each contain whole records and nothing partial.
+
+    WHOLE RECORDS PER WRITE is the guarantee this file has always made, and
+    batching is what could have taken it away. Two processes append to the same
+    day file, so a record split across two `write` calls is a record the other
+    one can land in the middle of. A single line was always one small write and
+    so was safe by construction; a batch is up to `BUFFER_MAX` of them, which
+    measured about 100 KB — one syscall on this machine, but a size at which a
+    short write stops being unthinkable, and a short write is precisely a record
+    torn in half.
+
+    So the batch is cut at line boundaries into pieces small enough that the
+    question does not arise. Another process may still interleave BETWEEN two
+    of them, which is what it could always do between two records and is not a
+    fault: the file is a log of independent lines, read a line at a time.
+
+    A single line longer than the cap is written on its own rather than split —
+    `MAX_FIELD` and `MAX_FIELDS` mean that cannot happen, and cutting a record
+    up to obey a size limit would be the exact harm the limit is for.
+    """
+    out: list[str] = []
+    held: list[str] = []
+    size = 0
+    for line in lines:
+        piece = line + "\n"
+        if held and size + len(piece) > cap:
+            out.append("".join(held))
+            held, size = [], 0
+        held.append(piece)
+        size += len(piece)
+    if held:
+        out.append("".join(held))
+    return out
+
+
+def flush(timeout: float = FLUSH_WAIT) -> None:
+    """Wait for what has been logged so far to reach the disk.
+
+    Called at every stop, from `atexit`, and by anything that has just recorded
+    something it may not survive. Bounded by `timeout` and silent about failing
+    to meet it: this is a diagnostic, and a diagnostic that can hang the
+    shutdown it is describing is worse than an incomplete file.
+    """
+    with _ready:
+        target = _queued
+        if _written >= target:
+            return
+        _ready.notify()
+        if _writer is None or not _writer.is_alive():
+            return
+        _ready.wait_for(lambda: _written >= target, timeout)
 
 
 def sample_memory() -> None:

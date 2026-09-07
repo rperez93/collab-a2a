@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .. import peers
 from ..config import collab_home, ensure_home
+from ..client.exclusive import Stamp, decode, parse_stamp, stamp_for
 from .auth import new_secret
 from .store import Store
 
@@ -46,6 +47,17 @@ class HubConfig:
     domain: str = ""
     pid: int = 0
     home: str = ""
+    #: The hub and the tunnel again, STAMPED — the pid with the start time and
+    #: the boot that say whether it is still the same process. See
+    #: `collab.client.exclusive.Stamp`.
+    #:
+    #: `stop_session` sends SIGTERM to the numbers above and used to send it to
+    #: nothing else: a `wsl --shutdown` restarts the pid counter while this
+    #: file survives untouched in the repository, so `collab kill` on a session
+    #: from before the restart signalled whichever process had inherited the
+    #: number. The plain fields stay because an older collab reads them.
+    pid_stamp: str = ""
+    tunnel_stamp: str = ""
 
     def __post_init__(self) -> None:
         if not self.home:
@@ -92,12 +104,47 @@ class HubConfig:
         acted as though the session had no hub, which is a large conclusion to
         draw from a scheduling accident.
         """
+        self._restamp()
         self.dir.mkdir(parents=True, exist_ok=True)
         p = self.dir / "hub.json"
         tmp = p.with_suffix(".tmp")
         tmp.write_text(json.dumps(asdict(self), indent=2) + "\n")
         os.chmod(tmp, 0o600)  # holds the invite and the host token
         tmp.replace(p)
+
+    def _restamp(self) -> None:
+        """Identify the two processes this file names, while they are still there.
+
+        A stamp already naming that pid AND carrying a start time is left
+        alone: it was minted when the process was alive, which is the only
+        moment its start time can be read, and re-reading it after the process
+        has gone would replace a good identification with an empty one.
+
+        A pid we cannot read a start time for is left UNSTAMPED rather than
+        stamped with nothing. The empty string is what a collab from before
+        this wrote, and it is treated as «trust the number» everywhere — which
+        is the old behaviour, and the right floor to fall back to. Writing an
+        emptied stamp instead would look like an identification and be none.
+        """
+        for pid_field, stamp_field in (("pid", "pid_stamp"),
+                                       ("tunnel_pid", "tunnel_stamp")):
+            pid = getattr(self, pid_field)
+            if not pid:
+                setattr(self, stamp_field, "")
+                continue
+            held = decode(getattr(self, stamp_field))
+            if held.pid == pid and held.started:
+                continue
+            fresh = stamp_for(pid)
+            setattr(self, stamp_field, fresh.encode() if fresh.started else "")
+
+    def hub_stamp(self) -> Stamp:
+        """The hub process, identified as far as this file allows."""
+        return decode(self.pid_stamp) or Stamp(pid=self.pid)
+
+    def tunnel_process(self) -> Stamp:
+        """The tunnel agent we started, identified as far as this file allows."""
+        return decode(self.tunnel_stamp) or Stamp(pid=self.tunnel_pid)
 
     @classmethod
     def load(cls, session_id: str, home: Path | str | None = None) -> HubConfig | None:
@@ -106,9 +153,23 @@ class HubConfig:
         if not p.exists():
             return None
         try:
-            return cls(**json.loads(p.read_text()))
-        except (OSError, ValueError, TypeError):
+            data = json.loads(p.read_text())
+        except (OSError, ValueError):
             return None
+        if not isinstance(data, dict):
+            return None
+        # UNKNOWN KEYS ARE DROPPED, not fatal. `cls(**data)` raised TypeError on
+        # any field a newer collab had added and this one had never heard of,
+        # and the caller reads that as «no such session» — so a hub.json written
+        # by a newer version made the session invisible to an older one rather
+        # than merely less detailed. It surfaced as a hub that would not come
+        # up, logging `no such session` about a file sitting next to it.
+        # `lockfile.read` has always filtered this way; this is the same rule.
+        known = set(cls.__dataclass_fields__)
+        try:
+            return cls(**{k: v for k, v in data.items() if k in known})
+        except TypeError:
+            return None            # a required field is missing: not a session
 
 
 def new_session_id() -> str:
@@ -256,17 +317,22 @@ def stop_session(cfg: HubConfig, *, purge: bool = False) -> dict[str, Any]:
     # goes on offering a session whose socket is already closed, and whoever
     # takes the offer gets a bare "connection refused" instead of being told
     # the session is down.
-    for pid in (cfg.pid, _daemon_pid(cfg)):
+    for pid in (cfg.pid, _daemon_pid(cfg).pid):
         if pid:
             peers.withdraw(cfg.session_id, pid)
 
-    for label, pid in (("hub_stopped", cfg.pid),
+    # STAMPS, NOT NUMBERS. Every one of these is about to be signalled, and a
+    # number on its own does not name a process: it names whatever holds that
+    # number now, which after a reboot is a stranger. `Stamp.alive` refuses one
+    # written on another boot outright, so a session left behind by a machine
+    # that went down is cleaned up without a signal being sent at all.
+    for label, who in (("hub_stopped", cfg.hub_stamp()),
                        ("daemon_stopped", _daemon_pid(cfg)),
-                       ("tunnel_stopped", cfg.tunnel_pid)):
-        if not pid:
+                       ("tunnel_stopped", cfg.tunnel_process())):
+        if not who.alive():
             continue
         try:
-            os.kill(pid, signal.SIGTERM)
+            os.kill(who.pid, signal.SIGTERM)
             result[label] = True
         except (OSError, ProcessLookupError):
             pass
@@ -277,14 +343,12 @@ def stop_session(cfg: HubConfig, *, purge: bool = False) -> dict[str, Any]:
     return result
 
 
-def _daemon_pid(cfg: HubConfig) -> int:
-    from ..client.exclusive import parse
-
+def _daemon_pid(cfg: HubConfig) -> Stamp:
+    """The listener this session recorded, as much identified as its file allows."""
     try:
-        pid, _ = parse((cfg.dir / "daemon.pid").read_text())
+        return parse_stamp((cfg.dir / "daemon.pid").read_text())
     except OSError:
-        return 0
-    return pid or 0
+        return Stamp()
 
 
 def join_line(cfg: HubConfig) -> str:

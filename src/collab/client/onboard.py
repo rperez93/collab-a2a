@@ -16,12 +16,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
+from .. import owner as ownership
 from ..config import SessionProfile, resolve_name
 from ..protocol import DEFAULT_ROOM
 from . import context as ctx
 from . import exclusive
 from .daemon_files import (DaemonPaths, effective_state, is_running,
-                           read_status)
+                           open_log, read_status)
 from .hub_client import HubClient, HubError
 
 DAEMON_READY_TIMEOUT = 20.0
@@ -45,7 +46,7 @@ def split_join_url(raw: str) -> tuple[str, str]:
     return base, invite
 
 
-def spawn_daemon(profile: SessionProfile) -> int:
+def spawn_daemon(profile: SessionProfile, *, follow: bool = True) -> int:
     """Start the daemon detached, so it outlives the command that started it.
 
     Refuses where the platform has no file locking, because the daemon refuses
@@ -58,14 +59,19 @@ def spawn_daemon(profile: SessionProfile) -> int:
         raise exclusive.UnsupportedPlatform(exclusive.UNSUPPORTED_PLATFORM)
     paths = DaemonPaths(profile.dir)
     paths.root.mkdir(parents=True, exist_ok=True)
-    log = paths.log.open("a")
+    log = open_log(paths.log)
+    # Pin the repo explicitly: the daemon outlives this shell and must not
+    # re-derive .collab/ from whatever cwd it happens to inherit.
+    env = {**os.environ, "PYTHONUNBUFFERED": "1", "COLLAB_HOME": profile.home}
+    # NAMED FROM HERE, because this is the last process that can see the
+    # answer. The daemon is about to be detached into its own session and
+    # reparented, so its own ancestry will not contain the agent a moment
+    # after it starts; ours does, right now. See `collab.owner`.
+    env = ownership.spawn_env(env) if follow else env
     proc = subprocess.Popen(
         [sys.executable, "-m", "collab.daemon_main", profile.session_id],
         stdout=log, stderr=log, stdin=subprocess.DEVNULL,
-        start_new_session=True,
-        # Pin the repo explicitly: the daemon outlives this shell and must not
-        # re-derive .collab/ from whatever cwd it happens to inherit.
-        env={**os.environ, "PYTHONUNBUFFERED": "1", "COLLAB_HOME": profile.home},
+        start_new_session=True, env=env,
     )
     return proc.pid
 
@@ -98,10 +104,11 @@ def wait_until_live(profile: SessionProfile, timeout: float = DAEMON_READY_TIMEO
     return last
 
 
-def ensure_daemon(profile: SessionProfile, *, wait: bool = True) -> dict[str, Any]:
+def ensure_daemon(profile: SessionProfile, *, wait: bool = True,
+                  follow: bool = True) -> dict[str, Any]:
     """Start the daemon unless one is already running — re-running join is safe."""
     if is_running(profile) is None:
-        spawn_daemon(profile)
+        spawn_daemon(profile, follow=follow)
     return wait_until_live(profile) if wait else read_status(profile)
 
 
@@ -112,6 +119,7 @@ def join_session(
     focus: str = "",
     room: str = DEFAULT_ROOM,
     start_daemon: bool = True,
+    follow: bool = True,
     cwd: Path | None = None,
 ) -> tuple[SessionProfile, dict[str, Any], dict[str, Any]]:
     """Join, announce, and come up listening.
@@ -137,5 +145,5 @@ def join_session(
     )
     profile.save()
 
-    status = ensure_daemon(profile) if start_daemon else {}
+    status = ensure_daemon(profile, follow=follow) if start_daemon else {}
     return profile, result.get("snapshot", {}), status

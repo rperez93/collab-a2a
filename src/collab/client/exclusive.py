@@ -73,6 +73,7 @@ import errno
 import os
 import subprocess
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 
 try:                                        # not on Windows
@@ -548,14 +549,16 @@ def _ps_started_at(pid: int) -> str:
 
 
 def stamp(pid: int | None = None) -> str:
-    """What goes in `daemon.pid`: the number first, the start time under it.
+    """What goes in `daemon.pid`: the number, the start time, the boot.
 
-    Two lines rather than one field because the number on its own is what the
+    Three lines rather than one field because the number on its own is what the
     rest of the tree reads out of this file, and a format change should not be
-    the thing that breaks `collab kill`.
+    the thing that breaks `collab kill`. The boot was appended for the same
+    reason the start time was, and in the same place — underneath, where a
+    reader of either older shape never looks. See `Stamp`.
     """
     pid = os.getpid() if pid is None else pid
-    return f"{pid}\n{started_at(pid)}\n"
+    return stamp_for(pid).text()
 
 
 def parse(text: str) -> tuple[int | None, str]:
@@ -602,3 +605,208 @@ def same_process(recorded: str, pid: int) -> bool:
     if not recorded or not began:
         return True
     return recorded == began
+
+
+# --- which boot, and one verdict on a recorded process -------------------------
+
+#: Read once. The boot cannot change under a running process, and every
+#: liveness check in the tree would otherwise open a file or spawn `sysctl`.
+_boot: str | None = None
+
+#: Where Linux keeps a fresh uuid per boot.
+_BOOT_ID = "/proc/sys/kernel/random/boot_id"
+
+
+def boot_id() -> str:
+    """An identifier for the machine's current boot, or "" if there is none.
+
+    THE HALF `started_at` CANNOT COVER, and the reason this exists. Field 22 of
+    /proc/<pid>/stat counts clock ticks since boot, so it restarts when the
+    machine does — and so does the pid counter. A `wsl --shutdown` hands the
+    next boot the same low pid numbers AND the same low tick counts as the last
+    one, which is precisely the case the start time was supposed to settle. Two
+    processes can then agree on both fields and be nothing to do with each
+    other, and the stale file in the repository outlives them both.
+
+    Three routes, and they are NOT equally good. `boot_id` is a uuid minted at
+    boot and is conclusive; it is what Linux and WSL 2 both have, so it is the
+    answer in practice. `btime` in /proc/stat is a fallback and a weaker one
+    than it looks: the kernel derives it as wall clock minus uptime, so a
+    machine whose clock is stepped — or a WSL 2 instance coming back from a
+    suspend — can report a btime some seconds different from the one it
+    reported an hour earlier, WITHIN THE SAME BOOT. `from_another_boot` is what
+    absorbs that, with a tolerance; a reboot moves btime by at least the last
+    boot's uptime, which is minutes at the very least. macOS has neither route,
+    so `kern.boottime` is read through `sysctl` — unmeasured, like everything
+    else this module says about macOS.
+
+    "" means the question cannot be answered here, and every reader treats that
+    the way `same_process` treats an empty start time: trusted. Refusing to
+    identify anything is a worse failure than the one this guards against.
+    """
+    global _boot
+    if _boot is None:
+        _boot = _read_boot_id()
+    return _boot
+
+
+def _read_boot_id() -> str:
+    try:
+        with open(_BOOT_ID, encoding="utf-8") as fh:
+            if (value := fh.read().strip()):
+                return value
+    except OSError:
+        pass
+    try:
+        with open("/proc/stat", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("btime "):
+                    return "btime:" + line.split()[1]
+    except (OSError, IndexError):
+        pass
+    try:
+        out = subprocess.run(["sysctl", "-n", "kern.boottime"],
+                             capture_output=True, text=True, timeout=2, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return " ".join(out.stdout.split())
+
+
+@dataclass(frozen=True)
+class Stamp:
+    """A pid, and enough beside it to say whether that pid is still the same one.
+
+    THE ONE ANSWER, and it is one because the tree had three. `daemon.pid` was
+    taught to carry a start time and to be read through `same_process`;
+    `hub.json` and `agent.lock` were not, and they hold pids that get SIGTERM
+    (`session.stop_session`) and pids that decide whether a repository is
+    occupied (`lockfile.Lock.held`). So the same stale-pid fault the daemon was
+    cured of went on living in the two files nobody had looked at.
+
+    Three fields, and each answers something the one before it cannot:
+
+    * `pid` alone answers nothing. The kernel reuses it.
+    * `started` — clock ticks since boot — settles reuse WITHIN a boot.
+    * `boot` settles the rest, because ticks-since-boot repeat across one.
+
+    An absent field is trusted rather than treated as a mismatch, exactly as
+    `same_process` trusts an empty record: these files are read by collabs
+    older and newer than the one that wrote them, and an upgrade that made
+    every running process look like an impostor would be the worse fault.
+    """
+
+    pid: int = 0
+    started: str = ""
+    boot: str = ""
+
+    def __bool__(self) -> bool:
+        return self.pid > 0
+
+    def alive(self) -> bool:
+        """Is the process this stamp was written about still running?
+
+        Never «is some process with that number running», which is the question
+        every caller thought it was asking and none of them was.
+        """
+        if self.pid <= 0:
+            return False
+        here = boot_id()
+        if self.boot and here and self.boot != here:
+            # Written before the machine restarted. Nothing that number names
+            # now has anything to do with what it named then, so this is dead
+            # by definition and — the point of the whole exercise — must never
+            # be signalled.
+            return False
+        # IMPORTED HERE, not at the top. `lockfile.process_alive` is the single
+        # place that tells ESRCH from EPERM, and a sandbox that cannot signal a
+        # peer must not read it as dead; that reasoning belongs in one module,
+        # and this one is imported BY that module.
+        from ..lockfile import process_alive
+
+        if not process_alive(self.pid):
+            return False
+        if is_zombie(self.pid):
+            return False        # exited, merely not reaped yet
+        return same_process(self.started, self.pid)
+
+    def text(self) -> str:
+        """The three lines that go in `daemon.pid`.
+
+        The pid keeps the first line and the start time the second, because
+        that is the file two released versions already read; the boot goes
+        underneath, where an older reader will not look and a newer one will.
+        """
+        return f"{self.pid}\n{self.started}\n{self.boot}\n"
+
+    def encode(self) -> str:
+        """One field, for an environment variable or a JSON string."""
+        return f"{self.pid}:{self.started}:{self.boot}"
+
+
+def stamp_for(pid: int | None = None) -> Stamp:
+    """Everything knowable about a process right now, as a Stamp."""
+    pid = os.getpid() if pid is None else pid
+    return Stamp(pid=pid, started=started_at(pid), boot=boot_id())
+
+
+def decode(text: str) -> Stamp:
+    """Read back what `Stamp.encode` wrote. Junk becomes an empty Stamp."""
+    parts = (text or "").split(":")
+    try:
+        pid = int(parts[0])
+    except (ValueError, IndexError):
+        return Stamp()
+    if pid <= 0:
+        return Stamp()          # see `parse` for why a pid of 0 is refused
+    started = parts[1] if len(parts) > 1 else ""
+    boot = parts[2] if len(parts) > 2 else ""
+    return Stamp(pid=pid, started=started, boot=boot)
+
+
+def parse_stamp(text: str) -> Stamp:
+    """Read `daemon.pid` in all three of its shapes: bare, two-line, three."""
+    pid, began = parse(text)
+    if pid is None:
+        return Stamp()
+    lines = text.splitlines()
+    boot = lines[2].strip() if len(lines) > 2 else ""
+    return Stamp(pid=pid, started=began, boot=boot)
+
+
+#: How far two `btime` readings may differ and still be the same boot. Only the
+#: fallback route needs it — see `boot_id` for why a derived boot time drifts —
+#: and two minutes is far more drift than a clock step or a suspend produces
+#: while being far less than any reboot: the new btime is at least the previous
+#: boot's whole uptime away.
+BTIME_SLACK = 120
+
+
+def from_another_boot(recorded: str) -> bool:
+    """Was this stamp's boot definitely not the one we are running on?
+
+    DEFINITELY, and the word carries the weight. An empty answer on either side
+    is «cannot tell», which is a different thing and must not clear anybody's
+    state — and a False here is the safe answer in every case but one: the
+    daemon's own `Follower` reads a stamp that is not alive as an agent that
+    has gone. So a wrong True costs a running daemon its life, and that is the
+    direction this refuses to fail in.
+    """
+    here = boot_id()
+    if not recorded or not here:
+        return False
+    if recorded == here:
+        return False
+    then, now = _btime(recorded), _btime(here)
+    if then is not None and now is not None:
+        return abs(then - now) > BTIME_SLACK
+    return True
+
+
+def _btime(value: str) -> int | None:
+    """The seconds out of a `btime:` boot id, or None for any other shape."""
+    if not value.startswith("btime:"):
+        return None
+    try:
+        return int(value.partition(":")[2])
+    except ValueError:
+        return None

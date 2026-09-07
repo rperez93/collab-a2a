@@ -76,14 +76,14 @@ refused on read when the stamp is not this agent's.
 | Path | What it holds |
 |---|---|
 | `.gitignore` | `*` — everything here is either a secret or local scratch state, so none of it is ever committed. |
-| `agent.lock` | Which agent is using this repository's collab state. See [state ownership](/architecture/state-ownership.md). |
+| `agent.lock` | Which agent is using this repository's collab state, and — since 1.40.0 — which agent process owns it and which boot the claim was made on. See [state ownership](/architecture/state-ownership.md). |
 | `current` | The session id this home currently answers about. |
-| `hub.json` | What the detached hub needs to come up: port, bind, invite, host token, tunnel state. |
+| `hub.json` | What the detached hub needs to come up: port, bind, invite, host token, tunnel state. Since 1.40.0 the hub's pid and the tunnel's each carry a stamp beside them — start time and boot — because `collab kill` signals those numbers. |
 | `hub.db` | The append-only event log, the participants, the rooms, the board, the batches. |
-| `hub.log` | The detached hub's stdout and stderr. |
+| `hub.log` | The detached hub's stdout and stderr. Rolled aside to `hub.log.1` by the next process to open it past two megabytes; one generation is kept. |
 | `profile.json` | This participant's credentials and identity for the session. |
 | `daemon.lock` | The advisory `flock` a live listener holds. See [the daemon lock](/architecture/daemon-lock.md). |
-| `daemon.pid` | The listener's pid, for *saying* — never for deciding whether it is alive. |
+| `daemon.pid` | The listener's pid, for *saying* — never for deciding whether it is alive. Three lines since 1.40.0: the number, the start time, and the boot it was written on. |
 | `status.json` | Everything the status line and `collab status` read. Written atomically every 3 seconds. |
 | `snapshot.json` | The last roster, rooms and batch figures the daemon fetched. |
 | `inbox.jsonl` | Every event, one JSON object per line, for `collab listen --follow`. |
@@ -103,7 +103,7 @@ held at `23db6d0`.
 | `wake/remind-now` | A marker `collab remind now` leaves for the daemon. Consumed when the reminder reaches a route, not when something asks whether one is due. |
 | `wake/reminder.txt` | The reminder as a delivery that can only carry a pointer needs it. One fixed name, unlike a batch's: every reminder is the same standing instructions and the newest copy is always the right one. |
 | `statusline-last.json` | The last status line that could be built, with its timestamp and colour mode, so a status file mid-rewrite does not blank the segment for a redraw. Sixty seconds. |
-| `diagnostics/YYYY-MM-DD.jsonl` | Off by default. Events only — never message text, names, invites, addresses, or paths under the reader's home. Kept seven days. See [the trust model](/operating/security-model.md). |
+| `diagnostics/YYYY-MM-DD.jsonl` | On by default since 1.40.0. Events only — never message text, names, invites, addresses, or paths under the reader's home. Every record carries the pid that wrote it. Written by a thread off a bounded queue, so a caller never waits for this disk. Kept seven days. See [the trust model](/operating/security-model.md). |
 
 One record deliberately sits outside this tree, for the same reason as the
 learnings below but a sharper one. `<config dir>/statusline-hang.log` holds the

@@ -104,7 +104,7 @@ def test_daemon_start_does_not_announce_a_listener_that_never_came_up(
 
     stale = _wrote(profile, state="live", heartbeat=time.time() - 7200)
     monkeypatch.setattr(cli, "_require_profile", lambda args: profile)
-    monkeypatch.setattr(cli.onboard, "ensure_daemon", lambda p: stale)
+    monkeypatch.setattr(cli.onboard, "ensure_daemon", lambda p, **kw: stale)
 
     cli.cmd_daemon(argparse.Namespace(action="start"))
 

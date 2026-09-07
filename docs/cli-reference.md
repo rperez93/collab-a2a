@@ -63,7 +63,7 @@ Start a session and print a link to share.
 ```text
 collab host [--name NAME] [--port PORT] [--bind BIND] [--focus FOCUS]
             [--home FOLDER] [--title TITLE] [--domain DOMAIN] [--no-tunnel]
-            [--no-daemon] [--no-update-check] [--update] [--fresh]
+            [--no-daemon] [--keep] [--no-update-check] [--update] [--fresh]
             [--resume [SESSION_ID]]
 ```
 
@@ -78,6 +78,7 @@ collab host [--name NAME] [--port PORT] [--bind BIND] [--focus FOCUS]
 | `--domain DOMAIN` | A reserved ngrok domain, so the URL survives a tunnel restart. |
 | `--no-tunnel` | Skip ngrok even if it is installed. |
 | `--no-daemon` | Do not start listening. |
+| `--keep` | Leave it running when the agent that started it quits. |
 | `--no-update-check` | Do not check for a newer collab first. |
 | `--update` | Install a newer collab without asking, if there is one. |
 | `--fresh` | Start an empty session instead of resuming this repository's last one. |
@@ -129,7 +130,8 @@ With no arguments, join the one running on this machine.
 
 ```text
 collab join [--agent AGENT] [--local] [--name NAME] [--focus FOCUS]
-            [--home FOLDER] [--no-daemon] [--no-update-check] [--update] [url]
+            [--home FOLDER] [--no-daemon] [--keep] [--no-update-check] [--update]
+            [url]
 ```
 
 | Argument or flag | Meaning |
@@ -141,6 +143,7 @@ collab join [--agent AGENT] [--local] [--name NAME] [--focus FOCUS]
 | `--focus FOCUS` | What you are working on, announced on arrival. |
 | `--home FOLDER` | State folder for this session. |
 | `--no-daemon` | Do not start listening. |
+| `--keep` | Leave it running when the agent that started it quits. |
 | `--no-update-check` | Do not check for a newer collab first. |
 | `--update` | Install a newer collab without asking, if there is one. |
 
@@ -762,11 +765,13 @@ session in the middle of its work.
 
 Four sources, and two of them no other command shows:
 
-- **the diagnostic record** — the daemon's and the hub's own events, if
-  `collab config diagnostics` is on. It reports counts first and then the last
-  `--lines` records, which is usually the shape of a fault before any of its
-  detail;
-- **`daemon.log` and `hub.log`** — the same processes at more length;
+- **the diagnostic record** — the daemon's and the hub's own events, kept
+  unless `collab config diagnostics` has been turned off. It reports counts
+  first and then the last `--lines` records, which is usually the shape of a
+  fault before any of its detail;
+- **`daemon.log` and `hub.log`** — the same processes at more length. A process
+  rolls one aside, keeping a single previous generation, when it opens it and
+  finds it past two megabytes;
 - **messages that never arrived** — the sequence numbers missing from this
   agent's own log. The hub numbers every event and the daemon resumes with
   `Last-Event-ID`, so a reconnect should leave no hole; when one is left,
@@ -783,9 +788,10 @@ Four sources, and two of them no other command shows:
   it. **It is written whether or not diagnostics are on**, because a hang is
   exactly the case where nobody turned them on beforehand.
 
-`collab config diagnostics on` reaches a daemon and a hub that are already
-running, on their next tick — you do not have to restart anything to start
-recording.
+The record is kept by default, so it already covers whatever you are about to
+look into. `collab config diagnostics off` stops it, and turning it back on
+reaches a daemon and a hub that are already running, on their next tick — you do
+not have to restart anything either way.
 
 ## issue
 
@@ -812,8 +818,8 @@ reading per process, a count of each recorded event, and the last 200 records.
 first: it is assembled out of your own machine's records, and nothing here
 entitles anybody to publish it unseen.
 
-With `collab config diagnostics` off it still writes the header section, which
-is a usable report on its own, and says how to capture a log:
+With `collab config diagnostics` turned off it still writes the header section,
+which is a usable report on its own, and says how to capture a log:
 
 ```bash
 collab config diagnostics on

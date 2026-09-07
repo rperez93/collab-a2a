@@ -23,7 +23,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import __version__, activity, lockfile, peers, rules, update, wake
+from . import (__version__, activity, lockfile, owner, peers, reboot, rules,
+               update, wake)
 from . import batch as batch_progress
 from .client import exclusive, onboard
 # FROM daemon_files, NOT daemon: these read the daemon's files, and the module
@@ -31,8 +32,8 @@ from .client import exclusive, onboard
 # Every command paid that — `recv`, `send`, `status`, `watch` — for a pid
 # check. The two that SIGNAL a daemon are below, imported when called.
 from .client.daemon_files import (DaemonPaths, effective_state as daemon_state,
-                                  is_running, last_poll, polled, read_status,
-                                  watchers, watching)
+                                  is_running, last_poll, open_log, polled,
+                                  read_status, watchers, watching)
 from .client.hub_client import HubClient, HubError
 from .client.inbox import Inbox
 from .config import (
@@ -553,6 +554,10 @@ def cmd_host(args: argparse.Namespace) -> int:
     if (code := _own_state_dir(args, resolve_name(args.name))) is not None:
         return code
     ensure_home()
+    # BEFORE THE PREVIOUS SESSIONS ARE READ. `hosted_sessions` and the resume
+    # under it believe what `hub.json` says about the hub it left running, and
+    # after a restart that is a pid belonging to something else entirely.
+    _sweep_a_previous_boot()
     name = resolve_name(args.name)
     port = args.port or free_port()
 
@@ -590,9 +595,16 @@ def cmd_host(args: argparse.Namespace) -> int:
     if args.no_tunnel:
         env["COLLAB_NO_TUNNEL"] = "1"
 
+    # NAMED HERE OR NOT AT ALL. The hub is detached and reparented just as the
+    # daemon is, so the agent that owns it has to be recorded by the process
+    # that can still see it. `--keep` records nobody, which is the same state a
+    # hub started by hand from a terminal is in: it follows nothing and runs
+    # until it is stopped.
+    if not _keeping(args):
+        env = owner.spawn_env(env)
+
     log = DaemonPaths(cfg.dir).root / "hub.log"
-    log.parent.mkdir(parents=True, exist_ok=True)
-    with log.open("a") as fh:
+    with open_log(log) as fh:
         subprocess.Popen(
             [sys.executable, "-m", "collab.hub_main", cfg.session_id],
             stdout=fh, stderr=fh, stdin=subprocess.DEVNULL,
@@ -665,7 +677,8 @@ def cmd_host(args: argparse.Namespace) -> int:
                                  text=args.focus, body=ctx_gather(args.focus)))
     except HubError as exc:
         warn(f"could not announce yourself: {exc}")
-    status = onboard.ensure_daemon(profile) if not args.no_daemon else {}
+    status = ({} if args.no_daemon else
+              onboard.ensure_daemon(profile, follow=not _keeping(args)))
     _take_lock(profile, role="host", hub_pid=cfg.pid)
     if _is_listening(profile, status):
         ok("listening")
@@ -778,6 +791,62 @@ def _describe_stopped(entries: list[tuple[Any, dict[str, int]]]) -> None:
         print(f"    {c(cfg.session_id, '36')}  {dim('stopped')}  {detail}")
 
 
+def _keeping(args: argparse.Namespace) -> bool:
+    """Was `--keep` given? Read defensively, as every optional flag here is.
+
+    A good deal of this suite — and every caller that builds a namespace rather
+    than parsing one — passes only the fields its own case is about, so a bare
+    attribute read turns a new flag into an AttributeError in a dozen unrelated
+    places.
+    """
+    return bool(getattr(args, "keep", False))
+
+
+def _sweep_a_previous_boot(home: Path | str | None = None) -> None:
+    """Clear anything this repo recorded before the machine last restarted.
+
+    Run unprompted from the commands that are about to act on those records,
+    and safe there precisely because nothing is signalled: a pid stamped with
+    another boot names no process at all, so this deletes files rather than
+    reaching for anything. See `collab.reboot`.
+
+    It says what it did. A repository that silently forgets the session it was
+    hosting is indistinguishable from one that lost it.
+    """
+    for line in reboot.swept(home):
+        print(dim(f"  {line}"))
+
+
+def _who_owns_this(profile: SessionProfile, listener: int) -> str:
+    """The agent to record as owning this session, encoded, or what already is.
+
+    TWO WAYS OF NOT KNOWING, and neither may overwrite an answer somebody else
+    got right.
+
+    **A turn the daemon started is not the owner.** A wake runs an agent — the
+    `codex-exec` recipe spawns one outright, and a custom command may spawn
+    anything — as a CHILD of the daemon. So a command issued from inside that
+    turn has the woken agent nearest in its own ancestry, and recording it here
+    would hand the session an owner that exits when the turn does; two minutes
+    later the daemon would stop itself, having been told its agent had gone by
+    the very turn it started. The listener's own pid in our ancestry is what
+    says we are inside one.
+
+    **No agent found is not an empty answer.** A command run from a plain shell
+    can name nobody, and writing "" would erase a perfectly good owner recorded
+    by the agent that really did start this. What was there stands.
+    """
+    if listener and listener in lockfile.ancestry():
+        return _recorded_owner(profile)
+    who = owner.current()
+    return who.encode() if who is not None else _recorded_owner(profile)
+
+
+def _recorded_owner(profile: SessionProfile) -> str:
+    held = lockfile.read(profile.home)
+    return held.owner if lockfile.is_ours(held, profile.session_id) and held else ""
+
+
 def _take_lock(profile: SessionProfile, *, role: str, hub_pid: int = 0) -> None:
     """Record that this repo's collab state is in use, and by whom.
 
@@ -790,6 +859,11 @@ def _take_lock(profile: SessionProfile, *, role: str, hub_pid: int = 0) -> None:
     # its number since reused — made a free repo read as occupied by a live
     # agent, and the next agent here was sent away.
     listener = is_running(profile) or 0
+    # STAMPED WHILE THEY ARE STILL THERE. Both processes are running at this
+    # moment — the hub answered a health check a few lines above, the listener
+    # was just found holding its lock — and a start time can only be read off a
+    # live process. A stamp minted later would be an empty one.
+    who = _who_owns_this(profile, listener)
     home = Path(profile.home)
     lockfile.acquire(lockfile.Lock(
         name=profile.name, session_id=profile.session_id, role=role,
@@ -803,7 +877,12 @@ def _take_lock(profile: SessionProfile, *, role: str, hub_pid: int = 0) -> None:
         # Recorded from this process, so every later command this agent runs
         # can recognise its own directory without being told which it is.
         owner_pids=lockfile.ancestry(),
+        #: The agent itself, so a detached daemon can tell whether it is still
+        #: there. See `collab.owner` and `_who_owns_this`.
+        owner=who,
         hub_pid=hub_pid, listener_pid=listener,
+        hub=exclusive.stamp_for(hub_pid).encode() if hub_pid else "",
+        listener=exclusive.stamp_for(listener).encode() if listener else "",
     ), profile.home)
 
 
@@ -1034,6 +1113,7 @@ def cmd_join(args: argparse.Namespace) -> int:
     if (code := _own_state_dir(args, resolve_name(args.name))) is not None:
         return code
     ensure_home()
+    _sweep_a_previous_boot()
 
     url = args.url
     if args.local or not url or not _looks_like_a_link(url):
@@ -1099,6 +1179,7 @@ def cmd_join(args: argparse.Namespace) -> int:
         profile, snapshot, status = onboard.join_session(
             url, name=args.name, focus=args.focus,
             start_daemon=not args.no_daemon,
+            follow=not _keeping(args),
         )
     except (ValueError, HubError) as exc:
         fail(str(exc))
@@ -3054,6 +3135,22 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
     else:
         add("listener", CHECK_OK, f"connected as {profile.name}")
 
+    # 1a. Is the agent this listener belongs to still here?
+    #
+    #     A daemon whose agent has gone is not broken and does not report as
+    #     anything else: it is live, connected, and about to stop. Saying so is
+    #     the difference between «my listener vanished» and «my listener told
+    #     me it was going, and why». Nothing is said when the daemon follows
+    #     nobody, which is the ordinary answer for one started by hand.
+    whose = status.get("owner")
+    if isinstance(whose, dict) and not whose.get("present"):
+        left = whose.get("stopping_in")
+        add("agent", CHECK_WARN,
+            "the agent that started this listener is gone"
+            + (f"; it stops in {int(left)}s" if left is not None else ""),
+            f"run any {exe} command from the agent that should own it, or"
+            f" {exe} config follow_agent off to leave it running")
+
     # 1b. Is the figure the roster row shows everybody actually current?
     #
     #     The count on that row is the hub's own count of the whole log, copied
@@ -4055,6 +4152,10 @@ def cmd_check(args: argparse.Namespace) -> int:
     Not a status display: a verdict, with an exit code, so it can be armed on a
     timer or a hook and mean something without being read by a person.
     """
+    # BEFORE THE VERDICT. `check` is the command an agent runs on a loop to
+    # find out whether it is still collaborating, so it is the one most likely
+    # to be the first thing run after a machine comes back up.
+    _sweep_a_previous_boot()
     # `--session` is offered on this command, so it has to be obeyed: reading
     # the current one while being told to read another checks the wrong session
     # and says nothing about having done so.
@@ -4117,6 +4218,12 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
+    # NOT UNDER `--json`, which is parsed by other programs and must stay one
+    # object. The sweep still runs; only the commentary is held back.
+    if not getattr(args, "json", False):
+        _sweep_a_previous_boot()
+    else:
+        reboot.swept()
     profile = SessionProfile.current()
     if profile is None:
         if args.json:
@@ -4234,13 +4341,30 @@ def cmd_status(args: argparse.Namespace) -> int:
         figures = {k: v for k, v in status["learnings"].items() if v}
         if figures:
             payload["learnings"] = figures
+    # WHOSE LISTENER THIS IS. A daemon follows the agent that started it and
+    # stops once that agent has gone — so «why did my listener stop» has an
+    # answer here, and so does «will it». Absent entirely when this daemon
+    # follows nobody, which is a different thing from its agent being present.
+    if isinstance(status.get("owner"), dict):
+        who = status["owner"]
+        payload["agent_pid"] = who.get("pid") or None
+        payload["agent_present"] = bool(who.get("present"))
+        if not who.get("present"):
+            left = who.get("stopping_in")
+            payload["hint"] = (
+                "the agent that started this listener is gone; it stops in "
+                f"{int(left)}s — run any collab command from the agent you want"
+                " to keep it, or `collab config follow_agent off`"
+                if left is not None else
+                "the agent that started this listener is gone")
     if args.json:
         print(json.dumps(payload, indent=2))
         return 0
     heading(f"collab session {payload['session_id']}")
     for key in ("name", "host", "url", "state", "recorded_state",
                 "others_connected", "unread",
-                "last_seq", "daemon_pid", "monitor_command", "monitor_ws"):
+                "last_seq", "daemon_pid", "agent_pid", "monitor_command",
+                "monitor_ws"):
         if payload.get(key) is None:
             continue
         value = payload[key]
@@ -4309,7 +4433,7 @@ def _readvertise(cfg: HubConfig) -> None:
     # parameter annotation above a string, so nothing in this body ever needs
     # the name — and importing it for the annotation's sake pulled starlette in
     # behind it, about 85 ms on `collab url --rotate`, to accomplish nothing.
-    if not cfg.pid or not lockfile.process_alive(cfg.pid):
+    if not cfg.hub_stamp().alive():
         return  # nothing is serving; the next `host` will announce afresh
     try:
         peers.announce(
@@ -5194,7 +5318,7 @@ def cmd_daemon(args: argparse.Namespace) -> int:
         print("stopped" if stop_daemon(profile) else "was not running")
         _say_what_is_left(profile, getattr(args, "disarm", False))
         return 0
-    status = onboard.ensure_daemon(profile)
+    status = onboard.ensure_daemon(profile, follow=not _keeping(args))
     ok(f"daemon {_effective(profile, status)}")
     return 0
 
@@ -6123,6 +6247,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="a reserved ngrok domain, so the URL survives a tunnel restart")
     h.add_argument("--no-tunnel", action="store_true", help="skip ngrok even if installed")
     h.add_argument("--no-daemon", action="store_true", help="do not start listening")
+    h.add_argument("--keep", action="store_true",
+                   help="leave it running when this agent quits")
     h.add_argument("--no-update-check", action="store_true",
                    help="do not check for a newer collab first")
     h.add_argument("--update", action="store_true",
@@ -6172,6 +6298,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="state folder for this session (default .collab, or"
                         " .collab-<name> when another agent already holds it)")
     j.add_argument("--no-daemon", action="store_true", help="do not start listening")
+    j.add_argument("--keep", action="store_true",
+                   help="leave it running when this agent quits")
     j.add_argument("--no-update-check", action="store_true",
                    help="do not check for a newer collab first")
     j.add_argument("--update", action="store_true",
@@ -6618,6 +6746,8 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("action", choices=["start", "stop", "status"], nargs="?", default="status")
     d.add_argument("--disarm", action="store_true",
                    help="with `stop`: also turn off the wake for this session")
+    d.add_argument("--keep", action="store_true",
+                   help="with `start`: leave it running when this agent quits")
     add_session_flag(d)
     d.set_defaults(func=cmd_daemon)
 

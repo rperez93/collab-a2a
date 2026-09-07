@@ -27,7 +27,7 @@ import time
 
 import pytest
 
-from collab import cli, config as cfg, wake
+from collab import cli, config as cfg, owner, wake
 from collab.client import daemon as d
 from collab.config import SessionProfile
 from collab.protocol import Envelope
@@ -540,6 +540,12 @@ def a_daemon(profile):
     daemon._waking = None
     daemon._wake_note = ""
     daemon._http = None
+    # The heartbeat asks this every beat. A daemon built with `__new__` gets
+    # only what its caller remembers to set, so a new field in `__init__` is
+    # missing here until somebody puts it in — and the loop swallows the
+    # AttributeError, so the symptom is a beat that quietly stops half way.
+    daemon._following = owner.Follower(None)
+    daemon._said_missing = False
     return daemon
 
 

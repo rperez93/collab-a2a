@@ -298,6 +298,43 @@ collab wake off       # removes it
 stop. A plain stop names what it left behind rather than pretending otherwise,
 so the line was printed at the time.
 
+## My listener stopped on its own
+
+It follows the agent that started it, and that agent quit. Since 1.40.0 the
+daemon and the hub both stop two minutes after the process that started them
+has gone — before that they carried on for ever, reconnecting to a session
+nobody was in and, for a host, holding an ngrok tunnel open for an empty room.
+
+You are told twice before it happens and once afterwards:
+
+```bash
+collab status         # says which agent it follows, and how long it has left
+collab check          # warns: the agent that started this listener is gone
+collab daemon start   # start it again
+```
+
+Two minutes rather than at once, because quitting an agent and starting it again
+should cost nothing: the first collab command the new one runs re-claims the
+session and the daemon picks that up on its next beat. If you want a session to
+outlive the agent deliberately — a hub left up overnight for somebody in another
+timezone — start it with `--keep`, or turn the behaviour off everywhere with
+`collab config follow_agent off`.
+
+If nothing stops when your agent quits, that is the other half of the design
+rather than a fault: collab follows an agent it can name, and a listener you
+started by hand from a terminal is followed by nothing at all.
+
+## `collab kill` says it stopped nothing, after restarting the machine
+
+It stopped nothing because there was nothing to stop, and the point is that it
+did not go looking. Every pid collab writes down carries the boot it was
+recorded on, so after a `wsl --shutdown` those numbers name processes that no
+longer exist — and the kernel has since handed the numbers to strangers.
+Signalling them is exactly the fault this prevents.
+
+The files are cleared by the next `collab host`, `join`, `status` or `check`,
+which say what they cleared. Nothing is signalled to do it.
+
 ## A terminal is still printing messages from a session that ended
 
 That is a `collab listen --follow` somebody armed, and it is a process of

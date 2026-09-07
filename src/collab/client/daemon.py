@@ -24,9 +24,11 @@ from typing import Any
 import httpx
 from httpx_sse import aconnect_sse
 
-from .. import __version__, activity as act, diagnostics, lockfile, peers, wake
+from .. import (__version__, activity as act, diagnostics, lockfile,
+               owner as ownership, peers, wake)
 from ..batch import DELTA_SHOWN_FOR
-from ..config import SessionProfile, share_stats_enabled, stats_source
+from ..config import (SessionProfile, follow_agent_enabled,
+                      share_stats_enabled, stats_source)
 from ..protocol import (EXT_PREFIX, KIND_CHAT, KIND_HELLO, KIND_PRESENCE,
                         KIND_PROJECT, KIND_SYSTEM, KIND_TASK, Envelope,
                         now_iso, scrub)
@@ -132,12 +134,12 @@ def _log_crash(where: str, exc: BaseException) -> None:
     names, which is what actually locates a bug. The message is dropped and the
     type is kept; `diagnostics._safe` strips the home prefix from the file
     names, so what survives is `~/…/collab/client/daemon.py`, line 1194.
-    """
-    import traceback
 
-    frames = traceback.format_tb(exc.__traceback__)
-    diagnostics.log("crash", where=where, kind=type(exc).__name__,
-                    traceback=[line.strip() for line in frames[-6:]])
+    A thin wrapper over `diagnostics.exception` now, kept for the name: this is
+    the word the daemon's own code uses for the thing, and the event it writes
+    — `crash` — is what `collab logs` counts and the issue draft groups by.
+    """
+    diagnostics.exception(where, exc, event="crash")
 
 
 def _has_host(url: str) -> bool:
@@ -351,6 +353,12 @@ class Daemon:
         self.waker = wake.Waker(
             self.paths.root, profile.session_id, attended=self._somebody_reads,
             is_host=bool(profile.is_host))
+        #: The agent that started us, and how long it has been missing. Read
+        #: from the environment at spawn and re-read off `agent.lock` on every
+        #: beat, so an agent that quit and came back is picked up rather than
+        #: mourned. See `collab.owner`.
+        self._following = ownership.Follower(ownership.from_env())
+        self._said_missing = False
         self._waking: asyncio.Task | None = None
         self._waking_batch: wake.Batch | None = None
         self._notifying: set[asyncio.Task] = set()
@@ -484,6 +492,11 @@ class Daemon:
             # is the hub's own count of the whole log, identical for everybody
             # who has fetched it.
             "messages": self._message_figures(),
+            # WHOSE THIS DAEMON IS, and how long it will outlive them. The
+            # status line and `collab check` read it here rather than working
+            # out the answer twice; None means this daemon follows nobody,
+            # which is not the same as its agent being gone.
+            "owner": self._owner_figures(),
             # Where our own usage figures got to. See `_stats_figures`.
             "stats": self._stats_figures(),
             # THIS AGENT'S OWN LAST WORD ABOUT ITSELF. Written here so the
@@ -580,6 +593,17 @@ class Daemon:
             "source_error": self._stats_source_error,
             "post_error": self._stats_post_error,
             "sharing": share_stats_enabled(),
+        }
+
+    def _owner_figures(self) -> dict[str, Any] | None:
+        """What `status.json` says about the agent this daemon belongs to."""
+        if not self._following.following or not follow_agent_enabled():
+            return None
+        gone = self._following.gone_since is not None
+        return {
+            "pid": self._following.owner.pid if self._following.owner else 0,
+            "present": not gone,
+            "stopping_in": round(self._following.waiting(), 1) if gone else None,
         }
 
     def _batch_figures(self) -> dict[str, Any] | None:
@@ -716,10 +740,61 @@ class Daemon:
         a `daemon stop`/`start` — and a lock naming a pid that no longer exists
         reads as stale even while the agent is still here.
         """
+        # NOT OVER A LISTENER THAT IS STILL THERE. `refresh` writes whatever it
+        # is given onto whatever it finds, so this stamped its own pid into a
+        # claim standing for a different, living listener — and the teardown
+        # then read that claim as ours and released it on the way out. The
+        # guard at the other end has always been there; this is the same rule
+        # applied where the claim is made rather than only where it is given up.
+        held = lockfile.read(self.profile.home)
+        if held is not None and held.listener_pid not in (0, os.getpid()):
+            recorded = exclusive.decode(held.listener) or \
+                exclusive.Stamp(pid=held.listener_pid)
+            if recorded.alive():
+                return
         try:
-            lockfile.refresh(self.profile.home, listener_pid=os.getpid())
+            # The number for a reader of any version, and the stamp beside it
+            # for one that can tell a reused pid from this process.
+            lockfile.refresh(self.profile.home, listener_pid=os.getpid(),
+                             listener=exclusive.stamp_for().encode())
         except OSError:
             pass
+
+    def _follow_the_agent(self) -> None:
+        """Stop once the agent that started this daemon has been gone a while.
+
+        THE SETTING IS READ EVERY BEAT, not at construction, so turning it off
+        reaches a daemon that is already running — the same promise the
+        diagnostic record makes, and for the same reason: the daemon you want
+        to change your mind about is the one already running.
+
+        Nothing found is not a stop. `Follower.look` answers "unowned" when no
+        agent could be named at spawn and none is on the lock now, and this
+        does nothing about that for ever — see `collab.owner` for why that is
+        the safe direction to fail in.
+        """
+        if not follow_agent_enabled():
+            return
+        state = self._following.look(
+            ownership.recorded(self.profile.home, self.profile.session_id))
+        if state in ("unowned", "following"):
+            if self._said_missing and state == "following":
+                logger.info("the agent is back; carrying on")
+                diagnostics.log("owner_returned")
+                self._said_missing = False
+            return
+        if not self._said_missing:
+            self._said_missing = True
+            left = int(self._following.waiting())
+            logger.warning("the agent that started this session is gone;"
+                           " stopping in %ds unless it comes back", left)
+            diagnostics.log("owner_lost", stopping_in=left)
+        if state == "gone":
+            logger.warning("stopping: the agent has been gone for %ds",
+                           int(self._following.grace))
+            diagnostics.log("stop", why="orphaned",
+                            after=int(self._following.grace))
+            self._stop.set()
 
     def _announce_locally(self) -> None:
         """Publish this session in the machine-wide registry.
@@ -2180,6 +2255,10 @@ class Daemon:
             try:
                 self._announce_locally()
                 self._refresh_lock()
+                # BEFORE THE WAKE AND EVERYTHING UNDER IT. A daemon whose agent
+                # has gone should not start that agent a turn on its way out,
+                # and the wake is the first thing below here that could.
+                self._follow_the_agent()
                 # GUARDED SEPARATELY, so that a wake which fails every time
                 # cannot keep the status write below it from ever running. An
                 # outer guard alone kept the task alive and still left
@@ -2519,10 +2598,44 @@ class Daemon:
                 loop.add_signal_handler(sig, self._stop.set)
 
         heartbeat = asyncio.create_task(self._heartbeat_loop())
+        # RACED AGAINST THE STOP rather than simply awaited. `_stop` is set by
+        # SIGTERM and, since the daemon started following its agent, by the
+        # heartbeat too — and the feed only looks at it as each event arrives.
+        # So on a quiet session a stop waited for the hub's next keepalive, and
+        # on one whose hub had already gone it waited out the read timeout.
+        # Both of those are now the instant the event is set.
+        feed = asyncio.create_task(self._connect_forever())
+        stopping = asyncio.create_task(self._stop.wait())
+        #: The feed's own exception, if it ended by raising one. Bound before
+        #: the `try` so that a shutdown which fails on its way to setting it
+        #: does not turn into a `NameError` below.
+        failure: BaseException | None = None
         try:
-            await self._connect_forever()
+            await asyncio.wait({feed, stopping},
+                               return_when=asyncio.FIRST_COMPLETED)
         finally:
             self._stop.set()
+            stopping.cancel()
+            feed.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stopping
+            # KEPT AND RAISED AFTER THE WHOLE `finally`, not inside it. When
+            # the feed ends by raising, that exception is what `run_daemon`
+            # records as a crash — but the shutdown below is what puts the pid
+            # file, the lock and the peer record back, and re-raising in the
+            # middle of it would skip all of that and leave the session looking
+            # occupied by a process that had died. Raising at the END of the
+            # `finally` would fix that and introduce a subtler fault: it would
+            # REPLACE an exception already on its way out, so a daemon being
+            # cancelled would report itself as having crashed. Outside the
+            # block, the language does the right thing on its own — a
+            # propagating exception never reaches the raise at all.
+            try:
+                await feed
+            except asyncio.CancelledError:
+                pass
+            except BaseException as exc:            # noqa: BLE001
+                failure = exc
             heartbeat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat
@@ -2548,6 +2661,8 @@ class Daemon:
             if self._owns_pid_file():
                 with contextlib.suppress(OSError):
                     self.paths.pid.unlink()
+        if failure is not None:
+            raise failure
 
     def _owns_pid_file(self) -> bool:
         """Does `daemon.pid` still name this process, and not merely this pid?"""

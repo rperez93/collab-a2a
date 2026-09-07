@@ -423,6 +423,27 @@ def set_share_stats(enabled: bool) -> bool:
     return bool(enabled)
 
 
+#: Whether a detached daemon or hub stops once the agent that started it has
+#: gone. On, because the alternative is what collab did: a listener
+#: reconnecting for ever to a session nobody is in, and a hub still advertising
+#: and tunnelling a room whose host quit hours ago. See `collab.owner` for how
+#: an agent is identified and why nothing is stopped when it cannot be.
+FOLLOW_AGENT_DEFAULT = True
+
+
+def follow_agent_enabled() -> bool:
+    """Read live, so turning it off reaches a daemon that is already running."""
+    value = load_config().get("follow_agent")
+    return FOLLOW_AGENT_DEFAULT if value is None else bool(value)
+
+
+def set_follow_agent(on: bool) -> bool:
+    cfg = load_config()
+    cfg["follow_agent"] = bool(on)
+    save_config(cfg)
+    return follow_agent_enabled()
+
+
 #: Whether `host` and `join` print collab's own rules of conduct on arrival.
 #: On by default because agents that are not told how to collaborate do it
 #: badly, and the cost of reading them once is nothing against one afternoon
@@ -1151,10 +1172,19 @@ def set_learnings_dir(where: str) -> str:
     return learnings_dir()
 
 
-#: OFF, because a log nobody asked for is a file that grows on somebody's disk
-#: to answer a question they may never ask. See `collab.diagnostics` for what it
-#: does and does not record.
-DIAGNOSTICS_DEFAULT = False
+#: ON. It was off, and the argument for that was a log nobody asked for growing
+#: on somebody's disk to answer a question they may never ask. Both halves of
+#: that turned out to be wrong about this particular record. It is bounded —
+#: seven day-files, swept at every start and once a day after — so it does not
+#: grow without limit; and it records events rather than content, so there is
+#: nothing in it to be careful with. What being off actually cost was the only
+#: thing it was for: a fault is reported after it happens, and a record that
+#: has to be switched on first never covers the occurrence anybody noticed.
+#:
+#: `collab config diagnostics off` stops it, and that is the setting doing its
+#: job rather than a fallback. See `collab.diagnostics` for what it does and
+#: does not record.
+DIAGNOSTICS_DEFAULT = True
 
 
 def diagnostics_enabled() -> bool:
@@ -2074,6 +2104,17 @@ def settings() -> tuple[Setting, ...]:
         # third thing the daemon does on its own, and the one that writes a
         # file. Somebody asking «what does collab record about me» should find
         # it beside the two acts it records.
+        # BESIDE THE DIAGNOSTIC RECORD, because the two are the daemon's own
+        # conduct rather than the session's: what it writes down, and how long
+        # it stays. Somebody asking «why did my listener stop» and somebody
+        # asking «what does collab record about me» are reading the same part
+        # of this list.
+        Setting("follow_agent",
+                "stop the listener and the hub once the agent that started"
+                " them has gone, rather than leaving them running",
+                FOLLOW_AGENT_DEFAULT, _as_bool,
+                follow_agent_enabled,
+                lambda v: set_follow_agent(v)),
         Setting("diagnostics",
                 "keep a local record of what your daemon and hub did — events"
                 " only, never message text, names or addresses",

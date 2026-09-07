@@ -155,6 +155,27 @@ the direction to fail in. Windows has neither half, and is refused.
 `_HAVE_PROC` to `False` on Linux, which walks the branches macOS would walk on
 a kernel that is not macOS. Nobody has run this on a Mac.[^exclusive-src]
 
+# The boot, which is the half the start time cannot cover
+
+Later than the pin. `started_at` is field 22 of `/proc/<pid>/stat` — clock ticks
+since boot — so it restarts when the machine does, and so does the pid counter.
+A `wsl --shutdown` therefore hands the next boot both the same low pid numbers
+and the same low tick counts as the last one, which is precisely the case the
+start time was supposed to settle. Two processes can agree on both fields and be
+nothing to do with each other.
+
+So 1.40.0 records a third field beside them: `/proc/sys/kernel/random/boot_id`,
+a uuid minted at boot, falling back to `btime` from `/proc/stat` and then to
+macOS's `kern.boottime`. `daemon.pid` grew a third line for it, under the two
+an older collab reads; `hub.json` and `agent.lock`, which had never been given
+the start time either, carry the whole stamp as one encoded field. One verdict
+— `Stamp.alive` — is what every reader now asks, and a record from another boot
+is dead by definition and is **never signalled**.
+
+Empty is trusted throughout, for the reason `same_process` already trusted an
+empty start time: a machine that cannot answer the question must not have every
+running process read as an impostor, and an upgrade must not look like a crash.
+
 # A pid of zero is not a pid
 
 `parse` rejects anything at or below zero, because every reader of

@@ -34,6 +34,34 @@ Every participant runs one, the host included. `collab host --no-daemon` and
 `collab join --no-daemon` suppress it, and `collab daemon start|stop|status`
 manage it afterwards.
 
+# It follows the agent that started it
+
+Later than the pin. Being detached is the point — an agent's turn kills whatever
+the turn started — but nothing ever asked what became of the agent, so the
+daemon also outlived it *leaving*: reconnecting for ever to a session nobody was
+in, holding the lock, refreshing the repository's claim, and answering `collab
+status` with «live», which it was.
+
+Since 1.40.0 it follows one. The spawning command names the agent in the
+environment it hands the daemon, `agent.lock` carries the same name so a
+restarted agent is adopted on the next beat, and the heartbeat stops the daemon
+two minutes after that process is gone. The hub does the same, and has more
+riding on it: a leaked hub keeps an ngrok tunnel open and goes on advertising a
+joinable room.
+
+**The agent is found by name, not by ancestry.** The obvious reading fails in
+both directions: a collab command's process chain ends at `init`, which never
+exits, so «is any forebear alive» is permanently true, while it begins with
+shells that are gone before the daemon has finished starting. What identifies
+the agent is its own process — `claude`, `codex`, `gemini` and the rest, read
+out of `/proc/<pid>/comm` or its argv.
+
+**Nothing named is not a stop.** A listener started by hand, an agent collab has
+never heard of, a sandbox that hides `/proc`: each answers «cannot tell», and
+the destructive reading of that would be a live daemon shutting itself down
+because it could not read a file. `--keep` and `collab config follow_agent off`
+turn it off deliberately.
+
 # Three republications from one event
 
 | Local form | Read by |

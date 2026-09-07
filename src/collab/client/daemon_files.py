@@ -22,10 +22,14 @@ serving them.
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import json
+import logging
 import os
+import queue
 import time
+from logging import handlers
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -54,6 +58,147 @@ class DaemonPaths:
     @property
     def snapshot(self) -> Path:
         return self.root / "snapshot.json"
+
+
+#: How large `daemon.log` or `hub.log` may be before the next process to open
+#: one rolls it aside. Two megabytes is some tens of thousands of lines: far
+#: more than anybody reads, and small enough that two of them per session is
+#: not a thing to notice on a disk.
+LOG_CAP = 2_000_000
+
+#: The loggers that are not what these files are for. httpx logs one INFO line
+#: per request, and this daemon makes one about every three seconds for as long
+#: as the session lives — the snapshot refresh, the usage report, the activity
+#: report — so `daemon.log` filled with a running commentary on its own
+#: successful polling and the warnings worth reading scrolled away inside it.
+#: WARNING keeps the failures, which is the half a log is kept for.
+NOISY = ("httpx", "httpcore")
+
+#: How many log records may wait for the writing thread. A thousand lines of a
+#: few hundred bytes is well under a megabyte, and a daemon that has queued a
+#: thousand lines without the disk taking one has a larger problem than its log.
+LOG_QUEUE_MAX = 1000
+
+#: The thread that does the writing, kept so it is started once and stopped on
+#: the way out.
+_listener: handlers.QueueListener | None = None
+
+
+class _Bounded(queue.Queue):
+    """A log queue that drops its oldest record rather than blocking anybody.
+
+    The two things a log queue must never do are grow without limit and make
+    the caller wait, and the stdlib's `QueueHandler` on a bounded queue does the
+    second: `put_nowait` raises `Full`, `handleError` runs, and on a default
+    build that prints to stderr from inside whatever was logging. So the
+    overflow is decided here — the oldest record goes, because in a burst the
+    newest lines are the ones describing what is happening now.
+
+    `LOG_QUEUE_MAX` records of a few hundred bytes is well under a megabyte,
+    which is the budget: this runs in a daemon that is expected to sit there
+    for days.
+    """
+
+    def put_nowait(self, item: Any) -> None:
+        try:
+            super().put_nowait(item)
+        except queue.Full:
+            with contextlib.suppress(queue.Empty):
+                self.get_nowait()
+            with contextlib.suppress(queue.Full):
+                super().put_nowait(item)
+
+
+def setup_logging(level: int = logging.INFO) -> None:
+    """What a detached collab process sends to its own log file.
+
+    One place rather than a `basicConfig` in each entry point, because the two
+    had drifted into the same call twice and the quieting below belongs to
+    both: the hub speaks httpx when it checks its own tunnel, and the daemon
+    speaks it continuously.
+
+    NOTHING HERE WRITES ON THE CALLER'S THREAD. Every record — the plain lines
+    below and the structured record in `collab.diagnostics` — goes on a queue
+    and a thread takes it from there. A `logger.warning` inside the daemon's
+    event loop was an `open` and a `write` on whatever filesystem the
+    repository lives on, and a filesystem that pauses paused the feed with it.
+    That is a rule for this project rather than a local decision here; see
+    CONTRIBUTING.
+    """
+    from .. import diagnostics
+
+    logging.basicConfig(level=level,
+                        format="%(asctime)s %(levelname)s %(message)s")
+    # AND THE LEVEL AGAIN, EXPLICITLY. `basicConfig` does nothing at all when
+    # the root logger already has a handler, so the level it was passed is
+    # silently dropped whenever anything has configured logging first. Both
+    # callers own their whole process — they are `__main__` — so saying it
+    # outright is the honest version of what the line above was assumed to do.
+    logging.getLogger().setLevel(level)
+    for name in NOISY:
+        logging.getLogger(name).setLevel(logging.WARNING)
+    # AND EVERY WARNING INTO THE STRUCTURED RECORD. The plain log holds what was
+    # said; the record holds that it was said, which is the half that answers
+    # «has this been going on all night». Attached once, and only to collab's
+    # own tree: this is not a place to route somebody else's library through.
+    collab_logger = logging.getLogger("collab")
+    if not any(isinstance(h, diagnostics.Handler) for h in collab_logger.handlers):
+        handler = diagnostics.Handler(level=logging.WARNING)
+        collab_logger.addHandler(handler)
+    _write_logs_on_a_thread()
+
+
+def _write_logs_on_a_thread() -> None:
+    """Put the root logger's handlers behind a queue, and drain it elsewhere.
+
+    Called once. A second call finds the `QueueHandler` already there and
+    leaves it alone, so a process that configures logging twice does not end up
+    with two listeners writing the same line.
+
+    The listener is stopped through `atexit` rather than left to the
+    interpreter, because it is the only thing that gets the tail of the queue
+    on to the disk: its thread is not a daemon thread and `stop()` drains what
+    is waiting before it returns.
+    """
+    global _listener
+    root = logging.getLogger()
+    if any(isinstance(h, handlers.QueueHandler) for h in root.handlers):
+        return
+    existing = list(root.handlers)
+    if not existing:
+        return
+    pipe = _Bounded(LOG_QUEUE_MAX)
+    for handler in existing:
+        root.removeHandler(handler)
+    root.addHandler(handlers.QueueHandler(pipe))
+    _listener = handlers.QueueListener(pipe, *existing,
+                                       respect_handler_level=True)
+    _listener.start()
+    atexit.register(_listener.stop)
+
+
+def open_log(path: Path, cap: int = LOG_CAP):
+    """Open a detached process's log for appending, rolling it aside if it is large.
+
+    ROLLED AT OPEN, which is to say when a process is spawned, and never while
+    one is running. A rotation underneath a live daemon would be renaming a
+    file it holds an open descriptor on: it would go on writing to the renamed
+    file, invisibly, and the fresh one would stay empty until the next restart.
+    Doing it here means the file a running process is writing to is the file it
+    was handed, for as long as it runs, which is the only arrangement that does
+    not need the daemon to know about rotation at all.
+
+    One generation is kept. The previous file is what somebody wants when a
+    daemon has just been restarted by the thing they are investigating; two
+    generations back is history nobody has ever asked this project for.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if path.stat().st_size > cap:
+            path.replace(path.with_suffix(path.suffix + ".1"))
+    except OSError:
+        pass                # unreadable or unrenameable: append to it anyway
+    return path.open("a")
 
 
 def is_running(profile: SessionProfile) -> int | None:

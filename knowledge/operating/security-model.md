@@ -138,8 +138,9 @@ model.[^security-doc]
 
 # The diagnostic log
 
-Later than the pin, and off unless somebody turns it on. With `diagnostics` on,
-the daemon and the hub append events to `diagnostics/YYYY-MM-DD.jsonl` under
+Later than the pin, and on by default since 1.40.0 — which is a claim about
+what is in it rather than a relaxation. The daemon and the hub append events to
+`diagnostics/YYYY-MM-DD.jsonl` under
 the session directory, kept seven days and swept at every start and once a day
 after.
 
@@ -153,10 +154,22 @@ classifications rather than free text, and the writer scrubs whatever reaches
 it anyway, control characters included, because the file is read with `cat` and
 pasted into a browser.
 
-Two places that costs something and is paid anyway. A dropped feed records the
+Three places that costs something and is paid anyway. A dropped feed records the
 exception's TYPE and not its message, because an httpx error carries the URL it
 was talking to. A failed wake records the exit code and not the output, because
-a woken agent prints what it was woken about, which is the conversation.
+a woken agent prints what it was woken about, which is the conversation. And
+since 1.40.0 every warning collab logs is counted here through a logging
+handler — which records that one fired, the module and line that raised it, and
+the type of any exception attached, and NOT the formatted message. That last
+exclusion is the whole reason the bridge is safe to have: a log line is written
+for a person reading `daemon.log` and says whatever it needs to, addresses
+included, while this file has one promise to keep.
+
+Being on by default rests on the same two facts and no others: there is nothing
+in it to leak, and it is bounded to seven day-files that delete themselves. It
+was off before, and what that cost was the only thing it is for — a fault is
+reported after it happens, so a record somebody has to turn on first never
+covers the occurrence anybody noticed.
 
 `collab issue draft` assembles it into a report and prints the `gh issue create`
 command that would post it. It never posts: partly because it is usually run by

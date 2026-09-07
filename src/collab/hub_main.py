@@ -9,13 +9,16 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
 import sys
 import threading
 from pathlib import Path
 
 import uvicorn
 
-from . import __version__, diagnostics, peers
+from . import __version__, diagnostics, owner as ownership, peers
+from .client.daemon_files import setup_logging
+from .config import follow_agent_enabled
 from .server.app import create_app
 from .server.session import HubConfig
 from .server.store import Store
@@ -43,6 +46,12 @@ class RegistryHeartbeat:
         self.interval = interval
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        #: The agent that started this hub, if one could be named. See
+        #: `collab.owner` — and note that a hub outliving its agent costs more
+        #: than a listener does: it goes on advertising a joinable session and
+        #: holding an ngrok tunnel open for a room whose host has gone.
+        self.following = ownership.Follower(ownership.from_env())
+        self._said_missing = False
 
     def beat(self) -> None:
         # Re-read: the invite changes on resume, and the public URL changes
@@ -69,7 +78,45 @@ class RegistryHeartbeat:
             # not mean a sample every thirty seconds.
             diagnostics.sample_memory()
             diagnostics.sweep()
+            # ON THIS LOOP'S OWN CLOCK, which is the coarsest thing about it:
+            # the grace period is checked every `interval`, so a hub stops
+            # somewhere between the grace and the grace plus one beat. Thirty
+            # seconds of slack on two minutes is not worth a second timer.
+            self._follow_the_agent()
             self._stop.wait(self.interval)
+
+    def _follow_the_agent(self) -> None:
+        """Stop the hub once the agent that started it has been gone a while.
+
+        BY SIGNALLING OURSELVES, and that is deliberate rather than lazy.
+        uvicorn owns the main thread and installs its own handler for SIGTERM,
+        so this is the one route that ends the server the way `collab kill`
+        does — the same graceful shutdown, the same `finally` in `main` putting
+        the tunnel and the store away. Reaching into uvicorn from a thread it
+        does not know about would be a second shutdown path to keep correct.
+        """
+        if not follow_agent_enabled():
+            return
+        state = self.following.look(
+            ownership.recorded(self.cfg.home, self.cfg.session_id))
+        if state in ("unowned", "following"):
+            if self._said_missing and state == "following":
+                logger.warning("the host's agent is back; carrying on")
+                diagnostics.log("owner_returned")
+                self._said_missing = False
+            return
+        if not self._said_missing:
+            self._said_missing = True
+            logger.warning("the agent hosting this session is gone; stopping"
+                           " in %ds unless it comes back",
+                           int(self.following.waiting()))
+            diagnostics.log("owner_lost", stopping_in=int(self.following.waiting()))
+        if state == "gone":
+            logger.warning("stopping the hub: its agent has been gone for %ds",
+                           int(self.following.grace))
+            diagnostics.log("stop", why="orphaned",
+                            after=int(self.following.grace))
+            os.kill(os.getpid(), signal.SIGTERM)
 
     def start(self) -> None:
         self.beat()
@@ -89,7 +136,7 @@ class RegistryHeartbeat:
 
 
 def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    setup_logging()
     if len(sys.argv) < 2:
         print("usage: python -m collab.hub_main <session_id>", file=sys.stderr)
         return 2
@@ -161,11 +208,7 @@ def main() -> int:
         # it only leaves a line saying that it died rather than was stopped.
         # From outside, a hub that crashed and a hub somebody killed look
         # identical — a gone process and a session nobody can join.
-        import traceback
-
-        diagnostics.log("crash", where="hub", kind=type(exc).__name__,
-                        traceback=[line.strip() for line
-                                   in traceback.format_tb(exc.__traceback__)[-6:]])
+        diagnostics.exception("hub", exc, event="crash")
         raise
     finally:
         registry.stop()

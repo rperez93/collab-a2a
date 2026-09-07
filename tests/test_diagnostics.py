@@ -23,6 +23,9 @@ import argparse
 import contextlib
 import io
 import json
+import logging
+import os
+import threading
 import time
 from datetime import date, timedelta
 
@@ -47,19 +50,48 @@ def recording(tmp_path, monkeypatch):
 
 
 def _rows(root):
+    """Everything recorded so far, once it has actually reached the disk.
+
+    The flush is the point rather than a detail. Records are queued and written
+    by a thread, so «log it and read it back» is two acts now — which is what
+    every caller outside a test has always wanted and what a test has to say
+    out loud.
+    """
+    diag.flush()
     return diag.records(root)
 
 
 # --- off unless somebody asks --------------------------------------------------
 
-def test_nothing_is_written_until_somebody_turns_it_on(tmp_path, monkeypatch):
+def test_nothing_is_written_once_somebody_turns_it_off(tmp_path, monkeypatch):
+    """It ships on now, so this is the setting doing its job rather than the
+    default. Turning it off must still stop the writing outright — not merely
+    stop new files, and not leave a directory behind to say it was here."""
     monkeypatch.setenv("COLLAB_CONFIG", str(tmp_path / "c.json"))
     cfg._CACHE.clear()
+    cfg.set_diagnostics(False)
     diag.begin(tmp_path / "state", "daemon")
     try:
         assert cfg.diagnostics_enabled() is False
         diag.log("start")
         assert not (tmp_path / "state" / diag.DIRNAME).exists()
+    finally:
+        diag._root = None
+        cfg._CACHE.clear()
+
+
+def test_it_is_kept_without_anybody_turning_it_on(tmp_path, monkeypatch):
+    """The change 1.40.0 made, and the reason for it: a fault is reported after
+    it happens, so a record you have to switch on first never covers the
+    occurrence that made anybody look."""
+    monkeypatch.setenv("COLLAB_CONFIG", str(tmp_path / "c.json"))
+    cfg._CACHE.clear()
+    diag.begin(tmp_path / "state", "daemon")
+    try:
+        assert cfg.diagnostics_enabled() is True
+        diag.log("start")
+        diag.flush()
+        assert list((tmp_path / "state" / diag.DIRNAME).glob("*.jsonl"))
     finally:
         diag._root = None
         cfg._CACHE.clear()
@@ -103,6 +135,7 @@ def test_a_record_says_when_which_process_and_what(recording):
 
 def test_the_file_is_one_per_day_named_for_the_day(recording):
     diag.log("start")
+    diag.flush()
     written = list((recording / diag.DIRNAME).glob("*.jsonl"))
     assert len(written) == 1
     assert date.fromisoformat(written[0].stem)
@@ -152,7 +185,9 @@ def test_a_long_field_is_cut_and_a_wide_record_is_cut(recording):
     diag.log("wake_attempt", why="x" * 5000)
     assert len(_rows(recording)[0]["why"]) == diag.MAX_FIELD
     diag.log("crash", **{f"f{i}": i for i in range(60)})
-    assert len(_rows(recording)[1]) <= diag.MAX_FIELDS + 3
+    # The four the record always carries — when, which process, which pid, and
+    # what happened — and no more than `MAX_FIELDS` of whatever was passed.
+    assert len(_rows(recording)[1]) <= diag.MAX_FIELDS + 4
 
 
 def test_nothing_it_writes_can_stop_the_file_being_read_back(recording):
@@ -171,6 +206,7 @@ def test_a_field_that_is_not_data_at_all_does_not_raise(recording):
 def test_a_half_written_last_line_does_not_lose_the_whole_day(recording):
     """Two processes append here and either can be killed mid-session."""
     diag.log("start")
+    diag.flush()
     with open(diag.path_for(recording), "a") as fh:
         fh.write('{"event": "sto')
     assert [r["event"] for r in _rows(recording)] == ["start"]
@@ -252,6 +288,10 @@ def _draft(profile, monkeypatch, **flags):
 def reporting(profile, tmp_path, monkeypatch):
     monkeypatch.setenv("COLLAB_CONFIG", str(tmp_path / "global-config.json"))
     cfg._CACHE.clear()
+    # OFF, and said out loud. The record ships on, so a report written with it
+    # off is now the deliberate case rather than the default one — and it is
+    # still the case the header has to carry on its own.
+    cfg.set_diagnostics(False)
     monkeypatch.setattr(cli, "is_running", lambda p: 4242)
     yield profile
     diag._root = None
@@ -328,3 +368,220 @@ def test_the_tail_is_bounded(reporting, monkeypatch, tmp_path):
     assert f"### Last {cli.ISSUE_LINES} records" in body
     assert '"n": 49\n' not in body, "the oldest are the ones dropped"
     assert '"n": 249' in body
+
+
+# --- the record is written off the caller's thread ------------------------------
+#
+# The daemon logs from inside its own event loop while it is holding the feed,
+# so an `open`/`write`/`close` there is a filesystem stall the feed waits out.
+# A 9p mount over /mnt/c is the case that made this worth changing.
+
+def test_the_disk_is_touched_by_the_writer_and_not_by_the_caller(recording):
+    """The property, stated as who is holding the pen."""
+    wrote_on: list[str] = []
+    real = diag._write
+
+    def watched(batch, dropped=0):
+        wrote_on.append(threading.current_thread().name)
+        real(batch, dropped)
+
+    diag._write = watched
+    try:
+        diag.log("wake_attempt", outcome="ok")
+        diag.flush()
+    finally:
+        diag._write = real
+    assert wrote_on and set(wrote_on) == {"collab-diagnostics"}
+
+
+def test_a_flush_waits_for_a_batch_that_is_already_in_flight(recording):
+    """The race a flag cannot see: taken off the queue and not yet on the disk.
+
+    `flush` returning there is `flush` not flushing, and it runs on the
+    shutdown path — so what it would lose is the `stop` record.
+    """
+    started, may_finish = threading.Event(), threading.Event()
+    real = diag._write
+
+    def slow(batch, dropped=0):
+        started.set()
+        may_finish.wait(5)
+        real(batch, dropped)
+
+    diag._write = slow
+    try:
+        diag.log("feed_dropped", why="TimeoutError")
+        assert started.wait(5), "the writer never took the batch"
+        finished = threading.Event()
+        waiter = threading.Thread(target=lambda: (diag.flush(10), finished.set()))
+        waiter.start()
+        assert not finished.wait(0.3), "flush returned with the write in flight"
+        may_finish.set()
+        waiter.join(5)
+        assert finished.is_set()
+    finally:
+        diag._write = real
+        may_finish.set()
+    assert [r["event"] for r in diag.records(diag._root)] == ["feed_dropped"]
+
+
+def test_a_stop_is_on_the_disk_by_the_time_it_returns(recording):
+    """It is the last thing a dying process writes, so its caller does wait."""
+    diag.log("stop", failures=2)
+    assert [r["event"] for r in diag.records(diag._root)] == ["stop"]
+
+
+def test_an_ordinary_record_does_not_make_its_caller_wait(recording):
+    """The waiting is bought for the two events that precede a death and for no
+    others. `error` was in that set and was taken out: the logging bridge makes
+    one out of every `logger.exception`, including the guarded ones inside the
+    daemon's heartbeat, and each would have held that loop on the very disk this
+    queue exists to keep it off.
+    """
+    assert diag.URGENT == frozenset({"crash", "stop"})
+    held = threading.Event()
+    real = diag._write
+    diag._write = lambda batch, dropped=0: (held.wait(5), real(batch, dropped))
+    try:
+        diag.log("error", where="feed", kind="TimeoutError")   # must not block
+        diag.log("wake_attempt", outcome="ok")
+    finally:
+        held.set()
+        diag.flush(5)
+        diag._write = real
+    assert {r["event"] for r in diag.records(diag._root)} == {"error", "wake_attempt"}
+
+
+def test_a_flood_is_bounded_and_says_how_much_it_lost(recording):
+    """A queue that grew while the disk was unwritable would turn the fault it
+    was reporting into a larger one. What goes is counted."""
+    held = threading.Event()
+    real = diag._write
+
+    def blocked(batch, dropped=0):
+        held.wait(5)
+        real(batch, dropped)
+
+    diag._write = blocked
+    try:
+        for i in range(diag.BUFFER_MAX + 200):
+            diag.log("wake_attempt", n=i)
+        held.set()
+        diag.flush(10)
+    finally:
+        diag._write = real
+        held.set()
+    rows = diag.records(diag._root)
+    lost = [r for r in rows if r["event"] == "dropped"]
+    assert lost, "a gap in the record must say it is a gap"
+    assert sum(r["records"] for r in lost) + len(rows) - len(lost) \
+        == diag.BUFFER_MAX + 200
+
+
+def test_every_record_says_which_process_wrote_it(recording):
+    """Two processes share this file, and `proc` is a role rather than a pid."""
+    diag.log("start")
+    diag.flush()
+    row = diag.records(diag._root)[0]
+    assert row["pid"] == os.getpid() and row["proc"] == "daemon"
+
+
+# --- what a failure leaves behind ----------------------------------------------
+
+def test_a_recorded_exception_keeps_its_type_and_loses_its_words(recording):
+    """An exception's own text is where the addresses are; httpx puts the
+    tunnel URL in it. The traceback is what locates the bug."""
+    try:
+        raise TimeoutError("reading https://silly-name-1234.ngrok-free.app/feed")
+    except TimeoutError as exc:
+        diag.exception("feed", exc)
+    diag.flush()
+    row = diag.records(diag._root)[0]
+    assert row["event"] == "error" and row["kind"] == "TimeoutError"
+    assert row["where"] == "feed"
+    assert "ngrok-free.app" not in json.dumps(row)
+    assert "silly-name-1234" not in json.dumps(row)
+
+
+def test_every_warning_collab_logs_is_counted_without_its_words(recording):
+    """The half that answers «has this been happening all night».
+
+    The message is deliberately not kept: this file is written to be pasted
+    into a public issue, and a formatted log line is content. What identifies
+    the warning instead is where it was raised.
+    """
+    logger = logging.getLogger("collab.client.daemon")
+    handler = diag.Handler(level=logging.WARNING)
+    logger.addHandler(handler)
+    try:
+        logger.warning("feed dropped (%s); retrying", "https://tunnel.example/x")
+        try:
+            raise ValueError("/home/someone/secret/path")
+        except ValueError:
+            logger.exception("the wake failed")
+    finally:
+        logger.removeHandler(handler)
+    diag.flush()
+    rows = diag.records(diag._root)
+    assert [r["event"] for r in rows] == ["warning", "error"]
+    assert rows[0]["where"] == "client.daemon" and rows[0]["at"] > 0
+    assert rows[1]["kind"] == "ValueError"
+    body = json.dumps(rows)
+    assert "tunnel.example" not in body and "retrying" not in body
+    assert "secret" not in body
+
+
+def test_a_warning_below_the_threshold_is_not_recorded(recording):
+    logger = logging.getLogger("collab.client.daemon")
+    handler = diag.Handler(level=logging.WARNING)
+    logger.addHandler(handler)
+    try:
+        logger.info("reminder handed to the monitor")
+    finally:
+        logger.removeHandler(handler)
+    diag.flush()
+    assert diag.records(diag._root) == []
+
+
+def test_a_batch_is_cut_so_no_record_is_ever_written_in_two_pieces():
+    """Two processes append to one day file, so a record split across two
+    `write` calls is a record the other can land in the middle of.
+
+    A single line was always one small write and safe by construction. A batch
+    is up to `BUFFER_MAX` of them — measured around 100 KB — at which size a
+    short write stops being unthinkable, and a short write is a torn record.
+    """
+    lines = [json.dumps({"n": i, "pad": "x" * 200}) for i in range(400)]
+    chunks = diag._chunks(lines)
+    assert len(chunks) > 1, "the fixture must be big enough to be cut"
+    assert max(len(c) for c in chunks) <= diag.WRITE_CAP
+    assert all(c.endswith("\n") for c in chunks)
+    assert "".join(chunks) == "".join(line + "\n" for line in lines)
+
+
+def test_a_record_longer_than_the_cap_is_written_whole_anyway():
+    """Cutting a record up to obey a size limit is the harm the limit is for.
+    `MAX_FIELD` and `MAX_FIELDS` mean it cannot arise; this says what happens.
+    """
+    assert diag._chunks(["y" * (diag.WRITE_CAP * 3)]) == \
+        ["y" * (diag.WRITE_CAP * 3) + "\n"]
+
+
+def test_two_writers_never_leave_a_half_line_in_the_file(recording):
+    """The property those chunks exist for, exercised against the real file."""
+    import threading as t
+
+    def hammer(tag):
+        for i in range(200):
+            diag.log("wake_attempt", who=tag, n=i)
+
+    threads = [t.Thread(target=hammer, args=(f"w{n}",)) for n in range(4)]
+    for one in threads:
+        one.start()
+    for one in threads:
+        one.join()
+    diag.flush()
+    body = diag.path_for(recording).read_text()
+    assert body.endswith("\n")
+    for line in body.splitlines():
+        json.loads(line)            # every line is a whole record, or this raises

@@ -112,6 +112,64 @@ remove or reorder what is already there, and make re-running replace our block
 rather than add a second. `tests/test_statusline_install.py` and
 `tests/test_skills.py` exist to keep that true.
 
+**Nothing writes a log on the caller's thread.** Every log this project keeps —
+the plain `daemon.log` and `hub.log` lines and the structured diagnostic record
+— goes on a bounded in-memory queue and is written by a thread that does nothing
+else. It is not about speed: the write itself is about 10 µs on a healthy disk.
+It is about *what the caller is exposed to*. The daemon logs from inside the
+event loop that is holding the SSE feed, and on the direct path a filesystem
+that stalls stalled the feed with it — a 9p mount over `/mnt/c`, a network
+share, a disk waking up. So a new log call must reach `logging` (which
+`daemon_files.setup_logging` has already put behind a `QueueHandler`) or
+`diagnostics.log`, and never `open(...).write(...)` on a path in a hot loop.
+
+Both queues are **bounded and drop their oldest** rather than growing or
+blocking: `diagnostics.BUFFER_MAX` and `daemon_files.LOG_QUEUE_MAX`. A daemon
+sits for days, and a queue that grows while the disk is unwritable turns the
+fault it was reporting into a larger one. What is dropped is counted and the
+count is written out, so a gap in the record says it is a gap. If you need to
+read a record back in a test, `diagnostics.flush()` first — writing and reading
+are two acts now.
+
+**The diagnostic record holds events, never content.** It is written to be
+pasted into a public issue. Pass classifications rather than free text, and note
+what the logging bridge does and does not take: `diagnostics.Handler` records
+that a warning fired, where, and the type of any exception with it — never the
+formatted message, because a message is content. An exception's own text is
+dropped for the same reason and its traceback kept, which is the part that
+locates the bug.
+
+**Every state file is read tolerantly, so that upgrades need no migration
+step.** Unknown keys are dropped, missing keys take their default, and an
+absent field means «cannot tell» rather than «false» — `lockfile.read` has
+always filtered this way, `HubConfig.load` was fixed to, and `exclusive.parse`
+reads `daemon.pid` in all three of the shapes it has had. That discipline is
+what lets a release add a field without shipping code to rewrite anybody's
+files, and it works in both directions: a newer collab reads an older file, and
+an older collab keeps working when a newer one has written the file first. Two
+versions coexist on one machine more often than you would think — a checkout
+being tested beside the installed copy is the ordinary case.
+
+`update.refresh_installed` is the only thing that runs after an upgrade, and it
+re-runs INSTALLERS — the skills and the status line, which are copies in other
+people's directories that `pip install` cannot reach. It is not a migration
+hook and should not become one: it runs unattended, it must never fail the
+update, and a half-applied state change that cannot fail loudly is worse than
+no state change at all. If a genuinely destructive format change ever arrives —
+a key that must be renamed rather than added, a file that must move — write a
+maintained module in this tree, key it off a `schema` integer stored in the
+file rather than off a version comparison, make it idempotent and safe to run
+twice, and refuse to run it against state a live daemon or hub is holding open.
+Never a script fetched or discovered at update time.
+
+**A pid is not an identity, and a pid from another boot is nobody.** Everything
+collab writes down about a process goes through `exclusive.Stamp` — the number,
+the start time, and the boot it was recorded on — and is put to `Stamp.alive`
+before it is believed and certainly before it is signalled. The kernel reuses
+pids, `wsl --shutdown` restarts the counter at 1, and the files in the
+repository survive the machine that wrote them. An unstamped record is trusted,
+because an upgrade must not make every running process look like an impostor.
+
 **Global settings belong to the person, session state to the repo.** A new
 preference goes in `~/.config/collab/config.json` behind a getter and setter in
 `config.py`, and gets a CLI flag — never ask anyone to edit that file by hand.

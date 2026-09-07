@@ -74,7 +74,8 @@ the project. A session belongs to a repository; a theme does not.
 | `new_when` | `idle` starts that fresh session only while this agent is not working, `task` when it is about to start one, `always` whatever it is doing | they say the daemon wiped a session mid-task, or that it never fires because the agent is always busy |
 | `new_consensus` | how many must agree to a swarm-wide fresh session: `all` of the other participants that were connected, or `majority` | somebody in the room is reliably away and a proposal never carries |
 | `new_consensus_minutes` | how long such a proposal stands before it expires | their agents need longer to reach a boundary and answer |
-| `diagnostics` | keep a local record of what the daemon and hub did — events only, never message text, names or addresses | they are reporting a bug, or something intermittent needs catching; turn it back off afterwards |
+| `follow_agent` | stop the listener and the hub once the agent that started them has gone | they want a session to outlive their agent — a host left up overnight for somebody in another timezone |
+| `diagnostics` | keep a local record of what the daemon and hub did — events only, never message text, names or addresses | on by default; turn it off only if they ask for nothing to be written down |
 | `learnings_dir` | where this agent keeps what it has learnt, outside any repository | they want the store somewhere else, or want the feature off entirely (empty string) |
 | `watch_layout` | `split`, `tmux`, `chat` or `roster` | they want tmux to own the panes |
 | `watch_roster_size` | the roster's share of the window, in percent | the roster is too small to read |
@@ -254,18 +255,19 @@ If they only want it once, now, that is `collab config compact on` and then
 
 ## When something is broken and needs reporting
 
-`diagnostics` turns on a local record of what the daemon and the hub did — a
-JSONL file per day under the session directory, kept seven days, deleted on its
-own. It records **events only**: starts, stops, crashes with a traceback, feed
-drops and reconnects, wake attempts with their outcome, reminders with their
-route, memory samples, compactions. Never a line of a message, never a
-participant's name, never an invite or a token, never a URL with an address in
-it, and no path under the user's home directory.
+`diagnostics` is a local record of what the daemon and the hub did — a JSONL
+file per day under the session directory, kept seven days, deleted on its own.
+It records **events only**: starts, stops, crashes with a traceback, every
+warning collab logs with the line that raised it, feed drops and reconnects,
+wake attempts with their outcome, reminders with their route, memory samples,
+compactions, and the pid of the process that wrote each line. Never a line of a
+message, never a participant's name, never an invite or a token, never a URL
+with an address in it, and no path under the user's home directory.
 
-Turn it on, reproduce the problem, then:
+**It is on already**, so it covers the fault they are describing rather than
+the next one. Reproduce the problem, then:
 
 ```bash
-collab config diagnostics on
 collab issue draft
 ```
 
@@ -369,9 +371,15 @@ what their session looks like to *other people*:
   the reader's only sign that what they are looking at is not live. Drop one of
   the other segments instead. `notice` is on the list so that somebody who
   genuinely wants it gone can say so; it is not a piece to trim on their behalf.
-- **Never turn `diagnostics` on and leave it on.** It is for catching something
-  that is going wrong, and a log nobody asked for grows on the user's disk for
-  the life of every session. Turn it off once the report is written.
+- **Never turn `diagnostics` off to tidy up.** It ships on, it is bounded to
+  seven day-files that delete themselves, and it holds events rather than
+  content — so there is nothing to save by turning it off and a fault report to
+  lose. Turn it off only if the user asks for nothing to be written down.
+- **Never turn `follow_agent` off to fix a listener that stopped.** A listener
+  that stopped because its agent quit is the setting working; `collab daemon
+  start` brings it back, and `--keep` leaves the next one running. Turning the
+  setting off means no session in any repository ever stops on its own again,
+  which is the thing that was leaking.
 - **Never turn `watch_status_roster` off** to buy the roster a line. It costs
   the roster nothing when there is nothing to say, and turning it off takes
   away the one place the shared batch and the session's message count are

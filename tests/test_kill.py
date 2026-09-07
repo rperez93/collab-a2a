@@ -50,6 +50,20 @@ def test_purging_removes_it():
     assert hosted_sessions() == []
 
 
+def _only_signals(monkeypatch) -> list[int]:
+    """Record the pids actually signalled, and none of the pids merely asked about.
+
+    `stop_session` now puts every recorded pid to `Stamp.alive` before reaching
+    for it — a number from a previous boot names nobody and must not be
+    signalled — and asking is `os.kill(pid, 0)`. A recorder that counted those
+    would report the question as the act.
+    """
+    sent: list[int] = []
+    monkeypatch.setattr(os, "kill",
+                        lambda pid, sig: sent.append(pid) if sig else None)
+    return sent
+
+
 def test_it_signals_the_recorded_pids(monkeypatch):
     """By pid, never by command-line pattern."""
     cfg = create_session("alice", 9000)
@@ -57,8 +71,7 @@ def test_it_signals_the_recorded_pids(monkeypatch):
     cfg.save()
     (cfg.dir / "daemon.pid").write_text("4243")
 
-    signalled: list[int] = []
-    monkeypatch.setattr(os, "kill", lambda pid, sig: signalled.append(pid))
+    signalled = _only_signals(monkeypatch)
 
     result = stop_session(cfg)
     assert signalled == [4242, 4243]
@@ -73,6 +86,9 @@ def test_a_process_that_is_already_gone_is_not_an_error(monkeypatch):
     def gone(pid, sig):
         raise ProcessLookupError
 
+    # Raised for the liveness question as well as for the signal, which is what
+    # a process that is genuinely gone does: `process_alive` reads ESRCH there
+    # and answers no, so `stop_session` never reaches for it at all.
     monkeypatch.setattr(os, "kill", gone)
     result = stop_session(cfg)
     assert result["hub_stopped"] is False
@@ -98,8 +114,7 @@ def test_stopping_takes_the_tunnel_with_it(monkeypatch):
     cfg.save()
     (cfg.dir / "daemon.pid").write_text("4243")
 
-    signalled: list[int] = []
-    monkeypatch.setattr(os, "kill", lambda pid, sig: signalled.append(pid))
+    signalled = _only_signals(monkeypatch)
 
     result = stop_session(cfg)
     assert signalled == [4242, 4243, 4244]
@@ -113,8 +128,7 @@ def test_a_tunnel_we_did_not_start_is_left_alone(monkeypatch):
     cfg.tunnel_pid = 0          # we reused one rather than launching it
     cfg.save()
 
-    signalled: list[int] = []
-    monkeypatch.setattr(os, "kill", lambda pid, sig: signalled.append(pid))
+    signalled = _only_signals(monkeypatch)
 
     result = stop_session(cfg)
     assert signalled == [4242]

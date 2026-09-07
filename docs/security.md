@@ -195,8 +195,10 @@ time per session, and one proposal per participant per five minutes.
 
 ### The diagnostic log
 
-`collab config diagnostics` is off by default, and what it writes when it is on
-is written to be pasted into a public issue.
+`collab config diagnostics` is on by default, and what it writes is written to
+be pasted into a public issue.
+That is the order those two facts belong in: it ships on *because* there is
+nothing in it to be careful with, not in spite of it.
 It records events and never content: no line of any message, no participant
 name, no invite or token, no URL with an address in it, and no path under your
 home directory — those are rewritten as `~/…`.

@@ -1576,6 +1576,45 @@ reconnect on their own — it is the *invite* that is retired, not everyone's
 access. For a genuinely clean guest list, start `--fresh`, or `collab kick`
 anyone you would rather not have back.
 
+### When your agent quits
+
+The daemon and the hub are detached on purpose: an agent's turn kills whatever
+the turn started, so a listener that has to survive between turns cannot be one
+of those things. Nothing ever asked what became of the agent, though, so they
+also survived the agent *leaving* — a listener reconnecting for ever to a
+session nobody was in, and a hub still tunnelling and advertising a room whose
+host had gone home.
+
+So they follow it. Both processes are told which agent started them, both watch
+whether it is still running, and both stop two minutes after it is not:
+
+```bash
+collab status                 # says which agent it follows, and if it is gone
+collab host --keep            # leave this hub running when the agent quits
+collab join --keep            # the same for a listener
+collab daemon start --keep
+collab config follow_agent off      # never follow, for any session
+```
+
+Two minutes rather than at once, because quitting an agent and starting it again
+is common and should cost nothing: the first collab command the new one runs
+re-claims the session, and the daemon picks that up on its next beat.
+
+**It follows an agent, never a shell.** The agent is found by name — `claude`,
+`codex`, `gemini` and the rest — in the chain of processes that started collab.
+When no such process is there, which is what happens if you start a listener by
+hand or run an agent collab has not heard of, nothing is followed and nothing
+stops. That is the intended answer rather than a gap: a listener that shut
+itself down because it could not read something would be a worse failure than
+the one this fixes.
+
+**Restarting the machine is not a mystery any more.** Every pid collab writes
+down now carries the boot it was written on, so a `wsl --shutdown` no longer
+leaves files claiming this repo has a hub on a number the kernel has since given
+to something else. `collab host`, `join`, `status` and `check` clear what the
+previous boot left and say what they cleared. Nothing is ever signalled on the
+strength of a pid from a boot that has ended.
+
 ## Two agents in one checkout
 
 State lives in `<repo>/.collab/` — right for one agent per checkout, wrong the
@@ -2151,12 +2190,19 @@ report is made of — what was happening an hour ago — had no answer, and the
 report that arrived was "it stopped working".
 
 ```bash
-collab config diagnostics on     # off by default
-# reproduce the problem, then:
+# it is already on; reproduce the problem, then:
 collab issue draft
+collab config diagnostics off    # if you would rather it were not kept
 ```
 
-With it on, the daemon and the hub append to `diagnostics/YYYY-MM-DD.jsonl`
+It was off until 1.40.0 and is now on, because being off cost it the only thing
+it is for: a fault is reported after it happens, and a record you have to switch
+on first never covers the occurrence that made anybody look. What made that safe
+to change is that the record is bounded — seven day-files, swept automatically —
+and that it holds events rather than content, so there is nothing in it to be
+careful with. The paragraph below is the whole of what it can contain.
+
+The daemon and the hub append to `diagnostics/YYYY-MM-DD.jsonl`
 under the session directory: one JSON object per line, carrying the time, which
 process wrote it, the event, and a few small classified fields. The events are
 starts, stops, crashes with a traceback, feed drops and reconnects, wake
@@ -2181,6 +2227,11 @@ then prints the `gh issue create` command that would post it. **It never posts
 anything.** Read the file before you do: it is assembled from your own machine's
 records, and no amount of scrubbing entitles anybody to publish it unseen. With
 diagnostics off it still writes the header and tells you how to capture a log.
+
+Beside it, `daemon.log` and `hub.log` are the two processes' own output at more
+length. Those have always been kept and are not a record of anything in
+particular; a process rolls one aside when it opens it and finds it past two
+megabytes, keeping one previous generation.
 
 ## Settings
 
@@ -2226,7 +2277,8 @@ collab config --json              # the same table, for an agent to read
 | `new_when` | `idle` starts that fresh session only while this agent is not working, `task` when it is about to start one, `always` whatever it is doing | — | `idle` |
 | `new_consensus` | how many must agree to a swarm-wide fresh session: `all` of the other participants that were connected, or `majority` | — | `all` |
 | `new_consensus_minutes` | how long such a proposal stands before it expires | — | `10` |
-| `diagnostics` | keep a local record of what your daemon and hub did — events only | — | `off` |
+| `follow_agent` | stop the listener and the hub once the agent that started them has gone | — | `on` |
+| `diagnostics` | keep a local record of what your daemon and hub did — events only | — | `on` |
 | `learnings_dir` | where this agent keeps what it has learnt, outside any repository; empty turns it off | — | `~/.config/collab/learnings` |
 | `watch_status` | show the viewer's bottom status row | — | `on` |
 | `watch_status_segments` | what that row carries, in order | — | `notice,stats,command,keys` |
@@ -2445,7 +2497,7 @@ Created on first `host` or `join`, and self-gitignoring because it holds tokens:
     snapshot.json         the last roster, so the viewer works offline
     status.json           what the status line reads
     agent_stats.json      usage your agent reported, waiting to be shared
-    daemon.pid daemon.log the listener
+    daemon.pid daemon.log the listener; the pid file carries the boot it was written on
     hub.json              host only: port, invite and host token (0600)
     hub.db                host only: the session's event log
     hub.log ngrok.log     host only
@@ -2501,6 +2553,8 @@ Then hand out `<that-url>#<invite>` — `collab url` reprints the invite, and
 | ngrok not detected | it must be on `PATH`; a free ngrok account also needs `ngrok config add-authtoken` |
 | `A2A version '0.3' is not supported` | send `A2A-Version: 1.0` (collab's own client does) |
 | an agent was woken for a session you thought was closed | the wake outlived the stop. `collab check` flags it, `collab wake off` removes it, and `collab kill --disarm` would have taken it with the stop |
+| the listener stopped on its own | it follows the agent that started it, and that agent quit. `collab status` says so before it happens and `collab check` warns; start it again with `collab daemon start`, or `collab daemon start --keep` to leave it running next time |
+| `collab kill` says it stopped nothing after a reboot | it did, and correctly: the pids in that session's files belong to a machine that is no longer running, so nothing was signalled. The files are cleared on the next `host`, `join`, `status` or `check` |
 | a terminal is still printing messages from an ended session | a `collab listen --follow` you armed. It is your process, not collab's — stop it where you started it |
 
 ## Contributing

@@ -26,6 +26,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .client.exclusive import Stamp, boot_id, decode, from_another_boot
+
 LOCK_NAME = "agent.lock"
 
 
@@ -140,6 +142,29 @@ class Lock:
     #: the same agent shares one of these; a command from the other agent in
     #: the repo shares none of them, or only something far above both.
     owner_pids: list[int] = field(default_factory=list)
+    #: The same two processes and the same chain, STAMPED — each pid with the
+    #: start time and the boot that say whether it is still the process the
+    #: number was written about. `hub_pid` and `listener_pid` are kept beside
+    #: them and still carry the numbers, because a collab older than this one
+    #: reads those and a lock it cannot read is a repository it thinks is free.
+    #:
+    #: The plain numbers were the whole of it, and `held` is `any(alive)` over
+    #: exactly them: a killed daemon whose number had since been handed to
+    #: something else made a free repository read as occupied by a live agent,
+    #: and the next agent here was turned away by a process that had nothing to
+    #: do with collab.
+    hub: str = ""
+    listener: str = ""
+    #: The agent this claim belongs to — see `collab.owner`. What makes the
+    #: daemon able to notice that the agent which started it has gone.
+    owner: str = ""
+    #: Which boot the claim was made on. A lock is a statement about running
+    #: processes, and after a restart every number in it names something else:
+    #: the pid counter starts again, `started_at` counts from the new boot, and
+    #: under WSL both come back around to the same low values they had. Without
+    #: this the ancestry match in `owned_by` could put a command inside a claim
+    #: made by an agent that stopped existing when the machine went down.
+    boot: str = field(default_factory=boot_id)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -148,13 +173,44 @@ class Lock:
         return [p for p in (self.hub_pid, self.listener_pid) if p]
 
     @property
+    def from_a_previous_boot(self) -> bool:
+        """Was this written before the machine last restarted?
+
+        False when either side of the comparison is unknown, which is the same
+        rule `same_process` applies to a start time: an unanswerable question
+        must not be answered destructively.
+        """
+        return from_another_boot(self.boot)
+
+    def stamps(self) -> list[Stamp]:
+        """The processes behind this claim, each as much identified as it can be.
+
+        A stamped field is used as written; a bare number becomes a Stamp with
+        nothing but the pid, which `alive` still improves on `os.kill(pid, 0)`
+        by refusing a zombie. Mixed shapes are ordinary here — the hub records
+        itself at start-up and the listener rewrites its own field on every
+        heartbeat, so one may be a version ahead of the other.
+        """
+        out = []
+        for text, pid in ((self.hub, self.hub_pid),
+                          (self.listener, self.listener_pid)):
+            got = decode(text)
+            if got:
+                out.append(got)
+            elif pid > 0:
+                out.append(Stamp(pid=pid))
+        return out
+
+    @property
     def held(self) -> bool:
         """A claim is only as real as the processes behind it.
 
         Either pid is enough: a host whose listener has stopped still has a hub
         serving the session, and a guest has no hub at all.
         """
-        return any(_alive(pid) for pid in self.pids)
+        if self.from_a_previous_boot:
+            return False
+        return any(stamp.alive() for stamp in self.stamps())
 
     @property
     def stale(self) -> bool:
@@ -170,6 +226,8 @@ class Lock:
         matters when two agents were started from one terminal: both chains
         then meet at that shell, but each meets its *own* agent first.
         """
+        if self.from_a_previous_boot:
+            return None         # every number in it names something else now
         for distance, pid in enumerate(chain):
             if pid in self.owner_pids:
                 return distance
@@ -197,6 +255,8 @@ class Lock:
         Nothing recorded, nothing living: not ours. A claim that cannot be
         matched is not a claim to walk into.
         """
+        if self.from_a_previous_boot:
+            return False
         for pid in self.owner_pids:
             if not process_alive(pid):
                 continue
@@ -244,6 +304,11 @@ def acquire(lock: Lock, home: Path | str | None = None) -> Path:
     path = lock_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
     lock.updated_at = time.time()
+    # STAMPED AT EVERY WRITE, not only at the first. A claim is a statement
+    # about processes running now, and the process writing it is running now
+    # by definition; a refresh that kept a boot from before the machine
+    # restarted would be a live agent filing a claim already ruled stale.
+    lock.boot = boot_id()
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(asdict(lock), indent=2))
     tmp.replace(path)

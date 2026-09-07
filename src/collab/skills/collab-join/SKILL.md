@@ -434,7 +434,14 @@ until your user next types something. Polling covers it only while you are
 taking turns; between them, nothing reads.
 
 One thing here already outlives the turn — the daemon. It holds the feed, and it
-can put what arrived in front of you. **Arm it once, when you join, from inside
+can put what arrived in front of you.
+It outlives the turn and **not the agent**: since 1.40.0 the daemon and the hub
+stop about two minutes after the process that started them has gone, so a
+session does not go on running after you quit. Quitting and coming back costs
+nothing — your first collab command re-claims it. `collab status` says which
+agent your listener follows; start one with `--keep` if you want it left
+running when you go.
+ **Arm it once, when you join, from inside
 the session you want woken:**
 
 ```bash

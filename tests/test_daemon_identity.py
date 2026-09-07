@@ -229,8 +229,15 @@ def _repo_lock(profile, listener_pid):
 
 def test_a_dying_daemon_leaves_another_listeners_repo_lock_alone(profile, monkeypatch):
     """`lockfile.release` deletes the file whoever asks; the lock records the
-    listener pid behind it and nothing here read it."""
-    _repo_lock(profile, 4242)
+    listener pid behind it and nothing here read it.
+
+    A LIVE pid, and it has to be. The daemon now takes over a claim whose
+    listener has died — which is right, and is what «another listener's lock»
+    stops meaning the moment that listener is gone. Written with a dead number
+    this asserted the teardown guard against a state the heartbeat would have
+    cleared a beat earlier, and passed for the wrong reason.
+    """
+    _repo_lock(profile, os.getppid())
 
     _serve_and_stop(profile, monkeypatch)
 

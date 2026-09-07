@@ -3,18 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import sys
 
 from .config import SessionProfile
 from .client.daemon import run_daemon
+from .client.daemon_files import setup_logging
 
 
 def main() -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
+    setup_logging()
     if len(sys.argv) < 2:
         print("usage: python -m collab.daemon_main <session_id>", file=sys.stderr)
         return 2
