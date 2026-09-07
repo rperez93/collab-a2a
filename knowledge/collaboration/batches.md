@@ -186,6 +186,36 @@ twelve. The characters are kept because the TUI's frame strokes are Ambiguous
 too, so this is the assumption the whole project already runs on rather than a
 new one.[^batch-src]
 
+# A batch counts across projects — later than the pin
+
+A **project** arrived after the revision this bundle is pinned to: a bundle of
+tasks that belongs to one participant. Nothing here about it carries a
+`verified` stamp.
+
+It does not touch the figure, and the two are beside each other rather than
+nested. A batch is a DENOMINATOR — the set of work whose completion everybody
+watches — and it counts **every task proposed while it was open**: in a project,
+in a different project, or in none at all. A project answers a different
+question, which is whose the work is.
+
+So the acts that look as though they should move the bar do not, and it is
+worth being explicit about which:
+
+* filing a task under a project, or taking it out of one, changes no count.
+  That is `task move`, which exists precisely because `task update` — the
+  obvious verb — moves a task to WORKING and would have recorded bookkeeping as
+  progress;
+* deleting a project releases its tasks rather than removing them, so the
+  denominator is unchanged. The tasks go back to belonging to no project and
+  stay in whatever batch they were proposed into;
+* a task in no project counts exactly like a task in one. Most tasks are in
+  none.
+
+The reasoning is the same one that fixes batch membership at propose time: a
+task that could change what it is counted in would move a shared figure for a
+reason no reader performed. Project membership is reassignable BECAUSE it is
+counted by nothing.
+
 # Related
 
 - [The task board](/collaboration/task-board.md) — what is being counted.
