@@ -40,6 +40,7 @@ from .config import (
     COLLAB_DIRNAME,
     SessionProfile,
     agent_home,
+    collab_executable,
     base_home,
     claimed_home,
     collab_home,
@@ -2400,6 +2401,83 @@ def cmd_stats(args: argparse.Namespace) -> int:
         ok("reported: " + ", ".join(f"{k}={v}" for k, v in figures.items()))
         return 0
 
+    if getattr(args, "probe", None):
+        # PRINTS AND NOTHING ELSE. This is what `--agent` arms as the usage
+        # command, so its whole contract is «one JSON object on stdout, or
+        # nothing and a non-zero exit» — the daemon leaves the stored figures
+        # alone when a source produces nothing, which is what a transient
+        # failure should cost. Clearing is a separate decision with its own
+        # command; see `collab.quotas`.
+        from . import quotas as quotamod
+
+        report, why = quotamod.probe(args.probe)
+        if why:
+            print(why, file=sys.stderr)
+            return 1
+        print(json.dumps(report))
+        return 0
+
+    if getattr(args, "agent", None):
+        from . import quotas as quotamod
+
+        # BOTH IS A CONTRADICTION, not a preference. `--agent` sets the usage
+        # command to one collab ships and `--source` sets it to yours; taking
+        # either silently would write a command the person did not ask for and
+        # leave them reading the other one in `collab config`.
+        if args.source is not None:
+            fail("--agent and --source both set the usage command")
+            print(dim("  --agent arms the one collab ships; --source arms yours"))
+            return 1
+        if args.agent not in quotamod.PROBES:
+            fail(f"collab cannot ask {args.agent} for a quota")
+            print(dim("  it knows: " + ", ".join(sorted(quotamod.PROBES))))
+            print(dim("  anything else reports with `collab stats --source"
+                      " '<your command>'`"))
+            return 1
+        # THE ABSOLUTE PATH, QUOTED. This command is STORED and run later by
+        # the daemon through a shell that may not have collab on its PATH — the
+        # same reason both installers write the full path — and a collab
+        # invoked as `python -m collab.cli` would otherwise arm `cli.py stats
+        # --probe codex`, which resolves to nothing. The quoting is the other
+        # half: an install under a path with a space in it armed a command the
+        # shell split in two, and the only symptom was `rc 127` two minutes
+        # later, in a log nobody was reading.
+        import shlex
+
+        command, interval = set_stats_source(
+            command=f"{shlex.quote(collab_executable())} stats --probe {args.agent}",
+            interval=args.interval)
+        ok(f"usage command set for {args.agent}, re-run every {interval}s")
+        print(f"       {dim(command)}")
+        # RUN THE STRING THAT WAS STORED, through a shell, exactly as the daemon
+        # will. Asking the probe in-process would answer a different question —
+        # «can this collab reach codex» rather than «does the command I just
+        # wrote down work» — and it was answering it: an unrunnable command was
+        # reported as `[ok] it currently reports …`.
+        from . import stats as statmod
+        import subprocess as sp
+
+        try:
+            # THE DAEMON'S OWN BUDGET, not a more generous one. Checking with
+            # longer would bless a command that only just fits here and fails
+            # there, two minutes later, in a log nobody is reading.
+            done = sp.run(command, shell=True, capture_output=True,
+                          text=True, timeout=20)
+        except (OSError, sp.SubprocessError) as exc:
+            warn(f"the command was saved, but running it failed ({type(exc).__name__})")
+            return 0
+        figures = statmod.normalise(done.stdout) if done.returncode == 0 else {}
+        windows = figures.get("quotas") or {}
+        if windows:
+            ok("it currently reports: "
+               + ", ".join(f"{k} {v.get('used_pct')}%" for k, v in windows.items()))
+        else:
+            reason = (done.stderr or done.stdout).strip()[:200]
+            warn("the command was saved, but it reports nothing yet"
+                 + (f": {reason}" if reason else ""))
+            print(dim(f"       see for yourself: {command}"))
+        return 0
+
     if args.source is not None or args.interval:
         command, interval = set_stats_source(
             command=args.source, interval=args.interval)
@@ -3142,8 +3220,13 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
     #     the difference between «my listener vanished» and «my listener told
     #     me it was going, and why». Nothing is said when the daemon follows
     #     nobody, which is the ordinary answer for one started by hand.
+    #     ASKED OF `following` FIRST, and that is not belt and braces. The
+    #     field grew a shape for «this daemon follows nobody», and a check
+    #     written against `present` alone reads that shape as an agent that has
+    #     gone — so every listener started by hand would be warned about a
+    #     departure that never happened.
     whose = status.get("owner")
-    if isinstance(whose, dict) and not whose.get("present"):
+    if isinstance(whose, dict) and whose.get("following") and not whose.get("present"):
         left = whose.get("stopping_in")
         add("agent", CHECK_WARN,
             "the agent that started this listener is gone"
@@ -4343,28 +4426,38 @@ def cmd_status(args: argparse.Namespace) -> int:
             payload["learnings"] = figures
     # WHOSE LISTENER THIS IS. A daemon follows the agent that started it and
     # stops once that agent has gone — so «why did my listener stop» has an
-    # answer here, and so does «will it». Absent entirely when this daemon
-    # follows nobody, which is a different thing from its agent being present.
+    # answer here, and so does «will it». A daemon following NOBODY says so
+    # rather than leaving the field out: absent, it could not be told from a
+    # collab too old to have it, and those are opposite answers about whether
+    # the session ends on its own.
     if isinstance(status.get("owner"), dict):
         who = status["owner"]
-        payload["agent_pid"] = who.get("pid") or None
-        payload["agent_present"] = bool(who.get("present"))
-        if not who.get("present"):
-            left = who.get("stopping_in")
-            payload["hint"] = (
-                "the agent that started this listener is gone; it stops in "
-                f"{int(left)}s — run any collab command from the agent you want"
-                " to keep it, or `collab config follow_agent off`"
-                if left is not None else
-                "the agent that started this listener is gone")
+        if not who.get("following"):
+            # SAID OUT LOUD. A listener that follows nobody runs until somebody
+            # stops it, which is the opposite answer from the one above, and
+            # leaving the field out made the two indistinguishable.
+            payload["agent"] = str(who.get("why") or "not following any agent")
+        else:
+            payload["agent_pid"] = who.get("pid") or None
+            payload["agent_present"] = bool(who.get("present"))
+            payload["agent"] = ("present" if who.get("present")
+                                else "gone — this listener is stopping")
+            if not who.get("present"):
+                left = who.get("stopping_in")
+                payload["hint"] = (
+                    "the agent that started this listener is gone; it stops in "
+                    f"{int(left)}s — run any collab command from the agent you want"
+                    " to keep it, or `collab config follow_agent off`"
+                    if left is not None else
+                    "the agent that started this listener is gone")
     if args.json:
         print(json.dumps(payload, indent=2))
         return 0
     heading(f"collab session {payload['session_id']}")
     for key in ("name", "host", "url", "state", "recorded_state",
                 "others_connected", "unread",
-                "last_seq", "daemon_pid", "agent_pid", "monitor_command",
-                "monitor_ws"):
+                "last_seq", "daemon_pid", "agent", "agent_pid",
+                "monitor_command", "monitor_ws"):
         if payload.get(key) is None:
             continue
         value = payload[key]
@@ -6590,6 +6683,14 @@ def build_parser() -> argparse.ArgumentParser:
                      help="tell everyone you no longer have quota information "
                           "(posts an empty 'quotas' map) — use it when your tool "
                           "has stopped showing you a quota")
+    stt.add_argument("--agent", metavar="NAME",
+                     help="arm the usage command collab ships for this agent, "
+                          "for tools that will only tell a program rather than "
+                          "a shell (codex)")
+    stt.add_argument("--probe", metavar="NAME",
+                     help="ask that agent for its quota once and print the JSON "
+                          "— what --agent arms, and what to run to see why it "
+                          "is not answering")
     stt.add_argument("--source", metavar="CMD",
                      help="a shell command printing your usage as JSON; collab runs "
                           "it on a timer so the figures stay current by themselves "

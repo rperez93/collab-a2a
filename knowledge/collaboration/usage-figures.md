@@ -92,6 +92,28 @@ Three routes, and the third is the one that needs no diligence:
    pushed figures, and relying on the agent to remember to report is relying on
    diligence; a command on a timer needs none. The default interval is 120 s,
    floored at 15.[^config-src]
+4. `collab stats --agent codex`, later than the pin. Some tools will tell a
+   PROGRAM what they will not tell a shell: Codex has neither a status line nor
+   a usage flag, but its CLI ships an app-server that answers
+   `account/rateLimits/read` with the real windows. So collab ships the command
+   rather than asking each user to write it, and route 3 is what carries it —
+   `--agent` only sets `stats_command` to a probe collab implements.
+
+   Two things about that probe are worth recording because either, guessed
+   wrong, produces a figure nobody would question. Its `resetsAt` is unix
+   seconds rather than an instant, so passed through unconverted every window
+   reads as overdue. And a Codex account has several limit buckets of the same
+   two durations — the account's own plus one per model allowance — so naming
+   them all by duration collapses three windows into one; the account's keep the
+   plain names and the rest are prefixed with the limit id. That prefix is
+   published with the figure, and it is an opaque codename for the allowance
+   rather than a model name — which is the distinction worth keeping, because
+   the bucket's `limitName` IS the model in words and is never reported. A quota
+   bucket says which allowance, not what is answering now.
+
+   A probe that cannot answer prints nothing, and that follows from the rule
+   above rather than from caution: a report omitting `quotas` leaves the stored
+   windows alone, while one carrying an empty map replaces them.
 
 Sharing is **on by default**, because the whole point is that an agent can
 weigh up who has quota left before handing out work. `collab stats --share off`

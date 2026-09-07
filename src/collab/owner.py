@@ -77,26 +77,42 @@ ORPHAN_GRACE = 120.0
 #: the neighbouring agent in a repository where two are at work.
 ENV_OWNER = "COLLAB_OWNER"
 
-#: The command each agent runs as, keyed by `hosttool` name.
+#: The command each agent runs as, keyed by `hosttool` name, with the vendor
+#: page that says so — the same rule `hosttool.MARKERS` follows, and for the
+#: same reason: every row is a claim about somebody else's program, and the
+#: claim and its source belong in one place.
 #:
-#: MEASURED FOR ONE OF THEM. `claude` was read out of `/proc/<pid>/comm` in
-#: this project's own session on 2026-09-07. Every other row is the name the
-#: tool's own documentation tells people to type, which is the same string in
-#: every case collab has been able to check and is a guess in the ones it
-#: has not. That asymmetry is the reason nothing here is destructive when it
-#: finds nothing: a name that is wrong costs a process that follows nobody,
-#: which is what collab did before this existed.
+#: `claude` is the one MEASURED here, read out of `/proc/<pid>/comm` in this
+#: project's own session on 2026-09-07. The other seven were checked against
+#: each vendor's own install page on 2026-09-07; every one matched what was
+#: already written, and none had to be changed. That is a check of the NAME and
+#: not of the process shape — how a particular install presents itself to
+#: `comm` and to argv is a separate question, and the one `_RUNNERS` and
+#: `_SCRIPT_SUFFIXES` exist for.
+#:
+#: Nothing here is destructive when it finds nothing: a name that is wrong costs
+#: a process that follows nobody, which is what collab did before this existed.
 #:
 #: `comm` is what the kernel truncates to fifteen characters, so a longer name
 #: is matched on argv instead — see `_wearing_the_name`.
 AGENTS: dict[str, tuple[str, ...]] = {
+    # https://docs.claude.com/en/docs/claude-code/cli-reference
     "claude-code": ("claude",),
+    # https://github.com/openai/codex — `npm i -g @openai/codex`, run as `codex`
     "codex": ("codex",),
+    # https://github.com/google-gemini/gemini-cli — `@google/gemini-cli`, `gemini`
     "gemini": ("gemini",),
+    # https://opencode.ai/docs/ — package `opencode-ai`, run as `opencode`
     "opencode": ("opencode",),
+    # https://cursor.com/docs/cli/installation — the agent is `cursor-agent`.
+    # `cursor` is the editor rather than the agent, and is kept deliberately: a
+    # terminal opened inside it is still a session that ends when it does.
     "cursor": ("cursor-agent", "cursor"),
+    # https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli
     "copilot": ("copilot",),
+    # https://goose-docs.ai/ — the package is block-goose-cli, the command `goose`
     "goose": ("goose",),
+    # https://ampcode.com/news/npm-package-changes — `@ampcode/cli`, run as `amp`
     "amp": ("amp",),
 }
 
@@ -105,21 +121,47 @@ AGENTS: dict[str, tuple[str, ...]] = {
 #: first argument rather than the zeroth.
 _RUNNERS = ("node", "bun", "deno", "python", "python3", "ruby", "sh")
 
+#: What a script's name may end in and still be the agent.
+#:
+#: JAVASCRIPT ONLY, AND THAT IS THE WHOLE JUSTIFICATION. Four of these eight
+#: agents ship as npm packages, and an npm install runs `node …/gemini.js`
+#: rather than `node …/gemini`, so without this the interpreter route reaches
+#: the right file and fails to recognise it.
+#:
+#: `.py` was here too and was removed: no agent collab knows ships as a Python
+#: script, `python3` IS in `_RUNNERS`, and the pair made `python3 anything/
+#: codex.py` an agent — so a daemon would follow somebody's own helper script
+#: and stop when it exited. A suffix goes in this tuple when an agent that ships
+#: with it does, and not before.
+_SCRIPT_SUFFIXES = (".js", ".mjs", ".cjs")
 
-def known_names(tool: str = "") -> tuple[str, ...]:
-    """The command names to look for: the detected tool's first, then all.
 
-    The detected tool is preferred and is not trusted exclusively. `hosttool`
-    reads a marker the tool sets in the environment of the commands it runs,
-    which says what we are talking to and not that its process is the nearest
-    one in this chain — a wake turn is started BY the daemon, and an agent that
-    shells out through another agent's terminal is not a thing to rule out from
-    here.
+def _bare(word: str) -> str:
+    """A path's last element, without a script suffix."""
+    name = os.path.basename(word)
+    for suffix in _SCRIPT_SUFFIXES:
+        if name.endswith(suffix):
+            return name[:-len(suffix)]
+    return name
+
+
+def known_names() -> tuple[str, ...]:
+    """Every command name collab recognises as an agent.
+
+    ALL OF THEM, IN NO PARTICULAR ORDER, and that is the correction. This used
+    to take the tool `hosttool` had detected and put its names first, described
+    as a preference — and the preference did nothing, because `owner_in` walks
+    the process chain and tests each process against the whole set. What
+    decides is position in the chain, not position in this tuple.
+
+    Which is the right rule, and the marker is the reason to say so rather than
+    quietly keep an ordering that never fires. `hosttool` reads a variable the
+    tool sets in the environment of the commands it runs, and that variable is
+    INHERITED: measured on 2026-09-07, a `codex` process started from inside a
+    Claude Code session was detected as `claude-code`, and the owner found for
+    it was still `codex` — because the chain was asked and the marker was not.
     """
-    first = AGENTS.get(tool, ())
-    rest = tuple(name for names in AGENTS.values() for name in names
-                 if name not in first)
-    return first + rest
+    return tuple(name for names in AGENTS.values() for name in names)
 
 
 def _wearing_the_name(pid: int, names: tuple[str, ...]) -> bool:
@@ -146,7 +188,7 @@ def _wearing_the_name(pid: int, names: tuple[str, ...]) -> bool:
     if head in names:
         return True
     if head in _RUNNERS and len(words) > 1:
-        return os.path.basename(words[1]) in names
+        return _bare(words[1]) in names
     return False
 
 
@@ -206,19 +248,20 @@ def _named_in(words: list[str], names: tuple[str, ...]) -> bool:
     if program in names:
         return True
     return (program in _RUNNERS and len(words) > 2
-            and os.path.basename(words[2]) in names)
+            and _bare(words[2]) in names)
 
 
-def owner_in(chain: list[int], tool: str = "") -> Stamp | None:
+def owner_in(chain: list[int]) -> Stamp | None:
     """The nearest process in this chain that is an agent collab knows.
 
     Nearest, because two agents started from one terminal share every forebear
     above their own process and differ only in which they meet first — the same
-    reasoning `lockfile.claimed_by` uses for its distance.
+    reasoning `lockfile.claimed_by` uses for its distance. Measured with three
+    agents at once on 2026-09-07: each found itself, none found a sibling.
     """
     from .client import exclusive
 
-    names = known_names(tool)
+    names = known_names()
     table = {} if exclusive._HAVE_PROC else _table(chain)
     for pid in chain:
         found = (_named_in(table[pid], names) if pid in table
@@ -230,9 +273,9 @@ def owner_in(chain: list[int], tool: str = "") -> Stamp | None:
 
 def current() -> Stamp | None:
     """The agent running this command, or None if none can be named."""
-    from . import hosttool, lockfile
+    from . import lockfile
 
-    return owner_in(lockfile.ancestry(), hosttool.detect())
+    return owner_in(lockfile.ancestry())
 
 
 def spawn_env(base: dict[str, str] | None = None) -> dict[str, str]:

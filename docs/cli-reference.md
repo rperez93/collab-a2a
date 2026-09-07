@@ -941,7 +941,8 @@ thirty minutes the age reads `— old`, and a row the hub never stamped reads
 as `reported_at`, in epoch seconds.
 
 ```text
-collab stats [--json] [--share {on,off}] [--report JSON] [--source CMD]
+collab stats [--json] [--share {on,off}] [--report JSON] [--clear-quota]
+             [--agent NAME] [--probe NAME] [--source CMD]
              [--interval SECONDS] [--session SESSION]
 ```
 
@@ -950,10 +951,33 @@ collab stats [--json] [--share {on,off}] [--report JSON] [--source CMD]
 | `--share {on,off}` | Share your own usage with the session. Defaults to on. |
 | `--report JSON` | Report your own usage as a JSON object, or `-` for standard input. Figures merge with what you reported before. A report that carries `quotas` replaces your quota with exactly that map — a window it names is the only window you have — and one that does not carry `quotas` leaves your quota as it was. The flat `quota_five_hour` / `quota_seven_day` are windows too: `{"quota_five_hour": 73}` on its own is a map of one window — a statement about that window, and about no others. |
 | `--clear-quota` | Tell everyone you no longer have quota information: posts `{"quotas": {}}` and clears it from every roster. Use it when your tool has stopped showing you a quota, so nobody splits work on your old figure. |
+| `--agent NAME` | Arm the usage command collab ships for that agent, for a tool that will only tell a program rather than a shell. `codex` is the one it has: the CLI's own app-server answers with its real rate-limit windows. Sets `stats_command`, so the daemon keeps it current from then on. |
+| `--probe NAME` | Ask that agent for its quota once and print the JSON. This is what `--agent` arms, and what to run by hand to see why it is not answering: it prints one object on standard output, or nothing and a reason on standard error. |
 | `--source CMD` | A shell command that prints your usage as JSON; collab runs it on a timer. Pass `''` to clear it. |
 | `--interval SECONDS` | How often to run `--source`. Defaults to 120. |
 | `--json` | Emit raw JSON. |
 | `--session SESSION` | Act on this session id instead of the current one. |
+
+These flags do one thing each, and giving several picks the first of
+`--clear-quota`, `--report`, `--probe`, `--agent`, `--source`/`--interval`,
+`--share` — except `--agent` with `--source`, which is refused rather than
+resolved, because both set the usage command and silently taking either would
+write one the person did not ask for.
+
+A probe that cannot answer prints nothing at all, and that is deliberate: a
+report which omits `quotas` leaves your stored windows alone, while one carrying
+an empty map replaces them. So a Codex that is briefly unreachable costs one
+cycle rather than clearing your figure from everybody's roster. Saying you have
+lost sight of your quota is a decision, and `--clear-quota` is how it is said.
+
+The windows it reports are every window Codex has: the account's own under the
+usual `five_hour` and `seven_day` names, so they compare with everybody else's,
+and every other allowance prefixed with the limit id that owns it. That prefix
+is shared with the session, and it is an opaque codename for the allowance —
+`codex_bengalfox`, say — rather than a model name. It is there because two
+allowances of the same length would otherwise report one figure between them.
+The model's own name and the account's plan are not reported at all: a quota
+bucket says which allowance, not which model is answering now.
 
 `--report` writes under your name, so — like every command that acts as you:
 `send`, `working`, `idle`, `task claim|propose|complete`, `batch start|close`,

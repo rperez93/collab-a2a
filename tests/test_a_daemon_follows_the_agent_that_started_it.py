@@ -70,12 +70,29 @@ def test_a_chain_with_no_agent_in_it_has_no_owner(monkeypatch):
     assert owner.owner_in([10, 20, 30]) is None
 
 
-def test_the_detected_tool_is_looked_for_first_and_not_only():
-    """A tool that announces itself is preferred; the rest are still candidates."""
-    names = owner.known_names("codex")
-    assert names[0] == "codex"
-    assert "claude" in names
-    assert set(owner.known_names()) == set(names)
+def test_every_agent_collab_can_detect_can_also_be_named():
+    """The two tables must not drift: a tool `hosttool` recognises but `owner`
+    cannot name is an agent whose sessions silently follow nobody."""
+    from collab import hosttool
+
+    assert set(owner.AGENTS) == {key for _var, _want, key, _docs in hosttool.MARKERS}
+    for names in owner.AGENTS.values():
+        assert names and all(name and name.strip() == name for name in names)
+
+
+def test_the_search_is_by_position_in_the_chain_and_not_by_name_order():
+    """`known_names` used to put the detected tool first and call that a
+    preference. It never was one: `owner_in` walks the chain and tests each
+    process against the whole set, so what decides is which agent is met first.
+
+    The marker is the reason it must not be trusted anyway. It is inherited by
+    whatever the agent starts, so a `codex` process launched from inside a
+    Claude Code session reports `claude-code` — measured 2026-09-07 — while the
+    chain still answers correctly.
+    """
+    names = owner.known_names()
+    assert set(names) == {n for row in owner.AGENTS.values() for n in row}
+    assert len(names) == len(set(names)), "a name listed twice searches twice"
 
 
 def test_an_interpreter_is_read_through_to_the_script(monkeypatch):
@@ -380,3 +397,23 @@ def test_a_clock_that_runs_backwards_never_shortens_the_grace():
 
     follower = owner.Follower(_dead(), grace=60.0, now=Backwards())
     assert {follower.look() for _ in range(20)} == {"waiting"}
+
+
+def test_an_npm_installed_agent_is_recognised_through_its_script():
+    """Four of the eight ship as npm packages, and an npm install runs
+    `node …/gemini.js` rather than `node …/gemini`."""
+    from collab.client import exclusive
+
+    for script in ("/opt/x/dist/gemini.js", "/opt/x/gemini.mjs",
+                   "/opt/x/copilot.cjs"):
+        assert owner._named_in(["node", "/usr/bin/node", script],
+                               owner.known_names()), script
+
+
+def test_stripping_a_suffix_does_not_make_a_file_into_an_agent():
+    """Only ever applied to the argument of a known interpreter, so a file
+    somebody happens to have named after one is not followed."""
+    assert not owner._named_in(["grep", "/usr/bin/grep", "claude.js"],
+                               owner.known_names())
+    assert not owner._named_in(["vim", "/usr/bin/vim", "codex.py"],
+                               owner.known_names())

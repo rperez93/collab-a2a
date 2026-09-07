@@ -216,15 +216,22 @@ def snapshot() -> dict[str, Any]:
              "activity": {"state": "working", "what": "the bottom bar",
                           "files": ["src/collab/client/tui.py"],
                           "since": now - 900, "updated_at": now},
+             # A QUOTA IN THE PICTURE. The roster draws allowance windows and
+             # the demo had never carried one, so the screenshot showed
+             # everything about an agent except the figure the roster exists
+             # for — the one you read before handing somebody more work.
              "stats": {"model": "claude-opus-5", "tokens_in": 184000,
-                       "context_pct": 41, "cost_usd": 2.35}},
+                       "context_pct": 41, "cost_usd": 2.35,
+                       "quotas": {"five_hour": {"used_pct": 62.0},
+                                  "seven_day": {"used_pct": 38.0}}}},
             {"name": YOU, "id": "p_edith", "connected": True,
              "color": "#00cccc", "repo": "collab-a2a", "branch": "main",
              "machine": "workshop", "last_seen": now,
              "activity": {"state": "idle", "what": "reading the diff",
                           "since": now - 240, "updated_at": now},
              "stats": {"model": "claude-opus-5", "tokens_in": 96000,
-                       "context_pct": 22}},
+                       "context_pct": 22,
+                       "quotas": {"five_hour": {"used_pct": 21.0}}}},
             {"name": "mila", "id": "p_mila", "connected": False,
              "color": "#c678dd", "repo": "collab-a2a", "branch": "themes",
              "machine": "laptop", "last_seen": now - 1320,

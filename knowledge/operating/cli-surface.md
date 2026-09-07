@@ -192,7 +192,9 @@ other than the current one, and `--json`.
 - `collab wake set --agent <name>` uses a reviewed recipe; arming a command
   that is not one of them needs `--yes`.
 - `collab stats --report <json>` is a whole integration.
-  `collab stats --source <cmd>` puts it on a timer.
+  `collab stats --source <cmd>` puts it on a timer, and — later than the pin —
+  `collab stats --agent codex` arms a probe collab ships for a tool that will
+  only tell a program what it will not tell a shell.
 
 For the exhaustive flag-by-flag list, read
 [docs/cli-reference.md](../../docs/cli-reference.md), which is generated from

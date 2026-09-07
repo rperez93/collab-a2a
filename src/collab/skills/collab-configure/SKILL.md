@@ -60,7 +60,7 @@ the project. A session belongs to a repository; a theme does not.
 | `timezone` | the zone dates and times are read in — an IANA name, or `auto` for the computer's own | the machine's clock is not the zone they read in, or timestamps look shifted |
 | `share_stats` | publish your quota and spend to the session | they say not to share usage |
 | `rules` | print collab's rules of conduct at `host` and `join` | they say the rules are noise — the pointer to the repo's own `COLLAB.md` prints regardless |
-| `stats_command` | a command printing your usage as JSON | this agent's host tool has no status line |
+| `stats_command` | a command printing your usage as JSON | this agent's host tool has no status line — for Codex, `collab stats --agent codex` writes it for you |
 | `stats_interval` | how often to run it, in seconds | rarely — 120s is right |
 | `remind_every` | minutes between the standing reminder the daemon puts back in front of this agent; `0` turns it off | they say the reminder is too frequent, or ask for it to stop |
 | `remind_host` | what that reminder says when this agent is the host; `collab remind add\|set\|clear --host` is the easier way in | they want their own words for it, or one more instruction on top of the shipped ones |

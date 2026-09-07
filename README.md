@@ -1,7 +1,7 @@
 # collab
 
 <p align="center">
-  <img src="assets/logo.svg" alt="collab logo" width="180">
+  <img src="https://raw.githubusercontent.com/rperez93/collab-a2a/main/assets/logo.svg" alt="collab logo" width="180">
 </p>
 
 <p align="center">
@@ -47,7 +47,7 @@ ten-minute reminder puts the standing instructions back in front of each of them
 It also works for two agents on **one** machine in different repos.
 
 <p align="center">
-  <img src="assets/demo.png" alt="collab demo: a coding agent's terminal on the left, mid-task, with a message from the session arriving, the reply going back out through collab send, and collab's status line at the foot; the collab watch viewer on the right showing the roster, the roster's foot with the batch bar, the message count and the reader's own activity, and the conversation" width="900">
+  <img src="https://raw.githubusercontent.com/rperez93/collab-a2a/main/assets/demo.png" alt="collab demo: a coding agent's terminal on the left, mid-task, with a message from the session arriving, the reply going back out through collab send, and collab's status line at the foot; the collab watch viewer on the right showing the roster, each participant's model, context and allowance windows, the roster's foot with the batch bar, the message count and the reader's own activity, and the conversation" width="900">
   <br>
   <sub>A coding agent mid-task on the left, the <code>collab watch</code> viewer on the right — <code>collab demo</code>, nobody on the other end. The roster's foot carries the shared batch, the message count and your own status; the agent's status line carries the batch too.</sub>
 </p>
@@ -1266,7 +1266,9 @@ viewer shows beside it, and the figures are shared too: the viewer's roster
 foot carries a batch part way through, a count of what has been said and the
 reader's own activity, and the agent's status line carries the same batch, all
 stamped fresh on every frame so nothing in the picture ages into a stale
-marker. The screenshot at the top of this page is `collab demo` in a 168×34
+marker. The roster rows carry allowance windows too — the figure you read
+before handing somebody more work — because a picture of the roster without one
+was showing everything about an agent except the thing it is for. The screenshot at the top of this page is `collab demo` in a 168×34
 terminal with the roster given 42 percent of the window, captured as it
 finished. Inside tmux, `collab demo` opens the viewer in a second pane; outside
 it, one window is split down the middle. `q` quits either. `collab watch
@@ -1878,7 +1880,7 @@ Agents differ, and most expose nothing a shell script can reach:
 |---|---|
 | **Claude Code** | automatic — its status line receives a cost and rate-limit snapshot, and collab reads it from there |
 | **Antigravity** | automatic — same mechanism, its status line payload is understood too |
-| **Codex CLI** | `collab stats --report` — it has no status line hook ([open request](https://github.com/openai/codex/issues/17827)); per-turn token counts live in `~/.codex/sessions/*.jsonl` |
+| **Codex CLI** | automatic — `collab stats --agent codex` arms a probe that asks the CLI's own app-server for its real rate-limit windows. It still has no status line hook ([open request](https://github.com/openai/codex/issues/17827)) |
 | **opencode** | `collab stats --report` from a plugin — a shell status line is still an [open request](https://github.com/anomalyco/opencode/issues/30295) |
 | **Gemini CLI** | `collab stats --report` — statusline is an [open request](https://github.com/google-gemini/gemini-cli/issues/8191); `/stats` shows the numbers |
 | **anything else** | `collab stats --report` |
@@ -1893,11 +1895,35 @@ the daemon runs it on a timer and shares whatever it prints. No agent has to
 remember anything:
 
 ```bash
+collab stats --agent codex               # for a tool collab can ask directly
 collab stats --source 'my-usage-script' --interval 120
 ```
 
 It is run and checked immediately, so a typo tells you at once rather than
 silently reporting nothing forever. `collab stats --source ''` clears it.
+
+**Some agents will only tell a program, not a shell.** Codex has no status line
+and no usage flag, but its CLI ships an app-server that will say what quota is
+left, so collab asks it directly:
+
+```bash
+collab stats --agent codex     # arms the probe and shows what it reports now
+collab stats --probe codex     # run it once and print the JSON, to see why not
+```
+
+Every window it has is reported — the account's own under the usual
+`five_hour` and `seven_day` names, so they compare with everybody else's, and
+each separate allowance under a label of its own. That label is the allowance's
+id, an opaque codename such as `codex_bengalfox`, and it is shared with the
+session: without it, two allowances of the same length would report one figure
+where there are two. The model's actual name is not reported, and neither is
+the plan — a quota bucket says which allowance, not what is answering now.
+
+A probe that cannot answer prints nothing at all, and leaves your last figures
+where they were. That is deliberate: a report carrying an empty quota map would
+replace them, so a Codex that is briefly unreachable would otherwise clear your
+figure from every roster in the session. Losing sight of your quota is a thing
+to say on purpose, with `collab stats --clear-quota`.
 
 **A figure stops moving only with a visible reason.** Whichever route produces
 your figures, the listener carries the file to the hub within one heartbeat
@@ -2263,7 +2289,7 @@ collab config --json              # the same table, for an agent to read
 | `watch_layout` | `split`, `tmux`, `chat` or `roster` | `collab watch --layout <l> --save` | `split` |
 | `watch_roster_size` | how much room the roster gets, in percent | `collab watch --roster-size <n> --save` | `30` |
 | `watch_roster_position` | `top`, `bottom`, `left` or `right` | `collab watch --roster-position <p> --save` | `top` |
-| `stats_command` | a command printing your usage as JSON, re-run on a timer | `collab stats --source <cmd>` | none |
+| `stats_command` | a command printing your usage as JSON, re-run on a timer | `collab stats --source <cmd>`, or `--agent codex` for one collab ships | none |
 | `stats_interval` | how often to run it, in seconds | `collab stats --interval <n>` | `120` |
 | `remind_every` | minutes between the standing reminder your daemon puts back in front of your agent; `0` turns it off | — | `10` |
 | `remind_host` | what that reminder says when you are the host; empty for the shipped one | — | none |

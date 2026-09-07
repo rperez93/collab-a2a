@@ -595,12 +595,24 @@ class Daemon:
             "sharing": share_stats_enabled(),
         }
 
-    def _owner_figures(self) -> dict[str, Any] | None:
-        """What `status.json` says about the agent this daemon belongs to."""
-        if not self._following.following or not follow_agent_enabled():
-            return None
+    def _owner_figures(self) -> dict[str, Any]:
+        """What `status.json` says about the agent this daemon belongs to.
+
+        ALWAYS A SHAPE, never None, and that is the fix for a real gap: a daemon
+        following nobody used to leave the field out altogether, so a reader
+        could not tell «this listener follows no agent and will run until it is
+        stopped» from «this collab is too old to have the field». Those are
+        opposite answers about whether the session ends on its own, and the
+        command that exists to say which was silent about it.
+        """
+        if not follow_agent_enabled():
+            return {"following": False, "why": "following is off (config follow_agent)"}
+        if not self._following.following:
+            return {"following": False,
+                    "why": "no agent could be named, so this runs until stopped"}
         gone = self._following.gone_since is not None
         return {
+            "following": True,
             "pid": self._following.owner.pid if self._following.owner else 0,
             "present": not gone,
             "stopping_in": round(self._following.waiting(), 1) if gone else None,

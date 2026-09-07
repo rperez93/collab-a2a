@@ -139,6 +139,30 @@ formatted message, because a message is content. An exception's own text is
 dropped for the same reason and its traceback kept, which is the part that
 locates the bug.
 
+**Measure the CPU and the memory of anything that reads from something you do
+not control.** Not "does it work" — what does it cost when the other end
+misbehaves? Both failures found in the quota probe were of that shape and
+neither showed up in a passing test. `readline` on a pipe grows its buffer until
+a newline arrives, with no ceiling: a server writing megabyte blobs and no
+newline took the process to **10.5 GB resident in ten seconds**. Fixing that by
+discarding instead then cost **93% of a core** for the whole deadline, on
+something the daemon runs every two minutes.
+
+So a reader of a pipe, a socket or a subprocess needs three limits, and they do
+three different jobs: a cap on one record (memory), a cap on the whole exchange
+(CPU), and a deadline that is enforced even while nothing is arriving — which a
+blocking read cannot do on its own. Write the figures into the test, the way
+`tests/test_a_quota_read_from_the_agent_itself.py` does: it asserts the wall
+clock, the resident growth and the CPU spent, against a fake that floods and a
+fake that goes silent. A limit with no measurement beside it is a guess.
+
+And anything spawned must be bounded by the budget of whoever runs it. The
+daemon gives a usage command twenty seconds and then SIGKILLs the shell — and
+SIGKILL does not unwind, so a probe slower than that leaks the process it
+started, every cycle, for ever. Start such a child in its own process group and
+end the group, not the handle: what holds the pipe open may be something the
+child forked.
+
 **Every state file is read tolerantly, so that upgrades need no migration
 step.** Unknown keys are dropped, missing keys take their default, and an
 absent field means «cannot tell» rather than «false» — `lockfile.read` has

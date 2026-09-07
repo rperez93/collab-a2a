@@ -862,6 +862,7 @@ Better than remembering to repeat that: give collab a command that prints your
 usage, and it will re-run it on a timer by itself.
 
 ```bash
+collab stats --agent codex                     # if you are Codex: collab asks it directly
 collab stats --source 'my-usage-script' --interval 120
 ```
 

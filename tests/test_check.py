@@ -483,3 +483,45 @@ def test_the_figures_reach_the_status_json(session):
     _status(session, learnings={"dropped": 3})
 
     assert json.loads(_status_page(as_json=True))["learnings"] == {"dropped": 3}
+
+
+# --- the agent this listener belongs to ------------------------------------------
+#
+# `status.json` grew a shape for «this daemon follows nobody» as well as one for
+# «its agent has gone». They are opposite answers about whether the session ends
+# on its own, and a check that reads only `present` collapses them.
+
+def _with_owner(session, owner):
+    body = json.loads((session.dir / "status.json").read_text())
+    body["owner"] = owner
+    (session.dir / "status.json").write_text(json.dumps(body))
+    return session
+
+
+def test_a_listener_that_follows_nobody_is_not_reported_as_abandoned(session,
+                                                                     monkeypatch):
+    """Written against `present` alone this warned about every listener started
+    by hand — a departure that never happened, on a command an agent runs in a
+    loop."""
+    monkeypatch.setattr(cli, "is_running", lambda p: 4242)
+    _with_owner(session, {"following": False, "why": "no agent could be named"})
+    results = {r["check"]: r for r in cli._checks(session)}
+    assert "agent" not in results
+
+
+def test_an_agent_that_has_gone_is_reported_with_the_time_it_has_left(session,
+                                                                     monkeypatch):
+    monkeypatch.setattr(cli, "is_running", lambda p: 4242)
+    _with_owner(session, {"following": True, "pid": 991,
+                          "present": False, "stopping_in": 90})
+    results = {r["check"]: r for r in cli._checks(session)}
+    assert results["agent"]["verdict"] == cli.CHECK_WARN
+    assert "gone" in results["agent"]["detail"] and "90s" in results["agent"]["detail"]
+
+
+def test_an_agent_that_is_there_is_said_nothing_about(session, monkeypatch):
+    monkeypatch.setattr(cli, "is_running", lambda p: 4242)
+    _with_owner(session, {"following": True, "pid": 991, "present": True,
+                          "stopping_in": None})
+    results = {r["check"]: r for r in cli._checks(session)}
+    assert "agent" not in results
