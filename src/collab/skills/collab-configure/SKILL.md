@@ -275,6 +275,32 @@ the file before posting it: it is assembled from their own machine's records,
 and nothing collab does entitles anybody to publish it unseen. Offer to turn
 the setting back off afterwards.
 
+**To look rather than to report, use `collab logs`.** `issue draft` assembles a
+file for somebody else to read; `collab logs` is for you, now, about a session
+that is still running — the diagnostic record, `daemon.log`, `hub.log`, any
+status line that hung, and the sequence numbers this agent's log never
+received. `--follow` keeps printing. Everything it opens is opened read-only,
+including the inbox, so it is safe against a session in the middle of its work.
+
+Two of those need no setting turned on at all. A status line that overran its
+limit writes its stack whether or not `diagnostics` is on — a hang is exactly
+the case where nobody turned it on beforehand — and the missing sequence
+numbers are counted from the log itself. So `collab logs` is worth running
+BEFORE asking the user to enable anything.
+
+```bash
+collab logs                 # what this session has recorded
+collab logs --follow        # and keep printing
+collab check                # `messages` warns when the log has holes in it
+```
+
+A hole in the log is the one fault nothing else can see: the listener is live,
+the feed is live, the unread count counts what arrived, and a conversation
+missing one message reads perfectly. If `check` reports it, say so plainly —
+this agent has been answering with part of the conversation missing, and the
+room's own copy is complete, so another participant's `collab watch` shows what
+is absent here.
+
 ## The standing reminder
 
 Every ten minutes the daemon puts the standing instructions back in front of

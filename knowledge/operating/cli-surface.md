@@ -112,6 +112,16 @@ that is not part of any session, and is therefore printed BEFORE a session is
 required — somebody whose status line has wedged may well have none open, that
 being one of the ways it wedges.
 
+One of what `logs` shows is a fact `collab check` reports too, and neither of
+them could see it before: the sequence numbers this agent's log never received.
+The hub numbers every event and the daemon resumes with `Last-Event-ID`, so a
+reconnect should leave no hole — and when one is left, nothing says so. The
+`last_seq` says how far the log reaches, the unread count counts what arrived,
+and a conversation with one message missing reads perfectly. `check` calls it
+`messages` and warns rather than failing, because the session is working and it
+is the record that is wrong; the fix it names is another participant, the
+room's own copy being complete.
+
 There is a second console script as well, `collab-statusline`, which takes the
 same flags as `collab statusline render` and reaches the same code without
 importing the CLI. The installers write it into the hooks they manage where it
