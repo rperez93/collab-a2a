@@ -38,7 +38,15 @@ sources:
 A task id is `T_` plus 12 hex characters, or whatever id the client names.
 `collab task list --json` returns a bare JSON array; each entry carries `id`,
 `title`, `state`, `owner`, `room`, `created_by`, `created_at`, `updated_at`,
-`detail` and `batch`.[^board-run]
+`detail` and `batch`.[^board-run] Later than the pin it carries `project` as
+well — null for a task in none, which is most of them. The snapshot every
+client renders from carries the projects themselves beside the tasks, so the
+title behind that id does not have to be fetched.
+
+The verbs `comment`, `pr`, `pr-remove` and `move` are later than the pin too.
+None of them changes a task's state: `move` files a task under a project and is
+deliberately separate from `update`, which means «I am working on this» and
+would record bookkeeping as progress.
 
 `--detail` adds a longer description, bounded at 4 000 characters. `--files`,
 with `claim`, declares the files about to be touched.

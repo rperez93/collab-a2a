@@ -26,6 +26,7 @@ from ..protocol import (
     KIND_HELLO,
     KIND_PRESENCE,
     KIND_PROJECT,
+    KIND_SYSTEM,
     KIND_TASK,
     project_line,
     task_line,
@@ -51,6 +52,11 @@ KIND_MARK = {
     # rather than a task action is that a reader wants to tell them apart.
     KIND_PROJECT: "▤",
     KIND_FILE: "▣",
+    # THE HUB SPEAKING FOR ITSELF. It fell through to a blank and read as
+    # though a participant had said it, which is the one thing a `system` line
+    # must not do — found by the test that holds these maps to `ALL_KINDS`,
+    # having gone unnoticed since the kind was added.
+    KIND_SYSTEM: "!",
 }
 
 

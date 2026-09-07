@@ -355,6 +355,13 @@ class Hub:
             "rooms": self.store.rooms() or [DEFAULT_ROOM],
             "participants": people,
             "tasks": self.store.tasks(open_only=True),
+            # THE PROJECTS THE TASKS NAME. A task carries a project id, and
+            # without this the title behind that id existed nowhere in the
+            # payload every client renders from — so the level above the board
+            # was invisible to any agent that had not gone and asked for it by
+            # hand. Carried here for the same reason as the batch figure: one
+            # read, so a client's board and the names on it cannot disagree.
+            "projects": self.store.projects(),
             # Counted here rather than fetched separately, so the figure a
             # client's status line draws and the roster it draws it beside came
             # out of one read of the board and cannot disagree.

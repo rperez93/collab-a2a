@@ -144,7 +144,11 @@ CREATE TABLE IF NOT EXISTS projects (
 -- trusted: it arrives from a request.
 CREATE TABLE IF NOT EXISTS comments (
     id         TEXT PRIMARY KEY,
-    subject    TEXT NOT NULL,
+    -- CHECKED, because `delete_project` sweeps `subject='project'` as a bare
+    -- literal: any caller spelling it differently leaves comments behind every
+    -- delete, permanently and invisibly. Also checked in `add_comment`, since
+    -- a constraint added here reaches new databases only.
+    subject    TEXT NOT NULL CHECK (subject IN ('project','task')),
     subject_id TEXT NOT NULL,
     author     TEXT NOT NULL,
     text       TEXT NOT NULL,
@@ -191,6 +195,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_one_open_batch
 # and on a database written before batches existed the column does not exist
 # yet — `CREATE INDEX` on a missing column raises and takes the whole hub down
 # on start-up. It is created in `_migrate`, once the column is certain.
+
+
+#: What a comment can be about. One place, because `delete_project` sweeps by
+#: this literal and a second spelling would strand rows nothing ever collects.
+COMMENT_SUBJECTS = frozenset({"project", "task"})
 
 
 def normalise_pr_url(url: str) -> str:
@@ -351,6 +360,19 @@ class Store:
         made = self._columns("projects")
         if made and "owner_id" not in made:
             self._db.execute("ALTER TABLE projects ADD COLUMN owner_id TEXT")
+            # BACK-FILLED FROM THE LIVE ROSTER ONLY, which is the whole of the
+            # care here. Resolving through `participant_names` — the way
+            # `events.sender_id` above is back-filled — would resolve a name
+            # its original holder has since given up, and hand a project to
+            # whoever took it: the exact transfer this column exists to
+            # prevent. A name still held by somebody who has not been revoked
+            # is the ordinary case and is safe; anything else stays NULL and
+            # falls back to the name, which is what it had before.
+            self._db.execute(
+                "UPDATE projects SET owner_id = ("
+                "  SELECT id FROM participants p"
+                "   WHERE p.name = projects.owner AND p.revoked = 0)"
+                " WHERE owner_id IS NULL AND owner IS NOT NULL")
         if self._columns("tasks"):
             self._db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project)")
@@ -811,7 +833,7 @@ class Store:
     # --- shared task board ----------------------------------------------------
 
     def upsert_task(self, task_id: str, *, title: str, state: str, owner: str | None,
-                    room: str | None, created_by: str, detail: str = "",
+                    room: str | None, created_by: str, detail: str | None = None,
                     join_open_batch: bool = False,
                     project: str | None = None) -> dict[str, Any]:
         """Create or update one task.
@@ -850,7 +872,7 @@ class Store:
                     "created_at,updated_at,detail,batch,project)"
                     " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     (task_id, title, state, owner, room, created_by, now, now,
-                     detail, batch, project),
+                     detail or "", batch, project),
                 )
             else:
                 # `batch` is deliberately absent from this list. Which batch a
@@ -877,7 +899,7 @@ class Store:
                     "UPDATE tasks SET title=?, state=?, owner=?, updated_at=?,"
                     " detail=?, project=? WHERE id=?",
                     (title or existing["title"], state, owner, now,
-                     detail or existing["detail"],
+                     existing["detail"] if detail is None else detail,
                      (None if project == "" else
                       project if project is not None else existing["project"]),
                      task_id),
@@ -908,7 +930,8 @@ class Store:
     # everybody watches as one figure and which nothing may join after it
     # closes. A task can live without either.
 
-    def upsert_project(self, project_id: str, *, title: str, detail: str = "",
+    def upsert_project(self, project_id: str, *, title: str,
+                       detail: str | None = None,
                        owner: str | None, created_by: str,
                        owner_id: str | None = None) -> dict[str, Any]:
         """Create a project, or change the one that is there.
@@ -935,14 +958,19 @@ class Store:
                     "INSERT INTO projects (id,title,detail,owner,owner_id,"
                     "created_by,created_at,updated_at)"
                     " VALUES (?,?,?,?,?,?,?,?)",
-                    (project_id, title, detail, owner, owner_id, created_by,
-                     now, now),
+                    (project_id, title, detail or "", owner, owner_id,
+                     created_by, now, now),
                 )
             else:
+                # `detail is None` LEAVES IT; `""` CLEARS IT. `detail or
+                # existing` is the same falsy collapse that made «belongs to no
+                # project» unsayable, and it made a description permanent: once
+                # written, there was no value a caller could send to remove it.
                 self._db.execute(
                     "UPDATE projects SET title=?, detail=?, owner=?,"
                     " owner_id=?, updated_at=? WHERE id=?",
-                    (title or existing["title"], detail or existing["detail"],
+                    (title or existing["title"],
+                     existing["detail"] if detail is None else detail,
                      owner, owner_id, now, project_id),
                 )
             self._db.commit()
@@ -959,18 +987,48 @@ class Store:
     def projects(self, *, owner: str | None = None) -> list[dict[str, Any]]:
         """Every project, or the ones belonging to one participant.
 
-        Matched on the name OR the id, so a caller may ask either way and an
-        agent that has since renamed still finds what belongs to it.
+        A NAME IS RESOLVED TO AN ID BEFORE IT IS MATCHED. `owner=? OR
+        owner_id=?` re-opened the hole the id column was added to close: a
+        recycled «alice» listed the previous alice's projects, so the guard was
+        right and the listing was still wrong. The name is looked up in the
+        live roster and the id is what is compared; a project whose owner_id is
+        NULL — written before the column, by somebody no longer here — is
+        matched by name, because for those the name is all there is.
         """
         sql = "SELECT * FROM projects"
         params: tuple[Any, ...] = ()
         if owner is not None:
-            sql += " WHERE owner=? OR owner_id=?"
-            params = (owner, owner)
+            with self._lock:
+                row = self._db.execute(
+                    "SELECT id FROM participants WHERE name=? AND revoked=0",
+                    (owner,)).fetchone()
+            wanted = str(row["id"]) if row else owner
+            sql += " WHERE owner_id=? OR (owner_id IS NULL AND owner=?)"
+            params = (wanted, owner)
         sql += " ORDER BY created_at"
         with self._lock:
             rows = self._db.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
+
+    def project_counts(self, open_excludes: Iterable[str]) -> dict[str, tuple[int, int]]:
+        """How many tasks each project holds, and how many are still open.
+
+        ONE QUERY FOR THE WHOLE BOARD. The listing route asked
+        `project_tasks` once per project, each call taking this lock, none of
+        them off the event loop — so a room with thirty projects was thirty
+        synchronous round trips against a lock every write wants, stalling the
+        feeds and the heartbeats of every agent in the session.
+        """
+        excludes = tuple(open_excludes)
+        marks = ",".join("?" * len(excludes)) or "''"
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT project, COUNT(*) AS total,"
+                f" SUM(CASE WHEN state NOT IN ({marks}) THEN 1 ELSE 0 END) AS open"
+                " FROM tasks WHERE project IS NOT NULL GROUP BY project",
+                excludes).fetchall()
+        return {str(r["project"]): (int(r["total"]), int(r["open"] or 0))
+                for r in rows}
 
     def project_tasks(self, project_id: str) -> list[dict[str, Any]]:
         with self._lock:
@@ -1021,6 +1079,8 @@ class Store:
         project it belongs to has already been deleted, so the row is
         unreachable from every surface and nothing will ever sweep it.
         """
+        if subject not in COMMENT_SUBJECTS:
+            raise ValueError(f"a comment is about a project or a task, not {subject!r}")
         now = time.time()
         with self._lock:
             table = "projects" if subject == "project" else "tasks"
@@ -1047,8 +1107,12 @@ class Store:
     def comments(self, subject: str, subject_id: str) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._db.execute(
+                # `rowid` BREAKS THE TIE, and it is not decoration: two
+                # comments written in the same millisecond ordered arbitrarily,
+                # and this file distrusts wall clocks everywhere else. Insert
+                # order is the one thing that cannot disagree with itself.
                 "SELECT * FROM comments WHERE subject=? AND subject_id=?"
-                " ORDER BY created_at", (subject, subject_id)).fetchall()
+                " ORDER BY created_at, rowid", (subject, subject_id)).fetchall()
         return [dict(r) for r in rows]
 
     def add_task_pr(self, task_id: str, *, url: str, number: int | None,

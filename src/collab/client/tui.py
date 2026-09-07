@@ -41,6 +41,7 @@ from ..protocol import (
     KIND_HELLO,
     KIND_PRESENCE,
     KIND_PROJECT,
+    KIND_SYSTEM,
     KIND_TASK,
     project_line,
     task_line,
@@ -270,6 +271,15 @@ KIND_MARK = {
     KIND_TASK: "◆",
     KIND_PROJECT: "▤",
     KIND_FILE: "▣",
+    # BOTH OF THESE WERE MISSING, and had been since their kinds were added.
+    # `activity` is marked in the watch pane and was not here, so the same
+    # event read differently in the two places that are supposed to agree; and
+    # `system` — the hub speaking for itself — fell through to a blank and read
+    # as though a participant had said it. Neither fails; the line is merely
+    # wrong, on somebody else's screen, which is why a test rather than a
+    # reader had to find them.
+    KIND_ACTIVITY: "◉",
+    KIND_SYSTEM: "!",
 }
 
 

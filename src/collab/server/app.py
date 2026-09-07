@@ -132,6 +132,16 @@ def _known_owner(store, given: Any) -> tuple[str | None, str | None]:
     return name, known[name]
 
 
+def _task_room(store, task_id: str) -> str:
+    """The room a task lives in, for the events that are about it.
+
+    A pull request linked to a task in `backend` announced in `general` reaches
+    the people not working on it and misses the people who are.
+    """
+    found = store.get_task(task_id) or {}
+    return str(found.get("room") or DEFAULT_ROOM)
+
+
 def _may_change(user, project: dict[str, Any]) -> bool:
     """Whose project is it to reassign or remove?
 
@@ -635,20 +645,27 @@ def create_app(
     @app.get(f"{EXT_PREFIX}/projects", tags=["collab"])
     async def list_projects(request: Request, owner: str = "") -> dict[str, Any]:
         _require(request)
-        found = store.projects(owner=owner or None)
         # THE TASK COUNTS COME WITH IT. A list of projects with no sense of
         # how much work each holds is a list of names, and the first thing
         # anybody does with it is ask — which would be one request per project.
+        #
+        # ONE QUERY, OFF THE LOOP. This was a `project_tasks` per project, each
+        # taking the store's lock synchronously on the event loop: thirty
+        # projects was thirty round trips against a lock every write wants,
+        # stalling the feeds of everybody in the session.
+        found, counts = await asyncio.gather(
+            asyncio.to_thread(store.projects, owner=owner or None),
+            asyncio.to_thread(store.project_counts, OPEN_EXCLUDES),
+        )
         for project in found:
-            tasks = store.project_tasks(str(project["id"]))
-            project["task_count"] = len(tasks)
+            total, still_open = counts.get(str(project["id"]), (0, 0))
+            project["task_count"] = total
             # ONE DEFINITION OF OPEN, shared with `store.tasks(open_only=True)`
             # and with the board. `FINISHED_STATES` is the narrower set that
             # governs REOPENING — completed and cancelled — and counting with
             # it reported a failed task as open while `collab task list` showed
             # nothing, which is two answers to one question on one screen.
-            project["open_count"] = sum(
-                1 for t in tasks if t["state"] not in OPEN_EXCLUDES)
+            project["open_count"] = still_open
         return {"projects": found}
 
     @app.get(EXT_PREFIX + "/projects/{project_id}", tags=["collab"])
@@ -776,6 +793,10 @@ def create_app(
         # ever sweep it, which is worse than the task case.
         exists = (store.get_project(subject_id) if subject == "project"
                   else store.get_task(subject_id)) or {}
+        # THE TASK'S OWN ROOM. A comment on a task in `backend` announced in
+        # `general` reaches the people not working on it and misses the people
+        # who are. A project has no room of its own, so it keeps the default.
+        room = str(exists.get("room") or DEFAULT_ROOM)
         try:
             record = await asyncio.to_thread(
                 store.add_comment, new_id("C"), subject=subject,
@@ -786,7 +807,7 @@ def create_app(
                 detail=f"no such {subject} {str(gone)!r}") from gone
         await hub.publish(Envelope(
             kind=KIND_PROJECT if subject == "project" else KIND_TASK,
-            sender=user.name, sender_id=user.id, room=DEFAULT_ROOM, text=text,
+            sender=user.name, sender_id=user.id, room=room, text=text,
             body={"action": "comment", "id": subject_id, "text": text,
                   "title": exists.get("title", "")},
         ))
@@ -822,7 +843,7 @@ def create_app(
                                     detail=f"{task_id} has no pull request {url!r}")
             await hub.publish(Envelope(
                 kind=KIND_TASK, sender=user.name, sender_id=user.id,
-                room=DEFAULT_ROOM, text=url,
+                room=_task_room(store, task_id), text=url,
                 body={"action": "pr-remove", "id": task_id, "url": url},
             ))
             return {"prs": store.task_prs(task_id)}
@@ -847,7 +868,7 @@ def create_app(
                                 detail=f"no such task {str(gone)!r}") from gone
         await hub.publish(Envelope(
             kind=KIND_TASK, sender=user.name, sender_id=user.id,
-            room=DEFAULT_ROOM, text=url,
+            room=_task_room(store, task_id), text=url,
             body={"action": "pr", "id": task_id, "url": url,
                   "number": record["number"]},
         ))
