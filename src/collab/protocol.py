@@ -39,11 +39,18 @@ KIND_SYSTEM = "system"
 #: that should be answered before it is asked.
 KIND_ACTIVITY = "activity"
 
+#: A project created, described, reassigned, commented on or removed. A KIND OF
+#: ITS OWN rather than a `task` with a different action, because a project is
+#: not a task: nothing counts it, no batch holds it, and a reader filtering the
+#: feed for what the board owes them wants one and not the other. The task
+#: kind carries comments and pull requests, which ARE about a task.
+KIND_PROJECT = "project"
+
 #: Every kind on the wire. `activity` was defined above and left out of this
 #: set for a release, so the set that said "all of them" was one short — and
 #: `test_all_kinds_is_every_kind_constant` now holds it to the constants.
 ALL_KINDS = frozenset({KIND_CHAT, KIND_TASK, KIND_HELLO, KIND_PRESENCE,
-                       KIND_FILE, KIND_SYSTEM, KIND_ACTIVITY})
+                       KIND_FILE, KIND_SYSTEM, KIND_ACTIVITY, KIND_PROJECT})
 
 #: The kinds a CLIENT may put on the wire itself. One. Every other kind is
 #: stamped by the hub on the route that performs it — join writes `hello` and
@@ -495,12 +502,34 @@ class Envelope:
             return f"[{self.body.get('state', 'activity')}] {self.sender}: {said}"
         if self.kind == KIND_TASK:
             b = self.body
+            action = b.get("action", "")
+            # A COMMENT AND A PULL REQUEST ARE NOT STATE CHANGES, and rendering
+            # them with a state in brackets said a task had moved when nothing
+            # about it had. What changed is what the line says.
+            if action == "comment":
+                said = str(b.get("text") or self.text or "")
+                return f"[task {b.get('id', '?')}] {self.sender} commented: {said}"
+            if action in ("pr", "pr-remove"):
+                verb = "linked" if action == "pr" else "unlinked"
+                num = f"#{b['number']}" if b.get("number") else str(b.get("url", ""))
+                return f"[task {b.get('id', '?')}] {self.sender} {verb} {num}"
             state = short_state(b.get("state", ""))
             owner = f" ({b['owner']})" if b.get("owner") else ""
+            of = f" in {b['project']}" if b.get("project") else ""
             return (
-                f"[task {b.get('id', '?')}] {self.sender} {b.get('action', '')}: "
-                f"{b.get('title') or self.text} [{state}]{owner}"
+                f"[task {b.get('id', '?')}] {self.sender} {action}: "
+                f"{b.get('title') or self.text} [{state}]{owner}{of}"
             )
+        if self.kind == KIND_PROJECT:
+            b = self.body
+            action = b.get("action", "")
+            who = f" — {b['owner']}" if b.get("owner") else ""
+            if action == "comment":
+                said = str(b.get("text") or self.text or "")
+                return (f"[project {b.get('id', '?')}] {self.sender}"
+                        f" commented: {said}")
+            return (f"[project {b.get('id', '?')}] {self.sender} {action}: "
+                    f"{b.get('title') or self.text}{who}")
         return f"[{self.kind}] {self.text or self.body}"
 
 

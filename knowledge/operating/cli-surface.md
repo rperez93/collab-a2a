@@ -88,6 +88,7 @@ pinned tree when it was not.
 | `remind` | make the standing reminder due now instead of at the end of its interval |
 | `issue` | write a bug report from this machine's own records, and print the command that posts it |
 | `logs` | what this session has recorded, read without stopping it |
+| `project` | a bundle of tasks that belongs to somebody |
 
 `learn` takes sub-verbs of its own — `add`, `list`, `search`, `read`, `used`
 and `sync` — over a store that lives beside the global config rather than in
@@ -111,6 +112,26 @@ other command can: the status line's hang log, which is written by a process
 that is not part of any session, and is therefore printed BEFORE a session is
 required — somebody whose status line has wedged may well have none open, that
 being one of the ways it wedges.
+
+`project` is a level above the board and deliberately beside the batch rather
+than under it. A batch is a denominator — the set of work whose completion
+everybody watches as one figure — and it counts every task proposed while it
+was open, in a project, in another project, or in none. A project says whose
+the work is. A task may have both, either or neither, and moving one between
+projects moves no figure at all.
+
+The owner is checked against the room: a project cannot be filed under a name
+that never joined, because a project owned by nobody that LOOKS owned is
+unfindable by the one reader it was for. Only the owner, whoever proposed it,
+and the host may reassign or delete one; anybody may add work and comment.
+Deleting keeps the tasks and takes the comments, which is the only thing in the
+feature that cannot be reconstructed from somewhere else.
+
+Both a project and a task carry comments, and a task carries the pull requests
+it produced — as many as the work took, keyed by URL, because a number alone is
+ambiguous across repositories. `task move` files a task under a project and
+changes nothing else: `update` means «I am working on this» and would mark
+bookkeeping as progress.
 
 One of what `logs` shows is a fact `collab check` reports too, and neither of
 them could see it before: the sequence numbers this agent's log never received.

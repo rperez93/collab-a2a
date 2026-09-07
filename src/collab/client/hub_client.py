@@ -130,13 +130,88 @@ class HubClient:
         )["tasks"]
 
     def task_action(self, action: str, *, task_id: str | None = None, title: str = "",
-                    detail: str = "", room: str | None = None) -> dict[str, Any]:
+                    detail: str = "", room: str | None = None,
+                    project: str | None = None) -> dict[str, Any]:
+        """One action on one task.
+
+        `project` is three-valued and the middle value is the useful one:
+        `None` leaves the task where it is, a project id moves it into that
+        project, and `""` takes it out of the one it is in. A single falsy
+        check would have run «say nothing about it» and «take it out» together,
+        and there would be no way to express the second.
+        """
         payload: dict[str, Any] = {"action": action, "title": title, "detail": detail}
         if task_id:
             payload["id"] = task_id
         if room:
             payload["room"] = room
+        if project is not None:
+            payload["project"] = project
         return self._request("POST", f"{EXT_PREFIX}/tasks", json=payload)["task"]
+
+    # --- projects --------------------------------------------------------------
+    #
+    # A project is a bundle of tasks that belongs to somebody. It does not
+    # interact with a batch: see `batch` below, which counts every task in its
+    # window whether or not the task is in a project.
+
+    def projects(self, *, owner: str = "") -> list[dict[str, Any]]:
+        return self._request("GET", f"{EXT_PREFIX}/projects",
+                             params={"owner": owner} if owner else None)["projects"]
+
+    def project(self, project_id: str) -> dict[str, Any]:
+        """One project with its tasks and its comments, in a single request."""
+        return self._request("GET", f"{EXT_PREFIX}/projects/{project_id}")
+
+    def project_action(self, action: str, *, project_id: str | None = None,
+                       title: str = "", detail: str = "",
+                       owner: str | None = None) -> dict[str, Any] | None:
+        """propose / update / assign / delete.
+
+        `owner` is sent only when given, and an empty string is a real value
+        meaning «belongs to nobody just now» — which somebody is entitled to
+        say, and which omitting the key could not express.
+        """
+        payload: dict[str, Any] = {"action": action}
+        if project_id:
+            payload["id"] = project_id
+        if title:
+            payload["title"] = title
+        if detail:
+            payload["detail"] = detail
+        if owner is not None:
+            payload["owner"] = owner
+        return self._request("POST", f"{EXT_PREFIX}/projects",
+                             json=payload)["project"]
+
+    # --- comments, and the pull requests a task produced ------------------------
+
+    def comments(self, subject: str, subject_id: str) -> list[dict[str, Any]]:
+        return self._request("GET", f"{EXT_PREFIX}/comments",
+                             params={"subject": subject,
+                                     "id": subject_id})["comments"]
+
+    def add_comment(self, subject: str, subject_id: str, text: str) -> dict[str, Any]:
+        return self._request("POST", f"{EXT_PREFIX}/comments",
+                             json={"subject": subject, "id": subject_id,
+                                   "text": text})["comment"]
+
+    def task_prs(self, task_id: str) -> list[dict[str, Any]]:
+        return self._request("GET", f"{EXT_PREFIX}/task-prs",
+                             params={"id": task_id})["prs"]
+
+    def task_pr_action(self, action: str, *, task_id: str, url: str,
+                       number: int | None = None) -> list[dict[str, Any]]:
+        """add / remove. Returns every pull request the task has afterwards.
+
+        The whole list rather than the one row, because a task has as many as
+        the work took and the caller is about to print all of them.
+        """
+        payload: dict[str, Any] = {"action": action, "id": task_id, "url": url}
+        if number is not None:
+            payload["number"] = number
+        return self._request("POST", f"{EXT_PREFIX}/task-prs",
+                             json=payload)["prs"]
 
     # --- batches ---------------------------------------------------------------
 

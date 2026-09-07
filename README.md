@@ -933,6 +933,71 @@ outruns the heartbeat loses its oldest — which is silent from both ends
 otherwise, because the sender was told the room had its fact. Ask again with
 `collab learn sync` once the flood has passed.
 
+## Projects
+
+A **project** is a bundle of tasks that belongs to somebody. A task can live
+without one; most do. What a project adds is the thing a bare board cannot
+say — whose this work is, and what it is for.
+
+```bash
+collab project propose "Q3 migration" --owner bob --detail "the whole move"
+collab task propose "drop the legacy cookie" --project P_a1b2
+collab project show --id P_a1b2          # its tasks and everything said about it
+collab project list --owner bob          # what bob is answerable for
+```
+
+```
+$ collab project show --id P_a1b2
+
+P_a1b2  Q3 migration
+  owner        bob
+  proposed by  alice
+  last change  8m ago
+
+  the whole move
+
+  T_9a1c  rotate the signing key   [working]    bob
+  T_c05e  drop the legacy cookie   [submitted]  unclaimed
+
+  carol  12m ago
+    blocked on the schema review
+
+  a project is not a denominator — `collab batch status` is the shared figure,
+  and it counts across projects
+```
+
+**A project is not a batch, and neither constrains the other.** A batch is a
+denominator — the set of work whose completion everybody watches as one figure
+— and it counts every task proposed while it was open: in a project, in a
+different project, or in none at all. A project answers whose the work is. A
+task can have both, either or neither, and moving a task between projects
+cannot move anybody's figure.
+
+**It belongs to somebody, and it is not given to whoever proposed it.** The
+proposer is very often not the person it is for. The owner must be somebody who
+has joined the session, so a mistyped name is refused rather than filed under a
+person who does not exist, and `--owner ''` leaves it deliberately unassigned.
+Only the owner, whoever proposed it, and the host may reassign or delete one;
+anybody may add tasks to it and comment on it. Deleting keeps the tasks — they
+go back to belonging to no project — but the comments go with it, and they are
+the only thing here that cannot be reconstructed from anywhere else.
+
+**Both a project and a task carry comments, and a task carries its pull
+requests.** As many as the work took: a fix and its test, or a rework after
+review.
+
+```bash
+collab task comment --id T_9a1c "rebased onto main"
+collab task pr --id T_9a1c --url https://github.com/owner/repo/pull/12
+collab task pr --id T_9a1c --url https://github.com/owner/repo/pull/13
+collab task move --id T_9a1c --project ''    # out of its project
+```
+
+`move` is deliberately not `update`: `update` means «I am working on this», so
+it moves the task to *working*. Filing work under a project is bookkeeping, not
+progress, and doing it with `update` marked submitted work as under way by
+nobody.
+
 ## Batches of work
 
 Two agents splitting a defined job need one answer to *how much is left*, and
@@ -1043,6 +1108,8 @@ collab 1.7.0 — let coding agents talk to each other
 | `collab activity [--json]` | who is working, and on what |
 | `collab rooms [--create X]` | list or create rooms |
 | `collab task propose\|claim\|update\|complete\|list\|show` | the shared task board |
+| `collab task comment\|pr\|move` | say something about a task, link its pull requests, file it under a project |
+| `collab project propose\|assign\|show\|list` | a bundle of tasks that belongs to somebody |
 | `collab batch start\|status\|close` | a batch of work, and the share of it the hub counts as done |
 | `collab file send\|get\|list\|rm` | share artifacts without pasting them |
 | `collab check [--json]` | run on a loop: silent when all is well, says what to fix when it is not |

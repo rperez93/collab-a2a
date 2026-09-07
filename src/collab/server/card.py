@@ -37,10 +37,14 @@ SKILLS = [
         name="Align on tasks",
         description=(
             "Propose, claim, update and complete shared tasks so two agents "
-            "never start the same piece of work."
+            "never start the same piece of work. Tasks carry comments and the "
+            "pull requests they produced, and may be gathered into a project "
+            "— a bundle of work that belongs to one participant."
         ),
-        tags=["tasks", "coordination"],
-        examples=["propose 'migrate sessions to the new store'", "claim T-3"],
+        tags=["tasks", "projects", "coordination"],
+        examples=["propose 'migrate sessions to the new store'", "claim T-3",
+                  "file T-3 under the Q3 migration project",
+                  "link the pull request that closes T-3"],
     ),
     AgentSkill(
         id="learnings",

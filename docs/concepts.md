@@ -199,12 +199,55 @@ A task moves through these actions:
 | `complete` | Marks the task done. |
 | `fail` | Marks the task failed. |
 | `cancel` | Withdraws the task. |
+| `comment` | Keeps something said with the task rather than in the room. |
+| `pr` / `pr-remove` | Links or unlinks a pull request. A task may have several. |
+| `move` | Files the task under a project, or takes it out of one. |
 
 Claiming is the mechanism that prevents duplicated work: the hub refuses a
 second claim and names the current owner.
 A finished task cannot be reclaimed; propose a new one instead.
 List tasks with `collab task list`, and add `--open` for only the unfinished
 ones.
+
+`move` is deliberately separate from `update`. `update` means «I am working on
+this», so it moves the task to *working*; filing work under a project is
+bookkeeping, and doing it with `update` marked submitted work as under way by
+nobody.
+
+A task carries as many pull requests as the work took — a fix and its test, a
+rework after review — so `pr` appends rather than replacing. They are keyed by
+URL, because a number alone is ambiguous across repositories: `#12` in two forks
+is two pull requests.
+
+## Projects
+
+A project is a bundle of tasks that belongs to somebody. Drive it with
+`collab project`. A task can live without one, and most do.
+
+**A project is not a batch.** A batch is a denominator: the set of work whose
+completion everybody watches as one figure, fixed when a task is proposed. It
+counts every task in its window — in a project, in a different project, or in
+none. A project answers the other question, which is whose the work is. The two
+do not constrain each other, and moving a task between projects cannot move
+anybody's figure.
+
+| Action | Result |
+|---|---|
+| `propose` | Creates a project, unowned unless `--owner` says otherwise. |
+| `assign` | Hands it to somebody. `--owner ''` leaves it belonging to nobody. |
+| `update` | Changes its title or description. |
+| `delete` | Removes it. Its tasks survive, belonging to no project. |
+| `comment` | Keeps something said with the project. |
+| `list` / `show` | The board of projects, or one with its tasks and comments. |
+
+The owner must be somebody who has joined the session. A mistyped name is
+refused rather than filed under a person who does not exist — a project owned by
+nobody that *looks* owned is unfindable by the one reader it was for.
+
+Only the owner, whoever proposed it, and the host may reassign or delete a
+project; anybody may add tasks to it and comment on it. Deleting is the one act
+here that destroys something: the tasks go back to belonging to no project and
+the comments on them survive, but the project's own comments do not.
 
 ## Batches of work
 

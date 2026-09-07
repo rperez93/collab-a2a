@@ -1803,10 +1803,59 @@ def cmd_task(args: argparse.Namespace) -> int:
                 if not found:
                     fail(f"no such task {args.id!r}")
                     return 1
-                return _describe_task(found[0], as_json=args.json)
+                # FETCHED HERE AND NOT INSIDE THE RENDERER, so that the one
+                # caller which already holds them does not ask twice.
+                return _describe_task(found[0], as_json=args.json,
+                                      comments=client.comments("task", args.id),
+                                      prs=client.task_prs(args.id))
+
+            if args.action == "comment":
+                if not args.id or not args.title:
+                    fail("`collab task comment --id T_xxx \"what you want to"
+                         " say\"`")
+                    return 1
+                client.add_comment("task", args.id, args.title)
+                ok(f"commented on {said(args.id)}")
+                return 0
+
+            if args.action in ("pr", "pr-remove"):
+                url = getattr(args, "url", None)
+                if not args.id or not url:
+                    fail(f"`collab task {args.action} --id T_xxx --url"
+                         " https://github.com/owner/repo/pull/12`")
+                    return 1
+                prs = client.task_pr_action(
+                    "add" if args.action == "pr" else "remove",
+                    task_id=args.id, url=url,
+                    number=getattr(args, "number", None))
+                ok(f"{args.action}: {said(args.id)}")
+                # ALL OF THEM, EVERY TIME. A task has as many pull requests as
+                # the work took, and printing only the one just added is how
+                # somebody comes to believe it replaced the others.
+                for one in prs:
+                    num = f"#{one['number']}" if one.get("number") else ""
+                    print(f"  {said(num)} {dim(said(one.get('url')))}")
+                if not prs:
+                    print(dim("  no pull requests on it now"))
+                return 0
+
+            # `getattr`, AND ONLY SENT WHEN THERE IS SOMETHING TO SAY. Every
+            # caller that builds its own namespace — the tests do, and so does
+            # anything driving this in-process — passes the attributes it knows
+            # about, so a new flag read as `args.project` turns a feature
+            # nobody used into an AttributeError in ten unrelated commands.
+            #
+            # And `project=None` already MEANS «leave it where it is», so
+            # passing it changes nothing while requiring every client and every
+            # test double to have grown the parameter. Omitting it says the
+            # same thing and keeps working against anything older.
+            extra: dict[str, Any] = {}
+            project = getattr(args, "project", None)
+            if project is not None:
+                extra["project"] = project
             task = client.task_action(
                 args.action, task_id=args.id, title=args.title or "",
-                detail=args.detail or "", room=args.room,
+                detail=args.detail or "", room=args.room, **extra,
             )
     except HubError as exc:
         fail(str(exc))
@@ -1849,19 +1898,31 @@ def cmd_task(args: argparse.Namespace) -> int:
     return 0
 
 
-def _describe_task(task: dict[str, Any], *, as_json: bool = False) -> int:
+def _describe_task(task: dict[str, Any], *, as_json: bool = False,
+                   comments: list[dict[str, Any]] | None = None,
+                   prs: list[dict[str, Any]] | None = None) -> int:
     """The whole of one task — which is what «validate it first» needs.
 
     `task list` is a board: one line each, and the detail that says what the
     work actually is does not fit on it. An agent claiming from the list alone
     is claiming a title.
+
+    The comments and the pull requests are handed in rather than fetched, so
+    that a caller which already has them — `project show` holds a whole
+    project's worth — does not go back to the hub once per task.
     """
     if as_json:
-        print(json.dumps(task, indent=2))
+        whole = dict(task)
+        if comments is not None:
+            whole["comments"] = comments
+        if prs is not None:
+            whole["prs"] = prs
+        print(json.dumps(whole, indent=2))
         return 0
     heading(f"{said(task['id'])}  {said(task['title'])}")
     print(f"  {'state':<12} {short_state(task['state'])}")
     print(f"  {'owner':<12} {said(task.get('owner')) or dim('unclaimed')}")
+    print(f"  {'project':<12} {said(task.get('project')) or dim('none')}")
     print(f"  {'proposed by':<12} {said(task.get('created_by')) or '?'}")
     if task.get("room"):
         print(f"  {'room':<12} {said(task['room'])}")
@@ -1871,12 +1932,158 @@ def _describe_task(task: dict[str, Any], *, as_json: bool = False) -> int:
         print(f"  {'last change':<12} {seen}")
     if task.get("detail"):
         print(f"\n  {said(task['detail'])}")
+    # THE PULL REQUESTS, PLURAL. A task carries as many as the work took — a
+    # fix and its test, a rework after review — and showing only the newest
+    # would hide the half of the work somebody is looking for.
+    for pr in prs or []:
+        num = f"#{pr['number']}" if pr.get("number") else ""
+        print(f"  {'pr':<12} {said(num)} {dim(said(pr.get('url')))}")
+    for note in comments or []:
+        when = activity.elapsed({"since": note.get("created_at")}) or ""
+        print(f"\n  {said(note.get('author'))} {dim(when)}")
+        print(f"    {said(note.get('text'))}")
     if task.get("owner"):
         print(dim(f"\n  {said(task['owner'])} has it — say so before taking it over"))
     elif short_state(task["state"]) in ("completed", "canceled"):
         print(dim("\n  finished work: propose a new task rather than reopening it"))
     else:
         print(dim(f"\n  yours to take: collab task claim --id {said(task['id'])}"))
+    return 0
+
+
+def cmd_project(args: argparse.Namespace) -> int:
+    """The level above the task board: a bundle of work that belongs to somebody.
+
+    A PROJECT IS NOT A BATCH, and the two do not constrain each other. A batch
+    is a denominator — the set of work whose completion everybody watches as
+    one figure — and it counts every task proposed while it was open, whether
+    that task is in a project, in a different project, or in none. A project
+    answers the other question: whose is this, and what is it for. A task can
+    have both, either or neither.
+    """
+    profile = (_require_profile(args) if args.action in ("list", "show")
+               else _require_own_profile(args))
+    try:
+        with _client(profile) as client:
+            if args.action == "list":
+                found = client.projects(owner=args.owner or "")
+                if args.json:
+                    print(json.dumps(found, indent=2))
+                    return 0
+                if not found:
+                    print(dim("  no projects yet — `collab project propose"
+                              " \"...\" --owner NAME`"))
+                    return 0
+                for one in found:
+                    owner = said(one.get("owner")) or dim("unassigned")
+                    counts = dim(f"{one.get('open_count', 0)} open"
+                                 f" of {one.get('task_count', 0)}")
+                    print(f"  {said(one['id'])}  {said(one['title'])}"
+                          f"  {owner}  {counts}")
+                return 0
+
+            if args.action == "show":
+                if not args.id:
+                    fail("say which project: `collab project show --id P_xxx`")
+                    return 1
+                whole = client.project(args.id)
+                if args.json:
+                    print(json.dumps(whole, indent=2))
+                    return 0
+                return _describe_project(whole)
+
+            if args.action == "comment":
+                if not args.id or not args.title:
+                    fail("`collab project comment --id P_xxx \"what you want"
+                         " to say\"`")
+                    return 1
+                client.add_comment("project", args.id, args.title)
+                ok(f"commented on {said(args.id)}")
+                return 0
+
+            if args.action == "delete":
+                if not args.id:
+                    fail("say which project: `collab project delete --id P_xxx`")
+                    return 1
+                client.project_action("delete", project_id=args.id)
+                # SAID BACK, because «deleted» about a thing that holds work
+                # reads as though the work went with it. It did not.
+                ok(f"removed {said(args.id)}")
+                print(dim("  its tasks are still on the board, belonging to no"
+                          " project"))
+                return 0
+
+            if args.action == "assign":
+                if not args.id:
+                    fail("say which project: `collab project assign --id P_xxx"
+                         " --owner NAME`")
+                    return 1
+                # `--owner ""` IS A REAL REQUEST: it means the project belongs
+                # to nobody just now, which somebody is entitled to say.
+                record = client.project_action(
+                    "assign", project_id=args.id, owner=args.owner or "")
+            elif args.action == "update":
+                if not args.id:
+                    fail("say which project: `collab project update --id P_xxx`")
+                    return 1
+                record = client.project_action(
+                    "update", project_id=args.id, title=args.title or "",
+                    detail=args.detail or "",
+                    owner=args.owner if args.owner is not None else None)
+            else:                                   # propose
+                if not args.title:
+                    fail("a project needs a title: `collab project propose"
+                         " \"...\" --owner NAME`")
+                    return 1
+                record = client.project_action(
+                    "propose", title=args.title, detail=args.detail or "",
+                    owner=args.owner if args.owner is not None else None)
+    except HubError as exc:
+        fail(str(exc))
+        return 1
+
+    owner = said(record.get("owner")) or dim("unassigned")
+    ok(f"{args.action}: {said(record['id'])}  {said(record['title'])}  {owner}")
+    if args.action == "propose" and not record.get("owner"):
+        # A PROJECT WITHOUT AN OWNER IS A FOLDER. The whole difference between
+        # this and a label on a task is that somebody is answerable for it, so
+        # the one moment it is easy to fix is said out loud.
+        print(dim(f"  nobody owns it yet: collab project assign --id"
+                  f" {said(record['id'])} --owner NAME"))
+    return 0
+
+
+def _describe_project(whole: dict[str, Any]) -> int:
+    """A project, its work and what has been said about it, on one screen."""
+    project = whole.get("project") or {}
+    tasks = whole.get("tasks") or []
+    notes = whole.get("comments") or []
+    heading(f"{said(project.get('id'))}  {said(project.get('title'))}")
+    print(f"  {'owner':<12} {said(project.get('owner')) or dim('unassigned')}")
+    print(f"  {'proposed by':<12} {said(project.get('created_by')) or '?'}")
+    if seen := activity.elapsed({"since": project.get("updated_at")}):
+        print(f"  {'last change':<12} {seen}")
+    if project.get("detail"):
+        print(f"\n  {said(project['detail'])}")
+
+    if not tasks:
+        print(dim("\n  no tasks in it yet — `collab task propose \"...\""
+                  f" --project {said(project.get('id'))}`"))
+    else:
+        print()
+        for task in tasks:
+            owner = said(task.get("owner")) or dim("unclaimed")
+            print(f"  {said(task['id'])}  {said(task['title'])}"
+                  f"  [{short_state(task['state'])}]  {owner}")
+    for note in notes:
+        when = activity.elapsed({"since": note.get("created_at")}) or ""
+        print(f"\n  {said(note.get('author'))} {dim(when)}")
+        print(f"    {said(note.get('text'))}")
+    # WHAT A BATCH WOULD SAY ABOUT THIS, and why it is not said here: a project
+    # is not counted. The figure everybody watches is the batch's, and it spans
+    # projects and unprojected work alike.
+    print(dim("\n  a project is not a denominator — `collab batch status` is"
+              " the shared figure, and it counts across projects"))
     return 0
 
 
@@ -5788,6 +5995,8 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ]),
     ("Align on work", [
         ("task propose|claim|complete", "the shared task board"),
+        ("task comment|pr", "say something about a task, or link its pull requests"),
+        ("project propose|assign|show", "a bundle of tasks that belongs to somebody"),
         ("who", "who is here, their focus, repo and machine"),
         ("stats", "each agent's quota and spend, for splitting work"),
         ("file send|get", "hand over artifacts instead of pasting them"),
@@ -6000,10 +6209,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     t = sub.add_parser("task", help="the shared task board")
     t.add_argument("action", choices=["propose", "claim", "update", "complete",
-                                      "fail", "cancel", "list", "show"])
-    t.add_argument("title", nargs="?", help="title when proposing")
+                                      "fail", "cancel", "list", "show",
+                                      "comment", "pr", "pr-remove", "move"])
+    t.add_argument("title", nargs="?",
+                   help="title when proposing, or the text when commenting")
     t.add_argument("--id", help="task id for show/claim/update/complete")
     t.add_argument("--detail", help="longer description")
+    t.add_argument("--project", metavar="ID",
+                   help="with propose, the project to file it under; with"
+                        " move, where to file it — `--project ''` takes it out"
+                        " of the one it is in. `move` changes nothing else:"
+                        " not the state, not the owner, not the batch")
+    t.add_argument("--url", help="with pr/pr-remove: the pull request's url")
+    t.add_argument("--number", type=int,
+                   help="with pr: its number, if the url does not end in one")
     t.add_argument("--files", nargs="*", metavar="PATH",
                    help="with claim: the files you are about to touch")
     t.add_argument("--room")
@@ -6011,6 +6230,20 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--json", action="store_true")
     add_session_flag(t)
     t.set_defaults(func=cmd_task)
+
+    pj = sub.add_parser("project",
+                        help="a bundle of tasks that belongs to somebody")
+    pj.add_argument("action", choices=["propose", "list", "show", "assign",
+                                       "update", "delete", "comment"])
+    pj.add_argument("title", nargs="?",
+                    help="title when proposing, or the text when commenting")
+    pj.add_argument("--id", help="project id for show/assign/update/delete")
+    pj.add_argument("--owner", metavar="NAME",
+                    help="who it belongs to; --owner '' leaves it unassigned")
+    pj.add_argument("--detail", help="longer description")
+    pj.add_argument("--json", action="store_true")
+    add_session_flag(pj)
+    pj.set_defaults(func=cmd_project)
 
     b = sub.add_parser("batch",
                        help="a batch of work, and how much of it is done")

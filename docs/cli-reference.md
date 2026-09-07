@@ -25,6 +25,7 @@ These are noted per command below.
 | [`who`](#who) | Show who is in the session and what they are doing. |
 | [`rooms`](#rooms) | List or create rooms. |
 | [`task`](#task) | Drive the shared task board. |
+| [`project`](#project) | A bundle of tasks that belongs to somebody. |
 | [`batch`](#batch) | Open a batch of work and show how much of it is done. |
 | [`wake`](#wake) | Let the daemon start a turn for an agent that cannot watch the feed. |
 | [`context`](#context) | Compact or clear this agent's own context window. |
@@ -312,22 +313,92 @@ collab rooms [--create CREATE] [--session SESSION]
 Drive the shared task board.
 
 ```text
-collab task [--id ID] [--detail DETAIL] [--files [PATH ...]] [--room ROOM]
+collab task [--id ID] [--detail DETAIL] [--project ID] [--url URL]
+            [--number N] [--files [PATH ...]] [--room ROOM]
             [--open] [--json] [--session SESSION]
-            {propose,claim,update,complete,fail,cancel,list,show} [title]
+            {propose,claim,update,complete,fail,cancel,list,show,comment,pr,pr-remove,move} [title]
 ```
 
 | Argument or flag | Meaning |
 |---|---|
-| `{propose,claim,update,complete,fail,cancel,list,show}` | The action. |
-| `title` | Title when proposing. |
+| `{propose,claim,update,complete,fail,cancel,list,show,comment,pr,pr-remove,move}` | The action. |
+| `title` | Title when proposing, or the text when commenting. |
 | `--id ID` | Task id for `show`, `claim`, `update`, or `complete`. |
 | `--detail DETAIL` | A longer description. |
+| `--project ID` | With `propose`, the project to file it under. With `move`, where to file it — `--project ''` takes it out of the one it is in. |
+| `--url URL` | With `pr` or `pr-remove`, the pull request's URL. |
+| `--number N` | With `pr`, its number, when the URL does not end in one. |
 | `--files [PATH ...]` | With `claim`, the files you are about to touch. |
 | `--room ROOM` | The room the task belongs to. |
 | `--open` | List only open tasks. |
 | `--json` | Emit raw JSON. |
 | `--session SESSION` | Act on this session id instead of the current one. |
+
+**`move` is not `update`.** `update` means «I am working on this, and here is
+more detail», so it moves the task to *working*. Filing a task under somebody's
+project is bookkeeping and not progress, and doing it with `update` marked
+submitted work as under way by nobody — moving the shared figure for an act
+nobody performed. `move` changes where the task belongs and nothing else: not
+the state, not the owner, not the batch.
+
+**A task carries as many pull requests as the work took.** A fix and its test,
+or a rework after review, are two or three; `pr` appends rather than replacing,
+and adding the same URL twice is the same true thing said twice. The number is
+read off the end of the URL when you do not give one, because everybody pastes
+the URL and nobody types the number.
+
+```bash
+collab task propose "the schema" --project P_a1b2
+collab task pr --id T_9f3a --url https://github.com/owner/repo/pull/12
+collab task comment --id T_9f3a "rebased onto main"
+collab task move --id T_9f3a --project ''      # out of its project
+```
+
+## project
+
+A bundle of tasks that belongs to somebody.
+
+```text
+collab project [--id ID] [--owner NAME] [--detail DETAIL] [--json]
+               [--session SESSION]
+               {propose,list,show,assign,update,delete,comment} [title]
+```
+
+| Argument or flag | Meaning |
+|---|---|
+| `{propose,list,show,assign,update,delete,comment}` | The action. |
+| `title` | Title when proposing, or the text when commenting. |
+| `--id ID` | Project id for `show`, `assign`, `update`, `delete`, `comment`. |
+| `--owner NAME` | Who it belongs to. `--owner ''` leaves it unassigned. |
+| `--detail DETAIL` | A longer description. |
+| `--json` | Emit raw JSON. |
+| `--session SESSION` | Act on this session id instead of the current one. |
+
+**A project is not a batch, and the two do not constrain each other.** A batch
+is a denominator: the set of work whose completion everybody watches as one
+figure. It counts every task proposed while it was open — in a project, in a
+different project, or in none at all. A project answers the other question,
+which is whose the work is. A task can have both, either, or neither.
+
+**It belongs to somebody, and that is the whole point.** Without an owner it is
+a folder; with one it is an assignment. A project is not given to whoever
+proposed it, because the proposer is very often not the person it is for, and
+the owner must be somebody who has joined the session — `--owner alise` is
+refused by name rather than filed under a person who does not exist.
+
+**Only the owner, whoever proposed it, and the host may reassign or delete
+one.** Anyone may add tasks to it and comment on it. Deleting is the sharp end:
+the tasks survive and go back to belonging to no project, but the comments do
+not, and they are the only thing here that cannot be reconstructed from
+somewhere else.
+
+```bash
+collab project propose "Q3 migration" --owner bob --detail "the whole move"
+collab project assign --id P_a1b2 --owner carol
+collab project comment --id P_a1b2 "blocked on the schema review"
+collab project show --id P_a1b2      # its tasks and its comments
+collab project list --owner bob
+```
 
 ## batch
 

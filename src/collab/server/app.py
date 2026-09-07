@@ -38,6 +38,7 @@ from ..protocol import (
     KIND_FILE,
     KIND_HELLO,
     KIND_PRESENCE,
+    KIND_PROJECT,
     KIND_SYSTEM,
     KIND_TASK,
     MAX_DETAIL,
@@ -58,7 +59,7 @@ from .card import build_agent_card
 from .events import event_stream
 from .executor import CollabAgentExecutor
 from .hub import Hub
-from .store import Store
+from .store import Store, UnknownProject
 
 #: How often to confirm the tunnel is still forwarding.
 TUNNEL_CHECK_SECONDS = 15.0
@@ -70,6 +71,13 @@ TASK_STATES = {
     "complete": "TASK_STATE_COMPLETED",
     "fail": "TASK_STATE_FAILED",
     "cancel": "TASK_STATE_CANCELED",
+    # MOVING A TASK BETWEEN PROJECTS IS NOT PROGRESS ON IT. `update` means «I
+    # am working on this and here is more detail» and therefore moves the state
+    # to WORKING, which is right for what it is for and quite wrong for
+    # reassignment: filing a submitted task under somebody's project marked it
+    # as being worked on by nobody, and the shared figure moved for an act that
+    # was pure bookkeeping. `move` says only where the task belongs.
+    "move": "",
 }
 
 #: Work that is over. Nothing reopens one of these — a new task is proposed
@@ -85,6 +93,54 @@ def _on_auth_error(conn, exc: Exception) -> JSONResponse:
         status_code=401,
         headers={"WWW-Authenticate": 'Bearer realm="collab"'},
     )
+
+
+def _known_owner(store, given: Any) -> tuple[str | None, str | None]:
+    """The participant a project is to belong to, or nothing at all.
+
+    NAMES ARE CHECKED, because an unchecked one is a project nobody owns that
+    LOOKS owned: `--owner alise` is accepted, and `collab project list --owner
+    alice` will never return it. A typo that silently files work under a person
+    who does not exist is the kind of failure nobody goes looking for.
+
+    An empty string is a real answer meaning «nobody just now», so it is not
+    the same as a name that is wrong.
+    """
+    if given is None:
+        return None, None
+    name = clip(str(given), MAX_NAME)
+    if not name:
+        return None, None
+    known = {p.name: p.id for p in store.participants()}
+    if name not in known:
+        raise HTTPException(
+            status_code=404,
+            detail=(f"no participant named {name!r} in this session"
+                    f" — `collab who` lists them"),
+        )
+    # THE NAME AND THE ID. A name is what is shown and an id is who it is; a
+    # name freed by a rename or a kick can be claimed by somebody else, and a
+    # project that kept only the name would change hands without anybody
+    # performing the change.
+    return name, known[name]
+
+
+def _may_change(user, project: dict[str, Any]) -> bool:
+    """Whose project is it to reassign or remove?
+
+    The owner, whoever proposed it, and the host. NOT everybody, which is where
+    this started: the board beside it refuses to let you claim a task somebody
+    else owns — «ask them before taking it over» — and `kick` is host-only, so
+    deleting another participant's project was strictly more destructive than
+    either and strictly less guarded.
+
+    Deletion is the sharp end. The tasks survive a delete and the project row
+    is only a title, but the COMMENTS do not: they are the one thing in this
+    feature that cannot be reconstructed from anywhere else.
+    """
+    if getattr(user, "is_host", False):
+        return True
+    return user.name in (project.get("owner"), project.get("created_by"))
 
 
 def _require(request: Request):
@@ -507,21 +563,266 @@ def create_app(
                     )
                 owner = user.name
 
-        record = await asyncio.to_thread(
-            store.upsert_task, task_id,
-            title=title, state=TASK_STATES[action], owner=owner,
-            room=body.get("room") or DEFAULT_ROOM, created_by=user.name,
-            detail=clip(str(body.get("detail") or ""), MAX_DETAIL),
-            join_open_batch=joins_a_batch,
-        )
+        # THE PROJECT IS CHECKED BY THE STORE, INSIDE THE WRITE'S LOCK, and
+        # not here. Checking here and then awaiting leaves a window in which a
+        # `delete_project` lands, and the task is filed under a project that no
+        # longer exists — invisible on the board and unfindable by the person
+        # it was for. It is the same window `join_open_batch` was moved into
+        # the lock to close; see `store.UnknownProject`.
+        #
+        # NOT `project or None`. The empty string is the request to take a
+        # task OUT of its project, and folding it into None would make that
+        # unsayable — the store reads `""` as «clear it» and `None` as «say
+        # nothing», which is the distinction this route is holding on to.
+        project = body.get("project")
+        if project is not None:
+            project = clip(str(project), MAX_NAME)
+
+        # AN EMPTY MAPPING MEANS «LEAVE THE STATE ALONE», which only `move`
+        # uses. `propose` cannot reach this: it has no existing row to keep a
+        # state from, and its own branch above sets one.
+        state = TASK_STATES[action] or str(existing["state"])
+        try:
+            record = await asyncio.to_thread(
+                store.upsert_task, task_id,
+                title=title, state=state, owner=owner,
+                room=body.get("room") or DEFAULT_ROOM, created_by=user.name,
+                detail=clip(str(body.get("detail") or ""), MAX_DETAIL),
+                join_open_batch=joins_a_batch,
+                project=(project or None) if action == "propose" else project,
+            )
+        except UnknownProject as gone:
+            raise HTTPException(
+                status_code=404,
+                detail=f"no such project {str(gone)!r} — `collab project list`"
+                       " shows them, or propose one first") from gone
         await hub.publish(Envelope(
             kind=KIND_TASK, sender=user.name, sender_id=user.id,
             room=body.get("room") or DEFAULT_ROOM,
             text=title,
             body={"action": action, "id": task_id, "title": title,
-                  "state": record["state"], "owner": record["owner"]},
+                  "state": record["state"], "owner": record["owner"],
+                  "project": record["project"]},
         ))
         return {"task": record}
+
+    # --- extension: projects ------------------------------------------------------
+    #
+    # A project is a bundle of tasks that BELONGS to somebody. It is not a
+    # batch and does not interact with one: a batch counts every task proposed
+    # while it was open, whether that task is in a project, in a different
+    # project, or in none at all. The two answer different questions — «how far
+    # through the agreed work are we» and «whose is this» — and a task has both
+    # or neither without one constraining the other.
+
+    @app.get(f"{EXT_PREFIX}/projects", tags=["collab"])
+    async def list_projects(request: Request, owner: str = "") -> dict[str, Any]:
+        _require(request)
+        found = store.projects(owner=owner or None)
+        # THE TASK COUNTS COME WITH IT. A list of projects with no sense of
+        # how much work each holds is a list of names, and the first thing
+        # anybody does with it is ask — which would be one request per project.
+        for project in found:
+            tasks = store.project_tasks(str(project["id"]))
+            project["task_count"] = len(tasks)
+            project["open_count"] = sum(
+                1 for t in tasks if t["state"] not in FINISHED_STATES)
+        return {"projects": found}
+
+    @app.get(EXT_PREFIX + "/projects/{project_id}", tags=["collab"])
+    async def show_project(request: Request, project_id: str) -> dict[str, Any]:
+        """One project, its tasks and its comments, in a single round trip."""
+        _require(request)
+        found = store.get_project(project_id)
+        if found is None:
+            raise HTTPException(status_code=404,
+                                detail=f"no such project {project_id!r}")
+        return {"project": found,
+                "tasks": store.project_tasks(project_id),
+                "comments": store.comments("project", project_id)}
+
+    @app.post(f"{EXT_PREFIX}/projects", tags=["collab"])
+    async def project_action(request: Request) -> dict[str, Any]:
+        """propose / update / assign / delete a project."""
+        user = _require(request)
+        body = await request.json()
+        action = str(body.get("action") or "propose")
+        if action not in ("propose", "update", "assign", "delete"):
+            raise HTTPException(status_code=400,
+                                detail=f"unknown action {action!r}")
+
+        project_id = clip(str(body.get("id") or ""), MAX_NAME)
+        if action == "propose":
+            # PROPOSE CREATES AND NEVER OVERWRITES, for the reason the task
+            # route gives at length: re-proposing an id that exists would
+            # silently rewrite somebody else's title and owner.
+            if project_id and store.get_project(project_id) is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"{project_id} already exists — use update or assign")
+            project_id = project_id or new_id("P")
+            title = clip(str(body.get("title") or ""), MAX_TITLE)
+            if not title:
+                raise HTTPException(status_code=400,
+                                    detail="a project needs a title")
+            # UNOWNED UNLESS SAID. A project belongs to somebody, and the
+            # proposer is very often not that somebody — assigning it to
+            # whoever typed the command would put half the board under the
+            # host's name by accident.
+            owner, owner_id = _known_owner(store, body.get("owner"))
+        else:
+            existing = store.get_project(project_id)
+            if existing is None:
+                raise HTTPException(status_code=404,
+                                    detail=f"no such project {project_id!r}")
+            # BEFORE THE DELETE BRANCH, which returns without reaching the
+            # bottom of this function. A guard placed with the other checks
+            # below it was never consulted for the one act it most needed to
+            # cover, and the test said so.
+            if action in ("assign", "delete") and not _may_change(user, existing):
+                raise HTTPException(
+                    status_code=403,
+                    detail=(f"{project_id} belongs to"
+                            f" {existing['owner'] or existing['created_by']}"
+                            " — ask them, or the host can do it"),
+                )
+            if action == "delete":
+                await asyncio.to_thread(store.delete_project, project_id)
+                await hub.publish(Envelope(
+                    kind=KIND_PROJECT, sender=user.name, sender_id=user.id,
+                    room=DEFAULT_ROOM, text=str(existing["title"]),
+                    body={"action": "delete", "id": project_id,
+                          "title": existing["title"]},
+                ))
+                # ITS TASKS SURVIVE IT, belonging to none. Said back, because
+                # «deleted» about a thing that holds work reads as though the
+                # work went too.
+                return {"project": None, "released": True}
+            title = clip(str(body.get("title") or existing["title"]), MAX_TITLE)
+            owner, owner_id = (_known_owner(store, body["owner"])
+                               if "owner" in body
+                               else (existing["owner"], existing["owner_id"]))
+
+        record = await asyncio.to_thread(
+            store.upsert_project, project_id, title=title,
+            detail=clip(str(body.get("detail") or ""), MAX_DETAIL),
+            owner=owner, owner_id=owner_id, created_by=user.name,
+        )
+        await hub.publish(Envelope(
+            kind=KIND_PROJECT, sender=user.name, sender_id=user.id,
+            room=DEFAULT_ROOM, text=title,
+            body={"action": action, "id": project_id, "title": title,
+                  "owner": record["owner"]},
+        ))
+        return {"project": record}
+
+    # --- extension: comments and the pull requests a task produced -----------------
+
+    @app.get(f"{EXT_PREFIX}/comments", tags=["collab"])
+    async def list_comments(request: Request, subject: str,
+                            id: str) -> dict[str, Any]:
+        _require(request)
+        if subject not in ("project", "task"):
+            raise HTTPException(status_code=400,
+                                detail="subject is 'project' or 'task'")
+        return {"comments": store.comments(subject, id)}
+
+    @app.post(f"{EXT_PREFIX}/comments", tags=["collab"])
+    async def add_comment(request: Request) -> dict[str, Any]:
+        """Say something about a project or a task, kept with it."""
+        user = _require(request)
+        body = await request.json()
+        subject = str(body.get("subject") or "")
+        if subject not in ("project", "task"):
+            raise HTTPException(status_code=400,
+                                detail="subject is 'project' or 'task'")
+        subject_id = clip(str(body.get("id") or ""), MAX_NAME)
+        text = clip(str(body.get("text") or ""), MAX_DETAIL)
+        if not text:
+            raise HTTPException(status_code=400, detail="a comment needs text")
+
+        # READ FOR ITS TITLE ONLY. Whether the subject EXISTS is settled by the
+        # store inside the insert's lock — a comment written into the window
+        # after a delete is unreachable from every surface and nothing will
+        # ever sweep it, which is worse than the task case.
+        exists = (store.get_project(subject_id) if subject == "project"
+                  else store.get_task(subject_id)) or {}
+        try:
+            record = await asyncio.to_thread(
+                store.add_comment, new_id("C"), subject=subject,
+                subject_id=subject_id, author=user.name, text=text)
+        except UnknownProject as gone:
+            raise HTTPException(
+                status_code=404,
+                detail=f"no such {subject} {str(gone)!r}") from gone
+        await hub.publish(Envelope(
+            kind=KIND_PROJECT if subject == "project" else KIND_TASK,
+            sender=user.name, sender_id=user.id, room=DEFAULT_ROOM, text=text,
+            body={"action": "comment", "id": subject_id, "text": text,
+                  "title": exists.get("title", "")},
+        ))
+        return {"comment": record}
+
+    @app.get(f"{EXT_PREFIX}/task-prs", tags=["collab"])
+    async def list_task_prs(request: Request, id: str) -> dict[str, Any]:
+        _require(request)
+        return {"prs": store.task_prs(id)}
+
+    @app.post(f"{EXT_PREFIX}/task-prs", tags=["collab"])
+    async def task_pr_action(request: Request) -> dict[str, Any]:
+        """add / remove a pull request against a task. A task may have many."""
+        user = _require(request)
+        body = await request.json()
+        action = str(body.get("action") or "add")
+        if action not in ("add", "remove"):
+            raise HTTPException(status_code=400,
+                                detail=f"unknown action {action!r}")
+        task_id = clip(str(body.get("id") or ""), MAX_NAME)
+        url = clip(str(body.get("url") or ""), MAX_TITLE)
+        if not url:
+            raise HTTPException(status_code=400,
+                                detail="a pull request needs a url")
+
+        if action == "remove":
+            if store.get_task(task_id) is None:
+                raise HTTPException(status_code=404,
+                                    detail=f"no such task {task_id!r}")
+            gone = await asyncio.to_thread(store.remove_task_pr, task_id, url)
+            if not gone:
+                raise HTTPException(status_code=404,
+                                    detail=f"{task_id} has no pull request {url!r}")
+            await hub.publish(Envelope(
+                kind=KIND_TASK, sender=user.name, sender_id=user.id,
+                room=DEFAULT_ROOM, text=url,
+                body={"action": "pr-remove", "id": task_id, "url": url},
+            ))
+            return {"prs": store.task_prs(task_id)}
+
+        number = body.get("number")
+        # THE NUMBER IS DERIVED WHEN IT IS NOT GIVEN, because everybody pastes
+        # the URL and nobody types the number, and «#12» is what the line says.
+        if number is None:
+            tail = url.rstrip("/").rsplit("/", 1)[-1]
+            number = int(tail) if tail.isdigit() else None
+        try:
+            number = int(number) if number is not None else None
+        except (TypeError, ValueError):
+            number = None
+
+        try:
+            record = await asyncio.to_thread(
+                store.add_task_pr, task_id, url=url, number=number,
+                added_by=user.name)
+        except UnknownProject as gone:
+            raise HTTPException(status_code=404,
+                                detail=f"no such task {str(gone)!r}") from gone
+        await hub.publish(Envelope(
+            kind=KIND_TASK, sender=user.name, sender_id=user.id,
+            room=DEFAULT_ROOM, text=url,
+            body={"action": "pr", "id": task_id, "url": url,
+                  "number": record["number"]},
+        ))
+        return {"pr": record, "prs": store.task_prs(task_id)}
 
     # --- extension: batches of work -----------------------------------------------
     #

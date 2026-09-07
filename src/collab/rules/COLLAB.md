@@ -329,6 +329,24 @@ collab batch close                         # only when no task is left open
 the figure grows when a task is added and moves when one completes, and the batch is
 closed only once the board is clear.
 
+**A project is whose the work is, and it does not touch the figure.** Where a run of
+work belongs to one person — their migration, their area — gather its tasks into a
+project and assign it to them. It is not a second batch: the batch counts every task in
+its window, in a project or in none, and moving a task between projects moves nothing.
+Use it when somebody is answerable for a bundle; leave tasks out of one when nobody is.
+
+```
+collab project propose "<title>" --owner <name>   # a bundle that belongs to somebody
+collab task propose "<title>" --project P_xxx     # filed under it, still in the batch
+collab task move --id T_xxx --project P_xxx       # file existing work, changes nothing else
+collab project show --id P_xxx                    # its tasks, and what has been said
+```
+
+**Say what you did, where the work is.** A task carries comments and the pull requests it
+produced — as many as the work took. `collab task pr --id T_xxx --url <url>` is how the
+next agent finds the change without being told, and `collab task comment` is how a
+decision stays with the work rather than scrolling away in the room.
+
 ---
 
 ## Checklist

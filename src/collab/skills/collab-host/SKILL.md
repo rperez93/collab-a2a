@@ -484,6 +484,10 @@ collab batch start "<name>"              # open a batch: what is being counted
 collab task propose "<title>"            # put work on the board (joins the batch)
 collab task claim --id T_xxx             # take it
 collab task complete --id T_xxx          # finish it — the only thing that counts
+collab project propose "<title>" --owner <name>   # a bundle of work that belongs to somebody
+collab task propose "<title>" --project P_xxx    # filed under it, and still in the batch
+collab task pr --id T_xxx --url <pull request>   # where the change actually is
+collab task comment --id T_xxx "<what you decided>"
 collab batch status                      # the shared bar: % done, and who holds the rest
 collab file send ./build.tar.gz --to bob # artifacts, not pasted text — gone once bob has it
 collab file send ./build.tar.gz          # to the room: kept until everyone has it, or 30 min

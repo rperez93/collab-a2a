@@ -97,11 +97,48 @@ into two different accounts of one piece of work.
 # What a task action publishes
 
 Every action publishes a `task` envelope carrying the action, the id, the
-title, the resulting state and the owner. That kind is in the daemon's
+title, the resulting state, the owner and — later than the pin — the project it
+belongs to. A comment on a task and a pull request linked to one ride the same
+kind with an action of `comment` or `pr`, and carry no state, because neither is
+a state change. A project of its own publishes a `project` envelope: nothing
+counts a project, no batch holds one, and a reader filtering the feed for what
+the board owes it wants one and not the other. That kind is in the daemon's
 `REFRESHES_THE_SNAPSHOT` set, so every client pulls a fresh snapshot at once
 rather than waiting for its timer — see
 [the client daemon](/architecture/client-daemon.md) for what happened when it
 was not.
+
+# A level above the board — later than the pin
+
+A **project** is a bundle of tasks that belongs to one participant. It arrived
+after the revision this bundle is pinned to, so nothing here about it carries a
+`verified` stamp.
+
+It is not a batch, and the two are beside each other rather than nested. A
+batch is a denominator — the set of work whose completion everybody watches as
+one figure, decided when a task is proposed and never moved. It counts every
+task in its window whether that task is in a project, in a different project, or
+in none. A project answers the other question: whose the work is. A task may
+have both, either or neither, and moving a task between projects moves no
+figure.
+
+Three rules that fall out of what a project is FOR:
+
+* the owner is checked against the room. A project filed under a name that never
+  joined is a project owned by nobody that LOOKS owned, and it is unfindable by
+  the one reader it was for;
+* only the owner, whoever proposed it, and the host may reassign or delete one.
+  Anybody may add work to it and comment on it — the guard is on taking a
+  project away, not on contributing to it;
+* deleting keeps the tasks, which go back to belonging to no project, and takes
+  the project's own comments. Those are the only thing in the feature that
+  cannot be reconstructed from somewhere else.
+
+Both projects and tasks carry comments. A task also carries the pull requests it
+produced, as many as the work took, keyed by URL rather than by number — `#12`
+in two forks is two pull requests. Filing a task under a project is `move` and
+not `update`, because `update` means «I am working on this» and would record
+bookkeeping as progress.
 
 # Related
 

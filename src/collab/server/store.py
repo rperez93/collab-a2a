@@ -117,6 +117,61 @@ CREATE TABLE IF NOT EXISTS tasks (
     batch      TEXT
 );
 
+-- A PROJECT IS A BUNDLE OF TASKS THAT BELONGS TO SOMEBODY. A batch is a
+-- denominator — a set of work whose completion everybody watches as one figure
+-- — and a project is the opposite kind of grouping: it names WHOSE the work is
+-- and what it is for, and it outlives the batch a given task happened to be
+-- proposed in. A task may belong to no project at all; most do not.
+--
+-- `owner` is the participant the project belongs to, and it is the whole point
+-- of the table. A project without one is a folder; with one it is an
+-- assignment, which is what the board was missing.
+CREATE TABLE IF NOT EXISTS projects (
+    id         TEXT PRIMARY KEY,
+    title      TEXT NOT NULL,
+    detail     TEXT NOT NULL DEFAULT '',
+    owner      TEXT,
+    owner_id   TEXT,
+    created_by TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+
+-- ONE TABLE FOR BOTH, KEYED BY WHAT IT IS ABOUT. A comment on a project and a
+-- comment on a task are the same act with the same fields, and two tables
+-- would mean two readers, two writers and two chances for them to disagree
+-- about ordering. `subject` says which kind, and is checked rather than
+-- trusted: it arrives from a request.
+CREATE TABLE IF NOT EXISTS comments (
+    id         TEXT PRIMARY KEY,
+    subject    TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    author     TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_comments_subject
+    ON comments(subject, subject_id, created_at);
+
+-- A TASK HAS AS MANY PULL REQUESTS AS THE WORK TOOK. One column was the first
+-- shape considered and it is wrong: a task split across a fix and its test, or
+-- reworked after review, carries two or three, and a single column would have
+-- meant the second silently replacing the first.
+--
+-- Keyed by URL rather than by number, because the number alone is ambiguous
+-- across repositories — #12 in two forks is two pull requests — and the URL is
+-- the thing a reader can actually open. The number is kept beside it for the
+-- rendering, where «#12» is what anybody says out loud.
+CREATE TABLE IF NOT EXISTS task_prs (
+    task_id  TEXT NOT NULL,
+    url      TEXT NOT NULL,
+    number   INTEGER,
+    added_by TEXT NOT NULL,
+    added_at REAL NOT NULL,
+    PRIMARY KEY (task_id, url)
+);
+CREATE INDEX IF NOT EXISTS idx_task_prs_task ON task_prs(task_id, added_at);
+
 CREATE TABLE IF NOT EXISTS batches (
     id        TEXT PRIMARY KEY,
     name      TEXT NOT NULL,
@@ -136,6 +191,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_one_open_batch
 # and on a database written before batches existed the column does not exist
 # yet — `CREATE INDEX` on a missing column raises and takes the whole hub down
 # on start-up. It is created in `_migrate`, once the column is certain.
+
+
+class UnknownProject(LookupError):
+    """A task or a comment named a project that is not there.
+
+    RAISED FROM INSIDE THE LOCK, which is the whole reason it exists. Checking
+    with `get_project` and then writing leaves an `await` between the two, and
+    a `delete_project` landing in that window files work under a project that
+    no longer exists — invisible on the board and unfindable by the person it
+    was for. `join_open_batch` was moved inside the lock for the identical
+    reason; see `upsert_task`.
+    """
 
 
 def token_hash(token: str) -> str:
@@ -256,6 +323,26 @@ class Store:
         if self._columns("tasks"):
             self._db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_tasks_batch ON tasks(batch)")
+
+        # A task may belong to a project, and a session recorded before
+        # projects existed has no such column — the same failure the `batch`
+        # back-fill above exists for, and the same answer: add it, leave it
+        # NULL, invent nothing. A task written before projects belongs to none,
+        # and assigning it to one on the strength of who happened to own it
+        # would be inventing an assignment nobody made.
+        if tasks and "project" not in tasks:
+            self._db.execute("ALTER TABLE tasks ADD COLUMN project TEXT")
+
+        # A project written before the owner's ID was kept beside their name
+        # has the name only. Left NULL rather than resolved: the name it holds
+        # is the name it held THEN, and the participant answering to it now may
+        # be somebody else — which is the whole reason the column exists.
+        made = self._columns("projects")
+        if made and "owner_id" not in made:
+            self._db.execute("ALTER TABLE projects ADD COLUMN owner_id TEXT")
+        if self._columns("tasks"):
+            self._db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project)")
 
         # HOW MANY THINGS HAVE BEEN SAID is one kind out of the fattest table
         # in the schema, and `events` has no index on `kind`. Without one the
@@ -714,7 +801,8 @@ class Store:
 
     def upsert_task(self, task_id: str, *, title: str, state: str, owner: str | None,
                     room: str | None, created_by: str, detail: str = "",
-                    join_open_batch: bool = False) -> dict[str, Any]:
+                    join_open_batch: bool = False,
+                    project: str | None = None) -> dict[str, Any]:
         """Create or update one task.
 
         `join_open_batch` resolves the open batch HERE, inside the same lock as
@@ -727,6 +815,14 @@ class Store:
         """
         now = time.time()
         with self._lock:
+            # INSIDE THE LOCK, with the write. See `UnknownProject`: a check
+            # the caller made before awaiting is a check about a moment that
+            # has passed.
+            if project:
+                known = self._db.execute(
+                    "SELECT 1 FROM projects WHERE id=?", (project,)).fetchone()
+                if known is None:
+                    raise UnknownProject(project)
             existing = self._db.execute(
                 "SELECT * FROM tasks WHERE id=?", (task_id,)
             ).fetchone()
@@ -740,10 +836,10 @@ class Store:
                     batch = str(open_now["id"]) if open_now else None
                 self._db.execute(
                     "INSERT INTO tasks (id,title,state,owner,room,created_by,"
-                    "created_at,updated_at,detail,batch)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    "created_at,updated_at,detail,batch,project)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     (task_id, title, state, owner, room, created_by, now, now,
-                     detail, batch),
+                     detail, batch, project),
                 )
             else:
                 # `batch` is deliberately absent from this list. Which batch a
@@ -751,10 +847,29 @@ class Store:
                 # again: a task that could move between batches would move the
                 # denominator of two of them at once, and the figure everybody
                 # is looking at would change for reasons nobody performed.
+                # `project` IS updatable and `batch` is not, and the
+                # difference is the point of having both. A batch is a
+                # denominator that was agreed on when the task was proposed;
+                # moving a task between batches moves two shared figures for a
+                # reason no reader performed. A project is whose the work is,
+                # and work is reassigned all the time — realising a task
+                # belongs to somebody's project is a discovery, not a
+                # falsification.
+                #
+                # THREE VALUES, AND THE THIRD IS THE ONE THAT IS EASY TO LOSE.
+                # `None` leaves it where it was, an id files it there, and `""`
+                # TAKES IT OUT of the project it is in. Collapsing the empty
+                # string to None — the obvious `project or None` — makes
+                # «belongs to no project» unsayable, and a task filed by
+                # mistake can then never be unfiled.
                 self._db.execute(
-                    "UPDATE tasks SET title=?, state=?, owner=?, updated_at=?, detail=? WHERE id=?",
+                    "UPDATE tasks SET title=?, state=?, owner=?, updated_at=?,"
+                    " detail=?, project=? WHERE id=?",
                     (title or existing["title"], state, owner, now,
-                     detail or existing["detail"], task_id),
+                     detail or existing["detail"],
+                     (None if project == "" else
+                      project if project is not None else existing["project"]),
+                     task_id),
                 )
             self._db.commit()
             row = self._db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
@@ -773,6 +888,180 @@ class Store:
         sql += " ORDER BY created_at"
         with self._lock:
             rows = self._db.execute(sql).fetchall()
+        return [dict(r) for r in rows]
+
+    # --- projects, comments and the pull requests a task produced ----------------
+    #
+    # A project is a bundle of tasks that BELONGS to somebody. That is the
+    # whole difference from a batch, which is a set of work whose completion
+    # everybody watches as one figure and which nothing may join after it
+    # closes. A task can live without either.
+
+    def upsert_project(self, project_id: str, *, title: str, detail: str = "",
+                       owner: str | None, created_by: str,
+                       owner_id: str | None = None) -> dict[str, Any]:
+        """Create a project, or change the one that is there.
+
+        `owner` is not `or existing` on update, unlike `title` and `detail`.
+        Those are text and an empty one means «leave it»; an owner of None is
+        somebody saying the project belongs to nobody just now, which is a
+        thing they are entitled to say and which `or existing` would silently
+        refuse to record.
+
+        BOTH THE NAME AND THE ID, like `events` keeps `sender` beside
+        `sender_id`, and for the same reason turned up here by review: a
+        display name is not a person. A name freed by a rename or a kick is
+        free for somebody else to claim, so a project owned by «alice» would
+        silently become a DIFFERENT agent's project the moment a second alice
+        joined. The name is what is shown; the id is who it is.
+        """
+        now = time.time()
+        with self._lock:
+            existing = self._db.execute(
+                "SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+            if existing is None:
+                self._db.execute(
+                    "INSERT INTO projects (id,title,detail,owner,owner_id,"
+                    "created_by,created_at,updated_at)"
+                    " VALUES (?,?,?,?,?,?,?,?)",
+                    (project_id, title, detail, owner, owner_id, created_by,
+                     now, now),
+                )
+            else:
+                self._db.execute(
+                    "UPDATE projects SET title=?, detail=?, owner=?,"
+                    " owner_id=?, updated_at=? WHERE id=?",
+                    (title or existing["title"], detail or existing["detail"],
+                     owner, owner_id, now, project_id),
+                )
+            self._db.commit()
+            row = self._db.execute(
+                "SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        return dict(row)
+
+    def get_project(self, project_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        return dict(row) if row else None
+
+    def projects(self, *, owner: str | None = None) -> list[dict[str, Any]]:
+        """Every project, or the ones belonging to one participant.
+
+        Matched on the name OR the id, so a caller may ask either way and an
+        agent that has since renamed still finds what belongs to it.
+        """
+        sql = "SELECT * FROM projects"
+        params: tuple[Any, ...] = ()
+        if owner is not None:
+            sql += " WHERE owner=? OR owner_id=?"
+            params = (owner, owner)
+        sql += " ORDER BY created_at"
+        with self._lock:
+            rows = self._db.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+
+    def project_tasks(self, project_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM tasks WHERE project=? ORDER BY created_at",
+                (project_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_project(self, project_id: str) -> bool:
+        """Remove a project. Its tasks survive it, belonging to none.
+
+        NOT A CASCADE, and deliberately. The tasks are the work; the project is
+        a statement about whose it is. Deleting the statement must not delete
+        the work — an agent that removed a project and took four claimed tasks
+        with it would have destroyed a board nobody could reconstruct.
+        """
+        with self._lock:
+            found = self._db.execute(
+                "SELECT id FROM projects WHERE id=?", (project_id,)).fetchone()
+            if found is None:
+                return False
+            self._db.execute("UPDATE tasks SET project=NULL WHERE project=?",
+                             (project_id,))
+            self._db.execute("DELETE FROM projects WHERE id=?", (project_id,))
+            self._db.execute("DELETE FROM comments WHERE subject='project'"
+                             " AND subject_id=?", (project_id,))
+            self._db.commit()
+        return True
+
+    def add_comment(self, comment_id: str, *, subject: str, subject_id: str,
+                    author: str, text: str) -> dict[str, Any]:
+        """Say something about a project or a task, kept with it.
+
+        The subject is checked HERE rather than by the caller, for the reason
+        `UnknownProject` gives. A comment written into the window between a
+        caller's check and its write is worse than a task written into it: the
+        project it belongs to has already been deleted, so the row is
+        unreachable from every surface and nothing will ever sweep it.
+        """
+        now = time.time()
+        with self._lock:
+            table = "projects" if subject == "project" else "tasks"
+            known = self._db.execute(
+                f"SELECT 1 FROM {table} WHERE id=?", (subject_id,)).fetchone()
+            if known is None:
+                raise UnknownProject(subject_id)
+            self._db.execute(
+                "INSERT OR REPLACE INTO comments (id,subject,subject_id,author,"
+                "text,created_at) VALUES (?,?,?,?,?,?)",
+                (comment_id, subject, subject_id, author, text, now),
+            )
+            self._db.commit()
+            row = self._db.execute(
+                "SELECT * FROM comments WHERE id=?", (comment_id,)).fetchone()
+        return dict(row)
+
+    def comments(self, subject: str, subject_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM comments WHERE subject=? AND subject_id=?"
+                " ORDER BY created_at", (subject, subject_id)).fetchall()
+        return [dict(r) for r in rows]
+
+    def add_task_pr(self, task_id: str, *, url: str, number: int | None,
+                    added_by: str) -> dict[str, Any]:
+        """Record a pull request against a task. Idempotent on the URL.
+
+        A task has as many pull requests as the work took — a fix and its
+        test, or a rework after review — so this appends rather than replaces.
+        Adding the same URL twice is somebody saying the same true thing twice
+        and updates the row rather than making a second one.
+        """
+        now = time.time()
+        with self._lock:
+            known = self._db.execute(
+                "SELECT 1 FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if known is None:
+                raise UnknownProject(task_id)
+            self._db.execute(
+                "INSERT INTO task_prs (task_id,url,number,added_by,added_at)"
+                " VALUES (?,?,?,?,?)"
+                " ON CONFLICT(task_id,url) DO UPDATE SET number=excluded.number",
+                (task_id, url, number, added_by, now),
+            )
+            self._db.commit()
+            row = self._db.execute(
+                "SELECT * FROM task_prs WHERE task_id=? AND url=?",
+                (task_id, url)).fetchone()
+        return dict(row)
+
+    def remove_task_pr(self, task_id: str, url: str) -> bool:
+        with self._lock:
+            cur = self._db.execute(
+                "DELETE FROM task_prs WHERE task_id=? AND url=?", (task_id, url))
+            self._db.commit()
+        return cur.rowcount > 0
+
+    def task_prs(self, task_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM task_prs WHERE task_id=? ORDER BY added_at",
+                (task_id,)).fetchall()
         return [dict(r) for r in rows]
 
     # --- batches of work --------------------------------------------------------

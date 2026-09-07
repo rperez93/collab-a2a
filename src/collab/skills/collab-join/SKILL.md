@@ -614,6 +614,10 @@ collab who                                 # roster and focus
 collab task list                           # the board
 collab task claim --id T_xxx               # take work
 collab task complete --id T_xxx            # finish it — the only thing that counts
+collab task pr --id T_xxx --url <pull request>   # where the change actually is
+collab task comment --id T_xxx "<what you decided>"
+collab project list --owner <you>          # bundles of work you are answerable for
+collab project show --id P_xxx             # its tasks, and what has been said about it
 collab batch status                        # the shared bar: % done, and who holds the rest
 collab file send ./patch.diff --to alice   # artifacts, not pasted text
 collab file send ./build.tar.gz            # to the room: kept until everyone has it, or 30 min
