@@ -176,7 +176,18 @@ def start_tunnel(port: int, *, log_path: str | None = None,
             return Tunnel(public_url=url, process=proc)
         time.sleep(0.4)
 
+    # TERMINATE, THEN MAKE SURE. One SIGTERM to a process in its own session and
+    # an immediate return leaves a slow ngrok running with nobody holding its
+    # pid: `own_pid()` reports 0, nothing records it, and `collab kill` never
+    # stops it. The same leak class the pid stamps exist for, at the one moment
+    # collab knows for certain which process it is.
     proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        with contextlib.suppress(subprocess.TimeoutExpired, OSError):
+            proc.wait(timeout=5)
     return None
 
 

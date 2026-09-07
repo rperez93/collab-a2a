@@ -45,7 +45,16 @@ status` with «live», which it was.
 Since 1.40.0 it follows one. The spawning command names the agent in the
 environment it hands the daemon, `agent.lock` carries the same name so a
 restarted agent is adopted on the next beat, and the heartbeat stops the daemon
-two minutes after that process is gone. The hub does the same, and has more
+two minutes after that process is gone.
+
+Two exactnesses that cost a release to learn. Only `host` and `join` write that
+name, so «any command re-claims it» was never true, and a dead name on the lock
+must not displace a live one held in the environment — taken unconditionally it
+stopped a daemon whose agent was working. And the stamp that carries all this is
+separated by a character that cannot occur in it: a colon could, on every
+platform without `/proc`, where the start time is `ps -o lstart=` and the boot
+is `kern.boottime`. Splitting on one truncated both and made every stamp read
+dead, which inverted the feature exactly where it could not be measured here. The hub does the same, and has more
 riding on it: a leaked hub keeps an ngrok tunnel open and goes on advertising a
 joinable room.
 

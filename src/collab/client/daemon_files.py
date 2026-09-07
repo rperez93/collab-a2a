@@ -100,13 +100,57 @@ class _Bounded(queue.Queue):
     """
 
     def put_nowait(self, item: Any) -> None:
-        try:
-            super().put_nowait(item)
-        except queue.Full:
-            with contextlib.suppress(queue.Empty):
-                self.get_nowait()
-            with contextlib.suppress(queue.Full):
-                super().put_nowait(item)
+        """Make room and put. Never blocks, and never silently loses this item.
+
+        MAKING ROOM AND INSERTING ARE ONE ACT, under the queue's own lock. Two
+        earlier spellings both lost records to a producer that refilled in
+        between: a single pop-and-retry dropped the NEW item rather than the
+        oldest, and a retry loop dropped up to eight old ones and could still
+        lose the new one at the end. Neither loss was counted.
+
+        It matters beyond a record. `QueueListener.stop()` posts its sentinel
+        through here, and a sentinel that never arrives leaves the listener
+        blocked in `dequeue` while `stop` waits on a join — from `atexit`, so
+        the process never exits at all. (`_Listener` bounds that join as well;
+        this is the half that stops it happening.)
+
+        The internals used here — `mutex`, `_qsize`, `_get`, `_put` and
+        `not_empty` — are `queue.Queue`'s documented extension points, which is
+        how the standard library intends a subclass to change this behaviour.
+        """
+        with self.mutex:
+            while self.maxsize > 0 and self._qsize() >= self.maxsize:
+                self._get()
+            self._put(item)
+            self.unfinished_tasks += 1
+            self.not_empty.notify()
+
+
+class _Listener(handlers.QueueListener):
+    """A log listener whose stop cannot hang the process on the way out.
+
+    The stdlib's `stop` posts a sentinel and then joins WITHOUT A TIMEOUT. That
+    is safe on an unbounded queue and not on this one: `_Bounded` drops its
+    oldest to make room, so a burst of logging after `stop` has posted can push
+    the sentinel out before the listener reaches it — and then `join` waits for
+    a thread that is waiting for a record that no longer exists, from `atexit`,
+    so the process never exits at all.
+
+    Bounding the join removes that outright. The listener's thread is a daemon
+    thread (the stdlib sets it), so a listener that has not noticed its sentinel
+    costs the tail of the log rather than the process.
+    """
+
+    #: Long enough for a drain of anything this queue can hold, short enough
+    #: that nobody watches a shutdown wondering whether it has hung.
+    JOIN_WAIT = 2.0
+
+    def stop(self) -> None:                                 # type: ignore[override]
+        if self._thread is None:
+            return
+        self.enqueue_sentinel()
+        self._thread.join(self.JOIN_WAIT)
+        self._thread = None
 
 
 def setup_logging(level: int = logging.INFO) -> None:
@@ -156,9 +200,11 @@ def _write_logs_on_a_thread() -> None:
     with two listeners writing the same line.
 
     The listener is stopped through `atexit` rather than left to the
-    interpreter, because it is the only thing that gets the tail of the queue
-    on to the disk: its thread is not a daemon thread and `stop()` drains what
-    is waiting before it returns.
+    interpreter, because that is what gets the tail of the queue on to the disk:
+    its thread IS a daemon thread — the stdlib sets that — so nothing else would
+    wait for it, and `stop` drains what is waiting, bounded by `_Listener`'s own
+    timeout. Bounded rather than complete: see `_Listener` for the shutdown that
+    would otherwise never end.
     """
     global _listener
     root = logging.getLogger()
@@ -171,8 +217,7 @@ def _write_logs_on_a_thread() -> None:
     for handler in existing:
         root.removeHandler(handler)
     root.addHandler(handlers.QueueHandler(pipe))
-    _listener = handlers.QueueListener(pipe, *existing,
-                                       respect_handler_level=True)
+    _listener = _Listener(pipe, *existing, respect_handler_level=True)
     _listener.start()
     atexit.register(_listener.stop)
 

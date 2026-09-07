@@ -34,6 +34,7 @@ import os
 from pathlib import Path
 
 from . import lockfile
+from .atomic import discard, scratch
 from .client.exclusive import decode, from_another_boot, parse_stamp
 
 
@@ -110,14 +111,17 @@ def _sweep_hub(session: Path) -> list[str]:
         changed.append(what)
     if not changed:
         return []
-    tmp = path.with_suffix(".tmp")
+    # The third writer of this file, and it shared the same temp name as the
+    # other two. It early-returns above unless there is something to clear, so
+    # it almost never reaches here — «almost» is not a reason to keep it. See
+    # `collab.atomic`.
+    tmp = scratch(path)
     try:
         tmp.write_text(json.dumps(data, indent=2) + "\n")
         os.chmod(tmp, 0o600)        # it holds the invite and the host token
         tmp.replace(path)
     except OSError:
-        with contextlib.suppress(OSError):
-            tmp.unlink()
+        discard(tmp)
         return []
     return [f"forgot {session.name}'s {' and '.join(changed)} process"
             f"{'es' if len(changed) > 1 else ''} from before the restart"]

@@ -1308,13 +1308,21 @@ collab color [--agent AGENT] [value]
 Manage the listener.
 
 ```text
-collab daemon [--session SESSION] [--disarm] [{start,stop,status}]
+collab daemon [--session SESSION] [--disarm] [--keep] [{start,stop,status}]
 ```
 
 | Argument or flag | Meaning |
 |---|---|
 | `{start,stop,status}` | Start the listener, stop it, or show its status. |
+| `--disarm` | With `stop`: also turn off the wake armed for this session. |
+| `--keep` | With `start`: leave the listener running when the agent that started it quits. |
 | `--session SESSION` | Act on this session id instead of the current one. |
+
+All three actions clear anything a previous boot left behind first. That matters
+here more than anywhere: a machine that has restarted is the commonest reason to
+be typing this, and the records it left name processes the kernel has since
+given to something else. `start` and `stop` say what they cleared; `status`
+does it silently, because it prints a JSON object and nothing else.
 
 ## skills
 

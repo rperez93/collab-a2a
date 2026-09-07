@@ -24,11 +24,18 @@ still one setting.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import pathlib
+import subprocess
+import sys
 import threading
 from logging import handlers
 
 from collab import config as cfg
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 from collab import diagnostics as diag
 from collab.client import daemon_files
 
@@ -223,3 +230,89 @@ def test_the_two_logs_divide_the_words_from_the_fact(tmp_path, monkeypatch):
             root.addHandler(handler)
         root.setLevel(level)
         logging.getLogger("collab").handlers.clear()
+
+
+# --- what the writing thread must not lose --------------------------------------
+
+def _in_a_fresh_interpreter(body: str, tmp_path) -> str:
+    """Run `body` in its own process, with collab importable and a clean slate.
+
+    THE WRITER IS MODULE STATE, shared by every test in this file — a thread,
+    two counters and a queue. A test that reaches into it to stage a failure
+    fights the other tests rather than the code, and the state it leaves behind
+    follows whatever runs next. A fresh interpreter has exactly one writer, in
+    exactly the condition the test puts it in.
+    """
+    script = tmp_path / "probe.py"
+    script.write_text(body)
+    done = subprocess.run([sys.executable, str(script)], capture_output=True,
+                          text=True, timeout=60,
+                          env={**os.environ,
+                               "PYTHONPATH": str(ROOT / "src"),
+                               "COLLAB_CONFIG": str(tmp_path / "config.json")})
+    assert done.returncode == 0, done.stdout + done.stderr
+    return done.stdout.strip()
+
+
+def test_a_flush_restarts_a_writer_that_has_died(tmp_path):
+    """The writer is started from `_enqueue` and nowhere else, so a thread that
+    died after the last record was queued was never replaced — and `flush`
+    returned at once, stranding everything still in memory. On the `atexit`
+    path that is the whole tail of the record.
+    """
+    root = str(tmp_path / "state")
+    said = _in_a_fresh_interpreter(
+        "import pathlib\n"
+        "from collab import diagnostics as diag\n"
+        f"root = pathlib.Path({root!r})\n"
+        "diag.begin(root, 'daemon')\n"
+        "for i in range(5):\n"
+        "    diag.log('wake_attempt', n=i)\n"
+        "diag._writer = None            # as if the thread had died\n"
+        "diag.flush(5)\n"
+        "print(len(diag.records(root)))\n", tmp_path)
+    assert said == "5", f"only {said} of 5 records reached the disk"
+
+
+def test_a_record_with_exc_info_but_no_exception_is_still_kept(tmp_path):
+    """`logger.error(..., exc_info=True)` outside an except block yields
+    `(None, None, None)`, which is truthy. Reading `.__name__` on it raised, the
+    blanket except swallowed the error, and the WHOLE record was lost rather
+    than one field of it.
+    """
+    root = str(tmp_path / "state")
+    said = _in_a_fresh_interpreter(
+        "import json, logging, pathlib\n"
+        "from collab import diagnostics as diag\n"
+        f"root = pathlib.Path({root!r})\n"
+        "diag.begin(root, 'daemon')\n"
+        "log = logging.getLogger('collab.client.daemon')\n"
+        "log.addHandler(diag.Handler(level=logging.WARNING))\n"
+        "log.error('nothing is being handled here', exc_info=True)\n"
+        "diag.flush(5)\n"
+        "print(json.dumps([(r['event'], r['kind']) "
+        "for r in diag.records(root)]))\n", tmp_path)
+    assert json.loads(said) == [["error", ""]]
+
+
+def test_every_write_is_one_syscall_of_whole_records(tmp_path, monkeypatch):
+    """`_chunks` cuts at 8 KiB, and a buffered writer re-merged the pieces: the
+    real syscall was twice the cap. The records still landed whole, by an
+    accident of where the buffer broke rather than by the rule the cap states.
+    """
+    from collab import diagnostics as diag
+
+    monkeypatch.setenv("COLLAB_CONFIG", str(tmp_path / "config.json"))
+    cfg._CACHE.clear()
+    root = tmp_path / "state"
+    diag.begin(root, "daemon")
+    try:
+        for i in range(400):
+            diag.log("wake_attempt", n=i, pad="x" * 150)
+        diag.flush(10)
+        body = diag.path_for(root).read_text()
+        assert body.endswith("\n")
+        for line in body.splitlines():
+            json.loads(line)
+    finally:
+        diag._root = None

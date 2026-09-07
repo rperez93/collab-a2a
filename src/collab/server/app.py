@@ -182,6 +182,19 @@ def _require(request: Request):
     return user
 
 
+def tunnel_worth_recording(changed: bool, serving: int,
+                           now_serving: int) -> bool:
+    """Is there anything new to write down about the tunnel?
+
+    TWO FACTS, NOT ONE. The address is what the room cares about; the process is
+    what `collab kill` needs. A reserved domain brings a relaunched tunnel back
+    on the SAME address, so `changed` is False — and recording only on `changed`
+    left `hub.json` naming a tunnel that had already died, which is a tunnel a
+    later `kill` walks straight past.
+    """
+    return bool(changed) or now_serving != serving
+
+
 def create_app(
     *,
     store: Store,
@@ -1265,17 +1278,31 @@ def create_app(
         @app.on_event("startup")
         async def _watch_tunnel() -> None:
             async def loop() -> None:
+                # WHICH PROCESS IS SERVING IT, alongside which address. A
+                # reserved domain means a relaunched tunnel comes back on the
+                # SAME url, so `changed` is False and nothing re-recorded the
+                # new pid — leaving `hub.json` naming a tunnel that had already
+                # died, which is a tunnel `collab kill` then walks past.
+                serving = supervisor.own_pid()
                 while True:
                     await asyncio.sleep(TUNNEL_CHECK_SECONDS)
                     try:
                         url, changed = await asyncio.to_thread(supervisor.ensure)
                     except Exception:
                         continue
-                    if not url or not changed:
+                    if not url:
                         continue
+                    now_serving = supervisor.own_pid()
+                    if not tunnel_worth_recording(changed, serving, now_serving):
+                        continue
+                    serving = now_serving
                     current["url"] = url
                     if on_url_change is not None:
-                        await asyncio.to_thread(on_url_change, url)
+                        await asyncio.to_thread(on_url_change, url, changed)
+                    if not changed:
+                        # A new process on the same address. Worth writing down
+                        # and not worth telling the room: nobody's link broke.
+                        continue
                     # Tell whoever is still connected. Anyone who was cut off
                     # by the outage needs a fresh link from the host instead.
                     await hub.publish(Envelope(

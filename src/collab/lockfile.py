@@ -26,6 +26,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .atomic import discard, scratch
 from .client.exclusive import Stamp, boot_id, decode, from_another_boot
 
 LOCK_NAME = "agent.lock"
@@ -309,9 +310,22 @@ def acquire(lock: Lock, home: Path | str | None = None) -> Path:
     # by definition; a refresh that kept a boot from before the machine
     # restarted would be a live agent filing a claim already ruled stale.
     lock.boot = boot_id()
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(asdict(lock), indent=2))
-    tmp.replace(path)
+    # A PRIVATE TEMP NAME. `agent.lock` has two writers by design — `_take_lock`
+    # on every host and join, and the daemon's heartbeat through `refresh`, in
+    # another process — and both used `agent.tmp`. The record is small enough
+    # that it never came back torn; what happened instead is that this `replace`
+    # raised, because the other writer had already renamed the shared file away.
+    # Two processes writing until done: 26.8% of these calls and 22.1% of the
+    # heartbeat's. `_refresh_lock` catches OSError, so the daemon half was
+    # invisible; `_take_lock` does not, so the other half was a traceback out of
+    # `collab host`. See `collab.atomic`.
+    tmp = scratch(path)
+    try:
+        tmp.write_text(json.dumps(asdict(lock), indent=2))
+        tmp.replace(path)
+    except OSError:
+        discard(tmp)
+        raise
     try:
         os.chmod(path, 0o600)
     except OSError:
@@ -320,9 +334,21 @@ def acquire(lock: Lock, home: Path | str | None = None) -> Path:
 
 
 def refresh(home: Path | str | None = None, **fields: Any) -> Lock | None:
-    """Update the pids or the state directory on a lock we already hold."""
+    """Update the pids or the state directory on a lock we already hold.
+
+    A LOCK FROM A PREVIOUS BOOT IS NOT ONE WE HOLD. `acquire` stamps the current
+    boot at every write, which is right for `_take_lock` — it rewrites every
+    field — and wrong here, because this is a read-modify-write: the daemon's
+    heartbeat would carry a dead boot's `hub_pid`, `owner_pids` and `owner`
+    across and file them under the boot we are on now. `claimed_by` then went
+    from None to 0 for a command whose ancestry happened to hold a re-issued
+    pid, which is exactly what the boot was recorded to prevent.
+
+    Refused rather than repaired: `collab.reboot.swept` clears such a lock, and
+    `host`, `join`, `status`, `check` and `daemon start` all run it.
+    """
     lock = read(home)
-    if lock is None:
+    if lock is None or lock.from_a_previous_boot:
         return None
     for key, value in fields.items():
         if hasattr(lock, key):

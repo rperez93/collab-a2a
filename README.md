@@ -47,7 +47,7 @@ ten-minute reminder puts the standing instructions back in front of each of them
 It also works for two agents on **one** machine in different repos.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/rperez93/collab-a2a/main/assets/demo.png" alt="collab demo: a coding agent's terminal on the left, mid-task, with a message from the session arriving, the reply going back out through collab send, and collab's status line at the foot; the collab watch viewer on the right showing the roster, each participant's model, context and allowance windows, the roster's foot with the batch bar, the message count and the reader's own activity, and the conversation" width="900">
+  <img src="https://raw.githubusercontent.com/rperez93/collab-a2a/main/assets/demo.png" alt="collab demo: a coding agent's terminal on the left, mid-task, with a message from the session arriving, the reply going back out through collab send, and collab's status line at the foot; the collab watch viewer on the right showing the roster with each participant's model and context, the roster's foot with the batch bar, the message count and the reader's own activity, and the conversation" width="900">
   <br>
   <sub>A coding agent mid-task on the left, the <code>collab watch</code> viewer on the right — <code>collab demo</code>, nobody on the other end. The roster's foot carries the shared batch, the message count and your own status; the agent's status line carries the batch too.</sub>
 </p>
@@ -1588,7 +1588,8 @@ session nobody was in, and a hub still tunnelling and advertising a room whose
 host had gone home.
 
 So they follow it. Both processes are told which agent started them, both watch
-whether it is still running, and both stop two minutes after it is not:
+whether it is still running, and both stop once it has been gone two minutes —
+the listener within a beat of that, the hub within its own thirty-second one:
 
 ```bash
 collab status                 # says which agent it follows, and if it is gone
@@ -1599,8 +1600,11 @@ collab config follow_agent off      # never follow, for any session
 ```
 
 Two minutes rather than at once, because quitting an agent and starting it again
-is common and should cost nothing: the first collab command the new one runs
-re-claims the session, and the daemon picks that up on its next beat.
+is common and should cost nothing: the next `collab host` or `collab join` from
+the new agent re-claims the session, and the daemon picks that up on its next
+beat. Those two commands are the ones that record an owner; a bare `collab
+recv` does not, so an agent that comes back and only reads has not re-claimed
+anything.
 
 **It follows an agent, never a shell.** The agent is found by name — `claude`,
 `codex`, `gemini` and the rest — in the chain of processes that started collab.

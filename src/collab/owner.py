@@ -271,11 +271,83 @@ def owner_in(chain: list[int]) -> Stamp | None:
     return None
 
 
+#: How a collab daemon describes itself to `argv`. A command whose ancestry
+#: contains one is running inside a turn that daemon started.
+DAEMON_ARGV = "collab.daemon_main"
+
+
+def started_by_a_daemon(chain: list[int]) -> bool:
+    """Is this command running inside a turn a collab daemon started?
+
+    A wake runs an agent as a CHILD of the daemon — the `codex-exec` recipe
+    spawns one outright — so a command issued from inside that turn has the
+    woken agent nearest in its own ancestry. Naming it as the owner hands the
+    session an agent that exits when the turn does, and two minutes later the
+    daemon stops itself, told its agent had gone by the very turn it started.
+
+    ASKED OF THE CHAIN RATHER THAN OF A PID WE WERE GIVEN, so that it holds for
+    every place an owner is minted. `cli._who_owns_this` has the cheaper, exact
+    form of this test — it knows the listener's pid — and this is the one that
+    covers `spawn_env`, where the environment handed to a fresh daemon is the
+    first thing it follows and no profile is in scope.
+    """
+    from .client import exclusive
+
+    # ONE `ps` FOR THE CHAIN WHERE THERE IS NO /proc, for the reason `_table`
+    # was written: `exclusive.argv` shells out per pid there, and twelve of
+    # those on every `host` and every `join` is a quarter of a second spent
+    # answering what one invocation answers. `_table` already asks for the
+    # command column, so the words are the same words.
+    if not exclusive._HAVE_PROC:
+        # `_table` puts `comm` first and the command line after it, so the argv
+        # this wants starts one column in.
+        table = _table(chain)
+        if any(_is_a_daemon(words[1:]) for words in table.values()):
+            return True
+        # AND THE PIDS IT DID NOT ANSWER FOR. `ps -p a,b,c` omits a pid that has
+        # exited between reading the ancestry and asking, and a table with any
+        # row in it looked like a complete answer — so a daemon in a missing row
+        # read as «no daemon», which is the direction that costs a session.
+        chain = [pid for pid in chain if pid not in table]
+    return any(_is_a_daemon(exclusive.argv(pid)) for pid in chain)
+
+
+def _is_a_daemon(words: list[str]) -> bool:
+    """Is this argv a collab daemon, rather than something that mentions one?
+
+    THE ARGUMENT AFTER `-m`, and an interpreter in front of it. Membership
+    anywhere in the argument list is not the same claim and is wrong in a way
+    that matters — `python3 -m pytest tests/x.py collab.daemon_main` passed it —
+    and a substring test over the whole command line is looser still, fooled by
+    anything that merely names the module. That is the same looseness that once
+    made `grep claude` an agent.
+
+    A daemon is `<python> -m collab.daemon_main <session>`. Anything else that
+    happens to carry the words is not one.
+
+    WHICH WAY TO LEAN, stated because the obvious reading is backwards. A false
+    YES makes `current` return None: the session follows nobody, which is this
+    module's documented safe direction and costs a leak. A false NO falls
+    through to `owner_in`, names the woken agent, and stops the daemon two
+    minutes later — the original bug. So breadth is worth more than precision
+    here, and the narrowness above is justified only because `onboard.
+    spawn_daemon` is the single launcher and always spells it this way; pipx,
+    uv-tool and Homebrew all give a `python*` basename. A launcher that does not
+    is a defect to fix here, not a case to shrug at.
+    """
+    if len(words) < 3 or not os.path.basename(words[0]).startswith("python"):
+        return False
+    return words[1] == "-m" and words[2] == DAEMON_ARGV
+
+
 def current() -> Stamp | None:
     """The agent running this command, or None if none can be named."""
     from . import lockfile
 
-    return owner_in(lockfile.ancestry())
+    chain = lockfile.ancestry()
+    if started_by_a_daemon(chain):
+        return None
+    return owner_in(chain)
 
 
 def spawn_env(base: dict[str, str] | None = None) -> dict[str, str]:
@@ -332,7 +404,7 @@ class Follower:
 
     def __init__(self, owner: Stamp | None = None, *,
                  grace: float = ORPHAN_GRACE,
-                 now: Callable[[], float] = time.time) -> None:
+                 now: Callable[[], float] = time.monotonic) -> None:
         self.owner = owner
         self.grace = grace
         self.now = now
@@ -365,11 +437,29 @@ class Follower:
         starting owner in place rather than clearing it — an agent that has
         released the lock on its way out is exactly the case this is for.
         """
+        # A DEAD ONE DOES NOT DISPLACE A LIVE ONE. `recorded` is written by
+        # `host` and `join` and by nothing else, so a repository whose lock
+        # still names an agent that has quit hands that dead stamp to the next
+        # daemon started there — and taken unconditionally it replaced a
+        # perfectly live owner and stopped that daemon two minutes later.
+        here = None
         if fresh is not None:
-            self.owner = fresh
+            here = fresh.alive()
+            if here or self.owner is None or not self.owner.alive():
+                self.owner = fresh
+            else:
+                # WE KEPT OURS, AND WE JUST ASKED IT. Reaching this branch means
+                # `self.owner.alive()` was True a line ago, so setting this to
+                # None would ask the same question a third time — on the branch
+                # the reuse was added for.
+                here = True
         if self.owner is None:
             return "unowned"
-        if self.owner.alive():
+        # REUSING THE ANSWER ABOVE where there is one. `Stamp.alive` is a
+        # signal and two `/proc` reads, and the common path — a live owner on
+        # the lock — was asking the same question about the same stamp twice on
+        # every beat of both the daemon and the hub.
+        if here if here is not None else self.owner.alive():
             self.seen_at = self.now()
             self.gone_since = None
             return "following"

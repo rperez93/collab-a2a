@@ -314,8 +314,9 @@ collab daemon start   # start it again
 ```
 
 Two minutes rather than at once, because quitting an agent and starting it again
-should cost nothing: the first collab command the new one runs re-claims the
-session and the daemon picks that up on its next beat. If you want a session to
+should cost nothing: the next `collab host` or `collab join` from the new agent
+re-claims the session and the daemon picks that up on its next beat. Those are
+the two commands that record an owner — reading with `collab recv` does not. If you want a session to
 outlive the agent deliberately — a hub left up overnight for somebody in another
 timezone — start it with `--keep`, or turn the behaviour off everywhere with
 `collab config follow_agent off`.

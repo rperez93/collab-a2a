@@ -2797,4 +2797,9 @@ async def run_daemon(profile: SessionProfile, *, bridge_port: int = 0) -> None:
         # apart, and re-raising leaves `daemon.log` and the exit status exactly
         # as they were.
         _log_crash("daemon", exc)
+        # HERE AND NOT IN THE WRITER. This is the one crash that is a death —
+        # the process is going, and the record has to be on the disk before it
+        # does. The two inside the heartbeat are survivable and deliberately do
+        # not wait; see `diagnostics.URGENT`.
+        diagnostics.flush()
         raise

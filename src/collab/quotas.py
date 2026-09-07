@@ -332,21 +332,42 @@ def read_lines(fd: int, *, chunk: int = READ_CHUNK, cap: int = MAX_LINE,
             buf.clear()
 
 
-def _pump(lines: Callable[[], Iterable[str]], inbox: "queue.Queue[str | None]") -> None:
+def _pump(lines: Callable[[], Iterable[str]], inbox: "queue.Queue[str | None]",
+          done: threading.Event) -> None:
     """Move whatever arrives into the queue, and say when there is no more.
 
     THE SENTINEL GOES IN A `finally`. Listed exceptions only, it was skipped by
     anything unlisted — and the consumer then had no way to learn the stream had
     ended, so a reader that died at once still cost the caller the whole
     deadline before it gave up with the wrong reason.
+
+    AND IT STOPS WHEN THE CONSUMER DOES. A plain `put` on a full queue blocks
+    for ever, and that is not the pipe blocking — EOF cannot reach a thread
+    waiting on a queue, so ending the process group does not free it. `speak`
+    returns the moment the answer arrives, and a server that keeps talking
+    afterwards left this thread wedged with `MAX_QUEUED` lines in hand: measured
+    at 11.6 MiB and one thread per probe, never released, on a daemon that
+    probes every two minutes. The back-pressure is the point and is kept — the
+    reader still waits rather than buffering without limit — but it now waits on
+    a flag as well, so it cannot outlive the call that started it.
     """
     try:
         for line in lines():
-            inbox.put(line)
+            while True:
+                if done.is_set():
+                    return
+                try:
+                    inbox.put(line, timeout=POLL)
+                    break
+                except queue.Full:
+                    continue
     except BaseException:                                   # noqa: BLE001
         pass
     finally:
-        inbox.put(None)
+        # NOT A BLOCKING PUT. If the queue is full the consumer has stopped
+        # reading, which is exactly when the sentinel is not needed.
+        with contextlib.suppress(queue.Full):
+            inbox.put_nowait(None)
 
 
 def speak(send: Callable[[dict[str, Any]], None],
@@ -382,46 +403,53 @@ def speak(send: Callable[[dict[str, Any]], None],
     # copied into memory at whatever rate it can write; past the cap the reader
     # simply blocks, which is what a pipe does to a writer nobody is draining.
     inbox: "queue.Queue[str | None]" = queue.Queue(maxsize=MAX_QUEUED)
-    threading.Thread(target=_pump, args=(lines, inbox), daemon=True,
+    done = threading.Event()
+    threading.Thread(target=_pump, args=(lines, inbox, done), daemon=True,
                      name="collab-quota-read").start()
 
-    asked = False
-    deadline = now() + timeout
-    # AND A SECOND DEADLINE ON THE REAL CLOCK. `left` comes from the injected
-    # one and the wait below is in real seconds, so a clock that does not move —
-    # which is how anybody writes «time does not pass» in a test — leaves `left`
-    # positive for ever and spins at five wakeups a second, indefinitely. The
-    # injected clock decides the ANSWER; this decides that there is one.
-    stop_at = time.monotonic() + max(float(timeout), POLL)
-    while True:
-        left = deadline - now()
-        if left <= 0 or time.monotonic() > stop_at:
-            return {}, "codex did not answer in time"
-        try:
-            line = inbox.get(timeout=min(left, POLL))
-        except queue.Empty:
-            continue
-        if line is None:
-            return {}, ("codex answered nothing" if asked else
-                        "codex never finished starting up")
-        if not line.strip():
-            continue
-        try:
-            message = json.loads(line)
-        except ValueError:
-            continue            # the server is entitled to say things we ignore
-        if not isinstance(message, dict):
-            continue
-        if message.get("id") == 1 and not asked:
-            asked = True
-            send({"method": "initialized"})
-            send({"method": "account/rateLimits/read", "id": 2})
-            continue
-        if message.get("id") == 2:
-            if isinstance(message.get("error"), dict):
-                why = str(message["error"].get("message") or "refused")[:120]
-                return {}, f"codex refused the read ({why})"
-            return message.get("result") or {}, ""
+    # EVERY EXIT RAISES THE FLAG, including the exceptional ones. The thread
+    # is what the flag is for, and a path that skipped it would leak exactly
+    # the thread this exists to stop.
+    try:
+        asked = False
+        deadline = now() + timeout
+        # AND A SECOND DEADLINE ON THE REAL CLOCK. `left` comes from the injected
+        # one and the wait below is in real seconds, so a clock that does not move —
+        # which is how anybody writes «time does not pass» in a test — leaves `left`
+        # positive for ever and spins at five wakeups a second, indefinitely. The
+        # injected clock decides the ANSWER; this decides that there is one.
+        stop_at = time.monotonic() + max(float(timeout), POLL)
+        while True:
+            left = deadline - now()
+            if left <= 0 or time.monotonic() > stop_at:
+                return {}, "codex did not answer in time"
+            try:
+                line = inbox.get(timeout=min(left, POLL))
+            except queue.Empty:
+                continue
+            if line is None:
+                return {}, ("codex answered nothing" if asked else
+                            "codex never finished starting up")
+            if not line.strip():
+                continue
+            try:
+                message = json.loads(line)
+            except ValueError:
+                continue            # the server is entitled to say things we ignore
+            if not isinstance(message, dict):
+                continue
+            if message.get("id") == 1 and not asked:
+                asked = True
+                send({"method": "initialized"})
+                send({"method": "account/rateLimits/read", "id": 2})
+                continue
+            if message.get("id") == 2:
+                if isinstance(message.get("error"), dict):
+                    why = str(message["error"].get("message") or "refused")[:120]
+                    return {}, f"codex refused the read ({why})"
+                return message.get("result") or {}, ""
+    finally:
+        done.set()
 
 
 def from_codex(argv: tuple[str, ...] = CODEX_ARGV,

@@ -105,6 +105,17 @@ held at `23db6d0`.
 | `statusline-last.json` | The last status line that could be built, with its timestamp and colour mode, so a status file mid-rewrite does not blank the segment for a redraw. Sixty seconds. |
 | `diagnostics/YYYY-MM-DD.jsonl` | On by default since 1.40.0. Events only — never message text, names, invites, addresses, or paths under the reader's home. Every record carries the pid that wrote it. Written by a thread off a bounded queue, so a caller never waits for this disk. Kept seven days. See [the trust model](/operating/security-model.md). |
 
+Two of these files are written by more than one process at a time, and since
+1.41.1 each writer takes a temp name of its own rather than the directory's
+single `<name>.tmp`. `hub.json` is written by the tunnel watcher and by `collab
+url --rotate`; `agent.lock` by `_take_lock` on every host and join and by the
+daemon's heartbeat. On the shared name the two faults were different: `hub.json`
+came back unreadable — a whole record followed by the tail of another, which
+`load` reports as «no such session» and nothing repairs — and `agent.lock`,
+written in one piece, never tore but made the `replace` itself fail, out of
+`collab host`, which does not catch it. Both need two writes inside the same
+few microseconds, so both are rare; neither is recoverable by the user.
+
 One record deliberately sits outside this tree, for the same reason as the
 learnings below but a sharper one. `<config dir>/statusline-hang.log` holds the
 stack of any status line that overran its limit and was stopped. It cannot live

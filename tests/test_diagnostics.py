@@ -345,6 +345,7 @@ def test_the_report_carries_the_counts_and_the_tail_of_the_log(
     for _ in range(5):
         diag.log("wake_attempt", outcome="exit-1", why="3 in a row")
     diag.log("reconnected", after_failures=2)
+    diag.flush()                # the draft reads the disk; see the test below
 
     out_path = tmp_path / "report.md"
     code, out = _draft(reporting, monkeypatch, out=str(out_path))
@@ -362,6 +363,11 @@ def test_the_tail_is_bounded(reporting, monkeypatch, tmp_path):
     diag.begin(DaemonPaths(reporting.dir).root, "daemon")
     for i in range(cli.ISSUE_LINES + 50):
         diag.log("wake_attempt", n=i)
+    # WRITING AND READING ARE TWO ACTS NOW. Without this the draft below reads
+    # whatever happens to have reached the disk, which is a race the machine
+    # wins on a quiet run and loses under load — measured 5 failures in 12 with
+    # the CPU busy. `_rows` got this flush; this path was missed.
+    diag.flush()
     out_path = tmp_path / "report.md"
     _draft(reporting, monkeypatch, out=str(out_path))
     body = out_path.read_text()
@@ -432,13 +438,16 @@ def test_a_stop_is_on_the_disk_by_the_time_it_returns(recording):
 
 
 def test_an_ordinary_record_does_not_make_its_caller_wait(recording):
-    """The waiting is bought for the two events that precede a death and for no
-    others. `error` was in that set and was taken out: the logging bridge makes
-    one out of every `logger.exception`, including the guarded ones inside the
-    daemon's heartbeat, and each would have held that loop on the very disk this
-    queue exists to keep it off.
+    """The waiting is bought for the one record whose process is leaving, and
+    for nothing else.
+
+    `error` went first and `crash` followed it, for the same reason. Both
+    `_log_crash` call sites in the daemon are inside the heartbeat, on the event
+    loop, and both are explicitly survivable — «the rest carries on». Waiting
+    there blocked the loop for two seconds per exception, exactly when the disk
+    was misbehaving. The paths that really are dying flush for themselves.
     """
-    assert diag.URGENT == frozenset({"crash", "stop"})
+    assert diag.URGENT == frozenset({"stop"})
     held = threading.Event()
     real = diag._write
     diag._write = lambda batch, dropped=0: (held.wait(5), real(batch, dropped))
@@ -450,6 +459,26 @@ def test_an_ordinary_record_does_not_make_its_caller_wait(recording):
         diag.flush(5)
         diag._write = real
     assert {r["event"] for r in diag.records(diag._root)} == {"error", "wake_attempt"}
+
+
+def test_a_survivable_crash_does_not_block_the_loop_it_happened_in(recording):
+    """The measurement that moved `crash` out of the urgent set: 2.001 s of
+    blocked event loop per exception the heartbeat was going to survive."""
+    import time as clock
+
+    held = threading.Event()
+    real = diag._write
+    diag._write = lambda batch, dropped=0: (held.wait(5), real(batch, dropped))
+    try:
+        began = clock.monotonic()
+        diag.log("crash", where="heartbeat", kind="ValueError")
+        waited = clock.monotonic() - began
+    finally:
+        held.set()
+        diag.flush(5)
+        diag._write = real
+    assert waited < 0.5, f"the caller waited {waited:.1f}s on the disk"
+    assert [r["event"] for r in diag.records(diag._root)] == ["crash"]
 
 
 def test_a_flood_is_bounded_and_says_how_much_it_lost(recording):

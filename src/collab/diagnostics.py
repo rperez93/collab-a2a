@@ -105,12 +105,19 @@ WRITE_CAP = 8192
 #: immediately either way. What this adds is the wait for confirmation, and the
 #: only reason to pay for that is that the process may not exist a moment later.
 #:
-#: So: the two that precede a death, and nothing else. `error` was in this set
-#: and was taken out — the logging bridge turns every `logger.exception` into
-#: one, including the guarded ones inside the daemon's heartbeat, and each
-#: would have held that loop for up to `FLUSH_WAIT` waiting on the very disk
-#: this queue exists to stop it waiting on.
-URGENT = frozenset({"crash", "stop"})
+#: So: the one record whose process is genuinely leaving, and nothing else.
+#: `error` was taken out first and `crash` followed it, for the same reason and
+#: with the same measurement behind it. A crash is not always a death: both
+#: `_log_crash` call sites in the daemon are inside the heartbeat, on the event
+#: loop, and both are explicitly survivable — «the rest carries on». Waiting
+#: there cost 2.001 seconds of blocked event loop per exception, measured, and
+#: it fired exactly when the disk was misbehaving.
+#:
+#: The paths that really are about to die flush for themselves: `run_daemon`
+#: and `hub_main` both call `flush` after recording the crash they are about to
+#: re-raise. That is where the knowledge lives — the writer cannot tell a
+#: survivable exception from a fatal one, and the caller always can.
+URGENT = frozenset({"stop"})
 
 #: Which process is writing, and where. Set once by `begin`; until then every
 #: call is a no-op, so a module that imports this and never attaches costs
@@ -300,7 +307,13 @@ class Handler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            kind = record.exc_info[0].__name__ if record.exc_info else ""
+            # ON `exc_info[0]`, NOT ON `exc_info`. `logger.error(…,
+            # exc_info=True)` outside an except block yields `(None, None,
+            # None)` — truthy — so reading `.__name__` raised, the blanket
+            # except below swallowed it, and the WHOLE record was lost rather
+            # than one field of it.
+            kind = (record.exc_info[0].__name__
+                    if record.exc_info and record.exc_info[0] else "")
             log("warning" if record.levelno < logging.ERROR else "error",
                 where=record.name.replace("collab.", "", 1)[:40],
                 at=record.lineno, kind=kind)
@@ -393,16 +406,28 @@ def _write(batch: list[tuple[Path, str]], dropped: int = 0) -> None:
     for path, line in batch:
         by_file.setdefault(path, []).append(line)
     if dropped:
-        note = json.dumps({"ts": round(time.time(), 3), "proc": _proc,
+        now = time.time()
+        note = json.dumps({"ts": round(now, 3), "proc": _proc,
                            "pid": os.getpid(), "event": "dropped",
                            "records": dropped})
-        by_file[batch[-1][0]].append(note)
+        # THE FILE THIS MOMENT BELONGS IN, not the last record's. A batch
+        # straddling a UTC midnight put the marker in the day that had no gap
+        # and left the day that did looking complete.
+        where = path_for(_root, now) if _root is not None else batch[-1][0]
+        by_file.setdefault(where, []).append(note)
     for path, lines in by_file.items():
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             with open(path, "a", encoding="utf-8") as fh:
                 for chunk in _chunks(lines):
                     fh.write(chunk)
+                    # FLUSHED PER CHUNK. Without this the buffered writer
+                    # re-merges consecutive chunks and the real syscall is twice
+                    # the cap — measured at 16,292 bytes for an 8 KiB cap. The
+                    # records still happened to land whole, by an accident of
+                    # where the buffer broke rather than by the rule this cap
+                    # states, and a 9p mount is exactly where that luck runs out.
+                    fh.flush()
         except Exception:                                     # noqa: BLE001
             continue
 
@@ -456,6 +481,12 @@ def flush(timeout: float = FLUSH_WAIT) -> None:
         if _written >= target:
             return
         _ready.notify()
+    # RESTARTED RATHER THAN ABANDONED. The writer is started from `_enqueue` and
+    # nowhere else, so a thread that died after the last record was queued is
+    # never replaced — and this returned at once, stranding everything still in
+    # memory. On the `atexit` path that is the whole tail of the record.
+    _start_writer()
+    with _ready:
         if _writer is None or not _writer.is_alive():
             return
         _ready.wait_for(lambda: _written >= target, timeout)

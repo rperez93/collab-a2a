@@ -609,6 +609,11 @@ def same_process(recorded: str, pid: int) -> bool:
 
 # --- which boot, and one verdict on a recorded process -------------------------
 
+#: What separates the three parts of an encoded `Stamp`. The ASCII unit
+#: separator, chosen because it cannot appear in any of them — see
+#: `Stamp.encode` for the colon that could, and did.
+SEP = "\x1f"
+
 #: Read once. The boot cannot change under a running process, and every
 #: liveness check in the tree would otherwise open a file or spawn `sysctl`.
 _boot: str | None = None
@@ -739,8 +744,18 @@ class Stamp:
         return f"{self.pid}\n{self.started}\n{self.boot}\n"
 
     def encode(self) -> str:
-        """One field, for an environment variable or a JSON string."""
-        return f"{self.pid}:{self.started}:{self.boot}"
+        """One field, for an environment variable or a JSON string.
+
+        SEPARATED BY A CHARACTER THAT CANNOT OCCUR IN THE PARTS. A colon was the
+        obvious choice and is the wrong one: `started` is `ps -o lstart=` where
+        there is no /proc — "Sun Sep 7 12:00:00 2026" — and `boot` is
+        "btime:<seconds>" or macOS's `kern.boottime`, so two of the three fields
+        carry colons of their own and no colon-splitting can undo it. The ASCII
+        unit separator carries none of that risk: nothing `ps`, `sysctl` or a
+        uuid produces contains a control character, and it survives an
+        environment variable and a JSON string unchanged.
+        """
+        return f"{self.pid}{SEP}{self.started}{SEP}{self.boot}"
 
 
 def stamp_for(pid: int | None = None) -> Stamp:
@@ -750,8 +765,55 @@ def stamp_for(pid: int | None = None) -> Stamp:
 
 
 def decode(text: str) -> Stamp:
-    """Read back what `Stamp.encode` wrote. Junk becomes an empty Stamp."""
-    parts = (text or "").split(":")
+    """Read back what `Stamp.encode` wrote. Junk becomes an empty Stamp.
+
+    SPLIT TWICE AND NO MORE, because two of the three fields contain colons on
+    the platforms this was written for. `started` is `ps -o lstart=` where there
+    is no /proc — "Sun Sep 7 12:00:00 2026" — and `boot` is either
+    "btime:<seconds>" or macOS's `kern.boottime`. An unlimited split truncated
+    both: a macOS stamp came back as `started='Sun Sep 7 12'`, `boot='00'`, so
+    `alive` saw a boot that did not match and answered False for a process that
+    was running perfectly.
+
+    That inverted the whole feature on those platforms: `owner.from_env` decoded
+    a live agent as dead, and every daemon and hub stopped itself two minutes
+    after starting. It also made the `btime` tolerance inert, since a decoded
+    btime boot arrived as the bare word "btime" and `_btime` could not read it.
+    """
+    text = text or ""
+    # THE OLD SPELLING IS STILL READ, BUT ONLY WHERE IT MEANS ANYTHING. 1.40 and
+    # 1.41 wrote colons. On Linux — a numeric start time and a uuid boot,
+    # neither containing one — that form is unambiguous and is in people's
+    # `agent.lock` and `hub.json` right now, so it is read as it was written.
+    #
+    # ON MACOS THE SAME BYTES ARE NOT A STAMP AT ALL. The start time is
+    # `ps -o lstart=` and carries its own colons, so splitting reconstructs a
+    # `started` of "Sun Sep  7 12" and a `boot` of the rest — a fabricated value
+    # that is not empty and therefore not trusted, but is definitely not this
+    # boot either. Read that way it would go on doing exactly what this release
+    # is fixing, and worse: `HubConfig._restamp` keeps a stamp with a truthy
+    # `started`, so the corruption would never be re-minted, and the sweep would
+    # zero a LIVE hub for being "from before the restart".
+    #
+    # A numeric second field is what tells the two apart, because that is what
+    # the Linux form always is. Anything else falls back to the pid alone, which
+    # is the floor this module documents everywhere: trust the number, and let
+    # the flock and the start time answer for it.
+    if SEP in text:
+        # BOUNDED, like the branch below. Nothing can put a separator inside a
+        # field today, so an unbounded split is correct by luck rather than by
+        # rule — and silently dropping the tail of a field on an unexpected
+        # separator is the exact fault this whole encoding exists to fix.
+        parts = text.split(SEP, 2)
+    else:
+        parts = text.split(":", 2)
+        # AN EMPTY SECOND FIELD IS NOT A CORRUPT ONE. `123::<uuid>` is what a
+        # Linux collab wrote for a process whose start time it could not read,
+        # and the boot after it is intact and unambiguous — dropping it there
+        # would throw away the one field that survives a reboot.
+        second = parts[1].strip() if len(parts) > 1 else ""
+        if second and not second.isdigit():
+            parts = parts[:1]
     try:
         pid = int(parts[0])
     except (ValueError, IndexError):

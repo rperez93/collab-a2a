@@ -5396,6 +5396,19 @@ def _settle_in_the_session(name: str, args: argparse.Namespace) -> int:
 
 
 def cmd_daemon(args: argparse.Namespace) -> int:
+    # BEFORE THE PROFILE IS READ. Troubleshooting sends people here after a
+    # restart — «the listener is not running, `collab daemon start`» — and this
+    # was the one command in that sentence that did not clear what the previous
+    # boot left. The lock it would then find is one no longer about anything.
+    #
+    # SILENTLY FOR `status`, which prints a JSON object and nothing else and is
+    # the DEFAULT action, so a line of commentary in front of it is a parse
+    # error for whatever is reading. `cmd_status` draws the same distinction and
+    # states it: the sweep still runs, only the commentary is held back.
+    if args.action == "status":
+        reboot.swept()
+    else:
+        _sweep_a_previous_boot()
     profile = _require_profile(args)
     if args.action == "status":
         pid = is_running(profile)

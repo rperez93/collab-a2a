@@ -118,13 +118,21 @@ def test_an_idle_note_survives(profile, monkeypatch):
 
 # --- reading it -------------------------------------------------------------
 
-WORKING = {"state": "working", "what": "the token refresh",
-           "files": ["src/api/auth.py"], "since": time.time() - 700}
+def working():
+    """Eleven minutes ago, counted from the call and not from the import.
+
+    A frozen `since` is only eleven minutes old while the suite is short. The
+    reading is taken at collection and asserted at execution, so once the run
+    between them passed twenty seconds the same constant read twelve minutes
+    and the test failed on nothing but its own age.
+    """
+    return {"state": "working", "what": "the token refresh",
+            "files": ["src/api/auth.py"], "since": time.time() - 700}
 
 
 def test_activity_says_who_is_on_what(profile, monkeypatch, capsys):
     monkeypatch.setattr(cli, "_client", lambda p: FakeClient(people=[
-        {"name": "me", "connected": True, "activity": WORKING},
+        {"name": "me", "connected": True, "activity": working()},
         {"name": "bob", "connected": True, "activity": {"state": "idle",
                                                         "since": time.time()}},
         {"name": "old", "connected": False, "last_seen": time.time() - 1200},
@@ -148,7 +156,7 @@ def test_connected_but_silent_is_not_reported_as_idle(profile, monkeypatch, caps
 
 def test_activity_json_is_for_a_program(profile, monkeypatch, capsys):
     monkeypatch.setattr(cli, "_client", lambda p: FakeClient(people=[
-        {"name": "bob", "connected": True, "activity": WORKING}]))
+        {"name": "bob", "connected": True, "activity": working()}]))
 
     cli.cmd_activity(_args(json=True))
     rows = json.loads(capsys.readouterr().out)

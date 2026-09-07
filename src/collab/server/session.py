@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import secrets
@@ -10,8 +11,10 @@ from typing import Any
 from pathlib import Path
 
 from .. import peers
+from ..atomic import discard, scratch
 from ..config import collab_home, ensure_home
-from ..client.exclusive import Stamp, decode, parse_stamp, stamp_for
+from ..client.exclusive import (Stamp, boot_id, decode, parse_stamp,
+                                stamp_for)
 from .auth import new_secret
 from .store import Store
 
@@ -107,10 +110,14 @@ class HubConfig:
         self._restamp()
         self.dir.mkdir(parents=True, exist_ok=True)
         p = self.dir / "hub.json"
-        tmp = p.with_suffix(".tmp")
-        tmp.write_text(json.dumps(asdict(self), indent=2) + "\n")
-        os.chmod(tmp, 0o600)  # holds the invite and the host token
-        tmp.replace(p)
+        tmp = scratch(p)
+        try:
+            tmp.write_text(json.dumps(asdict(self), indent=2) + "\n")
+            os.chmod(tmp, 0o600)  # holds the invite and the host token
+            tmp.replace(p)
+        except OSError:
+            discard(tmp)
+            raise
 
     def _restamp(self) -> None:
         """Identify the two processes this file names, while they are still there.
@@ -135,8 +142,55 @@ class HubConfig:
             held = decode(getattr(self, stamp_field))
             if held.pid == pid and held.started:
                 continue
+            # WHAT IS KNOWN ABOUT IT, AND NO MORE. A `hub.json` from before
+            # stamps existed carries a bare pid this process did not start, so
+            # its start time is not ours to vouch for: reading one off the
+            # number would identify whatever holds it now, which after a reuse
+            # is a stranger.
+            #
+            # Writing NOTHING was the first answer and it is worse, which is
+            # the part that is not obvious. `hub_stamp` falls back to
+            # `Stamp(pid=self.pid)` and a bare number is trusted, so the
+            # stranger is signalled either way — while `reboot.swept` gates on
+            # `from_another_boot(stamp.boot)`, and an empty boot is never
+            # another boot. Refusing to stamp therefore removed the one field
+            # that would have let the sweep forget the pid after a restart,
+            # which is the case pid reuse actually happens in.
+            #
+            # So: the boot, which we know because we are writing this now, and
+            # not the start time, which we do not. `same_process` trusts an
+            # empty start time, so nothing changes within a boot; across one the
+            # record is recognisably from before it.
+            #
+            # A CHILD IS STAMPED IN FULL BY WHOEVER STARTED IT — see
+            # `record_tunnel`, which holds that knowledge where it exists.
+            if pid != os.getpid():
+                # WRITTEN ONCE, NEVER RE-MINTED. The boot recorded here is the
+                # one the number was written down in, and a later save — in a
+                # LATER boot — must not replace it with today's. That is
+                # `lockfile.refresh` laundering a previous-boot claim, in
+                # another file: it erases the evidence the sweep needs, and
+                # `collab url --rotate` saves without sweeping first, so a
+                # single rotate after a restart would bury it for good.
+                if not (held.pid == pid and held.boot):
+                    setattr(self, stamp_field,
+                            Stamp(pid=pid, boot=boot_id()).encode())
+                continue
             fresh = stamp_for(pid)
             setattr(self, stamp_field, fresh.encode() if fresh.started else "")
+
+    def record_tunnel(self, pid: int) -> None:
+        """Note the tunnel we have just started, and identify it while it runs.
+
+        CALLED BY WHOEVER STARTED IT. A start time can only be read off a live
+        process, and the one moment anybody knows for certain that this pid is
+        the tunnel is the moment it was launched — a fact that lives in the hub
+        and cannot be recovered from the file afterwards. `_restamp` therefore
+        does not try: it stamps this process and nothing else.
+        """
+        self.tunnel_pid = int(pid or 0)
+        self.tunnel_stamp = (stamp_for(self.tunnel_pid).encode()
+                             if self.tunnel_pid else "")
 
     def hub_stamp(self) -> Stamp:
         """The hub process, identified as far as this file allows."""
@@ -341,6 +395,41 @@ def stop_session(cfg: HubConfig, *, purge: bool = False) -> dict[str, Any]:
         shutil.rmtree(cfg.dir, ignore_errors=True)
         result["purged"] = True
     return result
+
+
+def update_fields(session_dir: Path, **fields: Any) -> bool:
+    """Change exactly these keys in a `hub.json`, leaving every other one alone.
+
+    NOT `HubConfig.save()`, WHICH IS A READ-MODIFY-WRITE OF THE WHOLE OBJECT.
+    Two writers is not a hypothetical here: the tunnel watcher rewrites the
+    address whenever the tunnel is relaunched, and `collab url --rotate`
+    rewrites the invite on a hub that is already running. Whole-object saves
+    race — the watcher loads, rotate saves a new invite, the watcher saves what
+    it loaded, and the invite on disk is the retired one while the store holds
+    the new. `collab url` then prints a link that opens nothing.
+
+    `reboot._sweep_hub` is the precedent and states the rule: read the JSON,
+    change only the keys you own, write everything else back exactly as it was.
+    A file that cannot be read is left alone rather than replaced by whatever
+    this process happens to be holding.
+    """
+    path = Path(session_dir) / "hub.json"
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    data.update(fields)
+    tmp = scratch(path)
+    try:
+        tmp.write_text(json.dumps(data, indent=2) + "\n")
+        os.chmod(tmp, 0o600)        # it holds the invite and the host token
+        tmp.replace(path)
+    except OSError:
+        discard(tmp)
+        return False
+    return True
 
 
 def _daemon_pid(cfg: HubConfig) -> Stamp:

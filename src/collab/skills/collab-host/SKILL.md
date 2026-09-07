@@ -334,10 +334,11 @@ in front of you.
 It outlives the turn and **not the agent**: since 1.40.0 the daemon and the hub
 stop about two minutes after the process that started them has gone, so a
 session does not go on running after you quit. Quitting and coming back costs
-nothing — your first collab command re-claims it. `collab status` says which
+nothing — your next `collab host` or `collab join` re-claims it, and those
+are the two commands that do. `collab status` says which
 agent your listener follows; start one with `--keep` if you want it left
 running when you go.
- **Arm this from inside the session you want woken**, because
+**Arm this from inside the session you want woken**, because
 reaching a live session means knowing which one, and only you know that:
 
 ```bash

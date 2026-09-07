@@ -417,3 +417,149 @@ def test_stripping_a_suffix_does_not_make_a_file_into_an_agent():
                                owner.known_names())
     assert not owner._named_in(["vim", "/usr/bin/vim", "codex.py"],
                                owner.known_names())
+
+
+# --- a dead name on the lock must not kill a live daemon ------------------------
+
+def test_a_dead_recorded_owner_does_not_displace_a_live_one(me):
+    """`recorded` is written by `host` and `join` and by nothing else, so a
+    repository whose lock still names an agent that quit hands that dead stamp
+    to the next daemon started there. Taken unconditionally it replaced a live
+    owner and stopped a daemon whose agent was working.
+    """
+    follower = owner.Follower(me)
+    assert follower.look(_dead()) == "following"
+    assert follower.owner == me
+
+
+def test_a_live_recorded_owner_still_replaces_a_dead_one(me):
+    """The adoption this exists for has to keep working."""
+    follower = owner.Follower(_dead())
+    assert follower.look(me) == "following"
+    assert follower.owner == me
+
+
+def test_a_recorded_owner_is_taken_when_there_is_none_yet(me):
+    follower = owner.Follower(None)
+    assert follower.look(me) == "following"
+
+
+# --- no owner is minted from inside a turn a daemon started ---------------------
+
+def test_a_daemon_in_the_ancestry_means_no_owner_is_named(monkeypatch):
+    """The guard `_who_owns_this` has, applied where the environment is minted
+    too — `spawn_env` had none, and the environment is the first thing a fresh
+    daemon follows, before it reads any lock."""
+    from collab.client import exclusive
+
+    monkeypatch.setattr(exclusive, "argv",
+                        lambda pid: (["/usr/bin/python3", "-m",
+                                      "collab.daemon_main", "s_1"] if pid == 30
+                                     else ["bash"]))
+    assert owner.started_by_a_daemon([10, 20, 30])
+    monkeypatch.setattr("collab.lockfile.ancestry", lambda limit=12: [10, 20, 30])
+    assert owner.current() is None
+    assert owner.ENV_OWNER not in owner.spawn_env({})
+
+
+def test_only_a_real_daemon_counts_not_something_that_names_one(monkeypatch):
+    """A substring test over the command line is fooled by anything that
+    mentions the module — a shell running a script that contains the word, this
+    project's own test harness. It is the same looseness that once made `grep
+    claude` an agent."""
+    assert owner._is_a_daemon(["/usr/bin/python3", "-m", "collab.daemon_main", "s"])
+    assert not owner._is_a_daemon(["/bin/bash", "-lc", "echo collab.daemon_main"])
+    assert not owner._is_a_daemon(["grep", "collab.daemon_main", "notes.txt"])
+    assert not owner._is_a_daemon(["python3"])
+    assert not owner._is_a_daemon([])
+
+
+def test_the_clock_it_measures_with_cannot_be_stepped():
+    """A duration on the wall clock turns «waiting» into «gone» when somebody
+    corrects the time."""
+    import time as clock
+
+    assert owner.Follower(None).now is clock.monotonic
+
+
+def test_a_tunnel_is_stamped_by_whoever_started_it(tmp_path):
+    """Not inferred from `/proc`, which is no answer at all on macOS — the
+    platform the stamp exists for. Asked there, the tunnel went unstamped and
+    the stale-pid SIGTERM this release is about came straight back."""
+    import os
+
+    from collab.server.session import HubConfig
+
+    cfg = HubConfig(session_id="s", host_name="h", port=1, bind="127.0.0.1",
+                    invite="i", host_token="t", home=str(tmp_path))
+    cfg.record_tunnel(os.getpid())
+    assert cfg.tunnel_stamp and cfg.tunnel_process().alive()
+    cfg.record_tunnel(0)
+    assert cfg.tunnel_stamp == "" and not cfg.tunnel_process().alive()
+
+
+def test_a_pid_from_an_older_file_is_never_given_a_start_time(tmp_path):
+    """The one thing `_restamp` must not vouch for: the start time of a number
+    written down by a collab that had no stamps, whose process may be dead and
+    reused. The boot IS written — see the sweep test beside this one for why
+    writing nothing at all turned out to be the worse answer."""
+    from collab.client import exclusive
+    from collab.server.session import HubConfig
+
+    cfg = HubConfig(session_id="s", host_name="h", port=1, bind="127.0.0.1",
+                    invite="i", host_token="t", home=str(tmp_path),
+                    pid=999_999)
+    cfg._restamp()
+    assert exclusive.decode(cfg.pid_stamp).started == ""
+
+
+def test_daemon_status_prints_a_json_object_and_nothing_else(tmp_path,
+                                                             monkeypatch,
+                                                             capsys):
+    """It is the default action and it is unconditionally machine-readable, so
+    a line of sweep commentary in front of it is a parse error for whatever is
+    reading. `collab status` draws the same distinction and states it."""
+    import argparse
+    import json as jsonlib
+
+    from collab import cli
+    from collab.config import SessionProfile
+
+    home = tmp_path / "collab"
+    (home / "sessions" / "s1").mkdir(parents=True)
+    profile = SessionProfile(session_id="s1", url="http://h/", name="a",
+                             host_name="h", token="t", home=str(home))
+    profile.save()
+    # a claim left by a machine that is no longer running, so the sweep has
+    # something to say — and must not say it here
+    (home / "agent.lock").write_text(jsonlib.dumps(
+        {"name": "alice", "session_id": "s1", "boot": "another-machine"}))
+    monkeypatch.setattr(cli.SessionProfile, "current", classmethod(lambda c: profile))
+    monkeypatch.setattr(cli, "is_running", lambda p: None)
+    # POINTED AT THE PLANTED LOCK. The sweep is called with no home, so it
+    # resolves the ambient one — and without this the lock above is never seen,
+    # the sweep prints nothing whatever the code does, and the test passes with
+    # the defect fully restored. Proved by reverting the fix.
+    monkeypatch.setenv("COLLAB_HOME", str(home))
+
+    code = cli.cmd_daemon(argparse.Namespace(action="status", session=None))
+    assert code == 0
+    said = capsys.readouterr().out
+    jsonlib.loads(said)                 # raises if anything preceded the object
+
+
+def test_a_pid_that_ps_did_not_answer_for_is_still_checked(monkeypatch):
+    """`ps -p a,b,c` omits a pid that exited between reading the ancestry and
+    asking, and a table with any row in it looked like a complete answer — so a
+    daemon in a missing row read as «no daemon», which is the direction that
+    costs somebody a session."""
+    from collab.client import exclusive
+
+    monkeypatch.setattr(exclusive, "_HAVE_PROC", False)
+    monkeypatch.setattr(owner, "_table", lambda chain: {111: ["sh", "/bin/sh"]})
+    monkeypatch.setattr(exclusive, "argv",
+                        lambda pid: (["/usr/bin/python3", "-m",
+                                      "collab.daemon_main", "s"] if pid == 222
+                                     else ["sh"]))
+    assert owner.started_by_a_daemon([111, 222])
+    assert not owner.started_by_a_daemon([111])

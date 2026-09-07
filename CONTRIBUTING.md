@@ -74,6 +74,10 @@ src/collab/
                    it can hold a watcher between turns
   compaction.py    typing an agent's own /compact into the pane its wake holds
   diagnostics.py   the optional local record of what the daemon and hub did
+  atomic.py        replacing a file whole where more than one process writes it
+  reboot.py        clearing records left by processes from before a restart
+  owner.py         which agent started this, and whether it is still there
+  quotas.py        asking an agent for its own allowance figures
   client/
     daemon.py      holds the feed, reconnects, writes the local inbox
     daemon_files.py  the pid, status and readers it writes down, read without it
@@ -85,6 +89,22 @@ src/collab/
 ```
 
 ## Things worth knowing before you change something
+
+**A file two processes write gets a private temp name.** `path.with_suffix(".tmp")`
+is one name per directory, so two writers share it — and collab has two records
+with two writers by design: `hub.json` (the tunnel watcher and `collab url
+--rotate`) and `agent.lock` (`_take_lock` on every host and join, and the
+daemon's heartbeat). Sharing the name gives one of two faults depending on the
+size of the record. `hub.json` came back **unreadable in 1 run of 10** at its
+real size, one writer having truncated the other's half-written document so the
+mixture was renamed into place — and that is unrecoverable, because `load` reads
+it as «no such session». `agent.lock` is written in one piece and never tore;
+instead the `replace` itself raised, on **26.8%** of `acquire` calls with both
+sides looping, and `_take_lock` does not catch, so `collab host` exited with a
+traceback. Use `collab.atomic.scratch`, and `discard` on the failure path — a
+unique name leaves a *new* file behind on every failure where a shared one left
+the same file over and over.
+
 
 **Identity is an id, never a display name.** Names change; anything that routes
 or authorises on one breaks the moment someone renames themselves — which is

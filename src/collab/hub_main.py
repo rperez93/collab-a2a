@@ -20,7 +20,7 @@ from . import __version__, diagnostics, owner as ownership, peers
 from .client.daemon_files import setup_logging
 from .config import follow_agent_enabled
 from .server.app import create_app
-from .server.session import HubConfig
+from .server.session import HubConfig, update_fields
 from .server.store import Store
 from .server.tunnel import TunnelSupervisor
 
@@ -30,6 +30,35 @@ logger = logging.getLogger(__name__)
 #: nothing. The hub is the authority on whether the session can be joined, so
 #: it must not depend on the listener to stay visible.
 REGISTRY_REFRESH = 30.0
+
+
+def remember_url(cfg: HubConfig, supervisor: TunnelSupervisor | None,
+                 url: str, address_changed: bool) -> None:
+    """Persist a public address, and the process serving it, so `collab url`
+    and `collab kill` both stay correct.
+
+    MODULE LEVEL, and `address_changed` is REQUIRED. Written as a closure inside
+    `main` this could only be tested by asserting on its source text, which pins
+    the signature and nothing else — and the flag had a default, which is what
+    let a relaunch on a reserved domain be logged as an address that moved. A
+    parameter nobody can forget is better than a default nobody notices.
+    """
+    # A relaunched tunnel is a different process, whether or not it came back on
+    # the same address — and it is the process `collab kill` needs. Stamped
+    # here, by the one code that knows which pid that is.
+    cfg.record_tunnel(supervisor.own_pid() if supervisor else 0)
+    # ONLY THE FOUR KEYS THIS OWNS. A whole-object save races `collab url
+    # --rotate` on a running hub and loses whichever invite was written first;
+    # see `session.update_fields`.
+    update_fields(cfg.dir, public_url=url, pid=os.getpid(),
+                  tunnel_pid=cfg.tunnel_pid, tunnel_stamp=cfg.tunnel_stamp)
+    if address_changed:
+        logger.warning("tunnel came back on a new address: %s", url)
+    else:
+        # A NEW PROCESS ON THE SAME ADDRESS, which is what a reserved domain
+        # gives. Saying it moved would be false in the one log troubleshooting
+        # sends people to.
+        logger.info("tunnel relaunched on the same address")
 
 
 class RegistryHeartbeat:
@@ -171,23 +200,16 @@ def main() -> int:
         # Only what we started: a tunnel we merely reused belongs to whoever
         # launched it, and stopping it would be taking something that is not
         # ours.
-        cfg.tunnel_pid = supervisor.own_pid()
+        cfg.record_tunnel(supervisor.own_pid())
     else:
         cfg.public_url = ""
         cfg.tunnel = "none"
-        cfg.tunnel_pid = 0
+        cfg.record_tunnel(0)
     # Written before serving so `collab host` can print the real URL.
     cfg.save()
 
-    def remember_url(url: str) -> None:
-        """Persist a new public address so `collab url` stays correct."""
-        latest = HubConfig.load(cfg.session_id, cfg.home) or cfg
-        latest.public_url = url
-        latest.pid = os.getpid()
-        # A relaunched tunnel is a different process.
-        latest.tunnel_pid = supervisor.own_pid() if supervisor else 0
-        latest.save()
-        logger.warning("tunnel came back on a new address: %s", url)
+    def on_url(url: str, address_changed: bool) -> None:
+        remember_url(cfg, supervisor, url, address_changed)
 
     store = Store(cfg.db_path)
     app = create_app(
@@ -197,7 +219,7 @@ def main() -> int:
         public_url=cfg.public_url or cfg.local_url,
         title=cfg.title,
         supervisor=supervisor,
-        on_url_change=remember_url,
+        on_url_change=on_url,
     )
     registry = RegistryHeartbeat(cfg)
     registry.start()
@@ -209,6 +231,7 @@ def main() -> int:
         # From outside, a hub that crashed and a hub somebody killed look
         # identical — a gone process and a session nobody can join.
         diagnostics.exception("hub", exc, event="crash")
+        diagnostics.flush()             # the process is going; see URGENT
         raise
     finally:
         registry.stop()

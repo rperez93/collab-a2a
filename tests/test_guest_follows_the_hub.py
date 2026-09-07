@@ -18,6 +18,7 @@ import pathlib
 import time
 import types
 
+import json
 import pytest
 
 from collab import peers
@@ -395,13 +396,39 @@ def test_when_nothing_can_be_followed_it_says_so(tmp_path, caplog):
     assert "no address that is safe to follow" in caplog.text
 
 
-def test_hub_json_is_written_whole_or_not_at_all(tmp_path):
+def test_hub_json_is_written_whole_or_not_at_all(tmp_path, monkeypatch):
     """It is rewritten while a tunnel comes back on a new address — exactly
     when everything else is reading it — and a reader that caught the gap
-    concluded the session had no hub."""
-    import inspect
+    concluded the session had no hub.
 
-    from collab.server.session import HubConfig
+    This asked `inspect.getsource` whether the word «.tmp» appeared in `save`,
+    which stopped being true when both writers moved to a shared helper — and
+    would have stayed true if the rename were deleted, since the word is in the
+    comment. It asks the file instead: the record is never written in place, and
+    a write that fails leaves the previous one whole.
+    """
+    from collab.server import session as s
 
-    source = inspect.getsource(HubConfig.save)
-    assert ".tmp" in source and "replace(" in source, "atomic, like every other write"
+    cfg = s.HubConfig(session_id="s", host_name="h", port=1, bind="127.0.0.1",
+                      invite="one", host_token="t", home=str(tmp_path), pid=0)
+    cfg.save()
+    final = cfg.dir / "hub.json"
+
+    written: list[str] = []
+    real = s.Path.write_text
+    monkeypatch.setattr(s.Path, "write_text",
+                        lambda self, *a, **k: (written.append(self.name),
+                                               real(self, *a, **k))[1])
+    cfg.invite = "two"
+    cfg.save()
+    assert final.name not in written, "the live file was written in place"
+    assert json.loads(final.read_text())["invite"] == "two"
+
+    # A write that cannot be completed leaves the record it replaces untouched.
+    monkeypatch.setattr(s.Path, "replace",
+                        lambda *_a, **_k: (_ for _ in ()).throw(OSError("no")))
+    cfg.invite = "three"
+    with pytest.raises(OSError):
+        cfg.save()
+    assert json.loads(final.read_text())["invite"] == "two"
+    assert sorted(p.name for p in cfg.dir.iterdir()) == ["hub.json"]
