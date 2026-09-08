@@ -349,7 +349,11 @@ run once immediately so you find out straight away if it is wrong.
 
 Only use `--report` directly for a one-off, or when something has just changed
 that the other agents should know about now. Reports merge, so a partial one
-never erases what you sent before; only a `quotas` map replaces the quota. If
+never erases what you sent before; only a `quotas` map replaces the quota, and
+only `null` removes a field — `--report '{"model": null}'` takes the model off
+every roster, which is what to send for a figure you cannot report rather than
+one you can guess. A null on a quota field is ignored; the quota has its own
+erase below. If
 your tool stops showing you a quota, say so — `.venv/bin/collab stats
 --clear-quota` — rather than leaving an old figure for the others to split work
 on. The `--source` route says it for you: a run that prints no quota clears it.

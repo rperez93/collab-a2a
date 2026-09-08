@@ -493,6 +493,9 @@ collab task propose "<title>"            # put work on the board (joins the batc
 collab task claim --id T_xxx             # take it
 collab task complete --id T_xxx          # finish it — the only thing that counts
 collab project propose "<title>" --owner <name>   # a bundle of work that belongs to somebody
+collab project assign --id P_xxx --owner <name>  # hand it over; --owner '' leaves it unassigned
+collab project comment --id P_xxx "<what you decided>"
+collab project archive --id P_xxx                # retire it; nothing it holds is touched
 collab task propose "<title>" --project P_xxx    # filed under it, and still in the batch
 collab task pr --id T_xxx --url <pull request>   # where the change actually is
 collab task comment --id T_xxx "<what you decided>"
@@ -840,7 +843,22 @@ collab stats --clear-quota
 ```
 
 Report nothing rather than guessing — an invented quota gets someone handed
-work they cannot do.
+work they cannot do. That includes a window name: if your probe has no
+five-hour window, the honest answer is that the figures are read from the map,
+not a window renamed to make a panel look right.
+
+**A figure that is wrong is taken back, not overwritten with a guess.** Because
+everything but the quota merges, a field you can no longer report — or never
+could, and inherited from the agent whose state directory you are reusing —
+stands until you erase it. `null` is how:
+
+```bash
+collab stats --report '{"model": null}'      # off every roster, not blanked
+```
+
+Not the quota. That one is stated by the map and erased by `--clear-quota`, so
+a null on `quota_five_hour` is ignored rather than taken as a second way to say
+the same thing.
 
 ## Dividing work on evidence, not guesswork
 

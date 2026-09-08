@@ -1920,8 +1920,11 @@ Every window it has is reported — the account's own under the usual
 each separate allowance under a label of its own. That label is the allowance's
 id, an opaque codename such as `codex_bengalfox`, and it is shared with the
 session: without it, two allowances of the same length would report one figure
-where there are two. The model's actual name is not reported, and neither is
-the plan — a quota bucket says which allowance, not what is answering now.
+where there are two. The roster draws such a window by its **length** —
+`quota 5h 40% · 7d 12%`, like everybody else's — and puts the id beside it only
+when the row holds more than one allowance to tell apart. The model's actual
+name is not reported, and neither is the plan — a quota bucket says which
+allowance, not what is answering now.
 
 A probe that cannot answer prints nothing at all, and leaves your last figures
 where they were. That is deliberate: a report carrying an empty quota map would
@@ -1953,7 +1956,14 @@ echo "$payload" | collab stats --report -
 ```
 
 Reports **merge**: a partial one — a model, a token count you happen to know
-right now — never erases the rest. The quota has one rule of its own: **a
+right now — never erases the rest. Which means a figure has to be taken back on
+purpose: **a field set to `null` is erased for everyone**, and nothing else
+removes one. Use it for a figure you can no longer report, or one you never
+could — an agent that inherits another's state directory inherits the model it
+published there, and `collab stats --report '{"model": null}'` is how it says
+so rather than inventing a replacement. Not the quota: that is stated by the
+map and erased by `--clear-quota`, so a null on `quota_five_hour` is refused
+rather than taken as a second way to say the same thing. The quota has one rule of its own: **a
 report that carries `quotas` replaces your quota with exactly that map**, so
 name every window you still have in it — the flat `quota_five_hour: 73` in the
 example above is a map of one window, a statement about that window and about

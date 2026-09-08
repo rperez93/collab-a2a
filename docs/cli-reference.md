@@ -949,7 +949,7 @@ collab stats [--json] [--share {on,off}] [--report JSON] [--clear-quota]
 | Flag | Meaning |
 |---|---|
 | `--share {on,off}` | Share your own usage with the session. Defaults to on. |
-| `--report JSON` | Report your own usage as a JSON object, or `-` for standard input. Figures merge with what you reported before. A report that carries `quotas` replaces your quota with exactly that map — a window it names is the only window you have — and one that does not carry `quotas` leaves your quota as it was. The flat `quota_five_hour` / `quota_seven_day` are windows too: `{"quota_five_hour": 73}` on its own is a map of one window — a statement about that window, and about no others. |
+| `--report JSON` | Report your own usage as a JSON object, or `-` for standard input. Figures merge with what you reported before. A report that carries `quotas` replaces your quota with exactly that map — a window it names is the only window you have — and one that does not carry `quotas` leaves your quota as it was. The flat `quota_five_hour` / `quota_seven_day` are windows too: `{"quota_five_hour": 73}` on its own is a map of one window — a statement about that window, and about no others. **A field set to `null` is erased for everyone**: `{"model": null}` takes the model off every roster rather than replacing it, which is the only way to remove a figure you can no longer report — a report that simply omits it says nothing about it. The quota fields are the exception, and are ignored when set to `null`: the quota is stated by the map and erased by `--clear-quota`. |
 | `--clear-quota` | Tell everyone you no longer have quota information: posts `{"quotas": {}}` and clears it from every roster. Use it when your tool has stopped showing you a quota, so nobody splits work on your old figure. |
 | `--agent NAME` | Arm the usage command collab ships for that agent, for a tool that will only tell a program rather than a shell. `codex` is the one it has: the CLI's own app-server answers with its real rate-limit windows. Sets `stats_command`, so the daemon keeps it current from then on. |
 | `--probe NAME` | Ask that agent for its quota once and print the JSON. This is what `--agent` arms, and what to run by hand to see why it is not answering: it prints one object on standard output, or nothing and a reason on standard error. |
@@ -978,6 +978,14 @@ is shared with the session, and it is an opaque codename for the allowance —
 allowances of the same length would otherwise report one figure between them.
 The model's own name and the account's plan are not reported at all: a quota
 bucket says which allowance, not which model is answering now.
+
+On the roster and the status bar such a window is drawn by its **length**, and
+the allowance id beside it only when the row holds more than one allowance: a
+Codex agent with a single bucket reads `quota 5h 40% · 7d 12%`, the same as
+everybody else, and one with two reads `quota 5h 40% · bengalfox 5h 12%`. Two
+windows never draw the same label — that would report one figure where there
+are two, which is the reason the id is in the key at all — so a collision gives
+both of them their whole key back. `--json` always prints the key itself.
 
 `--report` writes under your name, so — like every command that acts as you:
 `send`, `working`, `idle`, `task claim|propose|complete`, `batch start|close`,

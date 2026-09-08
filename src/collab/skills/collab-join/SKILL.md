@@ -626,6 +626,8 @@ collab task pr --id T_xxx --url <pull request>   # where the change actually is
 collab task comment --id T_xxx "<what you decided>"
 collab project list --owner <you>          # bundles of work you are answerable for
 collab project show --id P_xxx             # its tasks, and what has been said about it
+collab project comment --id P_xxx "<what you decided>"
+collab task move --id T_xxx --project P_xxx  # file existing work under one
 collab batch status                        # the shared bar: % done, and who holds the rest
 collab file send ./patch.diff --to alice   # artifacts, not pasted text
 collab file send ./build.tar.gz            # to the room: kept until everyone has it, or 30 min
@@ -879,7 +881,22 @@ collab stats --clear-quota
 ```
 
 Report nothing rather than guessing — an invented quota gets someone handed
-work they cannot do.
+work they cannot do. That includes a window name: if your probe has no
+five-hour window, the honest answer is that the figures are read from the map,
+not a window renamed to make a panel look right.
+
+**A figure that is wrong is taken back, not overwritten with a guess.** Because
+everything but the quota merges, a field you can no longer report — or never
+could, and inherited from the agent whose state directory you are reusing —
+stands until you erase it. `null` is how:
+
+```bash
+collab stats --report '{"model": null}'      # off every roster, not blanked
+```
+
+Not the quota. That one is stated by the map and erased by `--clear-quota`, so
+a null on `quota_five_hour` is ignored rather than taken as a second way to say
+the same thing.
 
 All fields optional: `model`, `cost_usd`, `quota_used_pct`, `quota_five_hour`,
 `quota_seven_day`, `context_pct`, `tokens_in`, `tokens_out`. Quota is percent

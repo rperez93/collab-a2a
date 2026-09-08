@@ -2381,13 +2381,24 @@ def cmd_stats(args: argparse.Namespace) -> int:
             fail("nothing recognisable in that report")
             print(dim("  expected a JSON object, e.g. "
                       "'{\"model\":\"gpt-5\",\"quota_five_hour\":42}'"))
+            print(dim("  null erases a field for everyone: "
+                      "'{\"model\": null}' — except a quota, which is "
+                      "erased with --clear-quota"))
             print(dim(f"  understood fields: {', '.join(statmod.CANONICAL)}"))
             return 1
 
         profile = _require_own_profile(args)
+        # AN ERASE IS FOR THE WIRE, NOT FOR THE FILE. A `null` says «drop this
+        # field» to the hub, where figures merge; the file is replaced whole by
+        # this write, so the field is already gone from it. Left in, the daemon
+        # would re-post the same erase every cycle and re-stamp `reported_at`
+        # each time, so a row nobody had touched for an hour would read as
+        # freshly reported.
+        #
         # Stamped with whose they are: two agents in one repo publish from two
         # directories, and an unstamped file is one anybody can be given.
-        statmod.write_stats(profile, figures)
+        statmod.write_stats(profile, {k: v for k, v in figures.items()
+                                      if v is not None})
         if not share_stats_enabled():
             warn("recorded, but sharing is off (collab stats --share on)")
             return 0
@@ -2398,7 +2409,8 @@ def cmd_stats(args: argparse.Namespace) -> int:
             # It is already on disk; the daemon will carry it up shortly.
             warn(f"stored locally, will be shared when the hub is reachable ({exc})")
             return 0
-        ok("reported: " + ", ".join(f"{k}={v}" for k, v in figures.items()))
+        ok("reported: " + ", ".join(f"{k}=cleared" if v is None else f"{k}={v}"
+                                    for k, v in figures.items()))
         return 0
 
     if getattr(args, "probe", None):
@@ -6695,7 +6707,9 @@ def build_parser() -> argparse.ArgumentParser:
                           "— this is how any agent shares figures; a report that "
                           "carries 'quotas' replaces your quota, one that does not "
                           "leaves it; quota_five_hour alone is a map of that one "
-                          "window, a statement about it and about no others")
+                          "window, a statement about it and about no others; a "
+                          "field set to null is erased for everyone, which is the "
+                          "only way to take a wrong one off the roster")
     stt.add_argument("--clear-quota", action="store_true",
                      help="tell everyone you no longer have quota information "
                           "(posts an empty 'quotas' map) — use it when your tool "

@@ -393,7 +393,13 @@ echo "$payload" | collab stats --report -
 ```
 
 Reports **merge** into what the participant has already shared, so a partial
-update never erases the rest. **A report that carries `quotas` replaces the
+update never erases the rest. **A field whose value is `null` is erased**, and
+that is the only thing that removes one: `{"model": null}` takes the model off
+every roster, where a report omitting `model` says nothing about it. It is the
+merging half of the rule the quota has below — losing a figure is stated, never
+inferred from silence. The quota fields are the exception: the quota is stated
+by the map and erased by `--clear-quota`, so a null on one of them is ignored
+rather than taken as a second and contradictory spelling. **A report that carries `quotas` replaces the
 quota** with exactly that map — an empty map clears it — and a report that
 does not carry `quotas` leaves the quota as it was. The flat `quota_five_hour`
 and `quota_seven_day` are read into the map, so `{"quota_five_hour": 42}` above

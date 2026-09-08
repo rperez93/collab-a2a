@@ -234,6 +234,19 @@ class Hub:
                 merged.pop(key, None)
 
         merged.update(incoming)
+        # AN EXPLICIT NULL TAKES A FIELD OFF THE ROSTER, and nothing else does.
+        # Everything that is not quota merges, so a figure once reported stood
+        # for the life of the session however wrong it had become: an agent
+        # that reused another's state directory published that agent's `model`
+        # — «Opus 5» beside a Codex participant — and had no way to say
+        # otherwise, because a report that omits a field says nothing about it
+        # and there was no value meaning «none». Null is that value. It is the
+        # merging half of the rule the quota already has in `--clear-quota`:
+        # losing sight of a figure is said on purpose, never guessed at from
+        # silence.
+        for key, value in incoming.items():
+            if value is None:
+                merged.pop(key, None)
         # AN EMPTY MAP IS A STATEMENT ON THE WAY IN, NOT A FIGURE ON THE WAY
         # OUT. It has done its work above; stored, it would be published to
         # every roster as a quota-shaped field saying nothing, and `collab

@@ -70,6 +70,15 @@ emitted, derived from the map, so anything reading the older fields keeps
 working. At most `MAX_WINDOWS` (8) windows are kept: a roster line is not a
 dashboard.
 
+Later than the pin, they are derived from a window's **length** rather than
+from a key spelled exactly `five_hour`, and only where one window has that
+length. A prefixed key — `codex_bengalfox_five_hour`, from the buckets
+described below — used to derive nothing at all, so on an account whose
+five-hour allowance lives in a bucket, and such accounts exist, every reader of
+the older flat form saw nothing for that agent. Where two allowances share a
+length the flat field stays absent: it would have to name one of two and could
+not say which, and the map beside it already says both.
+
 # Percent used, never percent remaining
 
 This is the one direction error the module names explicitly.[^stats-src] Some
@@ -114,6 +123,40 @@ Three routes, and the third is the one that needs no diligence:
    A probe that cannot answer prints nothing, and that follows from the rule
    above rather than from caution: a report omitting `quotas` leaves the stored
    windows alone, while one carrying an empty map replaces them.
+
+   The prefix is a fact about the KEY and, later than the pin, no longer a fact
+   about the drawing. A window is labelled by its length, and the allowance id
+   appears beside it only when the row holds more than one allowance to tell
+   apart — so one bucket reads `quota 5h 40% · 7d 12%` and two read
+   `quota 5h 40% · bengalfox 5h 12%`. It was labelled by trimming the key from
+   the left against a fourteen-column budget, which spent the budget on the id
+   and dropped the length: three windows of one bucket all drew as `codex`,
+   which is where a reader looks to decide who takes the next task.
+
+# Taking a figure back
+
+Everything except the quota **merges**: an agent learns its figures one at a
+time, and a report carrying one says nothing about the others. The cost of that
+rule, which is later than the pin, is that a figure once reported stood for the
+life of the session however wrong it had become — there was no value meaning
+*none*, since omitting the field says nothing about it and every other value is
+a claim.
+
+`null` is that value: a field set to it is dropped from every roster. The case
+it was written for is seat reuse — an agent that starts in the state directory
+another agent used publishes under that seat, and inherits the `model` string
+its predecessor wrote there. A Codex participant showing `Opus 5` had no way to
+correct it except to invent a model, which is the failure the whole feature
+exists to prevent: work is split on these figures. It is the merging half of
+the rule the quota already had in `--clear-quota` — losing sight of a figure is
+said on purpose, never inferred from silence.
+
+The quota fields are the exception, and the exception is the quota's own rule
+rather than a special case: the quota is stated by the `quotas` map and erased
+by `--clear-quota`, so a null on `quota_five_hour` is ignored. Taken instead,
+it derived a window whose figure was null, replaced the agent's own stats file
+with that one junk window, and — the sanitiser then dropping it, so nothing
+carried `quotas` — left the hub holding the stale quota indefinitely.
 
 Sharing is **on by default**, because the whole point is that an agent can
 weigh up who has quota left before handing out work. `collab stats --share off`

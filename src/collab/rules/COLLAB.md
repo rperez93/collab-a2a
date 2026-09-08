@@ -239,6 +239,12 @@ quota available.** Do not under-load them on the strength of a missing number.
 **An agent that has lost sight of its quota says so** — `collab stats --clear-quota` —
 rather than leaving an old figure for the split to be made on.
 
+**A figure that is wrong is taken back, not overwritten with a guess.** Everything
+except the quota merges, so `collab stats --report '{"model": null}'` is what erases
+one — the case being an agent that inherited another's state directory and with it the
+model that agent published. Never invent a value to make a panel look right; the panel
+is drawn from the figures work is actually split on.
+
 **Done when:** the split is defensible from `collab stats --json`, not from impression.
 
 ---
@@ -340,6 +346,10 @@ collab project propose "<title>" --owner <name>   # a bundle that belongs to som
 collab task propose "<title>" --project P_xxx     # filed under it, still in the batch
 collab task move --id T_xxx --project P_xxx       # file existing work, changes nothing else
 collab project show --id P_xxx                    # its tasks, and what has been said
+collab project assign --id P_xxx --owner <name>   # hand it over, or --owner '' to unassign
+collab project comment --id P_xxx "<what you decided>"
+collab project archive --id P_xxx                 # retire it; its tasks are untouched
+collab project list --archived                    # the retired ones too
 ```
 
 **Say what you did, where the work is.** A task carries comments and the pull requests it

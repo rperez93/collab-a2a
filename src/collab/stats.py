@@ -66,7 +66,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Sequence
 
 from .protocol import MONTHS, local_day_clock  # noqa: F401
 #: `MONTHS` is a RE-EXPORT and is not read in this module — the comment here
@@ -119,6 +119,16 @@ WINDOW_ALIASES = {
 #: A roster line is not a dashboard.
 MAX_WINDOWS = 8
 
+#: How many columns a window's label may take beside its percentage. It is the
+#: roster row and the status bar that set it: past this the figure stops fitting
+#: and the row starts wrapping. What it bounds is the ALLOWANCE id — the length
+#: of a window collab can RECOGNISE is never trimmed away to meet it, which is
+#: the defect `split_window` was written for. A key whose window is spelled in
+#: words collab has no grammar for — `<id>_requests_per_minute` — cannot be
+#: split, so there is no id to shorten and the old left-trim still answers; no
+#: shape `quotas.window_name` emits is in that case.
+MAX_WINDOW_LABEL = 14
+
 #: Fields that arrive as "how much is left" and mean the opposite of ours.
 INVERTED = {
     "remaining_fraction": "quota_used_pct",
@@ -162,6 +172,13 @@ MAX_STRING = 64
 
 
 def _coerce(field: str, value: Any) -> Any | None:
+    # NOTHING IS NOT A FIGURE. `str(None)` is `"None"`, so a JSON `null` used to
+    # coerce into the four-letter STRING for every text field — `collab stats
+    # --report '{"model": null}'` put the word «None» on everybody's roster as
+    # the model. Null is handled by the callers, as an erase; it never reaches
+    # a conversion.
+    if value is None:
+        return None
     kind = CANONICAL[field]
     try:
         if kind is str:
@@ -198,13 +215,96 @@ def _take(out: dict[str, Any], key: str, value: Any) -> None:
     field = key if key in CANONICAL else ALIASES.get(key, "")
     if not field or field not in CANONICAL:
         return
+    # AN EXPLICIT NULL IS A STATEMENT, and the only one that can take a merged
+    # field off the roster. See `sanitise` and `server.hub.Hub.merge_stats`.
+    #
+    # NOT ON A QUOTA FIELD, and that exception is the whole of the quota's own
+    # rule. The quota is stated by the `quotas` map and replaced entire, so a
+    # null on a flat quota field is a second, contradictory way to say the same
+    # thing — and it did worse than contradict: `field in out` became true for
+    # a null, the derivation below injected `five_hour: {used_pct: null}` as a
+    # window, and `--report '{"quota_five_hour": null}'` REPLACED the agent's
+    # own stats file with that one junk window. The real figures went, the
+    # sanitiser then dropped the junk so nothing carried `quotas`, and the hub
+    # kept the stale quota for ever — work split on a figure nobody had
+    # reported. Erasing a quota has one spelling and it is `--clear-quota`.
+    if value is None:
+        if field in QUOTA_FIELDS:
+            return
+        out.setdefault(field, None)
+        return
     if (coerced := _coerce(field, value)) is not None:
         out.setdefault(field, coerced)
 
 
-def _window_name(raw: str) -> str:
+#: How long a window's key may be. It is a key in a map published to every
+#: participant, so it is bounded like every other string that arrives from
+#: somebody else.
+MAX_WINDOW_KEY = 32
+
+
+def _window_full(raw: str) -> str:
+    """One window's key, normalised and NOT yet bounded.
+
+    Two spellings of one window — `Five Hour` and `five_hour`, `5h` and
+    `seven_day`'s aliases — land here as the same string, which is what lets
+    the readers below merge them rather than draw both. It is the identity of a
+    window; `_window_name` is what fits that identity into a published key.
+    """
     name = str(raw).strip().lower().replace("-", "_").replace(" ", "_")
-    return WINDOW_ALIASES.get(name, name)[:32]
+    return WINDOW_ALIASES.get(name, name)
+
+
+def _free_window(taken: dict[str, Any], name: str) -> str:
+    """`name`, or the next spelling of it no window here has taken.
+
+    THE CAP CAN MAKE TWO KEYS ONE. `_window_name` keeps the window and shortens
+    the allowance id, which leaves 22 characters of id in front of a `five_hour`
+    tail — so two limit ids differing only after that collapse into one key, and
+    the reader that stored them would drop a window without saying so. That is
+    the failure `quotas._free` exists to prevent one layer down, undone one layer
+    up; this is the same answer in the same shape. Only the callers can see it,
+    because only they know what the map already holds.
+    """
+    if name not in taken:
+        return name
+    for n in range(2, 100):
+        marker = f"_{n}"
+        # Re-capped rather than appended to: `<32 chars>_2` is 34, and the copy
+        # marker is part of the tail `_window_name` protects, so the id gives up
+        # the two columns instead of the marker falling off the end.
+        candidate = _window_name(f"{name}{marker}")
+        if candidate == name:
+            # UNLESS THERE IS NO ID TO GIVE UP. A name whose window is outside
+            # `_names_a_window`'s grammar cannot be split, so the cap takes the
+            # marker off the end and hands back the name unchanged — which
+            # would spin here and then overwrite. Room comes off the tail
+            # instead: a name nothing can parse has no half worth protecting.
+            candidate = name[:MAX_WINDOW_KEY - len(marker)] + marker
+        if candidate not in taken:
+            return candidate
+    return name
+
+
+def _window_name(raw: str) -> str:
+    """One window's key, normalised and bounded."""
+    name = _window_full(raw)
+    if len(name) <= MAX_WINDOW_KEY:
+        return name
+    # SHORTENED FROM THE HEAD, KEEPING THE WINDOW. `quotas._slug` allows a limit
+    # id of forty characters, so `<id>_seven_day_opus` is fifty-five and a cut
+    # from the right took the window's length off the key altogether — the same
+    # defect `split_window` exists for, one layer down and past recovering from,
+    # because by then the length is not in the datum at all. The id is the half
+    # that is shortened; it says WHICH allowance, and the length says what the
+    # reader came for.
+    bucket, window, copy = split_window(name)
+    if not bucket:
+        return name[:MAX_WINDOW_KEY]
+    tail = f"{window}_{copy}" if copy else window
+    room = MAX_WINDOW_KEY - len(tail) - 1
+    head = bucket[:room] if room > 0 else ""
+    return f"{head}_{tail}".strip("_")[:MAX_WINDOW_KEY]
 
 
 def _window_figures(value: Any) -> dict[str, Any]:
@@ -226,6 +326,12 @@ def _window_figures(value: Any) -> dict[str, Any]:
             if (pct := _coerce("quota_used_pct", inner)) is not None:
                 out.setdefault("used_pct", pct)
         elif lowered in ("resets_at", "reset_time", "reset_at", "renews_at"):
+            # `str(None)` is `"None"` and `"None"` is truthy, so a null reset
+            # was stored as the four-letter word and the panel drew
+            # «quota 5h 40% (→None)». The same defect `_coerce` refuses at the
+            # top, one function away and on the very row this exists to draw.
+            if inner is None:
+                continue
             text = str(inner).strip()[:MAX_STRING]
             if text:
                 out.setdefault("resets_at", text)
@@ -237,6 +343,7 @@ def collect_quotas(data: Any) -> dict[str, dict[str, Any]]:
     if not isinstance(data, dict):
         return {}
     windows: dict[str, dict[str, Any]] = {}
+    chosen: dict[str, str] = {}
     sources = [data.get("quotas")]
     for key in ("rate_limits", "limits", "quota"):
         sources.append(data.get(key))
@@ -251,8 +358,22 @@ def collect_quotas(data: Any) -> dict[str, dict[str, Any]]:
                     "used_percentage", "used_pct", "resets_at", "reset_time"):
                 continue
             figures = _window_figures(value)
-            if figures and len(windows) < MAX_WINDOWS:
-                windows.setdefault(_window_name(raw_name), {}).update(figures)
+            if not figures:
+                continue
+            # ONE KEY PER WINDOW IDENTITY, and a new identity only while there
+            # is room. Keyed on the FULL name so that two spellings of one
+            # window still merge — the sources below are read one after another
+            # and the same window appears in more than one of them — while two
+            # genuinely different windows whose keys the cap shortened into one
+            # get told apart rather than silently overwriting each other.
+            full = _window_full(raw_name)
+            key = chosen.get(full)
+            if key is None:
+                if len(windows) >= MAX_WINDOWS:
+                    continue
+                key = _free_window(windows, _window_name(raw_name))
+                chosen[full] = key
+            windows.setdefault(key, {}).update(figures)
     return windows
 
 
@@ -335,6 +456,8 @@ def normalise(data: Any) -> dict[str, Any]:
         # Keep the older flat fields populated so anything reading them works.
         for window, field in flat:
             pct = windows.get(window, {}).get("used_pct")
+            if pct is None:
+                pct = _sole_window(windows, window)
             if pct is not None:
                 out[field] = pct
         if "quota_used_pct" not in out and len(windows) == 1:
@@ -343,6 +466,28 @@ def normalise(data: Any) -> dict[str, Any]:
                 out.setdefault("quota_used_pct", only["used_pct"])
 
     return out
+
+
+def _sole_window(windows: dict[str, dict[str, Any]], window: str) -> float | None:
+    """The figure for a window of this length, whatever allowance it belongs to.
+
+    A Codex bucket names its five-hour window `codex_bengalfox_five_hour`, and
+    the flat fields were derived only from a key spelled `five_hour` exactly —
+    so on an account whose five-hour allowance lives in a bucket, and there are
+    such accounts, `quota_five_hour` was never derived at all. Every reader of
+    the older flat form saw nothing for that agent, including the documented
+    one-liner integration this module's docstring offers as the whole of an
+    integration.
+
+    ONLY WHEN ONE WINDOW HAS THAT LENGTH. With two five-hour allowances the
+    flat field would have to pick one and could not say which: a figure that
+    describes one of two while naming neither is worse than no figure, and the
+    map beside it says both.
+    """
+    found = [figures["used_pct"] for name, figures in windows.items()
+             if split_window(name)[1] == window
+             and isinstance(figures, dict) and figures.get("used_pct") is not None]
+    return found[0] if len(found) == 1 else None
 
 
 def whole_picture(figures: dict[str, Any]) -> dict[str, Any]:
@@ -389,9 +534,26 @@ def sanitise(reported: dict[str, Any]) -> dict[str, Any]:
             # accepted; every dropped window is a step towards the failure
             # below.
             windows: dict[str, dict[str, Any]] = {}
+            chosen: dict[str, str] = {}
             for name, figures in list(value.items())[:MAX_WINDOWS]:
-                if (kept := _window_figures(figures)):
-                    windows[_window_name(name)] = kept
+                if not (kept := _window_figures(figures)):
+                    continue
+                # See `collect_quotas`: two spellings of one window are one
+                # window, and two windows the cap shortened into one key are
+                # still two. Overwriting either way loses a figure in silence.
+                full = _window_full(name)
+                if (key := chosen.get(full)) is None:
+                    # Not `setdefault`: it would allocate a free spelling on
+                    # every pass and throw all but the first away.
+                    key = chosen[full] = _free_window(windows, _window_name(name))
+                # UPDATED, NOT REPLACED, which is what `collect_quotas` does with
+                # the same input and what the comment above claims. Assigning
+                # meant `{"five_hour": {"used_pct": 40}, "5h": {"resets_at": …}}`
+                # — one window in two spellings, each carrying half of it —
+                # stored only the reset. `quota_summary` draws no window without
+                # a `used_pct`, and a non-empty map is a whole quota statement,
+                # so the 40% went off every roster in the session.
+                windows.setdefault(key, {}).update(kept)
             # `{}` IS A STATEMENT; `{"five_hour": "lots"}` IS NOISE, and noise
             # is never promoted to a statement. Emitting the windows
             # unconditionally — needed so an explicit empty map survives to
@@ -406,6 +568,26 @@ def sanitise(reported: dict[str, Any]) -> dict[str, Any]:
                 out["quotas"] = windows
             continue
         if isinstance(value, (dict, list)):
+            continue
+        # NULL SURVIVES SANITISING, alone among the things that coerce to
+        # nothing. Everything but the quota MERGES at the hub, so a field an
+        # agent has stopped being able to report — or never could, and
+        # inherited from whoever held the seat before it — stays on every
+        # roster for the life of the session with nothing that removes it. A
+        # Codex agent that reports no model at all showed «Opus 5», written
+        # weeks earlier by the agent whose state directory it had reused, and
+        # the only remedies were to invent a model or to leave the lie up.
+        # `{"model": null}` is neither: it says «I have no model», which is
+        # true, and `merge_stats` drops the field.
+        if value is None and (key in CANONICAL or isinstance(key, str)):
+            # The quota is never erased a field at a time; see `_take`.
+            if key in QUOTA_FIELDS:
+                continue
+            if key in CANONICAL:
+                out[key] = None
+            elif extras < MAX_EXTRA_FIELDS:
+                out[key[:MAX_STRING]] = None
+                extras += 1
             continue
         if key in CANONICAL:
             if (coerced := _coerce(key, value)) is not None:
@@ -622,22 +804,261 @@ def read_stats(profile: Any) -> dict[str, Any]:
     return {k: v for k, v in data.items() if k != OWNER_KEY}
 
 
-def window_label(name: str) -> str:
-    """A short name for a window, falling back to whatever the agent called it.
+def _names_a_window(name: str) -> bool:
+    """Whether this names the allowance WINDOW rather than the allowance.
+
+    Either one of the names collab has a word for, or one of the lengths
+    `quotas.window_name` builds for a duration nobody has a word for —
+    `3_hour`, `30_day`, `90_minute`.
+    """
+    if name in KNOWN_WINDOWS or name in WINDOW_ALIASES:
+        return True
+    head, _, unit = name.rpartition("_")
+    return bool(head) and head.isdigit() and unit in ("day", "hour", "minute")
+
+
+def split_window(name: str) -> tuple[str, str, int]:
+    """One window key as (allowance, window, copy).
+
+    A Codex bucket names its windows `<limit id>_<window>` —
+    `codex_bengalfox_five_hour` — because the limit id is the only thing that
+    tells two allowances of the same length apart; see `collab.quotas`. So the
+    part that says HOW LONG the window runs is the tail, and the opaque id is
+    the head.
+
+    `window_label` trimmed from the left against a fourteen-column budget,
+    which spent the whole budget on the id and dropped the tail. Measured on a
+    real Codex account with no account-level `rateLimits`: three windows, and
+    the roster drew «quota codex 40% · codex 12% · codex 3%» — three identical
+    labels, no window length anywhere, and no way to tell which figure was the
+    five-hour one the next task would be split on.
+
+    `copy` is the `_2` that `quotas._free` appends when two limit ids reduce to
+    one slug; 0 when there is none.
+    """
+    parts = [part for part in str(name).split("_") if part]
+    if not parts:
+        return "", str(name), 0
+    copy = 0
+    # A trailing number is a copy marker only if what is left still names a
+    # window: `five_hour_2` is the second five-hour allowance, `gpt_5` is not
+    # a window at all and keeps its 5.
+    if len(parts) > 1 and parts[-1].isdigit() and _split_at(parts[:-1]) is not None:
+        copy = int(parts[-1])
+        parts = parts[:-1]
+    at = _split_at(parts)
+    if at is None:
+        return "", "_".join(parts), copy
+    return "_".join(parts[:at]), "_".join(parts[at:]), copy
+
+
+def _split_at(parts: list[str]) -> int | None:
+    """Where the window name starts in these segments — the LONGEST tail that
+    names one, so `codex_seven_day_opus` keeps `seven_day_opus` whole."""
+    for at in range(len(parts)):
+        if _names_a_window("_".join(parts[at:])):
+            return at
+    return None
+
+
+def _window_words(window: str) -> str:
+    """A short name for a window's length, falling back to what it was called.
 
     Truncation drops the trailing partial word rather than cutting through it —
     "requests per" reads as a mistake where "requests" reads as a name.
     """
-    if name in KNOWN_WINDOWS:
-        return KNOWN_WINDOWS[name]
-    words = name.replace("_", " ").split()
+    if window in KNOWN_WINDOWS:
+        return KNOWN_WINDOWS[window]
+    # A length collab has no word for is still a length, and it reads beside
+    # the ones that do: `3_hour` is `3h`, not `3 hour`. The shapes are the ones
+    # `quotas.window_name` builds and nothing else.
+    head, _, unit = window.rpartition("_")
+    if head.isdigit() and unit in ("day", "hour", "minute"):
+        return f"{head}{unit[0]}"
+    # FROM THE LEFT, and only where `split_window` found no window to protect:
+    # a name collab cannot parse might be `requests_per_minute`, whose first
+    # words are the name, or `<opaque id>_requests_per_minute`, whose first word
+    # is not — and nothing here can tell them apart. The first reading is the
+    # one that keeps a real name readable, and it is the reading kept.
+    words = window.replace("_", " ").split()
     label = ""
     for word in words:
         candidate = f"{label} {word}".strip()
-        if len(candidate) > 14:
+        if len(candidate) > MAX_WINDOW_LABEL:
             break
         label = candidate
-    return label or name[:14]
+    return label or window[:MAX_WINDOW_LABEL]
+
+
+def _allowance_tag(bucket: str, room: int) -> str:
+    """As much of an allowance id as fits, taken from the END.
+
+    Two ids that appear together share their head — `codex` and
+    `codex_bengalfox` — so the tail is the half that tells them apart, and a
+    trim from the left keeps exactly the half that does not.
+    """
+    if room <= 0:
+        return ""
+    parts = bucket.split("_")
+    tag = ""
+    for at in range(len(parts) - 1, -1, -1):
+        candidate = "_".join(parts[at:])
+        if len(candidate) > room:
+            break
+        tag = candidate
+    if tag:
+        return tag
+    # NOTHING WHOLE FITS, so the cut is marked. An allowance id is an opaque
+    # codename and has no words to stop at — `bengalfox` cut to `bengalfo` does
+    # not read as a shortening, it reads as a different codename, which on a row
+    # whose whole job is telling two allowances apart is the wrong kind of
+    # wrong. The ellipsis costs a column and says the name goes on.
+    return parts[-1][:room - 1] + "…" if room >= 2 else ""
+
+
+def _label_of(bucket: str, window: str, copy: int) -> str:
+    """One split key, drawn. The window whole, the id with what is left."""
+    base = _window_words(window)
+    if copy:
+        base = f"{base} #{copy}"
+    if not bucket:
+        return base
+    tag = _allowance_tag(bucket, MAX_WINDOW_LABEL - len(base) - 1)
+    return f"{tag} {base}" if tag else base
+
+
+def window_label(name: str) -> str:
+    """A short name for one window, with its length never dropped.
+
+    The length is what a reader is looking for; the allowance id is what tells
+    two of the same length apart, so it is trimmed to whatever the budget has
+    left and the length is not trimmed at all.
+
+    One name on its own is all this can see. `window_labels` knows the row, and
+    a row can settle a key this cannot — see the evidence rule there.
+    """
+    return _label_of(*split_window(name))
+
+
+def _strippable(name: str) -> int:
+    """How many leading segments of this key certainly belong to no window.
+
+    TWO BOUNDS, AND BOTH WERE LEARNT BY GETTING THEM WRONG.
+
+    A window name may begin part-way along and not only at the tail:
+    `five_hour_gpt5` is a five-hour window of one model, and `_split_at` — which
+    only looks at the tail — reads none of it. A row of those had `five_hour_`
+    taken off as «shared», leaving `gpt5` and `o3` with no length between them,
+    which is verbatim the failure this module exists to remove. So the search is
+    for the earliest segment at which ANY window name starts, and nothing in
+    front of it may be shared away.
+
+    And a key that names no window anywhere keeps its last segment, so that
+    something is always left to draw. Without that floor, `tokens` beside
+    `tokens_pro_five_hour` had all six of its characters taken and the roster
+    drew a bare percentage after a double space — a figure with no label at all,
+    which reads as a rendering fault rather than as a window.
+    """
+    parts = name.split("_")
+    if len(parts) < 2:
+        return 0
+    for at in range(len(parts)):
+        for upto in range(at + 1, len(parts) + 1):
+            if _names_a_window("_".join(parts[at:upto])):
+                return at
+    return len(parts) - 1
+
+
+def _shared_head(names: Sequence[str]) -> str:
+    """The whole segments every one of these keys begins with, trailing `_` and
+    all — or "" where they share none, or where there is only one of them and so
+    nothing to have in common.
+
+    NEVER INTO A WINDOW, AND NEVER ALL OF A KEY. Both bounds are `_strippable`'s
+    and the row takes the smallest: what may be shared away is what every key on
+    it can spare.
+    """
+    if len(names) < 2:
+        return ""
+    heads = [name.split("_") for name in names]
+    cap = min(_strippable(name) for name in names)
+    common = 0
+    for parts in zip(*heads):
+        if common >= cap or len(set(parts)) > 1:
+            break
+        common += 1
+    shared = "_".join(heads[0][:common]) + "_" if common else ""
+    # AND THE FLOOR IS CHECKED ON THE CHARACTERS, not trusted from the segments.
+    # `"codex_".split("_")` is `['codex', '']`, so keeping one segment back keeps
+    # back no characters at all: the head reconstructed the whole six-character
+    # key, the slice came out empty, and the roster drew a bare percentage with
+    # no label. A key ending in a separator is the only shape where the count
+    # and the slice disagree — `quotas._slug` cannot produce one and a
+    # hand-written `--report` can — but the promise above is absolute, so it is
+    # kept on the thing that is actually sliced.
+    return shared if all(len(name) > len(shared) for name in names) else ""
+
+
+def window_labels(names: Iterable[str]) -> dict[str, str]:
+    """Label every window on ONE row, each told apart from the others there.
+
+    An allowance id that every window on the row shares distinguishes nothing
+    ON THAT ROW, so it is dropped and the lengths are drawn plainly: a Codex
+    agent with one bucket reads `5h 40% · 7d 12%`, the same as everybody else.
+    The full key is still what `collab stats --json` prints, and it is still
+    what travels; this is the drawing, not the datum.
+
+    NO TWO WINDOWS MAY DRAW THE SAME LABEL. Reporting one figure where there
+    are two is the exact failure the id in the key exists to prevent, so a
+    collision — two lengths that shorten to one word, an id trimmed past the
+    point that separated it — gives both of them their whole key back and lets
+    the pane clip it. A clipped key is ugly; two windows wearing one name is
+    wrong.
+    """
+    names = list(names)
+    # WHAT THE ROW KNOWS THAT ONE KEY CANNOT, and it is a fact rather than an
+    # attribution. `_names_a_window` has a grammar — the names collab has a word
+    # for and the lengths its own probe emits — and a key naming its window
+    # outside that grammar cannot be split at all, so its allowance id is read
+    # as part of the window and eats the whole budget:
+    # `codex_bengalfox_requests_per_minute` drew as «codex», which is verbatim
+    # the failure this function exists to remove.
+    #
+    # What every key on the row begins with distinguishes none of them ON THIS
+    # ROW, whether or not anything here can say which part of it is an
+    # allowance. So it comes off, and what is left is split.
+    #
+    # THE CLAIM WAS TRIED THE OTHER WAY ROUND FIRST and it was wrong. Reading an
+    # unsplittable key as belonging to some OTHER window's allowance —
+    # «`codex_bengalotter_burst_limit` starts with `codex_`, so it is `codex`'s»
+    # — names an allowance the row never showed, and beside a genuine `codex 5h`
+    # it puts two different allowances under one id, which is the error the id in
+    # the key exists to prevent. A shared prefix cannot be wrong about that
+    # because it claims nothing: it is what the keys have in common.
+    if (shared := _shared_head(names)):
+        pieces = {name: split_window(name[len(shared):]) for name in names}
+    else:
+        pieces = {name: split_window(name) for name in names}
+    if len({bucket for bucket, _w, _c in pieces.values()}) == 1:
+        labels = {name: _label_of("", window, copy)
+                  for name, (_b, window, copy) in pieces.items()}
+    else:
+        labels = {name: _label_of(*piece) for name, piece in pieces.items()}
+    # UNTIL IT IS STABLE, not once. Handing a colliding pair their keys back can
+    # put a key where another window's label already was — `weekly` shortens to
+    # `7d` and a window literally keyed `7d` draws as `7d` — so one pass can
+    # close one collision by opening another. Keys are unique among themselves,
+    # so replacing every colliding label with its key terminates.
+    for _pass in range(len(names) + 1):
+        drawn: dict[str, int] = {}
+        for label in labels.values():
+            drawn[label] = drawn.get(label, 0) + 1
+        clashing = {name for name, label in labels.items() if drawn[label] > 1}
+        if not clashing:
+            break
+        labels = {name: (name if name in clashing else label)
+                  for name, label in labels.items()}
+    return labels
 
 
 def quota_summary(stats: dict[str, Any], *, with_resets: bool = False) -> str:
@@ -654,8 +1075,11 @@ def quota_summary(stats: dict[str, Any], *, with_resets: bool = False) -> str:
              if isinstance(figures, dict) and figures.get("used_pct") is not None),
             key=lambda pair: pair[1]["used_pct"], reverse=True,
         )
+        # Labelled as a SET rather than one at a time: whether an allowance id
+        # is worth drawing depends on whether the row holds another one.
+        labels = window_labels([name for name, _figures in ranked])
         for name, figures in ranked:
-            piece = f"{window_label(name)} {float(figures['used_pct']):.0f}%"
+            piece = f"{labels[name]} {float(figures['used_pct']):.0f}%"
             if with_resets and figures.get("resets_at"):
                 piece += f" (→{_short_reset(str(figures['resets_at']))})"
             parts.append(piece)
