@@ -333,7 +333,12 @@ give the work to somebody else.
 
 Quota is **percent used**, not percent remaining. If your agent tells you what
 is left, either send it under a `remaining_fraction`/`remaining_percentage` key
-(which is inverted for you) or subtract it yourself.
+(which is inverted for you) or subtract it yourself. Under collab's own keys —
+`quota_five_hour`, `quota_used_pct`, `used_pct`, `context_pct` — write the
+percentage and nothing else: `73`, or `0.5` for half a percent; it is read
+exactly as written. A fraction belongs under a key that says so,
+`remaining_fraction`, or under a key of your own tool's, where a float inside
+`0..1` is read as one.
 
 ### How often?
 

@@ -47,6 +47,13 @@ mixing the two silently turns "42% left" into "42% burned", which is exactly
 backwards when you are deciding who can take on more work. Anything named
 *remaining* is inverted on the way in.
 
+A share may arrive as `0.42` or as `42`, and the one value that cannot tell
+you which is 1. It is read as ONE PERCENT when it is an integer — every integer
+source collab knows, Codex's `usedPercent` first among them, is a percentage —
+and as the whole when it is a float from a key that does not say; a key that
+says `fraction` or `percentage` is believed over either. See `_percent` for
+what a Codex account at 1 % of its week was published as before that rule.
+
 Every field is optional. An agent that knows only its model reports only that,
 and the roster shows what it has. The quota has one rule of its own: a report
 that carries `quotas` — even an empty map — replaces the stored quota with
@@ -165,13 +172,97 @@ ALIASES = {
     "total_output_tokens": "tokens_out",
 }
 
+#: The keys under which a share is a PERCENT BY DEFINITION, and is read as
+#: written. Nothing but collab itself — `normalise`'s output — and a client
+#: following the spec writes these keys, so a value under one has already been
+#: interpreted and must not be interpreted again. That is not a nicety: every
+#: report crosses `_percent` TWICE, once in `normalise` on the agent's side and
+#: once in `sanitise` on the hub's, and a `1.0` that the first pass had settled
+#: as one percent was read by the second as the whole and published to every
+#: other participant as 100 %. The agent's own `collab stats` was right; every
+#: other roster was wrong; and no test composed the two passes.
+CANONICAL_SHARES = frozenset({"used_pct", "quota_used_pct", "quota_five_hour",
+                              "quota_seven_day", "context_pct"})
+
 #: Room for something we have not thought of, without letting a participant
 #: push arbitrary volume into everyone else's roster.
 MAX_EXTRA_FIELDS = 6
 MAX_STRING = 64
 
 
-def _coerce(field: str, value: Any) -> Any | None:
+def _percent(value: Any, key: str = "") -> float | None:
+    """A share of something, as a percentage, whatever spelling it arrived in.
+
+    THE VALUE 1 IS THE WHOLE PROBLEM. Sources disagree on whether a share is
+    written `0.42` or `42`, and for every value but one the number says which:
+    below 1 it is a fraction, above it a percentage. At exactly 1 the two
+    readings are 1 % and 100 %, and «treat 0..1 as a fraction» chose 100 % —
+    so a Codex account at 1 % of its week, which is what a fresh week looks
+    like, was published to the whole session as spent, and would have been
+    handed nothing. Read from the real app-server on 2026-09-08: `usedPercent:
+    1`, drawn as `quota 7d 100%`. And a tool saying `remaining_percentage: 1`
+    — one percent left — was read as fully remaining.
+
+    Four things decide it, in this order, and each is written down because
+    the wrong one was tried first:
+
+    * The KEY, where it says. A key containing `fraction` is a fraction
+      whatever the number; one containing `percentage` — the whole word — is
+      a percentage.
+    * THE KEY, WHERE IT IS COLLAB'S OWN. A value under a canonical key —
+      `used_pct`, `quota_used_pct`, `quota_five_hour`, `quota_seven_day`,
+      `context_pct` — is a percent as written, because whoever wrote that key
+      was speaking collab's shape and had already decided. This is the rule
+      that makes `normalise`'s output survive `sanitise`: without it the
+      agent's side settled `1` as one percent, the hub's side read the `1.0`
+      it received as the whole, and every other roster showed 100 %. See
+      `CANONICAL_SHARES`. It is also why `pct` is not in the list above:
+      `context_pct` is canonical, and so read as written.
+    * The TYPE, for a foreign key. An integer is a count of percent. Nobody
+      writes a fraction as an integer, and every integer source collab knows
+      — Codex's `usedPercent` is int32 in its own schema — is a percentage.
+      `True` is not a number here.
+    * The RANGE, for a float from a foreign key that does not say: inside
+      (0, 1] it is a fraction. A float `1.0` is still read as the whole,
+      because a source that writes fractions writes `1.0` for all of it, and
+      the context share drives compaction — a full window read as 1 % would
+      never compact.
+    """
+    if isinstance(value, bool):
+        return None
+    # A STRING THAT IS AN INTEGER LITERAL IS AN INTEGER. A `--source` script
+    # that prints `{"quota_five_hour": "$PCT"}` sends `"1"`, and `"1"` is not
+    # an `int` instance — so the type rule below missed it and the range rule
+    # read the `1.0` that `float("1")` gives as the whole. The digits decide,
+    # not the quoting; `"1.0"` keeps its point and is read as a float would be.
+    if isinstance(value, str):
+        text = value.strip()
+        # AND `isdigit` IS NOT `int`. `"²".isdigit()` is true and `int("²")`
+        # raises, and this ran outside the guard below — so one superscript
+        # in a window's figure, posted by any participant, raised out of the
+        # hub's stats endpoint. Junk never raises here; it is not a figure.
+        if text.lstrip("+-").isdigit():
+            try:
+                value = int(text)
+            except ValueError:
+                return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    lowered = key.lower()
+    if "fraction" in lowered:
+        return round(number * 100, 1)
+    if "percentage" in lowered or lowered in CANONICAL_SHARES:
+        return round(number, 4)
+    if isinstance(value, int):
+        return float(value)
+    if 0 < number <= 1:
+        return round(number * 100, 1)
+    return round(number, 4)
+
+
+def _coerce(field: str, value: Any, key: str = "") -> Any | None:
     # NOTHING IS NOT A FIGURE. `str(None)` is `"None"`, so a JSON `null` used to
     # coerce into the four-letter STRING for every text field — `collab stats
     # --report '{"model": null}'` put the word «None» on everybody's roster as
@@ -186,30 +277,32 @@ def _coerce(field: str, value: Any) -> Any | None:
             return text[:MAX_STRING] or None
         if kind is int:
             return int(float(value))
-        number = round(float(value), 4)
-        # Percentages that arrive as 0..1 are still percentages.
-        if field.startswith(("quota_", "context")) and 0 < number <= 1:
-            number = round(number * 100, 1)
-        return number
+        if field.startswith(("quota_", "context")):
+            # A share, and the one place its spelling matters; see `_percent`.
+            return _percent(value, key)
+        return round(float(value), 4)
     except (TypeError, ValueError):
         return None
 
 
-def _invert(field: str, value: Any) -> Any | None:
-    """Turn "how much is left" into "how much is used"."""
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
+def _invert(field: str, value: Any, key: str = "") -> Any | None:
+    """Turn «how much is left» into «how much is used».
+
+    The spelling is decided by `_percent` and inverted here, so that the value
+    1 means the same thing on both sides: `remaining_percentage: 1` is one
+    percent left and 99 used, where the old range rule read it as a whole
+    fraction remaining and published 0 used.
+    """
+    left = _percent(value, key)
+    if left is None:
         return None
-    # A fraction (0..1) and a percentage (0..100) both appear in the wild.
-    used = (1 - number) * 100 if 0 <= number <= 1 else 100 - number
-    return round(max(0.0, min(used, 100.0)), 1)
+    return round(max(0.0, min(100 - left, 100.0)), 1)
 
 
 def _take(out: dict[str, Any], key: str, value: Any) -> None:
     if key in INVERTED:
         field = INVERTED[key]
-        if (inverted := _invert(field, value)) is not None:
+        if (inverted := _invert(field, value, key)) is not None:
             out.setdefault(field, inverted)
         return
     field = key if key in CANONICAL else ALIASES.get(key, "")
@@ -233,7 +326,7 @@ def _take(out: dict[str, Any], key: str, value: Any) -> None:
             return
         out.setdefault(field, None)
         return
-    if (coerced := _coerce(field, value)) is not None:
+    if (coerced := _coerce(field, value, key)) is not None:
         out.setdefault(field, coerced)
 
 
@@ -320,10 +413,10 @@ def _window_figures(value: Any) -> dict[str, Any]:
             continue
         lowered = str(key).lower()
         if lowered in INVERTED or "remaining" in lowered:
-            if (pct := _invert("quota_used_pct", inner)) is not None:
+            if (pct := _invert("quota_used_pct", inner, lowered)) is not None:
                 out.setdefault("used_pct", pct)
         elif lowered in ("used_percentage", "used_pct", "used", "percent_used"):
-            if (pct := _coerce("quota_used_pct", inner)) is not None:
+            if (pct := _coerce("quota_used_pct", inner, lowered)) is not None:
                 out.setdefault("used_pct", pct)
         elif lowered in ("resets_at", "reset_time", "reset_at", "renews_at"):
             # `str(None)` is `"None"` and `"None"` is truthy, so a null reset
@@ -430,7 +523,7 @@ def normalise(data: Any) -> dict[str, Any]:
             if lowered in INVERTED:
                 _take(out, lowered, inner)
             elif lowered in ("used_percentage", "used_pct"):
-                if (pct := _coerce("quota_used_pct", inner)) is not None:
+                if (pct := _coerce("quota_used_pct", inner, lowered)) is not None:
                     out.setdefault("quota_used_pct", pct)
             elif lowered in ("resets_at", "reset_time"):
                 _take(out, lowered, inner)
@@ -590,7 +683,10 @@ def sanitise(reported: dict[str, Any]) -> dict[str, Any]:
                 extras += 1
             continue
         if key in CANONICAL:
-            if (coerced := _coerce(key, value)) is not None:
+            # THE KEY GOES WITH THE VALUE. This is the second pass over a
+            # figure the agent's side already settled, and without the key
+            # `_percent` cannot know that; see `CANONICAL_SHARES`.
+            if (coerced := _coerce(key, value, key)) is not None:
                 out[key] = coerced
             continue
         if extras >= MAX_EXTRA_FIELDS or not isinstance(key, str):

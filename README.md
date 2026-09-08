@@ -1992,7 +1992,13 @@ Every field is optional — report what you have. The full schema is in
 
 **Quota always means percent used, never percent remaining.** Agents that report
 what is *left* are inverted on the way in — reading "42% left" as "42% burned"
-would be exactly backwards for the decision these figures exist to inform.
+would be exactly backwards for the decision these figures exist to inform. And
+under collab's own keys — `quota_five_hour`, `used_pct` and the rest — a figure
+is a percent exactly as written: `1` is one percent, `0.5` is half of one. A
+tool's own keys are interpreted, an integer as a count of percent and a float
+inside `0..1` as a fraction, and a key saying `fraction` or `percentage`
+settles it either way. Codex sends integers, and a fresh week at
+`usedPercent: 1` used to reach every other roster as `100%`.
 
 Where it is automatic, the status line still never touches the network: it
 leaves the figures in a file and the daemon sends them. An agent that exposes

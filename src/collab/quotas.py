@@ -231,7 +231,15 @@ def _windows(bucket: Any, prefix: str = "") -> dict[str, dict[str, Any]]:
         name = window_name(window.get("windowDurationMins"))
         if not name:
             continue
-        entry: dict[str, Any] = {"used_pct": round(min(max(float(used), 0.0), 100.0), 1)}
+        # AN INTEGER STAYS AN INTEGER. `usedPercent` is int32 in Codex's own
+        # schema, and `collab.stats` reads an integer as a count of percent
+        # where it reads a float in (0, 1] as a fraction — so `float(1)` here
+        # turned Codex's «one percent used» into a `1.0` that the reader
+        # multiplied to 100. The clamp is done on the value's own type.
+        clamped = max(min(used, 100), 0)
+        if isinstance(clamped, float):
+            clamped = round(clamped, 1)
+        entry: dict[str, Any] = {"used_pct": clamped}
         if (when := _at(window.get("resetsAt"))):
             entry["resets_at"] = when
         out[f"{prefix}{name}"] = entry

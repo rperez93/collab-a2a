@@ -132,9 +132,14 @@ def test_antigravity_token_field_names():
 
 
 @pytest.mark.parametrize("given,expected", [
-    ({"context_pct": 0.35}, 35.0),   # a fraction
-    ({"context_pct": 35}, 35.0),     # already a percentage
+    ({"context": 0.35}, 35.0),       # a fraction, under a key of the tool's own
+    ({"context": 35}, 35.0),         # already a percentage
+    ({"context_pct": 35}, 35.0),     # collab's own key: a percent as written
     ({"context_pct": 100}, 100.0),
+    # NOT `context_pct: 0.35` → 35. That key is collab's, and a value under it
+    # is a percent by definition — the rule that lets the hub read what the
+    # agent's side already settled without reading it again. It is 0.35 %.
+    ({"context_pct": 0.35}, 0.35),
 ])
 def test_fractions_and_percentages_both_work(given, expected):
     assert normalise(given)["context_pct"] == expected

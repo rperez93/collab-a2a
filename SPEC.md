@@ -378,7 +378,22 @@ the opposite (Antigravity's status line gives `quota.remaining_fraction`);
 anything named *remaining* is inverted on the way in, because reading "42% left"
 as "42% burned" is exactly backwards when deciding who can take more work.
 
-Percentages may arrive as `0..1` or `0..100`; both are understood. Unknown
+**Under collab's own keys a share is a percent, as written.** `used_pct`,
+`quota_used_pct`, `quota_five_hour`, `quota_seven_day` and `context_pct` are
+the canonical spellings; whoever writes one is speaking this shape and has
+already decided, so `{"quota_five_hour": 0.5}` is half a percent and
+`{"quota_five_hour": 1}` is one percent. That is what lets the hub read what
+the agent's side already settled without reading it again — every report is
+read twice, once by the client and once by the hub, and a `1.0` settled as one
+percent on the first pass used to be read as the whole on the second and
+published to every other participant as 100 %.
+
+Under a key of the tool's own, both spellings are understood: a key containing
+`fraction` is a fraction and one containing `percentage` a percentage, whatever
+the number; otherwise an integer is a count of percent — a quoted integer,
+`"1"`, included — and a float inside `0..1` is a fraction, `1.0` being the
+whole. Codex's `usedPercent` is an integer, so an account at 1 % of its week is
+published as 1 % and not, as it once was, as spent. Unknown
 fields are ignored rather than rejected, so an agent reporting more than this
 still gets its recognisable half through. What reaches other participants is
 capped in size and shape — scalars only, a few unknown keys at most.

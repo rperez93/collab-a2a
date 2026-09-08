@@ -87,6 +87,32 @@ agents report the opposite — Antigravity's status line gives
 *42% burned*, which is exactly backwards when you are deciding who can take on
 more work. Anything named *remaining* is inverted on the way in.
 
+Later than the pin, and found by reading the real thing: a share may arrive as
+`0.42` or as `42`, and the one value that cannot say which is 1. The rule
+«0..1 is a fraction» read it as 100 %, so a Codex account at 1 % of its week —
+`usedPercent: 1`, an int32 in Codex's own schema, captured from the live
+app-server on 2026-09-08 — was published to the whole session as spent, and
+`remaining_percentage: 1`, one percent left, as fully remaining. The direction
+was never wrong; the spelling was.
+
+The rule that closed it is structural rather than a heuristic, and it was the
+second attempt. The first — an integer is a count of percent, a float inside
+`0..1` a fraction — was right on the agent's side and wrong on the hub's,
+because every report is read TWICE: `normalise` where it is produced, then
+`sanitise` on the hub after the file, the daemon and the wire. The first pass
+settled `1` as one percent and stored `1.0`; the second read that `1.0`, an
+indistinguishable float under no telling key, as the whole. The agent's own
+`collab stats` was right and every other participant's roster said 100 %, and
+no test composed the two passes. So: under one of collab's OWN keys —
+`used_pct`, `quota_used_pct`, `quota_five_hour`, `quota_seven_day`,
+`context_pct` — a value is a percent as written, because whoever wrote that key
+had already decided. That makes the first pass's output a fixed point of the
+second. Under a tool's own key the spelling is interpreted: `fraction` or
+`percentage` in the key decides, then an integer is a count of percent, then a
+float inside `0..1` is a fraction. The cost is named: `context_pct: 0.35`,
+which one test had pinned as 35 %, is 0.35 %. The Codex probe keeps the
+integer an integer.
+
 # How figures get in
 
 Three routes, and the third is the one that needs no diligence:
