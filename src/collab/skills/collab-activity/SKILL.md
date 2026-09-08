@@ -102,6 +102,8 @@ collab task list --open              # what is on the board
 collab task show --id T_9d63         # READ IT BEFORE YOU TAKE IT — its comments and pull requests are here
 collab task claim --id T_9d63 --files src/api/auth.py
 collab task complete --id T_9d63
+collab task fail --id T_9d63         # it went wrong — still outstanding, and you are idle again
+collab task cancel --id T_9d63       # withdrawn — leaves the figure, and you are idle again
 collab task comment --id T_9d63 "<what you decided>"   # keep it with the work, not in the room
 collab task pr --id T_9d63 --url <pull request>        # as many as the work took
 collab project list --owner <you>    # bundles of work somebody is answerable for

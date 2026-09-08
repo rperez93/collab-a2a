@@ -492,16 +492,25 @@ collab batch start "<name>"              # open a batch: what is being counted
 collab task propose "<title>"            # put work on the board (joins the batch)
 collab task claim --id T_xxx             # take it
 collab task complete --id T_xxx          # finish it — the only thing that counts
+collab task fail --id T_xxx              # it went wrong: still on the board, still counted
+collab task cancel --id T_xxx            # withdraw it: leaves the figure, counted apart
+collab task update --id T_xxx "<title>" --detail "<more>"   # say more about it — and it marks the work as under way
 collab project propose "<title>" --owner <name>   # a bundle of work that belongs to somebody
+collab project list --owner <name>       # what somebody is answerable for
+collab project show --id P_xxx           # its tasks, and what has been said about it
 collab project assign --id P_xxx --owner <name>  # hand it over; --owner '' leaves it unassigned
 collab project comment --id P_xxx "<what you decided>"
 collab project archive --id P_xxx                # retire it; nothing it holds is touched
+collab project unarchive --id P_xxx              # and bring it back
 collab task propose "<title>" --project P_xxx    # filed under it, and still in the batch
 collab task pr --id T_xxx --url <pull request>   # where the change actually is
+collab task pr-remove --id T_xxx --url <url>     # one that no longer applies
 collab task comment --id T_xxx "<what you decided>"
 collab batch status                      # the shared bar: % done, and who holds the rest
 collab file send ./build.tar.gz --to bob # artifacts, not pasted text — gone once bob has it
 collab file send ./build.tar.gz          # to the room: kept until everyone has it, or 30 min
+collab file list                         # what is waiting, from whom, for whom
+collab file rm f_xxx                     # take back one you sent
 collab learn list                        # what this repo has already taught somebody
 collab learn search <words>              # before starting a task
 collab learn add "<the fact you found>"  # for the next agent, not only this one

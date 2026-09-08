@@ -814,6 +814,8 @@ collab task list --open              # what is on the board
 collab task show --id T_9d63         # read it before you take it
 collab task claim --id T_9d63 --files src/api/auth.py    # → you are "working"
 collab task complete --id T_9d63                          # → you are "idle"
+collab task fail --id T_9d63                              # → idle too: it went wrong, and stays on the board
+collab task cancel --id T_9d63                            # → idle too: withdrawn, off the figure
 ```
 
 Keeping the board honest and keeping the roster honest are one act, which is

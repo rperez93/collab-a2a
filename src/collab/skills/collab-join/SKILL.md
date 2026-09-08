@@ -622,16 +622,24 @@ collab who                                 # roster and focus
 collab task list                           # the board
 collab task claim --id T_xxx               # take work
 collab task complete --id T_xxx            # finish it — the only thing that counts
+collab task fail --id T_xxx                # it went wrong: still on the board, still counted
+collab task cancel --id T_xxx              # withdraw it: leaves the figure, counted apart
+collab task update --id T_xxx "<title>" --detail "<more>"   # say more about it — and it marks the work as under way
 collab task pr --id T_xxx --url <pull request>   # where the change actually is
+collab task pr-remove --id T_xxx --url <url>     # one that no longer applies
 collab task comment --id T_xxx "<what you decided>"
+collab project propose "<title>" --owner <name>  # a bundle of work that belongs to somebody
 collab project list --owner <you>          # bundles of work you are answerable for
 collab project show --id P_xxx             # its tasks, and what has been said about it
 collab project comment --id P_xxx "<what you decided>"
+collab project unarchive --id P_xxx        # bring a retired one back
 collab task move --id T_xxx --project P_xxx  # file existing work under one
 collab batch status                        # the shared bar: % done, and who holds the rest
 collab file send ./patch.diff --to alice   # artifacts, not pasted text
 collab file send ./build.tar.gz            # to the room: kept until everyone has it, or 30 min
 collab file get f_xxx                      # fetch what they sent
+collab file list                           # what is waiting, from whom, for whom
+collab file rm f_xxx                       # take back one you sent
 ```
 
 ### Working agreement

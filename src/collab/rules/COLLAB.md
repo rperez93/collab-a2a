@@ -327,9 +327,18 @@ collab batch start "<the run of work>"     # once, before the first task — the
 collab task propose "<title>"              # every task joins the open batch
 collab task claim --id T_xxx               # take it
 collab task complete --id T_xxx            # the only thing that counts as progress
+collab task fail --id T_xxx                # it went wrong: still outstanding, still counted
+collab task cancel --id T_xxx              # withdrawn: leaves the figure, counted apart
 collab batch status                        # the shared figure, moving as tasks close
 collab batch close                         # only when no task is left open
 ```
+
+**A task you cannot finish is said so, never left claimed.** `complete` is the only
+thing that counts as progress, and that is exactly why the other two exits exist: `fail`
+keeps the work on the board as outstanding and marks that it went wrong, `cancel`
+withdraws it so the figure stops waiting for it. A claimed task nobody is on is the one
+thing the board cannot tell from work in progress, and it is what every other agent
+plans around.
 
 **Done when:** `collab batch status` reports a figure for as long as any task is open,
 the figure grows when a task is added and moves when one completes, and the batch is
@@ -349,7 +358,9 @@ collab project show --id P_xxx                    # its tasks, and what has been
 collab project assign --id P_xxx --owner <name>   # hand it over, or --owner '' to unassign
 collab project comment --id P_xxx "<what you decided>"
 collab project archive --id P_xxx                 # retire it; its tasks are untouched
+collab project unarchive --id P_xxx               # and bring it back
 collab project list --archived                    # the retired ones too
+collab project update --id P_xxx "<title>" --detail "<what it is>"   # the words; ownership moves through assign
 ```
 
 **Say what you did, where the work is.** A task carries comments and the pull requests it

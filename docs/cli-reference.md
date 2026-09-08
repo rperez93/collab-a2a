@@ -326,7 +326,7 @@ collab task [--id ID] [--detail DETAIL] [--project ID] [--url URL]
 |---|---|
 | `{propose,claim,update,complete,fail,cancel,list,show,comment,pr,pr-remove,move}` | The action. |
 | `title` | Title when proposing, or the text when commenting. |
-| `--id ID` | Task id for `show`, `claim`, `update`, or `complete`. |
+| `--id ID` | Task id for `show`, `claim`, `update`, `complete`, `fail`, `cancel`, `comment`, `pr`, `pr-remove` and `move`. |
 | `--detail DETAIL` | A longer description. Left as it is by `claim`, `complete`, `move` and anything else that does not give one; `--detail ''` clears it. |
 | `--project ID` | With `propose`, the project to file it under. With `move`, where to file it — `--project ''` takes it out of the one it is in. |
 | `--url URL` | With `pr` or `pr-remove`, the pull request's URL. |
@@ -336,6 +336,16 @@ collab task [--id ID] [--detail DETAIL] [--project ID] [--url URL]
 | `--open` | List only open tasks. |
 | `--json` | Emit raw JSON. |
 | `--session SESSION` | Act on this session id instead of the current one. |
+
+**`fail` and `cancel` are the two exits from a task that will not be
+completed, and they move the figure in opposite directions.** A failed task is
+outstanding work that went wrong: it stays on the board and in the batch's
+denominator, so the figure keeps waiting for it and the next agent can see what
+happened. A cancelled task is withdrawn: it leaves the denominator and is
+counted apart, so a batch whose remaining work was genuinely dropped can still
+reach 100 %. Neither is `complete`, which is the only thing that counts as
+progress — and a claimed task that is quietly abandoned is worse than either,
+because the board cannot tell it from work in progress.
 
 **`move` is not `update`.** `update` means «I am working on this, and here is
 more detail», so it moves the task to *working*. Filing a task under somebody's
@@ -359,6 +369,8 @@ collab task propose "the schema" --project P_a1b2
 collab task pr --id T_9f3a --url https://github.com/owner/repo/pull/12
 collab task comment --id T_9f3a "rebased onto main"
 collab task move --id T_9f3a --project ''      # out of its project
+collab task fail --id T_9f3a                    # it went wrong; still outstanding
+collab task cancel --id T_9f3a                  # withdrawn; leaves the figure
 ```
 
 ## project
