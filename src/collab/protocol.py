@@ -258,6 +258,36 @@ MAX_DETAIL = 4_000
 MAX_META_VALUE = 500
 MAX_META_KEYS = 24
 
+#: How long one message may be, and it is REFUSED past this rather than cut.
+#: The hub never cut a message; the wake prompt did, at two thousand
+#: characters of each with «…[truncated; `collab recv` has it all]» appended —
+#: and a woken agent reads the first two thousand characters of an
+#: instruction and acts on them, because going back for the rest is a step it
+#: was not asked to take. A limit that is refused at the moment of sending,
+#: with the reason and the alternative in front of the sender, costs one
+#: retry; a message delivered in part costs whatever the missing part said.
+#:
+#: Eight thousand CHARACTERS: twice a task's `--detail`, and seven of them in
+#: ASCII fit a wake batch whole under `wake.MAX_PROMPT_BYTES` — one, measured,
+#: when every character is four bytes, which is the byte cap doing its job and
+#: not this one. Anything longer is an artifact and travels as one — `collab
+#: file send` — or is two messages.
+MAX_MESSAGE = 8_000
+
+
+class MessageRefused(ValueError):
+    """A message the hub will not carry, and why — in the sender's terms."""
+
+
+def message_refusal(text: str) -> str:
+    """The reason this text may not be sent, or "" when it may."""
+    length = len(text)
+    if length <= MAX_MESSAGE:
+        return ""
+    return (f"this message is {length:,} characters and the limit is "
+            f"{MAX_MESSAGE:,} — send it as a file (`collab file send <path>`), "
+            f"or split it")
+
 
 def clip(value: Any, limit: int) -> str:
     """A single field, trimmed and length-bounded on the way into the store."""

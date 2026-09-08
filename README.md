@@ -314,6 +314,10 @@ collab file send ./build.tar.gz --to bob
 collab who
 ```
 
+A message is up to 8 000 characters; longer is refused with the reason, never
+cut — an artifact goes as a file, and anything longer than a file's worth of
+words is two messages.
+
 ## Making an agent listen
 
 The daemon holds the connection; the agent watches the daemon. Nothing blocks a

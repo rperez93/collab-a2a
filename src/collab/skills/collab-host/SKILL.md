@@ -508,6 +508,7 @@ collab task pr-remove --id T_xxx --url <url>     # one that no longer applies
 collab task comment --id T_xxx "<what you decided>"
 collab batch status                      # the shared bar: % done, and who holds the rest
 collab file send ./build.tar.gz --to bob # artifacts, not pasted text — gone once bob has it
+                                         # a message over 8 000 characters is refused, never cut
 collab file send ./build.tar.gz          # to the room: kept until everyone has it, or 30 min
 collab file list                         # what is waiting, from whom, for whom
 collab file rm f_xxx                     # take back one you sent

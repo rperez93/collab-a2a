@@ -158,7 +158,7 @@ collab send [--room ROOM] [--to TO] [--thread THREAD] [--session SESSION]
 
 | Argument or flag | Meaning |
 |---|---|
-| `text` | The message. |
+| `text` | The message — up to 8 000 characters. Longer is refused, before it leaves your machine and again by the hub, with the size, the limit and the alternative: `collab file send` for an artifact, or two messages. Nothing is ever cut; a message that arrived in part used to be acted on in part. |
 | `--room ROOM` | Room to post in. Defaults to your current room. |
 | `--to TO` | Send privately to one participant. |
 | `--thread THREAD` | Thread id to reply in. |
@@ -728,9 +728,11 @@ different things. An edit to one never touches the other, and outside a session
 the role has to be named: both keys exist and both accept anything, so a guess
 would change the wrong text quietly.
 
-A reminder longer than 8,000 characters is refused, and the refusal says the
-size and the limit — the number is `wake.MAX_TEXT`'s reasoning applied here,
-and it is also about what an agent can be asked to read every few minutes.
+A reminder longer than 8 000 characters is refused, and the refusal says the
+size and the limit — `config.MAX_REMIND_TEXT`, which exists for the reason
+`wake.MAX_PROMPT_BYTES` does: five of the wake recipes pass the prompt as a
+single argument, and Linux refuses one over 128 KiB, so an unbounded reminder
+is a wake that fails identically on every retry, for ever.
 
 Every change is live. The daemon reads the text at each delivery, so an edit
 lands on the next reminder — within `remind_every` minutes, on either route,

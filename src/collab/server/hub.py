@@ -17,6 +17,7 @@ from typing import Any
 from .. import __version__
 from ..batch import DONE_STATE, WITHDRAWN_STATE, percent, tally
 from ..protocol import (DEFAULT_ROOM, Envelope, KIND_CHAT, KIND_HELLO,
+                        MessageRefused, message_refusal,
                         KIND_PRESENCE, bounded_meta)
 from .store import Store
 
@@ -73,6 +74,12 @@ class Hub:
 
     async def publish(self, env: Envelope) -> Envelope:
         """Persist, then push to every participant entitled to see it."""
+        # REFUSED HERE, where the two routes meet — the REST convenience path
+        # and A2A `SendMessage` — so that neither can carry what the other
+        # would not. Refused rather than cut: a message delivered in part is
+        # acted on in part, and the sender is the one person who can fix it.
+        if env.kind == KIND_CHAT and (reason := message_refusal(env.text or "")):
+            raise MessageRefused(reason)
         if env.kind == KIND_HELLO and env.sender_id and env.body:
             # The host announces itself the same way a guest does, so its repo,
             # branch and focus show up in the roster like everyone else's.

@@ -47,6 +47,11 @@ Every collab payload travels inside a standard A2A `Message` as a structured
 }
 ```
 
+`text` is at most 8 000 characters. A longer message is **refused**, on both
+routes, with the size, the limit and the alternative — a file, or two messages
+— in the refusal; it is never cut, because a message delivered in part is acted
+on in part. The wake's batch carries messages whole under the same limit.
+
 `from` is **never** taken from the client. The hub sets it from the
 authenticated participant, so a message cannot be attributed to someone else.
 

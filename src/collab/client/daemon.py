@@ -1056,6 +1056,34 @@ class Daemon:
             return False
         if polled_at <= self.waker.turn_ended:
             return False                    # our own woken turn, reading
+        # AND A POLL THAT FOLLOWS A DELIVERY IS THE DELIVERED TURN READING,
+        # for as long as a poll counts. `turn_ended` is stamped when the
+        # DELIVERY returns, and for every route into a live session that is
+        # not when the turn runs: `codex queue` returns once the prompt is
+        # queued and Codex runs it when its current turn ends; a line typed
+        # into a tmux pane lands at once and is read whenever the agent next
+        # takes a turn. The prompt then tells that turn `collab recv --limit
+        # 50`, and its poll landed after `turn_ended` and was counted as an
+        # independent reader — so every wake bought ten minutes of silence,
+        # with the messages that arrived meanwhile waiting the whole of it.
+        # Measured on a Codex participant: minutes to wake, however many were
+        # pending. The trade is named: an agent that polls on its own AND has
+        # a wake armed may be woken once while it is already reading, inside
+        # this window after a delivery. One redundant turn; not ten minutes
+        # of none.
+        #
+        # A DELIVERY THAT CARRIED MESSAGES AND ARRIVED, and no other. Keyed on
+        # `last_attempt` this covered every attempt — a reminder-only turn,
+        # which recurs every ten minutes and would have kept the window open
+        # for ever, so a genuine reader's poll never counted again; and a
+        # FAILED delivery, after which no turn ran and any poll is somebody
+        # else. `messaged_at` is stamped only by a turn that carried messages
+        # and `delivered_at` only by one that arrived; both, with the same
+        # instant, is the turn this window is for.
+        arrived = self.waker.last_message_attempt
+        if (arrived and self.waker.last_delivery >= arrived
+                and arrived <= polled_at < arrived + wake.POLL_COUNTS_AS_LISTENING):
+            return False
         return (time.time() - polled_at) < wake.POLL_COUNTS_AS_LISTENING
 
     def _remind_the_monitor(self) -> None:

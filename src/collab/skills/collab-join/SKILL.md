@@ -668,7 +668,9 @@ collab file rm f_xxx                       # take back one you sent
 - **Answer `[dm→you]` lines** — they are direct questions to you.
 - **Announce completions** with a short note on what changed.
 - **Send artifacts as files.** `collab file send` — do not paste binaries or
-  long diffs into messages. Fetching verifies the checksum and then confirms
+  long diffs into messages. A message is refused over 8 000 characters, with
+  the reason; nothing is cut, because a message read in part is acted on in
+  part. Fetching verifies the checksum and then confirms
   receipt. Sent `--to` one agent, that deletes the host's copy; sent to the
   room, the copy is kept until everyone who was in the session has fetched it,
   or for 30 minutes, whichever comes first — so fetch what is shared with the

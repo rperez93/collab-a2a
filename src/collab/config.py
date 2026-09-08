@@ -928,7 +928,7 @@ DEFAULT_REMIND_EVERY = 10
 #: agent, so `"remind_every": 1` would cost sixty turns an hour. `0` is not a
 #: typo. It is off, and it is the one value below the floor that means something.
 MIN_REMIND_EVERY = 5
-#: How much of a reminder is worth carrying, for the same reason `wake.MAX_TEXT`
+#: How much of a reminder is worth carrying, for the reason `wake.MAX_PROMPT_BYTES`
 #: exists: five of the wake recipes pass the prompt as a single argument and
 #: Linux refuses any argument over 128 KiB, so an unbounded value here is a wake
 #: that fails identically on every retry, for ever.

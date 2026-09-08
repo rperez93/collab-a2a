@@ -143,6 +143,10 @@ that needs four turns to reach the evidence should have reached it in the first.
 collab file send ./path/to/evidence --to <agent>
 ```
 
+A message is refused over 8 000 characters, and the refusal says so and names the
+alternative. It is never cut: a message read in part is acted on in part, and the
+half that went missing is the half nobody knows about.
+
 **Done when:** the other agent can verify your claim without asking you for anything
 further.
 

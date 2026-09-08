@@ -97,10 +97,6 @@ MAX_BATCH = 40
 #: long` on every retry, for ever, which is how a wake bricks itself.
 MAX_PROMPT_BYTES = 60_000
 
-#: How much of one message's text is worth carrying. The point of the batch is
-#: to say who wants what; the full text is a `collab recv` away.
-MAX_TEXT = 2_000
-
 #: Consecutive failures after which this is no longer a hiccup. A wake aimed at
 #: a session that has since been closed fails identically every time, and from
 #: the inside that is indistinguishable from a quiet room — so past this it is
@@ -884,8 +880,15 @@ class Waker:
             "at": when,
             "kind": env.kind,
             "from": env.sender,
-            "text": (text[:MAX_TEXT] + " …[truncated; `collab recv` has it all]"
-                     if len(text) > MAX_TEXT else text),
+            # WHOLE. This cut each message at two thousand characters with
+            # «…[truncated; `collab recv` has it all]» appended, and a woken
+            # agent acted on the first two thousand characters of an
+            # instruction, because going back for the rest is a step it was
+            # not asked to take. The hub refuses a message over
+            # `protocol.MAX_MESSAGE` at the moment of sending instead, so what
+            # is here is what was said; `prompt()` still bounds the BATCH, by
+            # whole messages, against the argument-length limit.
+            "text": text,
         }, ensure_ascii=False)
         try:
             with self.pending.open("a", encoding="utf-8") as fh:
@@ -1338,8 +1341,13 @@ class Waker:
         if len(body.encode()) > room:
             kept = body.encode()[-room:].decode("utf-8", "ignore")
             # Start at a line boundary: half a JSON object reads as corruption.
-            if "\n" in kept:
-                kept = kept[kept.index("\n") + 1:]
+            # AND A LINE WITH NO BOUNDARY IN IT IS ALL FRAGMENT. One message
+            # longer than the room on its own — which the hub refuses now, and
+            # an older hub did not — left its tail here as the whole batch,
+            # a run of characters out of the middle of somebody's sentence with
+            # nothing to say it was. Whole messages or none; the note says
+            # where they are.
+            kept = kept[kept.index("\n") + 1:] if "\n" in kept else ""
             body = ("[earlier messages in this batch were too large to carry —"
                     " `collab recv --limit 50` has them all]\n" + kept)
         return head + body

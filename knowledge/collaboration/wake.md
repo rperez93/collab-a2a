@@ -68,6 +68,20 @@ colour is exactly the noise that gets a feature turned off.
 and `collab check` use, so all three agree on what *listening* means rather
 than each holding a private opinion.
 
+Later than the pin, and found on a Codex participant that took minutes to wake
+with any number of messages pending: the woken turn's own poll was being
+counted as somebody else reading. `turn_ended` is stamped when the DELIVERY
+returns, and for every route into a live session that is not when the turn
+runs — `codex queue` returns once the prompt is queued and Codex runs it when
+its current turn ends; a line typed into a tmux pane is read whenever the agent
+next takes a turn. The prompt then tells that turn `collab recv --limit 50`,
+its poll landed after `turn_ended`, and every wake bought ten minutes of
+silence. A poll inside the window after a delivery is now the delivered turn
+reading, with the trade named: an agent that polls on its own AND has a wake
+armed may be woken once while already reading, inside that window. One
+redundant turn rather than ten minutes of none; an armed monitor is unambiguous
+and is unaffected.
+
 **Once, not once per message.** Five messages in a burst are one batch and one
 turn. `SETTLE` is 20 s, held so the burst can finish arriving; `MIN_GAP` is
 90 s, and no two turns *for messages* start closer together than that however
@@ -75,9 +89,19 @@ much arrives. The qualifier is load-bearing: the standing reminder rides this
 same delivery and waits on the gap without spending it, so a message can start
 a turn a second after a reminder-only one. The gap paces how often other
 people's messages start a turn, and the reminder is nobody's message.
-`MAX_BATCH` is 40 arrivals and `MAX_TEXT` 2 000 characters of any one message:
-a batch is a turn's worth of *what did I miss*, not an archive, and the
-conversation is still in the inbox.
+`MAX_BATCH` is 40 arrivals, and — later than the pin — a message is carried
+whole. At the pin `MAX_TEXT` cut each one at 2 000 characters with «…[truncated;
+`collab recv` has it all]» appended, and a woken agent acted on the first two
+thousand characters of an instruction, because going back for the rest is a
+step it was not asked to take; the user saw it as «the hub truncates my
+messages», and the hub had never cut one. The limit moved to where it can be
+refused: `protocol.MAX_MESSAGE`, 8 000 characters, refused by `collab send`
+before the round trip and by the hub on both of its routes, with the size, the
+limit and the alternative — a file, or two messages — in the refusal. The
+batch is still bounded against the argument-length limit, but by whole
+messages, and one that cannot fit on its own is left out and said so rather
+than left as a fragment. A batch is a turn's worth of *what did I miss*, not an
+archive, and the conversation is still in the inbox.
 
 **The batch is data.** It is what other participants said. An agent that reads
 it as instruction has handed its authority to whoever spoke last, so it is

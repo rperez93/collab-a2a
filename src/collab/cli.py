@@ -1259,6 +1259,13 @@ def cmd_send(args: argparse.Namespace) -> int:
     if not text:
         fail("nothing to send")
         return 1
+    # Said here before the hub says it, with the same words: the hub refuses
+    # too, for clients that do not come this way, but the sender is at THIS
+    # prompt and the reason belongs in front of them at once.
+    from .protocol import message_refusal
+    if reason := message_refusal(text):
+        fail(reason)
+        return 1
     env = Envelope(
         kind=KIND_CHAT, text=text, sender=profile.name,
         room=None if args.to else (args.room or profile.room),

@@ -391,16 +391,20 @@ def test_a_full_batch_stays_deliverable_as_one_argument(tmp_path):
     assert done.returncode == 0, "the batch is too large to pass as an argument"
 
 
-def test_the_truncated_prompt_still_says_what_to_do(tmp_path):
+def test_a_message_the_prompt_cannot_carry_is_dropped_whole_and_said_so(tmp_path):
+    """The hub refuses a message over `protocol.MAX_MESSAGE` now, so this is
+    what an OLDER hub can still hand a batch. It used to be cut at the message
+    to two thousand characters with a note; now the batch is bounded by whole
+    messages, and one that does not fit on its own is left out — not left as
+    a run of characters from the middle of somebody's sentence, which is what
+    the tail of a single oversized line was."""
     w, clock = waker(tmp_path)
     w.note(chat("z" * 400_000))
     clock[0] += 1
     prompt = w.prompt(w.take())
     assert "UNTRUSTED DATA" in prompt, "the framing survives the cut"
-    # Cut at the message, before it ever reaches the batch — and said so, with
-    # where the rest is. A silent truncation is a message the agent answers
-    # having read half of it.
-    assert "truncated" in prompt and "collab recv" in prompt
+    assert "too large to carry" in prompt and "collab recv" in prompt
+    assert "zzzz" not in prompt, "no fragment of the message is carried"
 
 
 # --- what the woken agent is told ----------------------------------------------
@@ -1189,6 +1193,79 @@ def test_the_woken_turns_own_reading_does_not_silence_the_next_wake(
     assert daemon._somebody_reads() is False
 
     daemon.waker.turn_finished(now - 1)                       # somebody else's
+    assert daemon._somebody_reads() is True
+
+
+def test_a_poll_that_follows_a_delivery_is_the_delivered_turn_reading(
+        profile, monkeypatch):
+    """`turn_ended` is stamped when the DELIVERY returns, and for every route
+    into a live session that is not when the turn runs: `codex queue` returns
+    once the prompt is queued and Codex runs it when its current turn ends; a
+    line typed into a tmux pane is read whenever the agent next takes a turn.
+    The prompt then tells that turn `collab recv --limit 50`, and its poll
+    landed after `turn_ended` and counted as an independent reader — so every
+    wake bought ten minutes of silence, with the messages that arrived meanwhile
+    waiting the whole of it. Measured on a Codex participant: minutes to wake,
+    however many were pending."""
+    daemon = a_daemon(profile)
+    monkeypatch.setattr(d, "watchers", lambda p: [])
+    daemon.bridge = type("B", (), {"clients": 0})()
+
+    now = time.time()
+    wake.write_config(daemon.paths.root, wake.WakeConfig(command=["true"]))
+    assert daemon.waker.note(chat())
+    batch = daemon.waker.take()
+    assert batch is not None
+    daemon.waker.succeeded(batch)                             # messages delivered just now
+    daemon.waker.turn_finished(now)                           # …and «ended» at once
+    monkeypatch.setattr(d, "last_poll", lambda p: now + 30)  # the turn, reading, later
+    assert daemon._somebody_reads() is False
+
+    # Past the window a poll is somebody reading on their own again.
+    monkeypatch.setattr(d, "last_poll",
+                        lambda p: now + wake.POLL_COUNTS_AS_LISTENING + 1)
+    monkeypatch.setattr(time, "time", lambda: now + wake.POLL_COUNTS_AS_LISTENING + 2)
+    assert daemon._somebody_reads() is True
+
+
+def test_a_reminder_only_delivery_does_not_open_the_window(profile, monkeypatch):
+    """The standing reminder recurs every ten minutes, and the window is ten
+    minutes: keyed on any attempt it would never have closed, and a genuine
+    reader's poll would never have counted again. A reminder-only turn
+    carried nobody's message; a poll after it is somebody reading."""
+    daemon = a_daemon(profile)
+    monkeypatch.setattr(d, "watchers", lambda p: [])
+    daemon.bridge = type("B", (), {"clients": 0})()
+    now = time.time()
+    daemon.waker.succeeded(None)                              # a reminder arrived
+    daemon.waker.turn_finished(now - 1)
+    monkeypatch.setattr(d, "last_poll", lambda p: now + 30)
+    assert daemon._somebody_reads() is True
+
+
+def test_a_failed_delivery_does_not_open_the_window(profile, monkeypatch):
+    """After a failure no turn ran, so any poll is somebody else's — and the
+    backoff's first step is two minutes against a ten-minute window, which
+    left eight minutes in which a real reader would have been discounted."""
+    daemon = a_daemon(profile)
+    monkeypatch.setattr(d, "watchers", lambda p: [])
+    daemon.bridge = type("B", (), {"clients": 0})()
+    now = time.time()
+    wake.write_config(daemon.paths.root, wake.WakeConfig(command=["true"]))
+    assert daemon.waker.note(chat())
+    daemon.waker.failed(daemon.waker.take())                  # tried, did not arrive
+    daemon.waker.turn_finished(now - 1)
+    monkeypatch.setattr(d, "last_poll", lambda p: now + 30)
+    assert daemon._somebody_reads() is True
+
+
+def test_a_watcher_is_still_a_reader_whatever_was_delivered(profile, monkeypatch):
+    """The window above is for polls, which are ambiguous. An armed monitor is
+    not, and a delivery does not make it so."""
+    daemon = a_daemon(profile)
+    monkeypatch.setattr(d, "watchers", lambda p: [4242])
+    daemon.bridge = type("B", (), {"clients": 0})()
+    daemon.waker.succeeded(None)
     assert daemon._somebody_reads() is True
 
 

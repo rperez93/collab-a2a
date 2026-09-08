@@ -45,6 +45,7 @@ from ..protocol import (
     MAX_NAME,
     MAX_ROOM,
     MAX_TITLE,
+    MessageRefused,
     REST_PREFIX,
     ROOM_FILE_TTL_SECONDS,
     RPC_PATH,
@@ -364,7 +365,12 @@ def create_app(
             body=dict(body.get("body") or {}),
             stats=dict(body.get("stats") or {}),
         )
-        env = await hub.publish(env)
+        try:
+            env = await hub.publish(env)
+        except MessageRefused as exc:
+            # 413, and the reason as the body: the sender reads it, and it
+            # names the alternative. See protocol.MAX_MESSAGE.
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
         return {"seq": env.seq, "ts": env.ts}
 
     @app.get(f"{EXT_PREFIX}/history", tags=["collab"])

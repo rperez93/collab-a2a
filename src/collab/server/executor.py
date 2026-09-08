@@ -15,7 +15,7 @@ from google.protobuf.json_format import MessageToDict, ParseDict
 from google.protobuf.struct_pb2 import Value
 
 from ..protocol import (DEFAULT_ROOM, Envelope, KIND_CHAT, KIND_HELLO,
-                        client_kind_refusal, new_id, now_iso)
+                        client_kind_refusal, new_id, now_iso, MessageRefused)
 from .hub import Hub
 
 
@@ -96,7 +96,12 @@ class CollabAgentExecutor(AgentExecutor):
         env.sender_id = sender_id
         if env.to:
             env.to_id = self.hub.store.resolve_name(env.to) or ""
-        env = await self.hub.publish(env)
+        try:
+            env = await self.hub.publish(env)
+        except MessageRefused as exc:
+            # The same refusal the REST route gives, in this route's words;
+            # `hub_client.send` surfaces the message to `collab send`.
+            raise InvalidParamsError(message=str(exc)) from exc
         await event_queue.enqueue_event(ack_message(env))
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:

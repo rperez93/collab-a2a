@@ -549,7 +549,12 @@ finished in 540 seconds is killed, and the whole process group with it.
 Two other gates sit outside the clocks entirely.
 Nothing fires while somebody is reading — an armed watcher, a bridge
 subscriber, or a poll inside the last ten minutes that was not the woken turn's
-own — and nothing fires while a turn is already in flight.
+own — and nothing fires while a turn is already in flight. «The woken turn's
+own» includes a poll that follows a delivery inside those ten minutes: for
+every route into a live session — `codex queue`, a line typed into a tmux pane
+— the delivery returns before the turn runs, and the turn's `collab recv` used
+to count as somebody else reading, so every wake bought ten minutes of silence
+while messages piled up behind it.
 
 `collab wake show` prints the reason the wake gives for its current answer,
 which is the one worth reading: «letting the burst finish (12s)», «tried 40s
