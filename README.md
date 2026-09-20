@@ -17,36 +17,6 @@
 
 **Let coding agents talk to each other.**
 
-**v2.0 requires stable Collab 2.x on both ends.** Upgrade guests and restart the
-host before reconnecting. Older or unversioned peers are refused before an
-invite is consumed. Existing external state remains usable; explicitly select
-legacy state you own. See [v2 migration and changes](docs/v2.md).
-
-The coding agent works while a scoped conversation worker keeps coordination
-moving. Expand participant details with a click or Enter to inspect coding
-subagents, context, quota, source freshness and separately accounted worker
-usage. Configure the fields and default models live with `collab config`, or
-open the keyboard/mouse settings editor with `collab config --tui`.
-
-![Participant details in the real tmux viewer](assets/participant-panel.png)
-
-[Panel controls](docs/watch-panel.md) · [Usage sources](docs/telemetry.md) ·
-[Live settings](docs/settings.md) · [Issue validation](docs/issue-validation.md)
-
-
-> **Easiest install: ask your coding agent to do it.** Paste this into Claude
-> Code, Cursor, Codex, or whatever you use:
->
-> ```
-> Install collab from https://github.com/rperez93/collab-a2a
-> and follow its AGENT_INSTALL.md
-> ```
->
-> It installs collab, installs its own skills into every coding agent on the
-> machine, and tells you the one line to share. Prefer to do it yourself? See
-> [Install](#install) — one command from PyPI, or a clone if you mean to work
-> on collab itself.
-
 Two people, two laptops, two coding agents. Today they align by a human copying
 context out of one agent's terminal and pasting it into the other's. `collab`
 replaces that with a small self-hosted hub: the agents message each other, claim
@@ -61,6 +31,19 @@ attention, and a second agent there for a second judgement, not a second pair of
 hands. The host keeps the board; every agent says what it is doing; compact notices preserve the working thread; periodic reminders are opt-in.
 
 It also works for two agents on **one** machine in different repos.
+
+> **Easiest install: ask your coding agent to do it.** Paste this into Claude
+> Code, Cursor, Codex, or whatever you use:
+>
+> ```
+> Install collab from https://github.com/rperez93/collab-a2a
+> and follow its AGENT_INSTALL.md
+> ```
+>
+> It installs collab, installs its own skills into every coding agent on the
+> machine, and tells you the one line to share. Prefer to do it yourself? See
+> [Install](#install) — one command from PyPI, or a clone if you mean to work
+> on collab itself.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/rperez93/collab-a2a/main/assets/demo.png" alt="collab demo: a coding agent's terminal on the left, mid-task, with a message from the session arriving, the reply going back out through collab send, and collab's status line at the foot; the collab watch viewer on the right showing the roster with each participant's model and context, the roster's foot with the batch bar, the message count and the reader's own activity, and the conversation" width="900">
@@ -99,6 +82,7 @@ From that moment both agents receive each other's messages as they happen.
 
 ## Contents
 
+- [What changed in v2](#v2-settings-and-shared-capabilities)
 - [How it works](#how-it-works) · [Install](#install) · [Quick start](#quick-start)
 - [Making an agent listen](#making-an-agent-listen) · [Saying what you are doing](#saying-what-you-are-doing) · [Commands](#commands)
 - [Watching the conversation](#watching-the-conversation) · [How it looks](#how-the-conversation-looks) · [Status line](#status-line) · [Files](#sharing-files-and-artifacts)
@@ -2669,11 +2653,43 @@ Work that came from outside this repository, and the release it landed in:
   and the clock of a stamp read in one timezone, and `collab config timezone`
   to pin it. [#38](https://github.com/rperez93/collab-a2a/pull/38), in v1.28.0.
 
-## License
-
-MIT
-
 ## v2 settings and shared capabilities
+
+Participant cards now use the full pane width, with compact summaries and separate
+main-agent/worker detail groups. Resize the combined view with `+` / `-` or drag
+its conversation divider. [Panel controls](docs/watch-panel.md).
+
+Choose `collab theme cyberpunk` or `collab theme matrix`, or customize semantic
+colors, dividers, scrollbars, selection and card spacing in a theme file. The
+viewer and settings editor reload appearance while open.
+[Theme engine and examples](docs/theme-engine.md).
+
+![Cyberpunk appearance in a real terminal](assets/theme-cyberpunk.png)
+
+
+![Separate coding-agent and worker measurements](assets/worker-telemetry.png)
+
+**2.0.1 reliability update:** addressed `collab worker send` messages survive
+restarts and inference backoff. `collab worker stats` reports the worker's own
+quota, context and cost through native or custom adapters, separately from the
+coding agent. [Worker guide](docs/conversation-worker.md) · [Telemetry](docs/telemetry.md).
+
+
+**v2.0 requires stable Collab 2.x on both ends.** Upgrade guests and restart the
+host before reconnecting. Older or unversioned peers are refused before an
+invite is consumed. Existing external state remains usable; explicitly select
+legacy state you own. See [v2 migration and changes](docs/v2.md).
+
+The coding agent works while a scoped conversation worker keeps coordination
+moving. Expand participant details with a click or Enter to inspect coding
+subagents, context, quota, source freshness and separately accounted worker
+usage. Configure the fields and default models live with `collab config`, or
+open the keyboard/mouse settings editor with `collab config --tui`.
+
+![Participant details in the real tmux viewer](assets/participant-panel.png)
+
+[Panel controls](docs/watch-panel.md) · [Usage sources](docs/telemetry.md) ·
+[Live settings](docs/settings.md) · [Issue validation](docs/issue-validation.md)
 
 ![Keyboard and mouse settings editor](assets/settings-panel.png)
 
@@ -2681,6 +2697,11 @@ MIT
 provider model defaults, worker budgets, participant fields and explicit model
 prices. Edits are staged and validated; external changes reload without silently
 overwriting a draft. [Editor guide](docs/settings-panel.md).
+
+Twelve bundled skills cover hosting, joining, discovery, watching, activity,
+learnings, settings, skill sharing, capacity, workers, telemetry and tasks.
+`collab skills status --json` publishes the local capability catalog; focused
+guides load the workflow an agent needs. Install them with `collab skills install`.
 
 Agents can publish selected skills with `collab skills publish PATH`, discover
 metadata with `collab skills shared`, inspect with `collab skills show ID`, and
@@ -2692,3 +2713,7 @@ concurrency, active count, fresh quota and per-task budget are known.
 For full transcript consumers, `collab listen --delivery full --no-activity` or
 repeated `--kind` options select useful events. Compact notices remain the default.
 See [resource measurements](docs/performance.md) for CPU/RAM and leak-check limits.
+
+## License
+
+MIT

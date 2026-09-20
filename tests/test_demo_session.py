@@ -84,7 +84,8 @@ def test_something_in_it_is_long_enough_to_fold(monkeypatch, layout, fold):
     assert any(r.button for r in rows), "no «show more» to click"
 
 
-def test_the_theme_that_ships_folds_the_long_messages_and_only_those(monkeypatch):
+@pytest.mark.parametrize('historical', [False, True])
+def test_the_theme_that_ships_folds_the_long_messages_and_only_those(monkeypatch, historical):
     """The shipped experience, said out loud rather than discovered.
 
     `classic` folds now, and the number it folds at was chosen against this
@@ -100,6 +101,9 @@ def test_the_theme_that_ships_folds_the_long_messages_and_only_those(monkeypatch
     resolved = dict(themes.DEFAULTS) | themes.BUILTIN["classic"]
     monkeypatch.setattr(tui, "_current_theme", lambda: resolved)
     monkeypatch.setattr(tui, "fold_override", lambda: None)
+    # The date adds seven header columns after midnight. Exercise both
+    # widths deterministically rather than depend on the test runner's clock.
+    monkeypatch.setattr(tui, '_stamp', lambda ts: '19 sep 23:40' if historical else '23:40')
 
     said = [e for e in demo.events() if e.kind == KIND_CHAT]
     for width, at_most in ((80, 0.10), (27, 0.20), (41, 0.20)):

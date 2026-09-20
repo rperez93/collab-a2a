@@ -25,6 +25,10 @@ VISUALES = {
     # Hiding it hides a picture of where you are — never the ability to get
     # there, since every key that scrolls still scrolls.
     "scrollbar_side",
+    "background", "foreground", "system", "status_fg", "status_bg", "accent",
+    "online", "offline", "good", "bad", "warn", "info", "button", "divider",
+    "scrollbar_track", "scrollbar_thumb", "selection_fg", "selection_bg", "roster",
+    "divider_char", "scrollbar_chars", "roster_spacing", "roster_indent", "roster_columns",
 }
 
 HOSTIL = """---

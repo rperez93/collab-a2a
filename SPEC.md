@@ -503,3 +503,16 @@ IDs distinguish publishers even when names match. Content hashes cover exact
 UTF-8 bytes. References/assets are not automatically uploaded. Capacity estimates
 are computed locally from observations and declared task budgets; they neither
 reserve remote quota nor create native children.
+
+
+### Worker telemetry extension (2.0.1)
+
+The optional nested `stats.worker` snapshot retains context, quota windows,
+cache-write tokens, cost/accounting scope and independent observation clocks.
+`quota_scope` is one of `shared_account`, `independent`, `unknown`; it describes
+an explicit relationship to the coding agent's allowance, not an account ID.
+The fixed field allow-list excludes secrets and recursively nested workers.
+Runtime health/counters originate in Collab; explicit local observations cannot
+replace them. `usage_model` labels original or mixed observed usage independently
+of the model configured for the next call. Unknown fields remain optional; the
+stable 2.x compatibility boundary is unchanged in 2.0.1.

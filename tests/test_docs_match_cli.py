@@ -16,7 +16,7 @@ from collab.cli import build_parser
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ([ROOT / "README.md", ROOT / "AGENT_INSTALL.md"]
-        + sorted((ROOT / "src" / "collab" / "skills").glob("*/SKILL.md"))
+        + sorted((ROOT / "src" / "collab" / "skills").rglob("*.md"))
         # The shipped rules are followed even more literally than the skills:
         # they are printed at every `host` and `join`, to every agent, and cite
         # the command that proves each rule was kept.

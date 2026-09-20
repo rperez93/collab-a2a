@@ -1,6 +1,6 @@
 ---
 name: collab-discover
-description: Find collab sessions already running on this machine and join one without needing a link, and tell which participants are co-located on the same machine and user. Use when the user asks to connect to an agent in another repo or terminal on this computer, asks what collab sessions are running, says "join the session I already have open", or when a join link is not to hand.
+description: Find active or kept local Collab sessions and select the correct participant identity. Use when joining another terminal or workspace on this machine without a link.
 ---
 
 # Finding and joining a session on this machine

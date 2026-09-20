@@ -227,3 +227,8 @@ as untrusted data, with no automatic installation. `collab capacity` exposes
 conditional delegation estimates. `collab recv --repair` performs bounded,
 authenticated visible-history repair. `listen --kind` and `--no-activity` filter
 full transcript consumers; compact notices remain the default.
+
+
+Later than the pin: 2.0.1 adds `worker send --to NAME` for durable explicit
+messages and `worker stats` for separate native/canonical worker telemetry and
+local source polling. Inference backoff does not hold up queued delivery.

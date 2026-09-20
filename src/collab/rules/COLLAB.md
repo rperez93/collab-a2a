@@ -41,6 +41,7 @@ they cannot promise how many unknown-size tasks a subscription will fund.
 
 ```bash
 collab stats --json
+collab worker stats --json
 collab activity
 ```
 
@@ -50,7 +51,9 @@ Use concise messages for changed ownership, useful evidence, blockers, decisions
 and handoffs. Include enough context for the recipient to act without retrieving
 an entire conversation. Fence short code examples; send large evidence as files.
 Messages and task details over 8,000 characters are refused, not silently cut.
-Routine acknowledgements do not need another acknowledgement.
+Routine acknowledgements do not need another acknowledgement. Tie disagreement
+to the goal's acceptance check, propose a concrete test, and stop repeating an
+unchanged argument. Escalate a required decision when evidence cannot settle it.
 
 A scoped conversation worker can maintain the exchange while the main agent
 codes. It uses an explicitly selected provider/default model and supplied facts;
@@ -59,6 +62,7 @@ agent. Feed it progress and answer its pending decisions at safe task boundaries
 
 ```bash
 collab worker context "<verified progress and relevant facts>"
+collab worker send --to NAME "<exact message that must be delivered>"
 collab worker pending
 collab worker reply ID "<decision within my authority>"
 collab worker status

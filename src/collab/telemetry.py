@@ -8,7 +8,10 @@ TEXT = {'source', 'cost_kind', 'cost_scope'}
 NESTED = {
  'subagents': {'active', 'total', 'source', 'observed_at'},
  'worker': {'enabled', 'running', 'agent', 'model', 'turns', 'attempts', 'pending', 'errors',
-            'tokens_in', 'tokens_out', 'tokens_cached', 'cost_usd', 'cost_kind', 'observed_at', 'source'},
+            'tokens_in', 'tokens_out', 'tokens_cached', 'tokens_cache_write', 'cost_usd', 'cost_kind', 'cost_scope', 'usage_model', 'observed_at', 'source',
+            'context_pct', 'context_tokens', 'context_limit', 'quotas', 'quota_scope', 'quota_observed_at',
+            'quota_used_pct', 'quota_five_hour', 'quota_seven_day', 'quota_reset_at',
+            'model_observed_at', 'context_observed_at', 'cost_observed_at', 'tokens_observed_at'},
 }
 
 def number(value):
@@ -35,6 +38,12 @@ def extended(data):
         if raw is None and key in data:
             out[key] = None
         elif isinstance(raw, dict):
+            if key == 'worker':
+                # A fixed allow-list prevents recursive worker/subagent trees.
+                # Reuse the ordinary quota parser so nested allowances have the
+                # same window/size caps and explicit-empty clearing contract.
+                out[key] = worker_report(raw)
+                continue
             kept = {}
             for field in fields:
                 value = raw.get(field)
@@ -45,6 +54,27 @@ def extended(data):
                 elif number(value) is not None:
                     kept[field] = value
             out[key] = kept
+    return out
+
+def worker_report(data):
+    from .stats import sanitise
+    if not isinstance(data, dict):
+        return {}
+    allowed = {key: value for key, value in data.items() if key in NESTED['worker']
+               and key not in ('enabled', 'running', 'quota_scope')}
+    out = sanitise(allowed)
+    if 'quotas' not in out and number(out.get('quota_used_pct')) is not None:
+        out['quotas'] = {'allowance': {'used_pct': out['quota_used_pct']}}
+        if out.get('quota_reset_at'):
+            out['quotas']['allowance']['resets_at'] = out['quota_reset_at']
+    for field in ('turns', 'attempts', 'pending', 'errors'):
+        if field in out and number(out[field]) is None:
+            out.pop(field)
+    for field in ('enabled', 'running'):
+        if isinstance(data.get(field), bool):
+            out[field] = data[field]
+    if data.get('quota_scope') in ('shared_account', 'independent', 'unknown'):
+        out['quota_scope'] = data['quota_scope']
     return out
 
 GROUPS = {
@@ -163,7 +193,7 @@ def parse(provider, data):
         if isinstance(children, list) and data.get('children_complete') is True:
             out['subagents'] = {'total': len(children), 'source': 'opencode-session-children', 'observed_at': out['observed_at']}
             statuses = mapping(data.get('statuses'))
-            if all(isinstance(c, dict) and c.get('id') in statuses for c in children):
+            if all(isinstance(c, dict) and mapping(statuses.get(c.get('id'))).get('type') in ('busy', 'retry', 'idle') for c in children):
                 out['subagents']['active'] = sum(mapping(statuses[c['id']]).get('type') in ('busy', 'retry') for c in children)
     else:
         raise ValueError('provider must be codex, claude, opencode or cursor')

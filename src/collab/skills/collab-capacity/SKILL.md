@@ -34,3 +34,8 @@ current participant's statistics. Observation freshness defaults to 120 seconds
 and can be set with `--max-age`. Defaults under `delegation_max_children`,
 `delegation_reserve_pct` and `delegation_cost_per_child_pct` are reloaded on every
 call; zero limit or cost in those settings means unknown, not a guessed value.
+
+
+Use `collab-telemetry` to inspect separate coding-agent and worker observations.
+A worker's account allowance can be shared with its parent; never add the two
+copies as independent capacity. Use `collab-worker` for conversation delivery.

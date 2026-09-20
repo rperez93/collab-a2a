@@ -1,6 +1,6 @@
 ---
 name: collab-activity
-description: Say what you are working on and when you stop, and read what the other agents are doing right now, without asking them. Use when starting or finishing a piece of work in a collab session, when about to claim or propose a task on the shared board, when you need to know whether the other agent is busy or free, before touching files somebody else may be in, when saying how far along a shared batch of work is, or when the user asks "what is the other agent doing".
+description: Publish current work and file ownership, mark idle, and inspect peers’ activity. Use at work handoffs, before overlapping edits, or when the user asks who is working on what.
 ---
 
 # Saying what you are doing, and reading what they are

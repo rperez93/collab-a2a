@@ -4,10 +4,13 @@ from .telemetry import number, estimate, mapping
 
 
 def extract(agent, output, model):
-    try:
-        records = [json.loads(line) for line in output.splitlines()] if agent in ('codex', 'opencode') else [json.loads(output)]
-    except (ValueError, UnicodeError):
-        return {}
+    records = []
+    for line in output.splitlines() if agent in ('codex', 'opencode') else [output]:
+        try:
+            records.append(json.loads(line))
+        except (ValueError, UnicodeError):
+            # Diagnostic chatter cannot erase a valid native usage envelope.
+            continue
     totals = {}
     for record in records:
         if not isinstance(record, dict):

@@ -182,10 +182,13 @@ def _columns(line: str, n: int) -> str:
     return "".join(out)
 
 
-def _participants_shown(screen: Screen, top: int, rows: list, content: int) -> int:
+def _participants_shown(screen: Screen, top: int, rows: list, content: int, expected: int) -> int:
     """How many rows from `top` down are, intact, the roster's rows in order."""
     shown = 0
-    for i, row in enumerate(rows):
+    # Cards now include optional blank spacing. A blank footer pad can match
+    # the next card's spacing byte for byte, so inspect only the independently
+    # specified viewport; the callers separately verify every footer boundary.
+    for i, row in enumerate(rows[:expected]):
         y = top + i
         if y >= screen.height:
             break
@@ -308,7 +311,8 @@ def test_the_split_view_pays_for_the_foot_only_out_of_a_roster_that_can(
             # The width the rows were BUILT to: the gutter is decided from the
             # previous frame, so asking for it after the draw is a frame late.
             content = viewer._roster_key[0]
-            shown = _participants_shown(win, 3, rows, content)
+            expected = panel - sum(_foot(panel, roster_row, width).values())
+            shown = _participants_shown(win, 3, rows, content, expected)
             assert shown == viewer.roster.rows, \
                 f"{where}: {viewer.roster.rows} rows reserved, {shown} drawn intact"
 
@@ -374,7 +378,7 @@ def test_the_foot_is_pinned_to_the_panel_when_the_list_is_short(tmp_path, cfg):
     assert _is_status_rule(win.row(chat_top - 2 - foot["bar"]))
     assert " bob" in win.row(3)
     assert all(_blank(win.row(y))
-               for y in range(5, chat_top - 2 - foot["bar"] - foot["pad_top"])), \
+               for y in range(3 + len(viewer._roster_rows), chat_top - 2 - foot["bar"] - foot["pad_top"])), \
         "the rows between the list and the rule are blank"
 
 
@@ -448,7 +452,8 @@ def test_the_roster_only_view_rules_off_its_own_row_and_no_other(
 
             rows = viewer._roster_rows
             content = viewer._roster_key[0]
-            shown = _participants_shown(win, 1, rows, content)
+            expected = height - 1 - row - (1 if rule else 0) - (1 if pad else 0)
+            shown = _participants_shown(win, 1, rows, content, expected)
             assert shown == viewer.roster.rows, \
                 f"{where}: {viewer.roster.rows} rows reserved, {shown} drawn intact"
             assert shown == height - 1 - row - (1 if rule else 0) - (1 if pad else 0), \

@@ -1,0 +1,63 @@
+{
+  "idle_palette": {
+    "iterations": 10000,
+    "wall_seconds": 0.018823302001692355,
+    "cpu_seconds": 0.018822563,
+    "retained_python_bytes_delta": 896,
+    "peak_python_bytes": 1353,
+    "largest_growth": [
+      "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py:560: size=328 B (+328 B), count=1 (+1), average=328 B",
+      "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py:423: size=328 B (+328 B), count=1 (+1), average=328 B",
+      "/tmp/collab-v201-work/benchmarks/theme_engine.py:26: size=120 B (+120 B), count=3 (+3), average=40 B",
+      "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py:558: size=168 B (+112 B), count=3 (+2), average=56 B",
+      "/tmp/collab-v201-work/benchmarks/theme_engine.py:18: size=0 B (-56 B), count=0 (-1)"
+    ],
+    "palette_pair_writes": 0
+  },
+  "idle_settings": {
+    "iterations": 10000,
+    "wall_seconds": 0.22400171399931423,
+    "cpu_seconds": 0.22399492199999999,
+    "retained_python_bytes_delta": 962112,
+    "peak_python_bytes": 965810,
+    "largest_growth": [
+      "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py:274: size=939 KiB (+939 KiB), count=1 (+1), average=939 KiB",
+      "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py:560: size=312 B (+312 B), count=1 (+1), average=312 B",
+      "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py:423: size=312 B (+312 B), count=1 (+1), average=312 B",
+      "/tmp/collab-v201-work/benchmarks/theme_engine.py:26: size=152 B (+120 B), count=4 (+3), average=38 B",
+      "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py:558: size=168 B (+112 B), count=3 (+2), average=56 B"
+    ]
+  },
+  "idle_settings_followup": {
+    "iterations": 10000,
+    "wall_seconds": 0.23602867100271396,
+    "cpu_seconds": 0.23602179499999998,
+    "retained_python_bytes_delta": 864,
+    "peak_python_bytes": 967099,
+    "largest_growth": [
+      "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py:560: size=296 B (+296 B), count=1 (+1), average=296 B",
+      "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py:423: size=296 B (+296 B), count=1 (+1), average=296 B",
+      "/tmp/collab-v201-work/benchmarks/theme_engine.py:26: size=184 B (+120 B), count=5 (+3), average=37 B",
+      "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py:558: size=168 B (+112 B), count=3 (+2), average=56 B",
+      "/tmp/collab-v201-work/benchmarks/theme_engine.py:18: size=32 B (-56 B), count=1 (-1), average=32 B"
+    ]
+  },
+  "theme_edits": {
+    "iterations": 500,
+    "wall_seconds": 0.46130084800097393,
+    "cpu_seconds": 0.451270858,
+    "retained_python_bytes_delta": 2713,
+    "peak_python_bytes": 1281878,
+    "largest_growth": [
+      "/tmp/collab-v201-work/src/collab/themes.py:580: size=832 B (+832 B), count=2 (+2), average=416 B",
+      "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py:560: size=272 B (+272 B), count=1 (+1), average=272 B",
+      "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py:423: size=272 B (+272 B), count=1 (+1), average=272 B",
+      "/tmp/collab-v201-work/src/collab/themes.py:182: size=184 B (+184 B), count=4 (+4), average=46 B",
+      "/tmp/collab-v201-work/benchmarks/theme_engine.py:26: size=216 B (+120 B), count=6 (+3), average=36 B"
+    ],
+    "palette_pair_writes": 14000,
+    "dynamic_pair_cache": 0,
+    "hex_cache": 0,
+    "theme_folder_cache": 1
+  }
+}

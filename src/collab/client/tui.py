@@ -85,7 +85,7 @@ POLL_SECONDS = 0.25
 #: vanished altogether, and the legend is how anybody learns the viewer. The
 #: short form keeps the two that are not guessable: how to get back to the live
 #: end, and how to leave.
-CHAT_KEYS = ("wheel/tab: pane · ↑↓ pgup/pgdn: scroll · [ ]: roster · "
+CHAT_KEYS = ("wheel/tab: pane · +/-: resize · ↑↓ pgup/pgdn: scroll · [ ]: roster · "
              "End/G: newest · Home/g: top · q: quit")
 CHAT_KEYS_SHORT = "End/G: newest · tab: pane · q: quit"
 ROSTER_KEYS = "J/K: select · Enter/click: details · v: all details · f: fields · ↑↓/wheel: scroll · q: quit"
@@ -154,6 +154,13 @@ C_BUTTON = 21
 #: eight-colour ones fall back to COLOR_BLUE, which is what they had anyway.
 INFO_HEX = "#4888db"
 C_TEXT = 22      # white · the body of a message that says nothing special
+C_SELECTION = 23
+C_DIVIDER = 24
+C_SCROLL_TRACK = 25
+C_SCROLL_THUMB = 26
+_BACKGROUND = [-1]
+_PALETTE_VERSION = [None]
+_THEME_POLLING = [False]
 
 #: How many lines of a message show before it folds, and how much of the width
 #: the bubble takes. The gap left on the opposite side is what makes it readable
@@ -367,6 +374,8 @@ def _colour_index(value) -> int:
     """
     if isinstance(value, int):
         return value
+    if value in themes.COLOR_NAMES:
+        return themes.COLOR_NAMES[value]
 
     # IT GOES THROUGH parse_color, which understands name, index, hex, rgb()
     # A theme value is either a hex colour or a variable; parse_color
@@ -414,9 +423,11 @@ def _pair_for(value) -> int:
     color = _colour_index(value)
     if color not in _PAIRS_BY_COLOUR:
         pair = _NEXT_PAIR[0]
+        if pair >= getattr(curses, "COLOR_PAIRS", 256):
+            return C_TEXT
         _NEXT_PAIR[0] += 1
         try:
-            curses.init_pair(pair, color, -1)
+            curses.init_pair(pair, color, _BACKGROUND[0])
         except (curses.error, ValueError):
             # ValueError, not only curses.error: with the terminal not yet
             # initialised, or the index out of range, curses raises ValueError
@@ -482,6 +493,7 @@ _VARS = {
     "$WARN": lambda _s: C_WARN,
     "$INFO": lambda _s: C_INFO,
     "$DIM": lambda _s: C_DIM,
+    "$ACCENT": lambda _s: C_ACCENT,
 }
 
 
@@ -512,7 +524,23 @@ def _current_theme() -> dict:
     have to close the viewer to see each change, and testing blind is what makes
     nobody write themes.
     """
-    chosen = theme()
+    now = time.monotonic()
+    environment = os.environ.get("COLLAB_CONFIG")
+    if (_THEME_POLLING[0] and _THEME_CACHE.get("environment") == environment
+            and "theme" in _THEME_CACHE and now < _THEME_CACHE.get("check_at", 0)):
+        return _THEME_CACHE["theme"]
+    if _THEME_POLLING[0]:
+        from ..config import load_config, DEFAULT_THEME
+        requested = str(load_config().get("theme") or DEFAULT_THEME)
+    else:
+        requested = theme()
+    folder = themes.user_themes_dir()
+    # The viewer paints many rows per frame. Poll edits at most four times a
+    # second; repeatedly scanning the theme directory for each row was needless
+    # work. Outside a running curses palette, inspection remains immediate.
+    if (_THEME_POLLING[0] and _THEME_CACHE.get("selection") == (requested, str(folder))
+            and now < _THEME_CACHE.get("check_at", 0)):
+        return _THEME_CACHE["theme"]
     # THE STAMP COMES FROM THE FILES, not from the folder. Saving an existing
     # file does not change the folder's mtime, so a folder-level stamp meant
     # editing your theme did nothing until you created another one — with nano,
@@ -521,19 +549,19 @@ def _current_theme() -> dict:
     #
     # load_md_themes already stamps per file, so the cheap thing to do is ask it
     # and let its own cache decide whether to touch the disk.
-    try:
-        stamp = tuple(sorted(
-            (p.name, p.stat().st_mtime, p.stat().st_size)
-            for p in themes.user_themes_dir().iterdir()
-            if p.suffix.lower() in (".md", ".markdown")))
-    except OSError:
-        stamp = ()
+    loaded, _ = themes.load_md_themes(folder)
+    available = {**themes.BUILTIN, **loaded}
+    chosen = requested if requested in available or not _THEME_POLLING[0] else "classic"
+    cached = themes._MD_CACHE.get(str(folder))
+    stamp = cached[0] if cached else None
     if _THEME_CACHE.get("key") != (chosen, stamp):
         # The version is what tells the row cache the rendering rules moved.
         # Comparing the theme dicts themselves would work and costs more than
         # the redraw it is trying to avoid.
-        _THEME_CACHE.update(key=(chosen, stamp), theme=themes.resolve(chosen),
+        _THEME_CACHE.update(key=(chosen, stamp), theme=themes.resolve(chosen, folder, available=available),
                             version=_THEME_CACHE.get("version", 0) + 1)
+    _THEME_CACHE.update(selection=(requested, str(folder)), environment=environment,
+                       resolved_name=chosen, check_at=now + .25)
     return _THEME_CACHE["theme"]
 
 
@@ -1551,7 +1579,11 @@ def classic_rows(env: Envelope, width: int, me: str,
     # Under that width the header is dropped to its first line and the body
     # runs full width underneath: unusual-looking, but readable, which is the
     # only thing that matters at twenty-four columns.
-    cramped = head_width + 8 > width
+    # A date appears in yesterday's header. At 41 columns that left only
+    # eight body columns: crossing midnight suddenly folded ordinary chat
+    # into eight-line previews. Keep at least twelve useful body columns,
+    # otherwise use the existing full-width body below its header.
+    cramped = width - head_width - 1 < 12
     if cramped:
         indent = ""
     body_width = max(width - (0 if cramped else head_width) - 1, 8)
@@ -1725,6 +1757,74 @@ def participant_key(person: dict[str, Any]) -> str:
     return str(person.get("id") or person.get("participant_id") or person.get("name") or "?")
 
 
+def _participant_card(person: dict[str, Any], width: int, *, who: str,
+                      state: str, online: bool, selected: bool,
+                      fields: list[str] | tuple[str, ...], detailed: bool,
+                      doing: str = "") -> list[Row]:
+    """Use the pane's width, keeping identity and connection state visible.
+
+    Main and worker measurements occupy independent columns when both fit.
+    Narrow terminals retain every expanded fact by wrapping, and compact cards
+    have a fixed two-row measurement budget rather than growing with telemetry.
+    This is pure layout, called only when the roster cache is invalidated.
+    """
+    theme = _current_theme()
+    ident = participant_key(person)
+    width = max(width, 1)
+    short_state = state.split(" · ", 1)[0]
+    state_room = min(_w(short_state), max(width // 3, 0))
+    left = _clip(who, max(width - state_room - 1, 0))
+    header = left + " " * max(width - _w(left) - state_room, 0) + _clip(short_state, state_room)
+    rows = [Row(header, C_SELECTION if selected else C_ONLINE if online else C_OFFLINE,
+                curses.A_BOLD if selected or online else curses.A_DIM,
+                edge=0 if selected else _theme_colour(theme["roster"], person.get("name", "?")),
+                head=0 if selected else len(left), participant=ident, participant_header=True)]
+    indent = " " * min(theme["roster_indent"], max(width - 4, 0))
+    usable = max(width - len(indent), 1)
+
+    def add(text: str, *, heading: bool = False) -> None:
+        rows.append(Row(_clip(indent + text, width), C_ACCENT if heading else C_TEXT,
+                        curses.A_BOLD if heading else 0, participant=ident))
+
+    if state != short_state:
+        add(_clip(state, usable))
+    if doing:
+        add(_clip(doing, usable))
+    if not detailed:
+        facts = participant_metrics.metric_lines(person, fields, detailed=False)
+        lines = _wrap(" · ".join(facts) or "fields hidden", max(usable, 4))
+        for i, line in enumerate(lines[:2]):
+            if i == 1 and len(lines) > 2:
+                line = _clip(line, max(usable - 1, 0)) + "…"
+            add(line)
+    else:
+        main_fields = [field for field in fields if field != "worker"]
+        main = participant_metrics.metric_lines(person, main_fields, detailed=True)
+        worker = participant_metrics.metric_lines(person, ["worker"], detailed=True)[:-1] if "worker" in fields else []
+        two = width >= 88 and main and worker and theme["roster_columns"] != "one"
+        if two:
+            col = max((usable - 3) // 2, 4)
+            right = usable - col - 3
+            add("MAIN AGENT".ljust(col) + " │ WORKER", heading=True)
+            first = [part for fact in main for part in _wrap(fact, col)]
+            second = [part for fact in worker for part in _wrap(fact, right)]
+            for i in range(max(len(first), len(second))):
+                a = first[i] if i < len(first) else ""
+                b = second[i] if i < len(second) else ""
+                add(a + " " * (col - _w(a)) + " │ " + b)
+        else:
+            for title, facts in (("MAIN AGENT", main), ("WORKER", worker)):
+                if facts:
+                    add(title, heading=True)
+                for fact in facts:
+                    for part in _wrap(fact, max(usable, 4)):
+                        add(part)
+        if not main and not worker:
+            add("fields hidden")
+    rows.extend(Row("", C_DIM, participant=ident) for _ in range(theme["roster_spacing"]))
+    return rows
+
+
 def roster_rows(model: Model, width: int, *,
                 fields: list[str] | tuple[str, ...] | None = None,
                 opened: set[str] | None = None, selected: str = "") -> list[Row]:
@@ -1787,6 +1887,14 @@ def roster_rows(model: Model, width: int, *,
         person_id = participant_key(person)
         disclosure = ("▾" if person_id in (opened or set()) else "▸") if fields is not None else " "
         who = f"{disclosure}{glyph} {name}{suffix}"
+        if fields is not None:
+            rows.extend(_participant_card(
+                person, width, who=who, state=state, online=bool(online),
+                selected=person_id == selected, fields=fields,
+                detailed=person_id in (opened or set()),
+                doing=(activity.describe(doing, width=max(width, 4)) if online else "")
+                      or person.get("focus") or ""))
+            continue
         head = who
         # COLUMNS, not characters. A name in Japanese costs two columns per
         # glyph, so `28 - len(head)` left the state word starting at column 28,
@@ -1870,6 +1978,10 @@ class Tui:
         self.participant_field_mode = 0
         self._participant_settings_key: tuple = ()
         self._roster_top = -1
+        self._split_dragging = False
+        self._split_preview: float | None = None
+        self._split_body_height = 0
+        self._split_override: float | None = None
         self._roster_controls: tuple[int, int, int, int] = (-1, 0, 0, 0)
         self._participant_anchor = ""
         #: Where the conversation starts on screen and which rows are showing.
@@ -2024,9 +2136,16 @@ class Tui:
     # -- drawing ------------------------------------------------------------
 
     def _hline(self, win, y: int, width: int, label: str) -> None:
-        win.attron(curses.color_pair(C_DIM))
-        win.hline(y, 0, curses.ACS_HLINE, width)
-        win.attroff(curses.color_pair(C_DIM))
+        win.attron(curses.color_pair(C_DIVIDER))
+        stroke = _current_theme()["divider_char"]
+        if stroke == "─":
+            win.hline(y, 0, curses.ACS_HLINE, width)
+        else:
+            # ncurses hline accepts a byte/ACS chtype, not an arbitrary Unicode
+            # scalar (a real tmux run raises OverflowError for "─"). Draw custom
+            # validated single-cell strokes through the wide-text API instead.
+            win.addnstr(y, 0, stroke * width, width, curses.color_pair(C_DIVIDER))
+        win.attroff(curses.color_pair(C_DIVIDER))
         if label:
             focused = (label.lower().startswith("participants") and self.focus == "roster") \
                 or (label.lower().startswith("conversation") and self.focus == "chat")
@@ -2089,6 +2208,7 @@ class Tui:
                 pass
 
     def _draw(self, win) -> None:
+        _apply_theme_palette(win)
         win.erase()
         # Forgotten with the frame they belong to: a gutter left behind from a
         # pane that no longer has one is a click target over live text.
@@ -2107,6 +2227,19 @@ class Tui:
             self._command.poll(self._settings["command"],
                                self._settings["interval"])
         height, width = win.getmaxyx()
+        if self.view != "both" or height < 8 or width < 24:
+            self._split_body_height = 0
+        if self._split_dragging and not self._split_body_height:
+            # A live layout change or terminal resize can remove the divider
+            # before release. Stop motion reports then; an invisible gesture
+            # must not keep waking the viewer or commit stale geometry later.
+            self._split_dragging = False
+            self._split_preview = None
+            self._split_body_height = 0
+            try:
+                curses.mousemask(curses.ALL_MOUSE_EVENTS)
+            except curses.error:
+                pass
         if height < 4 or width < 24:
             # Never into the last cell of the last row: on a one-column pane
             # that is the write that ends the viewer.
@@ -2193,7 +2326,9 @@ class Tui:
         # instead of a line of conversation.
         foot = 1 if self._bar else 0
         body_height = height - body_top - foot
-        roster_h = max(int(body_height * roster_share()), MIN_ROSTER_ROWS)
+        self._split_body_height = body_height
+        share = self._split_preview if self._split_preview is not None else self._split_override
+        roster_h = max(int(body_height * (roster_share() if share is None else share)), MIN_ROSTER_ROWS)
         # Leave the conversation room to exist, but never squeeze the roster
         # out entirely: at MIN_ROSTER_ROWS-1 visible rows it renders nothing at
         # all, and a pane you cannot see is a pane you cannot scroll.
@@ -2343,7 +2478,7 @@ class Tui:
         # A theme change moves every row. Put the message you were reading back
         # under your eyes instead of leaving the offset pointing at whatever
         # now happens to live at that row number.
-        self._theme_drawn = theme()
+        self._theme_drawn = _THEME_CACHE.get("resolved_name", "classic")
         if theme_before and self._theme_drawn != theme_before:
             self.chat.hold(was_at, chat_rows)
         for i in range(self.chat.rows):
@@ -2394,12 +2529,13 @@ class Tui:
         """Paint the vertical scrollbar and remember where it went."""
         if rows <= 0:
             return
+        glyphs = _current_theme()["scrollbar_chars"]
         cells = scroll_track(rows, pane.offset, pane.rows, pane.total,
                              more_above=more_above, more_below=more_below,
-                             glyphs=(V_RAIL, V_THUMB, V_UNLOADED))
+                             glyphs=tuple(glyphs))
         for i, cell in enumerate(cells):
-            tone = C_DIM if cell == V_RAIL else C_ACCENT
-            attr = curses.A_DIM if cell == V_RAIL else curses.A_BOLD
+            tone = C_SCROLL_TRACK if cell == glyphs[0] else C_SCROLL_THUMB
+            attr = curses.A_DIM if cell == glyphs[0] else curses.A_BOLD
             try:
                 win.addnstr(top + i, x, cell, 1, curses.color_pair(tone) | attr)
             except curses.error:
@@ -2764,6 +2900,24 @@ class Tui:
             return "chat"
         return "roster"
 
+    def _resize_roster(self, share: float, *, save: bool = True) -> None:
+        """Only a completed gesture writes settings; motion stays in memory."""
+        share = max(.05, min(.90, share))
+        if not save:
+            self._split_preview = share
+            return
+        from ..config import save_watch_settings
+        try:
+            save_watch_settings(roster_size=round(share * 100))
+        except (OSError, ValueError):
+            # A read-only config must not make the live viewer unusable.
+            self._split_override = share
+        else:
+            # An explicit CLI size remains a pin for this process; a user's
+            # resize overrides that pin locally, while also saving for next time.
+            self._split_override = share if ROSTER_SHARE_PINNED is not None else None
+        self._split_preview = None
+
     def handle_mouse(self) -> bool:
         """One wheel notch, or a click on a «show more» button.
 
@@ -2778,6 +2932,21 @@ class Tui:
             _, x, y, _, state = curses.getmouse()
         except curses.error:
             return True
+        pressed = bool(state & getattr(curses, "BUTTON1_PRESSED", 0))
+        released = bool(state & getattr(curses, "BUTTON1_RELEASED", 0))
+        if self.view == "both" and self._split_body_height > 0:
+            if pressed and y == self._chat_top - 1:
+                self._split_dragging = True
+                # Ask for motion only during a drag. Idle pointer movement
+                # must not wake or redraw the panel continuously.
+                curses.mousemask(curses.ALL_MOUSE_EVENTS | getattr(curses, "REPORT_MOUSE_POSITION", 0))
+                return True
+            if self._split_dragging:
+                self._resize_roster((y - 2) / self._split_body_height, save=released)
+                if released:
+                    self._split_dragging = False
+                    curses.mousemask(curses.ALL_MOUSE_EVENTS)
+                return True
         where = self.pane_at(y)
         pane = self.roster if where == "roster" else self.chat
         up = state & getattr(curses, "BUTTON4_PRESSED", 0)
@@ -2900,6 +3069,9 @@ class Tui:
         if key == ord("\t"):
             if self.view == "both":
                 self.focus = "roster" if self.focus == "chat" else "chat"
+        elif self.view == "both" and key in (ord("+"), ord("-")):
+            share = self._split_override if self._split_override is not None else roster_share()
+            self._resize_roster(share + (.05 if key == ord("+") else -.05))
         elif self.focus == "roster" and key in (ord("J"), ord("K")):
             self._select_participant(1 if key == ord("J") else -1)
         elif self.focus == "roster" and key in (10, 13, curses.KEY_ENTER, ord(" "), curses.KEY_LEFT, curses.KEY_RIGHT):
@@ -3146,23 +3318,66 @@ def _pair_or(pair: int, colour: int, fallback: int) -> None:
 
 
 def _init_colors() -> None:
-    curses.start_color()
-    curses.use_default_colors()
-    curses.init_pair(C_TITLE, curses.COLOR_BLACK, curses.COLOR_CYAN)
-    curses.init_pair(C_DIM, curses.COLOR_WHITE, -1)
-    curses.init_pair(C_ONLINE, curses.COLOR_GREEN, -1)
-    curses.init_pair(C_OFFLINE, curses.COLOR_RED, -1)
-    curses.init_pair(C_ACCENT, curses.COLOR_CYAN, -1)
-    curses.init_pair(C_WARN, curses.COLOR_YELLOW, -1)
-    curses.init_pair(C_GOOD, curses.COLOR_GREEN, -1)
-    curses.init_pair(C_BAD, curses.COLOR_RED, -1)
-    curses.init_pair(C_WARNLINE, curses.COLOR_YELLOW, -1)
-    _pair_or(C_INFO, _colour_index(INFO_HEX), curses.COLOR_BLUE)
-    curses.init_pair(C_TEXT, curses.COLOR_WHITE, -1)
-    curses.init_pair(C_BUTTON, curses.COLOR_YELLOW, -1)
-    _deal_colours(curses.COLORS)
-    for i, colour in enumerate(SPEAKER_COLORS):
-        curses.init_pair(C_SPEAKER_BASE + i, colour, -1)
+    try:
+        curses.start_color()
+        curses.use_default_colors()
+    except curses.error:
+        pass
+    _deal_colours(getattr(curses, "COLORS", 0))
+    _PALETTE_VERSION[0] = None
+    _apply_theme_palette()
+
+
+def _apply_theme_palette(win=None) -> None:
+    """Refresh semantic pairs once per theme generation, with bounded caches."""
+    if not getattr(curses, "COLORS", 0):
+        return
+    current = _current_theme()
+    version = _THEME_CACHE.get("version", 0)
+    if _PALETTE_VERSION[0] != version:
+        _HEX_SLOTS.clear()
+        _NEXT_SLOT[0] = 255
+        _PAIRS_BY_COLOUR.clear()
+        _NEXT_PAIR[0] = C_SPEAKER_BASE + 40
+        def index(key, fallback):
+            value = _colour_index(current[key])
+            return value if -1 <= value < curses.COLORS else fallback
+        background = index("background", curses.COLOR_BLACK)
+        _BACKGROUND[0] = background
+        roles = {
+            C_TEXT: ("foreground", curses.COLOR_WHITE), C_DIM: ("system", curses.COLOR_WHITE),
+            C_ONLINE: ("online", curses.COLOR_GREEN), C_OFFLINE: ("offline", curses.COLOR_RED),
+            C_ACCENT: ("accent", curses.COLOR_CYAN), C_WARN: ("warn", curses.COLOR_YELLOW),
+            C_GOOD: ("good", curses.COLOR_GREEN), C_BAD: ("bad", curses.COLOR_RED),
+            C_WARNLINE: ("warn", curses.COLOR_YELLOW), C_INFO: ("info", curses.COLOR_BLUE),
+            C_BUTTON: ("button", curses.COLOR_YELLOW), C_DIVIDER: ("divider", curses.COLOR_WHITE),
+            C_SCROLL_TRACK: ("scrollbar_track", curses.COLOR_WHITE),
+            C_SCROLL_THUMB: ("scrollbar_thumb", curses.COLOR_CYAN),
+        }
+        def pair(number, foreground, ground):
+            try:
+                curses.init_pair(number, foreground, ground)
+            except (curses.error, ValueError):
+                # Some limited terminals reject default colours or high pairs.
+                # Remaining attributes still provide focus/status distinction.
+                try:
+                    curses.init_pair(number, curses.COLOR_WHITE, curses.COLOR_BLACK)
+                except (curses.error, ValueError):
+                    pass
+        for number, (key, fallback) in roles.items():
+            pair(number, index(key, fallback), background)
+        pair(C_TITLE, index("status_fg", curses.COLOR_BLACK), index("status_bg", curses.COLOR_CYAN))
+        pair(C_SELECTION, index("selection_fg", curses.COLOR_BLACK), index("selection_bg", curses.COLOR_CYAN))
+        for i, colour in enumerate(SPEAKER_COLORS):
+            pair(C_SPEAKER_BASE + i, colour, background)
+        _PALETTE_VERSION[0] = version
+    if win is not None:
+        try:
+            # erase() applies this on the next line; bkgd() would repaint all
+            # existing cells needlessly on every idle frame.
+            win.bkgdset(" ", curses.color_pair(C_TEXT))
+        except (curses.error, AttributeError):
+            pass
 
 
 def run(profile: SessionProfile, view: str = "both", limit: int = OPEN_WITH,
@@ -3260,7 +3475,11 @@ def run(profile: SessionProfile, view: str = "both", limit: int = OPEN_WITH,
             finally:
                 win.timeout(int(POLL_SECONDS * 1000))
 
-    return curses.wrapper(loop)
+    _THEME_POLLING[0] = True
+    try:
+        return curses.wrapper(loop)
+    finally:
+        _THEME_POLLING[0] = False
 
 
 def _on_resize(win) -> None:

@@ -906,6 +906,13 @@ class Daemon:
         self._stats_source_error = None
         write_stats(self.profile, whole_picture(figures))
 
+    async def _refresh_worker_stats_from_command(self) -> None:
+        from ..worker_telemetry import SourcePoller
+        poller = getattr(self, '_worker_stats_poller', None)
+        if poller is None:
+            poller = self._worker_stats_poller = SourcePoller(self.profile)
+        await poller.tick()
+
     async def _report_stats(self, client: httpx.AsyncClient) -> None:
         """Tell the hub where we are running, and what we know about our usage.
 
@@ -2430,6 +2437,7 @@ class Daemon:
                 # interval, the report by whether anything changed. Reading a
                 # small file every three seconds is the whole cost.
                 if self.state == "live" and self._http is not None:
+                    await self._refresh_worker_stats_from_command()
                     await self._refresh_stats_from_command()
                     await self._report_stats(self._http)
                 self.write_status()
@@ -2758,6 +2766,9 @@ class Daemon:
             service = getattr(self, "_conversation", None)
             if service is not None:
                 await service.stop()
+            poller = getattr(self, '_worker_stats_poller', None)
+            if poller is not None:
+                await poller.stop()
             await self._finish_any_wake()
             await self.bridge.stop()
             self.state = "stopped"

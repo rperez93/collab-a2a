@@ -103,3 +103,54 @@ raise SystemExit(tui.run(m.profile, view='roster', model=m))
         # Only this test's private server is terminated. No process matching,
         # no default tmux socket, and no access to the person's live sessions.
         subprocess.run(command + ["kill-server"], env=env, capture_output=True, timeout=5)
+
+
+@pytest.mark.skipif(not shutil.which('tmux'), reason='tmux is not installed')
+def test_combined_panel_resize_uses_real_keyboard_and_drag_reports(tmp_path):
+    """Ncurses decodes a divider drag and persists only its completed gesture."""
+    import json
+    harness = tmp_path / 'resize.py'
+    harness.write_text('''from collab import demo
+from collab.client import tui
+m = demo.model()
+m.refresh_side = lambda: None
+raise SystemExit(tui.run(m.profile, view='both', model=m))
+''')
+    config = tmp_path / 'config.json'
+    config.write_text(json.dumps({'watch_roster_size': 35}))
+    env = dict(os.environ, COLLAB_CONFIG=str(config), COLLAB_STATE_DIR=str(tmp_path / 'state'),
+               COLLAB_HOME=str(tmp_path / 'home'), TERM='xterm-256color',
+               PYTHONPATH=str(Path(__file__).resolve().parents[1] / 'src'))
+    env.pop('TMUX', None)
+    command = ['tmux', '-S', str(tmp_path / 'resize.sock')]
+    def call(*args):
+        return subprocess.run(command + list(args), env=env, check=True,
+                              capture_output=True, text=True, timeout=5).stdout
+    def wait_for(predicate):
+        until = time.monotonic() + 5
+        while time.monotonic() < until:
+            if predicate():
+                return
+            time.sleep(.05)
+        pytest.fail('Resize did not reach expected state:\n' + call('capture-pane', '-p'))
+    try:
+        call('-f', '/dev/null', 'new-session', '-d', '-x', '100', '-y', '40',
+             shlex.join(['env', 'TERM=xterm-256color', sys.executable, str(harness)]))
+        wait_for(lambda: 'CONVERSATION' in call('capture-pane', '-p'))
+        initial_divider = next(i for i, line in enumerate(call('capture-pane', '-p').splitlines()) if 'CONVERSATION' in line)
+        call('send-keys', '-l', '+')
+        wait_for(lambda: json.loads(config.read_text()).get('watch_roster_size') == 40)
+        wait_for(lambda: next(i for i, line in enumerate(call('capture-pane', '-p').splitlines()) if 'CONVERSATION' in line) > initial_divider)
+        lines = call('capture-pane', '-p').splitlines()
+        divider = next(i for i, line in enumerate(lines) if 'CONVERSATION' in line)
+        call('send-keys', '-l', f'\x1b[<0;50;{divider + 1}M')
+        time.sleep(.2)  # Let ncurses distinguish press from a completed click.
+        call('send-keys', '-l', '\x1b[<32;50;26M')
+        time.sleep(.15)
+        assert json.loads(config.read_text())['watch_roster_size'] == 40
+        call('send-keys', '-l', '\x1b[<0;50;26m')
+        wait_for(lambda: json.loads(config.read_text()).get('watch_roster_size') == 62)
+        call('send-keys', '-l', '-')
+        wait_for(lambda: json.loads(config.read_text()).get('watch_roster_size') == 57)
+    finally:
+        subprocess.run(command + ['kill-server'], env=env, capture_output=True, timeout=5)

@@ -1,6 +1,6 @@
 ---
 name: collab-configure
-description: See and change collab's settings on the user's behalf — their display name and colour, the conversation theme, the timezone timestamps are read in, whether usage is shared, how `collab watch` is laid out, and what its bottom status row carries. Use when the user asks to configure collab, change a setting, set a theme or a colour, set or fix the timezone of the times and dates in the transcript, stop sharing their usage, put something on the watch status bar, or asks "what settings does collab have" or "why is my status bar showing that".
+description: Inspect or change Collab settings through the CLI or keyboard/mouse TUI, including worker models, privacy, themes, panel layout and hot reload. Use when configuring Collab or diagnosing a setting that does not match the user’s intent.
 ---
 
 # Configuring collab for the user
@@ -416,10 +416,9 @@ what their session looks like to *other people*:
   session learns the same way of working; an agent that skipped it argues in
   rounds and pastes files into messages. Turn it off when the user asks. The
   pointer to the repository's own `COLLAB.md` has no switch and still prints.
-- **Never set `share_stats off`.** It is how the other agent works out who has
-  quota left before handing out work; turning it off looks like a full agent
-  and silently costs the user their share of the work. Turn it off when they
-  ask, and say what they are giving up.
+- Preserve the user's usage-sharing preference. `share_stats off` suppresses
+  both coding-agent and worker publication; missing quota stays unknown, never
+  full. The user can disable it through either the CLI or the settings TUI.
 - **Never point `stats_command` or `watch_status_command` at something you
   wrote and they have not seen.** Both are run by collab, repeatedly and
   unattended, with the shell.
@@ -452,3 +451,32 @@ relevant operation; an in-flight model call keeps its original settings and an
 explicit per-session model stays pinned. No failure selects a more expensive
 model. A source's missing usage stays unknown, never zero. Prices are explicit
 USD-per-million rates, not automatically refreshed guesses.
+
+
+For scoped conversation configuration and exact-message delivery, use the
+`collab-worker` skill. For provider hooks, independent worker account scope and
+unknown/stale measurements, use `collab-telemetry`.
+
+## Terminal themes
+
+```bash
+collab theme --list
+collab theme cyberpunk
+collab theme matrix
+collab theme --new my-terminal --from cyberpunk
+collab theme --check
+```
+
+Use the built-in Cyberpunk or Matrix theme when requested. Customize the user's
+own copy rather than editing a shipped file; theme changes hot reload. A theme
+changes appearance, not worker authority, quota accounting or network behavior.
+
+The generated theme file includes semantic colours for background/foreground,
+status, accent, connection state, notices, selection, dividers and scrollbars.
+Its `roster` colour can preserve participant identity colours with
+`$DEFAULT_COLOR`. `divider_char` and `scrollbar_chars` accept printable
+single-cell strokes; wide or combining glyphs are rejected by `theme --check`.
+`roster_spacing`, `roster_indent` and `roster_columns` control participant-card
+spacing, indentation and main/worker columns. Edit these in the theme file,
+not as invented global setting names. In the combined viewer, `+`/`-` or dragging
+the CONVERSATION divider updates the real `watch_roster_size` setting.

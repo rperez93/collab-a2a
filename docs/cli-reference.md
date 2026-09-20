@@ -1,6 +1,6 @@
 # CLI reference
 
-Generated from the v2 command parser. Existing commands remain available; `collab config --tui` adds the interactive editor.
+Generated from the command parser. Existing commands remain available; `collab config --tui` adds the interactive editor.
 
 ## Commands
 
@@ -781,16 +781,17 @@ options:
 ## worker
 
 ```text
-usage: collab worker [-h] {start,off,status,pending,reply,context} ...
+usage: collab worker [-h]
+                     {start,off,status,pending,reply,context,send,stats} ...
 
 positional arguments:
-  {start,off,status,pending,reply,context}
+  {start,off,status,pending,reply,context,send,stats}
 
 options:
   -h, --help            show this help message and exit
 ```
 
-### worker start
+## worker start
 
 ```text
 usage: collab worker start [-h] [--session SESSION]
@@ -811,7 +812,7 @@ options:
                         turn on stdin
 ```
 
-### worker off
+## worker off
 
 ```text
 usage: collab worker off [-h] [--session SESSION]
@@ -821,7 +822,7 @@ options:
   --session SESSION  act on this session id instead of the current one
 ```
 
-### worker status
+## worker status
 
 ```text
 usage: collab worker status [-h] [--session SESSION] [--json]
@@ -832,7 +833,7 @@ options:
   --json
 ```
 
-### worker pending
+## worker pending
 
 ```text
 usage: collab worker pending [-h] [--session SESSION] [--json]
@@ -843,7 +844,7 @@ options:
   --json
 ```
 
-### worker reply
+## worker reply
 
 ```text
 usage: collab worker reply [-h] [--session SESSION] decision_id text
@@ -857,7 +858,7 @@ options:
   --session SESSION  act on this session id instead of the current one
 ```
 
-### worker context
+## worker context
 
 ```text
 usage: collab worker context [-h] [--session SESSION] text
@@ -868,6 +869,45 @@ positional arguments:
 options:
   -h, --help         show this help message and exit
   --session SESSION  act on this session id instead of the current one
+```
+
+## worker send
+
+```text
+usage: collab worker send [-h] [--session SESSION] --to TO [--room ROOM] text
+
+positional arguments:
+  text               exact message to queue for reliable worker delivery
+
+options:
+  -h, --help         show this help message and exit
+  --session SESSION  act on this session id instead of the current one
+  --to TO            explicit participant name
+  --room ROOM        optional room for the addressed message
+```
+
+## worker stats
+
+```text
+usage: collab worker stats [-h] [--session SESSION] [--report JSON]
+                           [--provider {canonical,codex,claude,opencode,cursor}]
+                           [--source CMD] [--interval SECONDS]
+                           [--quota-scope {shared_account,independent,unknown}]
+                           [--json]
+
+options:
+  -h, --help            show this help message and exit
+  --session SESSION     act on this session id instead of the current one
+  --report JSON         worker usage snapshot, or - for stdin
+  --provider {canonical,codex,claude,opencode,cursor}
+                        native snapshot adapter; canonical for a normalized
+                        report
+  --source CMD          local worker usage command; empty clears
+  --interval SECONDS    source interval, 10–86400 seconds; default 120
+  --quota-scope {shared_account,independent,unknown}
+                        whether the worker allowance shares the coding agent's
+                        account
+  --json                JSON output (also the default)
 ```
 
 ## daemon

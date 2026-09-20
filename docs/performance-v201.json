@@ -1,0 +1,2797 @@
+{
+  "accounting": {
+    "iterations": 1000,
+    "wall_seconds": 9.527565427000809,
+    "cpu_seconds": 2.0568576789999997,
+    "tracemalloc_current_peak_bytes": [
+      133540,
+      195260
+    ],
+    "retained_samples_bytes": [
+      133017,
+      133081,
+      133145,
+      133177,
+      133209,
+      133273,
+      133305,
+      133337,
+      133369,
+      133465
+    ],
+    "model_buckets": 33,
+    "database_bytes": 20480,
+    "fd_count": 4,
+    "process_memory": {
+      "VmHWM": "23524 kB",
+      "VmRSS": "23524 kB"
+    }
+  },
+  "worker_sources": {
+    "calls": 100,
+    "wall_seconds": 3.428071258000273,
+    "controller_cpu_seconds": 0.45210755,
+    "tracemalloc_current_peak_bytes": [
+      245869,
+      592711
+    ],
+    "samples": [
+      {
+        "calls": 10,
+        "retained_bytes": 221145,
+        "fds": 7
+      },
+      {
+        "calls": 20,
+        "retained_bytes": 224185,
+        "fds": 7
+      },
+      {
+        "calls": 30,
+        "retained_bytes": 227092,
+        "fds": 7
+      },
+      {
+        "calls": 40,
+        "retained_bytes": 229678,
+        "fds": 7
+      },
+      {
+        "calls": 50,
+        "retained_bytes": 232380,
+        "fds": 7
+      },
+      {
+        "calls": 60,
+        "retained_bytes": 234833,
+        "fds": 7
+      },
+      {
+        "calls": 70,
+        "retained_bytes": 236526,
+        "fds": 7
+      },
+      {
+        "calls": 80,
+        "retained_bytes": 238839,
+        "fds": 7
+      },
+      {
+        "calls": 90,
+        "retained_bytes": 240561,
+        "fds": 7
+      },
+      {
+        "calls": 100,
+        "retained_bytes": 242138,
+        "fds": 7
+      }
+    ],
+    "memory": {
+      "VmHWM": "27856 kB",
+      "VmRSS": "27856 kB"
+    }
+  },
+  "worker_sources_binary_100": {
+    "calls": 100,
+    "wall_seconds": 3.575955200998578,
+    "controller_cpu_seconds": 0.41205172300000004,
+    "tracemalloc_current_peak_bytes": [
+      228272,
+      552619
+    ],
+    "samples": [
+      {
+        "calls": 10,
+        "retained_bytes": 218848,
+        "fds": 7
+      },
+      {
+        "calls": 20,
+        "retained_bytes": 219378,
+        "fds": 7
+      },
+      {
+        "calls": 30,
+        "retained_bytes": 219857,
+        "fds": 7
+      },
+      {
+        "calls": 40,
+        "retained_bytes": 220966,
+        "fds": 7
+      },
+      {
+        "calls": 50,
+        "retained_bytes": 221464,
+        "fds": 7
+      },
+      {
+        "calls": 60,
+        "retained_bytes": 221712,
+        "fds": 7
+      },
+      {
+        "calls": 70,
+        "retained_bytes": 221928,
+        "fds": 7
+      },
+      {
+        "calls": 80,
+        "retained_bytes": 222943,
+        "fds": 7
+      },
+      {
+        "calls": 90,
+        "retained_bytes": 223755,
+        "fds": 7
+      },
+      {
+        "calls": 100,
+        "retained_bytes": 224364,
+        "fds": 7
+      }
+    ],
+    "memory": {
+      "VmHWM": "27712 kB",
+      "VmRSS": "27712 kB"
+    },
+    "timing_note": "Concurrent final regression suite; compare memory/descriptors, not speed."
+  },
+  "source_lifecycle_2000": {
+    "mode": "collab",
+    "calls": 2000,
+    "wall_seconds": 85.1700752100005,
+    "cpu_seconds": 26.712205613,
+    "samples": [
+      {
+        "calls": 10,
+        "retained": 374637,
+        "peak": 699079,
+        "fd": 7,
+        "live_tasks": 1,
+        "live_text_wrappers": 3,
+        "live_processes": 0,
+        "live_transports": 0,
+        "diff": []
+      },
+      {
+        "calls": 100,
+        "retained": 393824,
+        "peak": 947180,
+        "fd": 7,
+        "live_tasks": 1,
+        "live_text_wrappers": 3,
+        "live_processes": 0,
+        "live_transports": 0,
+        "diff": [
+          {
+            "bytes": 6815,
+            "count": 145,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ]
+            ]
+          },
+          {
+            "bytes": 3186,
+            "count": 54,
+            "trace": [
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                24
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                126
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                63
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                537
+              ]
+            ]
+          },
+          {
+            "bytes": 3127,
+            "count": 53,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                166
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                63
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                537
+              ]
+            ]
+          },
+          {
+            "bytes": 2478,
+            "count": 42,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                167
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                54
+              ],
+              [
+                "<frozen os>",
+                1069
+              ]
+            ]
+          },
+          {
+            "bytes": 2419,
+            "count": 41,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                159
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                63
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                537
+              ]
+            ]
+          },
+          {
+            "bytes": 1024,
+            "count": 1,
+            "trace": [
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                155
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_runtime.py",
+                326
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_runtime.py",
+                266
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/tasks.py",
+                884
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/tasks.py",
+                748
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                475
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/_weakrefset.py",
+                88
+              ]
+            ]
+          },
+          {
+            "bytes": -1024,
+            "count": -1,
+            "trace": [
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                155
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_runtime.py",
+                342
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_runtime.py",
+                266
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/tasks.py",
+                884
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/tasks.py",
+                748
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                475
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/_weakrefset.py",
+                88
+              ]
+            ]
+          },
+          {
+            "bytes": 328,
+            "count": 1,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                33
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py",
+                560
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py",
+                423
+              ]
+            ]
+          },
+          {
+            "bytes": 328,
+            "count": 1,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                33
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py",
+                560
+              ]
+            ]
+          },
+          {
+            "bytes": 304,
+            "count": 3,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                40
+              ]
+            ]
+          },
+          {
+            "bytes": 112,
+            "count": 2,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                33
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py",
+                558
+              ]
+            ]
+          },
+          {
+            "bytes": 64,
+            "count": 2,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                32
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "calls": 500,
+        "retained": 1384885,
+        "peak": 2071776,
+        "fd": 7,
+        "live_tasks": 1,
+        "live_text_wrappers": 3,
+        "live_processes": 0,
+        "live_transports": 0,
+        "diff": [
+          {
+            "bytes": 961216,
+            "count": 1,
+            "trace": [
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                24
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                128
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/config.py",
+                556
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/config.py",
+                468
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                515
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                167
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                233
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                295
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                274
+              ]
+            ]
+          },
+          {
+            "bytes": 17052,
+            "count": 363,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ]
+            ]
+          },
+          {
+            "bytes": 10624,
+            "count": 161,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                38
+              ]
+            ]
+          },
+          {
+            "bytes": 5428,
+            "count": 92,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                159
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                63
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                537
+              ]
+            ]
+          },
+          {
+            "bytes": 5369,
+            "count": 91,
+            "trace": [
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                24
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                126
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                63
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                537
+              ]
+            ]
+          },
+          {
+            "bytes": 4720,
+            "count": 80,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                166
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                63
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                537
+              ]
+            ]
+          },
+          {
+            "bytes": 4130,
+            "count": 70,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                167
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                54
+              ],
+              [
+                "<frozen os>",
+                1069
+              ]
+            ]
+          },
+          {
+            "bytes": 576,
+            "count": 5,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                40
+              ]
+            ]
+          },
+          {
+            "bytes": 328,
+            "count": 1,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                33
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py",
+                560
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py",
+                423
+              ]
+            ]
+          },
+          {
+            "bytes": 328,
+            "count": 1,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                33
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py",
+                560
+              ]
+            ]
+          },
+          {
+            "bytes": 160,
+            "count": 5,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                38
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py",
+                546
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py",
+                126
+              ]
+            ]
+          },
+          {
+            "bytes": 128,
+            "count": 4,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                32
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "calls": 1000,
+        "retained": 1400211,
+        "peak": 2092411,
+        "fd": 7,
+        "live_tasks": 1,
+        "live_text_wrappers": 3,
+        "live_processes": 0,
+        "live_transports": 0,
+        "diff": [
+          {
+            "bytes": 961216,
+            "count": 1,
+            "trace": [
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                24
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                128
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/config.py",
+                556
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/config.py",
+                468
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                515
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                167
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                233
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                295
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                274
+              ]
+            ]
+          },
+          {
+            "bytes": 21128,
+            "count": 321,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                38
+              ]
+            ]
+          },
+          {
+            "bytes": 21000,
+            "count": 447,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ]
+            ]
+          },
+          {
+            "bytes": 5487,
+            "count": 93,
+            "trace": [
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                24
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                126
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                63
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                537
+              ]
+            ]
+          },
+          {
+            "bytes": 5369,
+            "count": 91,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                159
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                63
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                537
+              ]
+            ]
+          },
+          {
+            "bytes": 4602,
+            "count": 78,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                166
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                63
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                537
+              ]
+            ]
+          },
+          {
+            "bytes": 4484,
+            "count": 76,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                167
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                54
+              ],
+              [
+                "<frozen os>",
+                1069
+              ]
+            ]
+          },
+          {
+            "bytes": 880,
+            "count": 8,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                40
+              ]
+            ]
+          },
+          {
+            "bytes": 328,
+            "count": 1,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                33
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py",
+                560
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py",
+                423
+              ]
+            ]
+          },
+          {
+            "bytes": 328,
+            "count": 1,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                33
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py",
+                560
+              ]
+            ]
+          },
+          {
+            "bytes": 320,
+            "count": 10,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                38
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py",
+                546
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py",
+                126
+              ]
+            ]
+          },
+          {
+            "bytes": 192,
+            "count": 6,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                32
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "calls": 2000,
+        "retained": 1416396,
+        "peak": 2710918,
+        "fd": 7,
+        "live_tasks": 1,
+        "live_text_wrappers": 3,
+        "live_processes": 0,
+        "live_transports": 0,
+        "diff": [
+          {
+            "bytes": 961216,
+            "count": 1,
+            "trace": [
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                159
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                63
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                537
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                167
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                233
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                295
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                274
+              ]
+            ]
+          },
+          {
+            "bytes": 31632,
+            "count": 481,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                38
+              ]
+            ]
+          },
+          {
+            "bytes": 23397,
+            "count": 498,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ]
+            ]
+          },
+          {
+            "bytes": 6018,
+            "count": 102,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                159
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                63
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                537
+              ]
+            ]
+          },
+          {
+            "bytes": 5841,
+            "count": 99,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                167
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                54
+              ],
+              [
+                "<frozen os>",
+                1069
+              ]
+            ]
+          },
+          {
+            "bytes": 5428,
+            "count": 92,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                166
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                63
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                537
+              ]
+            ]
+          },
+          {
+            "bytes": 5251,
+            "count": 89,
+            "trace": [
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                24
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                126
+              ],
+              [
+                "/tmp/collab-v201-work/src/collab/worker_telemetry.py",
+                63
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py",
+                537
+              ]
+            ]
+          },
+          {
+            "bytes": 1184,
+            "count": 11,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                40
+              ]
+            ]
+          },
+          {
+            "bytes": 480,
+            "count": 15,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                38
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py",
+                546
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py",
+                126
+              ]
+            ]
+          },
+          {
+            "bytes": 328,
+            "count": 1,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                33
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py",
+                560
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py",
+                423
+              ]
+            ]
+          },
+          {
+            "bytes": 328,
+            "count": 1,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                33
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py",
+                560
+              ]
+            ]
+          },
+          {
+            "bytes": 256,
+            "count": 8,
+            "trace": [
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                53
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                195
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/runners.py",
+                118
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                712
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                683
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/base_events.py",
+                2050
+              ],
+              [
+                "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/asyncio/events.py",
+                89
+              ],
+              [
+                "/tmp/collab-v201-work/.claude/review/source_retention_probe.py",
+                32
+              ]
+            ]
+          }
+        ]
+      }
+    ],
+    "memory": {
+      "VmHWM": "31628 kB",
+      "VmRSS": "31416 kB"
+    }
+  },
+  "atomic_text_control": [
+    {
+      "writes": 10,
+      "heap": 3083,
+      "fds": 4
+    },
+    {
+      "writes": 100,
+      "heap": 8497,
+      "fds": 4
+    },
+    {
+      "writes": 500,
+      "heap": 15916,
+      "fds": 4
+    },
+    {
+      "writes": 1000,
+      "heap": 17521,
+      "fds": 4
+    },
+    {
+      "writes": 2000,
+      "heap": 19244,
+      "fds": 4
+    },
+    {
+      "writes": 5000,
+      "heap": 23536,
+      "fds": 4
+    },
+    {
+      "writes": 10000,
+      "heap": 29566,
+      "fds": 4
+    },
+    {
+      "writes": 20000,
+      "heap": 33295,
+      "fds": 4
+    }
+  ],
+  "atomic_binary_control": [
+    {
+      "writes": 10,
+      "heap": 1704,
+      "fds": 4
+    },
+    {
+      "writes": 100,
+      "heap": 1952,
+      "fds": 4
+    },
+    {
+      "writes": 500,
+      "heap": 2296,
+      "fds": 4
+    },
+    {
+      "writes": 1000,
+      "heap": 2544,
+      "fds": 4
+    },
+    {
+      "writes": 2000,
+      "heap": 2792,
+      "fds": 4
+    },
+    {
+      "writes": 5000,
+      "heap": 3072,
+      "fds": 4
+    },
+    {
+      "writes": 10000,
+      "heap": 3320,
+      "fds": 4
+    },
+    {
+      "writes": 20000,
+      "heap": 3568,
+      "fds": 4
+    }
+  ],
+  "source_binary_1000": {
+    "calls": 1000,
+    "wall_seconds": 35.691816723003285,
+    "controller_cpu_seconds": 4.402946122,
+    "tracemalloc_current_peak_bytes": [
+      1188750,
+      1866895
+    ],
+    "samples": [
+      {
+        "calls": 10,
+        "retained_bytes": 218756,
+        "fds": 7
+      },
+      {
+        "calls": 100,
+        "retained_bytes": 222111,
+        "fds": 7
+      },
+      {
+        "calls": 500,
+        "retained_bytes": 1184594,
+        "fds": 7
+      },
+      {
+        "calls": 1000,
+        "retained_bytes": 1184842,
+        "fds": 7
+      }
+    ],
+    "memory": {
+      "VmHWM": "29376 kB",
+      "VmRSS": "29376 kB"
+    },
+    "timing_note": "Concurrent regression suite; no throughput comparison."
+  },
+  "full_runtime": {
+    "version": "2.0.1",
+    "python": "3.13.12",
+    "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "timestamp_utc": "2026-09-20T05:43:33Z",
+    "soak": {
+      "workload": {
+        "warmup_rounds": 2,
+        "measured_rounds": 8,
+        "events_per_round": 2000,
+        "fast_subscribers": 4,
+        "slow_subscribers": 1,
+        "message_characters": 256,
+        "worker_metrics_and_expanded_formatting_every": 20
+      },
+      "wall_seconds_including_warmup": 71.544,
+      "cpu_seconds_including_warmup": 16.7272,
+      "proc_rss_peak_kib": 34776,
+      "sampled_rss_peak_kib": 34740,
+      "slow_disconnects": 1,
+      "samples": [
+        {
+          "round": 1,
+          "phase": "warmup",
+          "events_total": 2000,
+          "wall_seconds": 7.3833,
+          "cpu_seconds": 1.5976,
+          "rss_kib": 32444,
+          "python_live_bytes": 186691,
+          "python_peak_bytes": 595545,
+          "open_fds": 13,
+          "slow_queue": 1,
+          "persistent_bytes": 10952781
+        },
+        {
+          "round": 2,
+          "phase": "warmup",
+          "events_total": 4000,
+          "wall_seconds": 7.2546,
+          "cpu_seconds": 1.5195,
+          "rss_kib": 34476,
+          "python_live_bytes": 182227,
+          "python_peak_bytes": 595545,
+          "open_fds": 13,
+          "slow_queue": 1,
+          "persistent_bytes": 13760589
+        },
+        {
+          "round": 3,
+          "phase": "measured",
+          "events_total": 6000,
+          "wall_seconds": 7.2132,
+          "cpu_seconds": 1.5565,
+          "rss_kib": 34720,
+          "python_live_bytes": 179052,
+          "python_peak_bytes": 595545,
+          "open_fds": 13,
+          "slow_queue": 1,
+          "persistent_bytes": 16486525
+        },
+        {
+          "round": 4,
+          "phase": "measured",
+          "events_total": 8000,
+          "wall_seconds": 7.273,
+          "cpu_seconds": 1.58,
+          "rss_kib": 34724,
+          "python_live_bytes": 174405,
+          "python_peak_bytes": 595545,
+          "open_fds": 13,
+          "slow_queue": 1,
+          "persistent_bytes": 19183741
+        },
+        {
+          "round": 5,
+          "phase": "measured",
+          "events_total": 10000,
+          "wall_seconds": 7.545,
+          "cpu_seconds": 1.6582,
+          "rss_kib": 34728,
+          "python_live_bytes": 169554,
+          "python_peak_bytes": 595545,
+          "open_fds": 13,
+          "slow_queue": 1,
+          "persistent_bytes": 21692542
+        },
+        {
+          "round": 6,
+          "phase": "measured",
+          "events_total": 12000,
+          "wall_seconds": 6.9193,
+          "cpu_seconds": 1.6902,
+          "rss_kib": 34740,
+          "python_live_bytes": 164917,
+          "python_peak_bytes": 595545,
+          "open_fds": 13,
+          "slow_queue": 1,
+          "persistent_bytes": 24391758
+        },
+        {
+          "round": 7,
+          "phase": "measured",
+          "events_total": 14000,
+          "wall_seconds": 6.9461,
+          "cpu_seconds": 1.7625,
+          "rss_kib": 34740,
+          "python_live_bytes": 178056,
+          "python_peak_bytes": 595545,
+          "open_fds": 13,
+          "slow_queue": 1,
+          "persistent_bytes": 27090974
+        },
+        {
+          "round": 8,
+          "phase": "measured",
+          "events_total": 16000,
+          "wall_seconds": 6.8383,
+          "cpu_seconds": 1.751,
+          "rss_kib": 34740,
+          "python_live_bytes": 191168,
+          "python_peak_bytes": 595545,
+          "open_fds": 13,
+          "slow_queue": 1,
+          "persistent_bytes": 29794286
+        },
+        {
+          "round": 9,
+          "phase": "measured",
+          "events_total": 18000,
+          "wall_seconds": 6.9393,
+          "cpu_seconds": 1.7925,
+          "rss_kib": 34740,
+          "python_live_bytes": 186435,
+          "python_peak_bytes": 595545,
+          "open_fds": 13,
+          "slow_queue": 1,
+          "persistent_bytes": 32296894
+        },
+        {
+          "round": 10,
+          "phase": "measured",
+          "events_total": 20000,
+          "wall_seconds": 7.2182,
+          "cpu_seconds": 1.8056,
+          "rss_kib": 34740,
+          "python_live_bytes": 181712,
+          "python_peak_bytes": 595545,
+          "open_fds": 13,
+          "slow_queue": 1,
+          "persistent_bytes": 35000206
+        }
+      ],
+      "largest_retained_growth_after_warmup": [
+        {
+          "location": "/tmp/collab-v201-work/benchmarks/runtime.py:87",
+          "bytes": 3712,
+          "count": 16
+        },
+        {
+          "location": "/tmp/collab-v201-work/src/collab/server/store.py:568",
+          "bytes": -2416,
+          "count": -14
+        },
+        {
+          "location": "/tmp/collab-v201-work/src/collab/client/inbox.py:178",
+          "bytes": -2384,
+          "count": -16
+        },
+        {
+          "location": "/tmp/collab-v201-work/src/collab/client/inbox.py:166",
+          "bytes": -1200,
+          "count": -15
+        },
+        {
+          "location": "/tmp/collab-v201-work/src/collab/server/store.py:575",
+          "bytes": -1040,
+          "count": -13
+        },
+        {
+          "location": "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py:558",
+          "bytes": 560,
+          "count": 10
+        },
+        {
+          "location": "/tmp/collab-v201-work/benchmarks/runtime.py:86",
+          "bytes": 512,
+          "count": 16
+        },
+        {
+          "location": "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py:537",
+          "bytes": 472,
+          "count": 8
+        }
+      ],
+      "limits": "In-process durable writes and fanout with tracemalloc enabled. RSS includes interpreter and SQLite; persistent logs intentionally grow. Excludes HTTP/TLS and provider CLI memory."
+    },
+    "panels": {
+      "viewer": {
+        "wall_seconds": 12.0,
+        "cpu_seconds": 0.09,
+        "one_core_percent": 0.75,
+        "initial_rss_kib": 28768,
+        "initial_open_fds": 3,
+        "samples": [
+          {
+            "cpu_seconds": 0.09,
+            "rss_kib": 28780,
+            "open_fds": 3,
+            "elapsed_seconds": 2.001
+          },
+          {
+            "cpu_seconds": 0.1,
+            "rss_kib": 28784,
+            "open_fds": 3,
+            "elapsed_seconds": 4.002
+          },
+          {
+            "cpu_seconds": 0.12,
+            "rss_kib": 29320,
+            "open_fds": 3,
+            "elapsed_seconds": 6.002
+          },
+          {
+            "cpu_seconds": 0.14,
+            "rss_kib": 29332,
+            "open_fds": 3,
+            "elapsed_seconds": 8.002
+          },
+          {
+            "cpu_seconds": 0.15,
+            "rss_kib": 29340,
+            "open_fds": 3,
+            "elapsed_seconds": 10.003
+          },
+          {
+            "cpu_seconds": 0.17,
+            "rss_kib": 29344,
+            "open_fds": 3,
+            "elapsed_seconds": 12.0
+          }
+        ],
+        "tmux_server_cpu_seconds": 0.0,
+        "limits": "120x40 real curses terminal; isolated tmux server; idle fake demo log or settings. 2s warmup. Python pane CPU excludes its child processes and tmux; no real session I/O."
+      },
+      "settings": {
+        "wall_seconds": 12.0,
+        "cpu_seconds": 0.07,
+        "one_core_percent": 0.583,
+        "initial_rss_kib": 28384,
+        "initial_open_fds": 3,
+        "samples": [
+          {
+            "cpu_seconds": 0.08,
+            "rss_kib": 28384,
+            "open_fds": 3,
+            "elapsed_seconds": 2.001
+          },
+          {
+            "cpu_seconds": 0.09,
+            "rss_kib": 28384,
+            "open_fds": 3,
+            "elapsed_seconds": 4.001
+          },
+          {
+            "cpu_seconds": 0.1,
+            "rss_kib": 28388,
+            "open_fds": 3,
+            "elapsed_seconds": 6.002
+          },
+          {
+            "cpu_seconds": 0.11,
+            "rss_kib": 28388,
+            "open_fds": 3,
+            "elapsed_seconds": 8.002
+          },
+          {
+            "cpu_seconds": 0.13,
+            "rss_kib": 28388,
+            "open_fds": 3,
+            "elapsed_seconds": 10.002
+          },
+          {
+            "cpu_seconds": 0.14,
+            "rss_kib": 28388,
+            "open_fds": 3,
+            "elapsed_seconds": 12.0
+          }
+        ],
+        "tmux_server_cpu_seconds": 0.0,
+        "limits": "120x40 real curses terminal; isolated tmux server; idle fake demo log or settings. 2s warmup. Python pane CPU excludes its child processes and tmux; no real session I/O."
+      }
+    },
+    "probes": {
+      "source-flood": {
+        "wall_seconds": 0.0156,
+        "controller_cpu_seconds": 0.0042,
+        "controller_rss_peak_kib": 24816,
+        "controller_rss_peak_growth_kib": 1364,
+        "controller_rss_before_kib": 23460,
+        "controller_rss_after_kib": 23660,
+        "python_live_bytes": 472,
+        "python_peak_bytes": 1248334,
+        "fd_before": 4,
+        "fd_after": 4,
+        "outcome": {
+          "error_type": "SubprocessError"
+        },
+        "limits": "Fresh Python process; fake local child; .5s deadline. CPU/RSS are the Python controller, excluding fake child and any real provider CLI."
+      },
+      "source-silent": {
+        "wall_seconds": 0.5043,
+        "controller_cpu_seconds": 0.0033,
+        "controller_rss_peak_kib": 23552,
+        "controller_rss_peak_growth_kib": 88,
+        "controller_rss_before_kib": 23472,
+        "controller_rss_after_kib": 23552,
+        "python_live_bytes": 592,
+        "python_peak_bytes": 60390,
+        "fd_before": 4,
+        "fd_after": 4,
+        "outcome": {
+          "error_type": "TimeoutExpired"
+        },
+        "limits": "Fresh Python process; fake local child; .5s deadline. CPU/RSS are the Python controller, excluding fake child and any real provider CLI."
+      },
+      "worker-flood": {
+        "wall_seconds": 0.0178,
+        "controller_cpu_seconds": 0.007,
+        "controller_rss_peak_kib": 23692,
+        "controller_rss_peak_growth_kib": 340,
+        "controller_rss_before_kib": 23360,
+        "controller_rss_after_kib": 23584,
+        "python_live_bytes": 3696,
+        "python_peak_bytes": 638637,
+        "fd_before": 4,
+        "fd_after": 4,
+        "outcome": {
+          "error_type": "WorkerRuntimeError"
+        },
+        "limits": "Fresh Python process; fake local child; .5s deadline. CPU/RSS are the Python controller, excluding fake child and any real provider CLI."
+      },
+      "worker-silent": {
+        "wall_seconds": 0.5061,
+        "controller_cpu_seconds": 0.0083,
+        "controller_rss_peak_kib": 23592,
+        "controller_rss_peak_growth_kib": 136,
+        "controller_rss_before_kib": 23460,
+        "controller_rss_after_kib": 23592,
+        "python_live_bytes": 3696,
+        "python_peak_bytes": 302892,
+        "fd_before": 4,
+        "fd_after": 4,
+        "outcome": {
+          "error_type": "WorkerRuntimeError"
+        },
+        "limits": "Fresh Python process; fake local child; .5s deadline. CPU/RSS are the Python controller, excluding fake child and any real provider CLI."
+      },
+      "quota-flood": {
+        "wall_seconds": 0.0179,
+        "controller_cpu_seconds": 0.0033,
+        "controller_rss_peak_kib": 23836,
+        "controller_rss_peak_growth_kib": 380,
+        "controller_rss_before_kib": 23464,
+        "controller_rss_after_kib": 23840,
+        "python_live_bytes": 1215,
+        "python_peak_bytes": 414424,
+        "fd_before": 4,
+        "fd_after": 4,
+        "outcome": {
+          "report": {},
+          "reason": "codex answered nothing"
+        },
+        "limits": "Fresh Python process; fake local child; .5s deadline. CPU/RSS are the Python controller, excluding fake child and any real provider CLI."
+      },
+      "quota-silent": {
+        "wall_seconds": 0.506,
+        "controller_cpu_seconds": 0.005,
+        "controller_rss_peak_kib": 23700,
+        "controller_rss_peak_growth_kib": 244,
+        "controller_rss_before_kib": 23464,
+        "controller_rss_after_kib": 23700,
+        "python_live_bytes": 1199,
+        "python_peak_bytes": 87188,
+        "fd_before": 4,
+        "fd_after": 4,
+        "outcome": {
+          "report": {},
+          "reason": "codex did not answer in time"
+        },
+        "limits": "Fresh Python process; fake local child; .5s deadline. CPU/RSS are the Python controller, excluding fake child and any real provider CLI."
+      }
+    }
+  }
+}

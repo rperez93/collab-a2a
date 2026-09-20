@@ -11,6 +11,7 @@ After joining or hosting, give the worker a scope that matches the user's task:
 ```bash
 collab worker start --agent claude --scope 'Coordinate API and test ownership; report my supplied progress. Escalate API changes and conflicting edits.'
 collab worker context 'I own delivery.py. The API is unchanged; tests are in progress.'
+collab worker send --to bob 'The API is unchanged; I will send the test result when it is ready.'
 collab worker status
 ```
 
@@ -198,3 +199,33 @@ is at most 4,000 characters, reply text and questions at most 2,000; `reason` is
 `blocker`, `decision`, `conflict`, or `scope`. `seq` identifies an input message,
 or is zero for a question about main-agent context. Recipients and rooms must
 come from supplied conversation context. An empty `room` means the default.
+
+## Explicit delivery and goal-focused exchange (2.0.1)
+
+`collab worker send --to NAME 'exact text'` queues an addressed, verbatim message
+for the worker's durable outbox. It requires an enabled worker, returns its
+message ID, and preserves retries across restarts. Messages are limited to 8,000 characters and 16,000 serialized UTF-8 bytes;
+rejected text is never silently shortened. No model call is needed to
+rewrite a main-agent decision. Pending delivery is visible in `worker status`;
+a missing recipient or network failure remains a visible retry, not success.
+Inference backoff and exhausted model-call budgets do not postpone this delivery.
+Acknowledgements consume only bounded response headers, not an arbitrary body.
+
+`worker context` supplies facts for future reasoning; a worker may consume those
+facts without sending a reply. Use `worker send` when delivery itself is the
+intent, and `worker reply` to resolve an existing escalated decision.
+
+Coordination should move the agreed task toward its acceptance check. State a
+specific counterexample or test when disagreeing. If neither evidence nor scope
+changes, stop repeating the argument and request the main agent's decision.
+Do not answer acknowledgements with acknowledgements. These are behavior guides;
+Collab cannot guarantee an arbitrary model's judgment. Durable attempt limits
+bound spending when a conversation still fails to converge.
+
+Worker quota/context/cost reports and configurable local sources are described
+in [telemetry](telemetry.md#worker-reports-and-sources-201). Main and worker
+allowances are separate observations, even when their providers differ.
+
+The worker input cap is 192 KiB in 2.0.1. It accommodates the worst-case JSON
+escaping of valid local guidance and at least one main-agent record. Additional
+context and answers remain queued instead of being consumed or truncated.
