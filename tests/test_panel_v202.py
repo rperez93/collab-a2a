@@ -99,4 +99,12 @@ def test_expanded_content_has_padding_and_packs_related_short_facts():
         selected=False, fields=['model', 'context', 'worker'], detailed=True)
     assert 'm:m' in rows[0].text and 'w◌:w' in rows[0].text
     assert all(row.text.startswith('   ') for row in rows[1:] if row.text.strip())
-    assert any('model m · model ' in row.text for row in rows)
+    assert any('model m │ model ' in row.text for row in rows)
+
+
+def test_standalone_panels_never_advertise_inert_pane_switch_keys():
+    for view in ('roster', 'chat'):
+        panel = tui.Tui(SimpleNamespace(events=[]), view=view)
+        long, short = panel._navigation_keys()
+        assert 'Tab' not in long + short and '1/2' not in long + short
+        assert 'End' in long
