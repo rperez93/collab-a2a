@@ -29,6 +29,7 @@ from .. import (__version__, activity as act, diagnostics, lockfile,
 from ..batch import DELTA_SHOWN_FOR
 from ..config import (SessionProfile, follow_agent_enabled, repo_for_home,
                       share_stats_enabled, stats_source)
+from ..compatibility import request_headers, check_host
 from ..protocol import (EXT_PREFIX, KIND_CHAT, KIND_HELLO, KIND_PRESENCE,
                         KIND_PROJECT, KIND_SYSTEM, KIND_TASK, Envelope,
                         now_iso, scrub)
@@ -879,8 +880,8 @@ class Daemon:
 
         def run() -> tuple[int, str, str]:
             try:
-                done = subprocess.run(command, shell=True, capture_output=True,
-                                      text=True, timeout=20)
+                from ..source_command import run as run_source
+                done = run_source(command, timeout=20)
                 return done.returncode, done.stdout, done.stderr
             except (OSError, subprocess.SubprocessError) as exc:
                 return -1, "", f"{type(exc).__name__}: {exc}"
@@ -918,7 +919,12 @@ class Daemon:
         # line, a --report, our own probe — and publishing it unread meant
         # publishing whoever wrote there last, under our name.
         mtime = self._stats_file_mtime()
-        payload = {**peers.identity(), "stats": read_stats(self.profile)}
+        from ..worker import metrics
+        figures = read_stats(self.profile)
+        worker_usage = metrics(self.profile.dir)
+        if worker_usage is not None:
+            figures = {**figures, "worker": worker_usage}
+        payload = {**peers.identity(), "stats": figures}
         changed = payload != self._last_stats
         # An unchanged figure in a file rewritten since we last sent it is
         # the route saying «still true», and the hub's stamp has to say so
@@ -930,7 +936,7 @@ class Daemon:
         try:
             r = await client.post(
                 f"{self.profile.url}{EXT_PREFIX}/stats",
-                headers={"Authorization": f"Bearer {self.profile.token}"},
+                headers=request_headers(self.profile.token),
                 json=payload, timeout=10.0,
             )
             if r.status_code == 200:
@@ -969,7 +975,7 @@ class Daemon:
         try:
             r = await client.post(
                 f"{self.profile.url}{EXT_PREFIX}/activity",
-                headers={"Authorization": f"Bearer {self.profile.token}"},
+                headers=request_headers(self.profile.token),
                 json=mine, timeout=10.0,
             )
             if r.status_code == 200:
@@ -1751,7 +1757,7 @@ class Daemon:
         try:
             await self._http.post(
                 f"{self.profile.url}{EXT_PREFIX}/activity",
-                headers={"Authorization": f"Bearer {self.profile.token}"},
+                headers=request_headers(self.profile.token),
                 json=said, timeout=10.0)
             self._last_activity = said
             self._activity_sent_at = time.time()
@@ -2268,7 +2274,7 @@ class Daemon:
         try:
             await self._http.post(
                 f"{self.profile.url}{EXT_PREFIX}/messages",
-                headers={"Authorization": f"Bearer {self.profile.token}"},
+                headers=request_headers(self.profile.token),
                 json=payload, timeout=15.0)
         except (httpx.HTTPError, AttributeError, TypeError, RuntimeError) as exc:
             logger.warning("could not publish a learning (%r)", exc)
@@ -2313,7 +2319,7 @@ class Daemon:
         try:
             await self._http.post(          # type: ignore[union-attr]
                 f"{self.profile.url}{EXT_PREFIX}/messages",
-                headers={"Authorization": f"Bearer {self.profile.token}"},
+                headers=request_headers(self.profile.token),
                 json={"kind": KIND_CHAT, "text":
                       "my agent is not being reached — the wake command has"
                       f" failed {self.waker.failures} times, so messages are"
@@ -2445,7 +2451,7 @@ class Daemon:
         try:
             r = await client.get(
                 f"{self.profile.url}{EXT_PREFIX}/participants",
-                headers={"Authorization": f"Bearer {self.profile.token}"},
+                headers=request_headers(self.profile.token),
                 timeout=10.0,
             )
             if r.status_code == 200:
@@ -2788,15 +2794,22 @@ class Daemon:
     async def _connect_forever(self) -> None:
         backoff = BACKOFF_START
         async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=READ_TIMEOUT)) as client:
-            self._http = client
+            self._http = None
             while not self._stop.is_set():
                 try:
+                    # Persisted v1 profiles skip /join entirely. Check the
+                    # running host before heartbeat/worker code can use a token.
+                    await check_host(client, self.profile.url)
+                    self._http = client
                     await self._refresh_snapshot(client)
                     await self._stream_once(client)
+                    self._http = None
                     backoff = BACKOFF_START
                 except asyncio.CancelledError:
+                    self._http = None
                     raise
                 except Exception as exc:  # any drop is a reconnect, not a crash
+                    self._http = None
                     self.state = "reconnecting"
                     self.connected_since = None
                     self.failures += 1
@@ -2828,10 +2841,7 @@ class Daemon:
         # Always sent, including 0: on a first connect that backfills everything
         # said before we arrived, and on a reconnect it resumes exactly where we
         # left off. Either way the local log ends up gap-free.
-        headers = {
-            "Authorization": f"Bearer {self.profile.token}",
-            "Last-Event-ID": str(resume),
-        }
+        headers = request_headers(self.profile.token, {"Last-Event-ID": str(resume)})
 
         url = f"{self.profile.url}{EXT_PREFIX}/events"
         async with aconnect_sse(client, "GET", url, headers=headers) as source:

@@ -31,12 +31,12 @@ NOT_FOR_A_CLIENT = sorted(ALL_KINDS - {KIND_CHAT}) + ["banana"]
 
 
 def _join(client, session, name="bob"):
-    r = client.post("/ext/collab/v1/join", json={
+    r = client.post("/ext/collab/v1/join", json={"protocol_major": 2, "version": "2.0.0",
         "invite": session["invite"], "name": name, "hello": {"focus": "guest"},
     })
     assert r.status_code == 200, r.text
     joined = r.json()
-    return {"Authorization": f"Bearer {joined['token']}"}, joined
+    return {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {joined['token']}"}, joined
 
 
 def _rpc(client, headers, data):

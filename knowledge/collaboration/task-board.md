@@ -48,8 +48,11 @@ None of them changes a task's state: `move` files a task under a project and is
 deliberately separate from `update`, which means «I am working on this» and
 would record bookkeeping as progress.
 
-`--detail` adds a longer description, bounded at 4 000 characters. `--files`,
-with `claim`, declares the files about to be touched.
+`--detail` adds a longer description. Later than the pin: descriptions and
+comments accept up to 8 000 characters, stored whole; longer input is refused
+with its length and the limit. The pinned version clipped at 4 000 characters
+without telling the author. `--files`, with `claim`, declares the files about
+to be touched.
 
 # Three refusals, and what each one was protecting
 

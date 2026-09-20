@@ -254,7 +254,6 @@ def scrub_block(text: str) -> str:
 MAX_NAME = 64
 MAX_ROOM = 64
 MAX_TITLE = 200
-MAX_DETAIL = 4_000
 MAX_META_VALUE = 500
 MAX_META_KEYS = 24
 
@@ -267,12 +266,16 @@ MAX_META_KEYS = 24
 #: with the reason and the alternative in front of the sender, costs one
 #: retry; a message delivered in part costs whatever the missing part said.
 #:
-#: Eight thousand CHARACTERS: twice a task's `--detail`, and seven of them in
+#: Eight thousand CHARACTERS: also a task's `--detail`, and seven of them in
 #: ASCII fit a wake batch whole under `wake.MAX_PROMPT_BYTES` — one, measured,
 #: when every character is four bytes, which is the byte cap doing its job and
 #: not this one. Anything longer is an artifact and travels as one — `collab
 #: file send` — or is two messages.
 MAX_MESSAGE = 8_000
+
+#: Stored descriptions and comments share chat's finite character budget.
+#: These are content, so the HTTP endpoints refuse excess rather than clip.
+MAX_DETAIL = 8_000
 
 
 class MessageRefused(ValueError):

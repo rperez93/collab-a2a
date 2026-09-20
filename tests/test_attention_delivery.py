@@ -63,8 +63,9 @@ def test_monitor_coalesces_without_consuming_and_stays_quiet_until_recv(profile,
     monkeypatch.setattr(cli, "_require_profile", lambda args: profile)
     monkeypatch.setattr(cli, "is_running", lambda p: 1 if alive.is_set() else None)
     monkeypatch.setattr(cli, "print", lambda *args, **kwargs: printed.append(str(args[0])), raising=False)
-    original = attention.Digest
-    monkeypatch.setattr(attention, "Digest", lambda: original(settle=0.05, gap=0.05))
+    from collab import runtime_settings
+    original = runtime_settings.get
+    monkeypatch.setattr(runtime_settings, "get", lambda key: 0.05 if key in ("attention_settle", "attention_gap") else original(key))
     args = argparse.Namespace(follow=True, delivery="notice", replay=0, json=False,
                               room=None, mine_too=False, exit_when_idle=True, limit=50)
     thread = threading.Thread(target=cli.cmd_listen, args=(args,), daemon=True)

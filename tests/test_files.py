@@ -10,8 +10,8 @@ from collab.protocol import MAX_FILE_BYTES
 
 def _join(client, session, name):
     r = client.post("/ext/collab/v1/join",
-                    json={"invite": session["invite"], "name": name, "hello": {}})
-    return {"Authorization": f"Bearer {r.json()['token']}"}
+                    json={"protocol_major": 2, "version": "2.0.0", "invite": session["invite"], "name": name, "hello": {}})
+    return {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {r.json()['token']}"}
 
 
 def _upload(client, headers, content: bytes, name="artifact.bin", **params):

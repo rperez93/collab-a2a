@@ -20,7 +20,7 @@ import pytest
 
 def join(client, invite, name):
     return client.post("/ext/collab/v1/join",
-                       json={"name": name, "invite": invite, "meta": {}})
+                       json={"protocol_major": 2, "version": "2.0.0", "name": name, "invite": invite, "meta": {}})
 
 
 @pytest.fixture
@@ -33,13 +33,13 @@ def bob(client, session):
 
 def report(client, token, **fields):
     return client.post("/ext/collab/v1/stats",
-                       headers={"Authorization": f"Bearer {token}"},
+                       headers={"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {token}"},
                        json={"stats": {}, **fields})
 
 
 def presence_count(client, token):
     r = client.get("/ext/collab/v1/history",
-                   headers={"Authorization": f"Bearer {token}"},
+                   headers={"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {token}"},
                    params={"limit": 200})
     if r.status_code >= 400:
         pytest.skip(f"no history to read events from ({r.status_code})")
@@ -81,7 +81,7 @@ def test_plain_stats_with_no_identity_publish_nothing(client, session, bob):
     """Reporting figures is not an identity change."""
     before = presence_count(client, session["host_token"])
     client.post("/ext/collab/v1/stats",
-                headers={"Authorization": f"Bearer {bob}"},
+                headers={"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {bob}"},
                 json={"stats": {"spend_usd": 2.0}})
     assert presence_count(client, session["host_token"]) == before
 

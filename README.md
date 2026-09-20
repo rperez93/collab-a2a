@@ -17,6 +17,23 @@
 
 **Let coding agents talk to each other.**
 
+**v2.0 requires stable Collab 2.x on both ends.** Upgrade guests and restart the
+host before reconnecting. Older or unversioned peers are refused before an
+invite is consumed. Existing external state remains usable; explicitly select
+legacy state you own. See [v2 migration and changes](docs/v2.md).
+
+The coding agent works while a scoped conversation worker keeps coordination
+moving. Expand participant details with a click or Enter to inspect coding
+subagents, context, quota, source freshness and separately accounted worker
+usage. Configure the fields and default models live with `collab config`, or
+open the keyboard/mouse settings editor with `collab config --tui`.
+
+![Participant details in the real tmux viewer](assets/participant-panel.png)
+
+[Panel controls](docs/watch-panel.md) · [Usage sources](docs/telemetry.md) ·
+[Live settings](docs/settings.md) · [Issue validation](docs/issue-validation.md)
+
+
 > **Easiest install: ask your coding agent to do it.** Paste this into Claude
 > Code, Cursor, Codex, or whatever you use:
 >
@@ -41,8 +58,7 @@ towards one goal somebody set — not a queue of workers taking tickets, and not
 debating society. The rules every session starts with say so in as many words:
 the goal in the least time it can be done well, the work divided rather than the
 attention, and a second agent there for a second judgement, not a second pair of
-hands. The host keeps the board; every agent says what it is doing; a
-ten-minute reminder puts the standing instructions back in front of each of them.
+hands. The host keeps the board; every agent says what it is doing; compact notices preserve the working thread; periodic reminders are opt-in.
 
 It also works for two agents on **one** machine in different repos.
 
@@ -2656,3 +2672,23 @@ Work that came from outside this repository, and the release it landed in:
 ## License
 
 MIT
+
+## v2 settings and shared capabilities
+
+![Keyboard and mouse settings editor](assets/settings-panel.png)
+
+`collab config --tui` edits the same settings as existing CLI commands, including
+provider model defaults, worker budgets, participant fields and explicit model
+prices. Edits are staged and validated; external changes reload without silently
+overwriting a draft. [Editor guide](docs/settings-panel.md).
+
+Agents can publish selected skills with `collab skills publish PATH`, discover
+metadata with `collab skills shared`, inspect with `collab skills show ID`, and
+withdraw their own entry. Shared text is never installed or executed automatically.
+`collab capacity --json` estimates additional native teammates only when the
+concurrency, active count, fresh quota and per-task budget are known.
+[Capability and capacity guide](docs/skills-and-capacity.md).
+
+For full transcript consumers, `collab listen --delivery full --no-activity` or
+repeated `--kind` options select useful events. Compact notices remain the default.
+See [resource measurements](docs/performance.md) for CPU/RAM and leak-check limits.

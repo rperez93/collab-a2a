@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS inbox (
     sender_id TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS repair_pending (seq INTEGER PRIMARY KEY);
 """
 
 #: Brings an inbox written by an older collab up to SCHEMA. `sender_id` was
@@ -138,7 +139,7 @@ class Inbox:
         with self._lock:
             self._db.close()
 
-    def record(self, env: Envelope) -> bool:
+    def record(self, env: Envelope, *, repaired: bool = False) -> bool:
         """Store one event.  Returns False if this seq was already stored.
 
         Replay after a reconnect can legitimately resend an event we already
@@ -175,9 +176,17 @@ class Inbox:
                      json.dumps(env.to_dict())),
                 )
                 self._db.execute(
-                    "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_seq', ?)",
+                    "INSERT INTO meta (key, value) VALUES ('last_seq', ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = "
+                    "CAST(MAX(CAST(meta.value AS INTEGER), CAST(excluded.value AS INTEGER)) AS TEXT)",
                     (str(env.seq),),
                 )
+                if repaired:
+                    # Commit the repair notice with the row. If replay fails
+                    # on the next page, retry sees an existing inbox row; only
+                    # this durable marker still tells a worker whose cursor is
+                    # ahead of it that unseen work has arrived behind it.
+                    self._db.execute("INSERT INTO repair_pending (seq) VALUES (?)", (env.seq,))
                 # The append goes here, inside the lock and BEFORE the commit:
                 # the commit is the moment the event becomes one we will never
                 # ask for again, so nothing may become unfetchable while the log
@@ -248,6 +257,22 @@ class Inbox:
                 self._discard()
                 raise
         return True
+
+    def pending_repairs(self, limit: int = 1000) -> list[int]:
+        """Recovered rows awaiting a durable main-agent/worker notice."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT seq FROM repair_pending ORDER BY seq LIMIT ?",
+                (max(0, min(limit, 1000)),),
+            ).fetchall()
+        return [int(row["seq"]) for row in rows]
+
+    def acknowledge_repairs(self, seqs: list[int]) -> None:
+        """Call only after the corresponding notice is durable and deduplicated."""
+        with self._lock:
+            self._db.executemany("DELETE FROM repair_pending WHERE seq = ?",
+                                 ((seq,) for seq in seqs))
+            self._db.commit()
 
     def _discard(self) -> None:
         """Undo the half-written event, even when the rollback itself fails.
@@ -353,7 +378,8 @@ class Inbox:
         return int(row["c"])
 
     def notice_events(self, *, limit: int = 100, room: str | None = None,
-                      exclude_sender: str = "", exclude_sender_id: str = "") -> list[Envelope]:
+                      exclude_sender: str = "", exclude_sender_id: str = "",
+                      kinds: tuple[str, ...] = ()) -> list[Envelope]:
         """Peek at relevant unread events; filter before applying the page limit.
 
         A hundred presence rows or own echoes must not conceal a request just
@@ -362,6 +388,9 @@ class Inbox:
         query = ("SELECT payload FROM inbox WHERE read=0 AND kind IN "
                  "('chat','task','project','request','response')")
         params: list[Any] = []
+        if kinds:
+            query += " AND kind IN (" + ",".join("?" for _ in kinds) + ")"
+            params.extend(kinds)
         if room:
             query += " AND json_extract(payload, '$.room')=?"
             params.append(room)
@@ -528,28 +557,27 @@ class Inbox:
             ).fetchone()
         return row is not None
 
-    def gaps(self) -> list[int]:
-        """Sequence numbers missing from this log — messages that were dropped.
+    def gaps(self, limit: int = 1000) -> list[int]:
+        """Unverified holes in the global sequence, never a loss count.
 
-        The hub numbers every event and the daemon resumes with
-        `Last-Event-ID`, so a reconnect is meant to leave a log with no holes
-        in it. This is how that is checked rather than assumed: the numbers
-        between the lowest and the highest that are not here.
-
-        A HOLE IS NOT VISIBLE FROM ANY OTHER SURFACE. `last_seq` says how far
-        the log reaches and `unread` says what has not been looked at; neither
-        can tell you that message 41 never arrived, and the conversation reads
-        perfectly well without it. Somebody answering a question they were
-        never asked is the failure this catches, and it is silent.
-
-        Empty when there is nothing, and empty is also the healthy answer —
-        `collab check` and `collab logs` both report it, so it has a reader
-        where for a long time it had only a docstring claiming one.
+        Other participants' private DMs consume sequence numbers too. Only a
+        viewer-filtered replay from the hub can establish that an event this
+        participant was entitled to receive is actually absent.
         """
+        # Global seqs can jump by millions when other agents exchange DMs.
+        # Never allocate range(min, max): a diagnostic must stay small even
+        # when the peer's sequence space is huge. SQL finds only the gaps and
+        # this method returns a bounded sample for an explicitly unverified hint.
+        limit = max(0, min(limit, 1000))
+        missing: list[int] = []
         with self._lock:
-            rows = self._db.execute("SELECT seq FROM inbox ORDER BY seq").fetchall()
-        seqs = [r["seq"] for r in rows]
-        if not seqs:
-            return []
-        known = set(seqs)
-        return [n for n in range(seqs[0], seqs[-1] + 1) if n not in known]
+            rows = self._db.execute(
+                "SELECT previous, seq FROM (SELECT seq, LAG(seq) OVER (ORDER BY seq) "
+                "AS previous FROM inbox) WHERE seq > previous + 1 LIMIT ?", (limit,)
+            )
+            for row in rows:
+                count = min(row["seq"] - row["previous"] - 1, limit - len(missing))
+                missing.extend(range(row["previous"] + 1, row["previous"] + 1 + count))
+                if len(missing) >= limit:
+                    break
+        return missing

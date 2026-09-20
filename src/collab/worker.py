@@ -50,7 +50,9 @@ def _config(config: dict[str, Any]) -> dict[str, Any]:
     else:
         if config.get("command"):
             raise ValueError("--command requires --agent command")
-        result["model"] = _text(config.get("model") or DEFAULT_MODELS.get(agent), "model (required for opencode and cursor)")
+        from .runtime_settings import get
+        result["model_default"] = bool(config.get("model_default", not bool(config.get("model"))))
+        result["model"] = _text(config.get("model") or get(f"worker_{agent}_model"), "model (required when no default is configured)")
     return result
 
 
@@ -68,6 +70,7 @@ class Store:
             db.execute("BEGIN IMMEDIATE")
             db.execute("CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY, data TEXT NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS records (id TEXT PRIMARY KEY, kind TEXT NOT NULL, data TEXT NOT NULL, created_at REAL NOT NULL)")
+            db.execute("CREATE TABLE IF NOT EXISTS repaired (seq INTEGER PRIMARY KEY)")
             yield db
             db.commit()
         except BaseException:
@@ -240,6 +243,29 @@ class Store:
             state.update(error=bounded_error, retry_at=retry_at, running=running)
             self._save(db, state)
 
+    def repaired(self, seq: int) -> None:
+        """Deduplicate a recovered older message without rewinding reply history."""
+        with self._db() as db:
+            state = self._state(db)
+            if seq > state["cursor"] or db.execute("SELECT 1 FROM repaired WHERE seq=?", (seq,)).fetchone():
+                return
+            self._add(db, "escalation", {"reason": "decision", "seq": seq,
+                "question": f"Recovered older message #{seq}. Inspect collab recv and supply a decision if a reply is still needed; prior worker replies were not replayed."})
+            db.execute("INSERT INTO repaired VALUES(?)", (seq,))
+
+    def record_usage(self, figures: dict) -> None:
+        with self._db() as db:
+            state = self._state(db)
+            usage = state.setdefault("usage", {})
+            for key in ("tokens_in", "tokens_out", "tokens_cached", "cost_usd"):
+                if key in figures:
+                    usage[key] = usage.get(key, 0) + figures[key]
+            if figures.get("cost_kind"):
+                old_kind = usage.get("cost_kind")
+                usage["cost_kind"] = "mixed" if old_kind and old_kind != figures["cost_kind"] else figures["cost_kind"]
+            usage["observed_at"] = time.time()
+            self._save(db, state)
+
     def reserve_turn(self, *, expected_generation: int, now: float | None = None,
                      limit: int = 60, window: float = 3600) -> float | None:
         """Reserve a model attempt before launch, including attempts that fail.
@@ -257,16 +283,17 @@ class Store:
             if (state["generation"] != expected_generation
                     or not (state["config"] or {}).get("enabled")):
                 return None
-            attempts = [stamp for stamp in state.get("model_attempts", [])
-                        if stamp > now - window]
-            state["model_attempts"] = attempts
-            if len(attempts) >= limit:
-                retry_at = min(attempts) + window
+            history = [stamp for stamp in state.get("model_attempts", []) if stamp > now - 86400]
+            attempts = [stamp for stamp in history if stamp > now - window]
+            state["model_attempts"] = history
+            if len(attempts) >= limit or len(history) >= 10000:
+                retry_at = min(attempts) + window if len(attempts) >= limit else min(history) + 86400
                 state.update(error="Worker hourly turn limit reached", retry_at=retry_at,
                              running=False)
                 self._save(db, state)
                 return retry_at
-            attempts.append(now)
+            history.append(now)
+            state["attempts_total"] = state.get("attempts_total", 0) + 1
             self._save(db, state)
             return 0.0
 
@@ -293,3 +320,27 @@ def pending(root):
 
 def answer(root, escalation_id, text):
     return Store(root).answer(escalation_id, text)
+
+
+def metrics(root):
+    store = Store(root)
+    if not store.path.exists():
+        return None
+    state = store.status()
+    cfg = state["config"] or {}
+    from .runtime_settings import get
+    model = get(f"worker_{cfg['agent']}_model") if cfg.get("model_default") else cfg.get("model", "")
+    return {**state.get("usage", {}), "enabled": state["enabled"], "running": state["running"],
+        "agent": cfg.get("agent", ""), "model": model, "turns": state["turn"],
+        "attempts": state.get("attempts_total", 0), "pending": len(state["pending"]),
+        "errors": int(bool(state["error"])), "source": "collab-worker",
+        "observed_at": max(state.get("last_progress", 0), state.get("usage", {}).get("observed_at", 0))}
+
+
+def notify_repairs(root, inbox):
+    store = Store(root)
+    if not store.path.exists():
+        return
+    for seq in inbox.pending_repairs():
+        store.repaired(seq)
+        inbox.acknowledge_repairs([seq])

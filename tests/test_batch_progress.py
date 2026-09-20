@@ -28,7 +28,7 @@ from collab.statusline.render import (_batch_segment, _visible_len, render,
 
 
 def _join(client, session, name="bob"):
-    r = client.post("/ext/collab/v1/join", json={
+    r = client.post("/ext/collab/v1/join", json={"protocol_major": 2, "version": "2.0.0",
         "invite": session["invite"], "name": name, "hello": {"focus": "the batch"},
     })
     assert r.status_code == 200, r.text
@@ -36,7 +36,7 @@ def _join(client, session, name="bob"):
 
 
 def _headers(token):
-    return {"Authorization": f"Bearer {token}"}
+    return {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {token}"}
 
 
 def _start(client, headers, name="the migration"):
@@ -486,7 +486,7 @@ def _daemon_for(live_server, tmp_path, name):
     if name == "alice":
         token = live_server["host_token"]
     else:
-        joined = httpx.post(f"{live_server['base']}/ext/collab/v1/join", json={
+        joined = httpx.post(f"{live_server['base']}/ext/collab/v1/join", json={"protocol_major": 2, "version": "2.0.0",
             "invite": live_server["invite"], "name": name, "hello": {},
         }, timeout=10.0)
         assert joined.status_code == 200, joined.text

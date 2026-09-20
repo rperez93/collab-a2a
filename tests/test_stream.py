@@ -11,8 +11,8 @@ from httpx_sse import connect_sse
 
 def _join(base, session, name):
     r = httpx.post(f"{base}/ext/collab/v1/join",
-                   json={"invite": session["invite"], "name": name, "hello": {}}, timeout=10)
-    return {"Authorization": f"Bearer {r.json()['token']}"}
+                   json={"protocol_major": 2, "version": "2.0.0", "invite": session["invite"], "name": name, "hello": {}}, timeout=10)
+    return {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {r.json()['token']}"}
 
 
 def _frames(base, headers, *, since, expect, timeout=15.0):

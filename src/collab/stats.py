@@ -71,6 +71,7 @@ that already emit something close.
 from __future__ import annotations
 
 import json
+import math
 import time
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -87,7 +88,7 @@ from .protocol import MONTHS, local_day_clock  # noqa: F401
 #: `CANONICAL` merges. See `server.hub.Hub.merge_stats` for the rule, and
 #: `whole_picture` for the routes that must state the quota every time.
 QUOTA_FIELDS = ("quotas", "quota_five_hour", "quota_seven_day",
-                "quota_used_pct", "quota_reset_at")
+                "quota_used_pct", "quota_reset_at", "quota_observed_at")
 
 #: Fields we understand, and how to coerce them.
 CANONICAL: dict[str, type] = {
@@ -250,6 +251,8 @@ def _percent(value: Any, key: str = "") -> float | None:
         number = float(value)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(number):
+        return None
     lowered = key.lower()
     if "fraction" in lowered:
         return round(number * 100, 1)
@@ -275,6 +278,8 @@ def _coerce(field: str, value: Any, key: str = "") -> Any | None:
         if kind is str:
             text = str(value).strip()
             return text[:MAX_STRING] or None
+        if isinstance(value, bool) or not math.isfinite(float(value)) or float(value) < 0:
+            return None
         if kind is int:
             return int(float(value))
         if field.startswith(("quota_", "context")):
@@ -486,7 +491,8 @@ def normalise(data: Any) -> dict[str, Any]:
     if not isinstance(data, dict):
         return {}
 
-    out: dict[str, Any] = {}
+    from .telemetry import extended
+    out: dict[str, Any] = extended(data)
 
     # Flat, canonical or aliased.
     for key, value in data.items():
@@ -510,6 +516,13 @@ def normalise(data: Any) -> dict[str, Any]:
             for key, value in inner.items():
                 if not isinstance(value, (dict, list)):
                     _take(out, key, value)
+
+    if isinstance(data.get("context_window"), dict) and ("current_usage" in data["context_window"] or data.get("session_id")):
+        from .telemetry import parse
+        native = parse("claude", data)
+        out.pop("tokens_in", None)
+        out.pop("tokens_out", None)
+        out.update(native)
 
     # A single-figure quota block: {"quota": {"remaining_fraction": 0.58}}
     for key in ("rate_limits", "limits", "quota"):
@@ -558,7 +571,8 @@ def normalise(data: Any) -> dict[str, Any]:
             if only.get("used_pct") is not None:
                 out.setdefault("quota_used_pct", only["used_pct"])
 
-    return out
+    from .telemetry import estimate
+    return estimate(out)
 
 
 def _sole_window(windows: dict[str, dict[str, Any]], window: str) -> float | None:
@@ -607,8 +621,12 @@ def sanitise(reported: dict[str, Any]) -> dict[str, Any]:
     scalars only, a handful of unknown keys at most, short strings.
     """
     out: dict[str, Any] = {}
+    from .telemetry import extended, NUMBERS, TEXT, NESTED
+    out.update(extended(reported or {}))
     extras = 0
     for key, value in (reported or {}).items():
+        if key in NUMBERS | TEXT | NESTED.keys():
+            continue
         if key == "quotas":
             # THE ONE NESTED FIELD WE KEEP, capped and coerced — and kept when
             # it is EMPTY, because `quotas: {}` is the statement «I have no
@@ -780,7 +798,8 @@ def reported_age(stats: Any, *, now: float | None = None) -> str:
         words = f"{int(gap // 3600)}h ago"
     else:
         words = f"{int(gap // 86400)}d ago"
-    return f"{words} — old" if gap > STATS_STALE_AFTER else words
+    from .config import stats_stale_after
+    return f"{words} — old" if gap > stats_stale_after() else words
 
 
 def reported_when(stats: Any, *, now: float | None = None) -> str:
@@ -833,10 +852,20 @@ def owner_of(profile: Any) -> str:
 
 def write_stats(profile: Any, figures: dict[str, Any]) -> bool:
     """Record figures as belonging to this profile. False if it could not."""
-    stamped = {**figures, OWNER_KEY: owner_of(profile)}
+    from .telemetry import stamp_observations
+    stamped = {"observed_at": time.time(), **stamp_observations(figures), OWNER_KEY: owner_of(profile)}
+    if figures.get("quotas"):
+        stamped.setdefault("quota_observed_at", time.time())
     try:
         Path(profile.dir).mkdir(parents=True, exist_ok=True)
-        (Path(profile.dir) / STATS_FILE).write_text(json.dumps(stamped))
+        from .atomic import scratch, discard
+        path = Path(profile.dir) / STATS_FILE
+        tmp = scratch(path)
+        try:
+            tmp.write_text(json.dumps(stamped, allow_nan=False))
+            tmp.replace(path)
+        finally:
+            discard(tmp)
     except (OSError, TypeError, ValueError):
         return False
     return True

@@ -233,7 +233,8 @@ def test_every_canonical_field_survives_a_round_trip():
     # because two windows leave it nobody's.
     assert got["quotas"] == {"five_hour": {"used_pct": 6.0},
                              "seven_day": {"used_pct": 7.0}}
-    assert set(got) == set(sample) | {"quotas"}
+    assert set(got) == set(sample) | {"quotas", "cost_kind"}
+    assert got["cost_kind"] == "reported"
 
 
 # --- every quota window, not a fixed two -------------------------------------

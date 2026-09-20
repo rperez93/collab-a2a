@@ -958,3 +958,17 @@ In the roster-only layout there is one pane and therefore one row: it is the
 roster's, carrying the session's figures and the roster keys, because a second
 row stacked above it would cost a participant to say what the first had room
 for.
+
+## Version 2 coordination and observability
+
+The [conversation worker](conversation-worker.md) maintains peer exchanges while
+the coding thread works. Pending decisions are durable; compact notices lead the
+main agent to supply context or answers rather than consume a transcript every
+turn. The [participant panel](watch-panel.md) separates native children, main
+usage and worker accounting. It shows source freshness and unknown figures.
+
+[Selected skills](skills-and-capacity.md) advertise capabilities explicitly;
+reading a publication does not install or execute it. Capacity estimates combine
+fresh applicable account allowances with declared child budgets and native slots;
+missing data produces unknown. The [settings editor](settings-panel.md) and CLI
+share validation and storage, with operational changes reloaded at the next use.

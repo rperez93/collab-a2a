@@ -12,7 +12,7 @@ from collab.protocol import EXTENSION_URI
 
 
 def _join(client, session, name="bob", **hello):
-    r = client.post("/ext/collab/v1/join", json={
+    r = client.post("/ext/collab/v1/join", json={"protocol_major": 2, "version": "2.0.0",
         "invite": session["invite"], "name": name, "hello": hello or {"focus": "client side"},
     })
     assert r.status_code == 200, r.text
@@ -86,24 +86,24 @@ def test_extension_requires_a_token(client):
 
 def test_invalid_token_is_rejected(client):
     assert client.get("/ext/collab/v1/snapshot",
-                      headers={"Authorization": "Bearer nope"}).status_code == 401
+                      headers={"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": "Bearer nope"}).status_code == 401
 
 
 def test_bad_invite_is_rejected(client):
-    r = client.post("/ext/collab/v1/join", json={"invite": "wrong", "name": "mallory"})
+    r = client.post("/ext/collab/v1/join", json={"protocol_major": 2, "version": "2.0.0", "invite": "wrong", "name": "mallory"})
     assert r.status_code == 401
 
 
 def test_expired_invite_is_rejected(client, session):
     session["store"].add_invite("stale", ttl_seconds=-1)
-    r = client.post("/ext/collab/v1/join", json={"invite": "stale", "name": "mallory"})
+    r = client.post("/ext/collab/v1/join", json={"protocol_major": 2, "version": "2.0.0", "invite": "stale", "name": "mallory"})
     assert r.status_code == 401
     assert "expired" in r.json()["detail"]
 
 
 def test_only_the_host_can_remove_people(client, session, host_headers):
     bob = _join(client, session)
-    bob_headers = {"Authorization": f"Bearer {bob['token']}"}
+    bob_headers = {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {bob['token']}"}
     assert client.post("/ext/collab/v1/revoke", json={"name": "alice"},
                        headers=bob_headers).status_code == 403
     assert client.post("/ext/collab/v1/revoke", json={"name": "bob"},
@@ -147,7 +147,7 @@ async def test_a_name_held_by_someone_online_is_refused_with_a_clear_reason(
     assert bob["name"] == "bob"
     await _connect(session, bob["id"])
 
-    r = client.post("/ext/collab/v1/join", json={
+    r = client.post("/ext/collab/v1/join", json={"protocol_major": 2, "version": "2.0.0",
         "invite": session["invite"], "name": "bob", "hello": {},
     })
     assert r.status_code == 409
@@ -173,7 +173,7 @@ def test_a_rejoin_keeps_what_was_already_known_about_them(client, session):
     _join(client, session, name="bob", focus="the auth refactor")
 
     people = client.get("/ext/collab/v1/snapshot",
-                        headers={"Authorization": f"Bearer {session['host_token']}"}
+                        headers={"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {session['host_token']}"}
                         ).json()["participants"]
     bob = [p for p in people if p["name"] == "bob"]
     assert len(bob) == 1, "one row, not one per rejoin"
@@ -185,7 +185,7 @@ def test_a_rejoin_keeps_what_was_already_known_about_them(client, session):
 def test_the_old_token_stops_working_after_a_rejoin(client, session):
     """A hand-over, not a second key cut for the same door."""
     first = _join(client, session, name="bob")
-    old = {"Authorization": f"Bearer {first['token']}"}
+    old = {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {first['token']}"}
     assert client.get("/ext/collab/v1/snapshot", headers=old).status_code == 200
 
     _join(client, session, name="bob")
@@ -193,7 +193,7 @@ def test_the_old_token_stops_working_after_a_rejoin(client, session):
 
 
 def test_the_hosts_name_is_protected_too(client, session):
-    r = client.post("/ext/collab/v1/join", json={
+    r = client.post("/ext/collab/v1/join", json={"protocol_major": 2, "version": "2.0.0",
         "invite": session["invite"], "name": "alice", "hello": {},
     })
     assert r.status_code == 409
@@ -202,14 +202,14 @@ def test_the_hosts_name_is_protected_too(client, session):
 def test_a_name_freed_by_a_rename_can_be_taken(client, session):
     """Rejection is about live collisions, not reserving names forever."""
     bob = _join(client, session, name="bob")
-    headers = {"Authorization": f"Bearer {bob['token']}"}
+    headers = {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {bob['token']}"}
     client.post("/ext/collab/v1/rename", json={"name": "roberto"}, headers=headers)
     assert _join(client, session, name="bob")["name"] == "bob"
 
 
 def test_renaming_onto_a_taken_name_is_refused(client, session):
     bob = _join(client, session, name="bob")
-    headers = {"Authorization": f"Bearer {bob['token']}"}
+    headers = {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {bob['token']}"}
     r = client.post("/ext/collab/v1/rename", json={"name": "alice"}, headers=headers)
     assert r.status_code == 409
 
@@ -219,8 +219,8 @@ def test_renaming_onto_a_taken_name_is_refused(client, session):
 def test_direct_messages_are_private(client, session, host_headers):
     bob = _join(client, session, name="bob")
     carol = _join(client, session, name="carol")
-    bob_h = {"Authorization": f"Bearer {bob['token']}"}
-    carol_h = {"Authorization": f"Bearer {carol['token']}"}
+    bob_h = {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {bob['token']}"}
+    carol_h = {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {carol['token']}"}
 
     client.post("/ext/collab/v1/messages", json={"text": "just between us", "to": "alice"},
                 headers=bob_h)
@@ -238,7 +238,7 @@ def test_direct_messages_are_private(client, session, host_headers):
 
 def test_a_task_cannot_be_claimed_twice(client, session, host_headers):
     bob = _join(client, session, name="bob")
-    bob_h = {"Authorization": f"Bearer {bob['token']}"}
+    bob_h = {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {bob['token']}"}
     task = client.post("/ext/collab/v1/tasks",
                        json={"action": "propose", "title": "migrate sessions"},
                        headers=host_headers).json()["task"]

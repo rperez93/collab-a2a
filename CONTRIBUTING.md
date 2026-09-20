@@ -423,3 +423,15 @@ place.
 
 Please do not open a public issue for anything involving tokens, authentication,
 or access control. Open a private security advisory on the repository instead.
+
+
+## v2 verification
+
+Use an isolated worktree and absolute `PYTHONPATH` for subprocess tests; do not
+replace an editable install while its session is running. The suite includes a
+real private tmux server for mouse/keyboard regression checks. Run
+`PYTHONPATH=src python benchmarks/runtime.py` for the synthetic CPU/RAM soak;
+keep the workload and raw samples with any performance claim. Provider model
+processes and billed calls are outside that benchmark. Build the wheel and
+verify packaged rules/skills before tagging a release. v2 handshake tests cover
+both old-host and old-guest refusal before admission.

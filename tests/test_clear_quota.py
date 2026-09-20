@@ -110,7 +110,8 @@ def test_clear_quota_with_no_figures_on_disk_still_says_so(own, reported):
     hold a quota this agent reported from another route."""
     assert _run(["stats", "--clear-quota"]) == 0
     assert reported == [{"quotas": {}}]
-    assert stats.read_stats(own) == {"quotas": {}}
+    assert stats.read_stats(own)["quotas"] == {}
+    assert stats.read_stats(own)["observed_at"] > 0
 
 
 def test_clear_quota_reaches_the_hub_and_moves_the_stamp(
@@ -120,9 +121,9 @@ def test_clear_quota_reaches_the_hub_and_moves_the_stamp(
     import time
 
     r_join = client.post("/ext/collab/v1/join",
-                         json={"invite": session["invite"], "name": "bob", "hello": {}})
+                         json={"protocol_major": 2, "version": "2.0.0", "invite": session["invite"], "name": "bob", "hello": {}})
     token = r_join.json()["token"]
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {token}"}
     client.post("/ext/collab/v1/stats", headers=headers, json={"stats": SEEDED})
 
     def person():
@@ -209,7 +210,9 @@ def test_a_report_without_quota_does_not_carry_quotas(own, reported):
     """`--report '{"cost_usd": 2}'` says nothing about the quota, on the wire
     and on disk; the hub leaves the quota alone."""
     assert _run(["stats", "--report", '{"cost_usd": 2}']) == 0
-    assert reported == [{"cost_usd": 2.0}], reported
+    assert reported[0].pop("observed_at") > 0
+    assert reported[0].pop("cost_observed_at") > 0
+    assert reported == [{"cost_usd": 2.0, "cost_kind": "reported"}], reported
     assert "quotas" not in stats.read_stats(own)
 
 
@@ -231,6 +234,8 @@ def test_a_flat_figure_alone_is_a_statement_about_that_window(own, reported):
     assert _run(["stats", "--report", '{"quota_five_hour": 40}']) == 0
     # `quota_used_pct` rides along: one window is also the single-figure form,
     # by the map rule that predates this.
+    assert reported[0].pop("observed_at") > 0
+    assert reported[0].pop("quota_observed_at") > 0
     assert reported == [{"quota_five_hour": 40.0, "quota_used_pct": 40.0,
                          "quotas": {"five_hour": {"used_pct": 40.0}}}], reported
 
@@ -241,9 +246,9 @@ def test_a_flat_report_after_a_map_drops_the_other_windows(
     the one-liner with five-hour only — the weekly window is gone, its flat
     figure with it, and the roster reads the new five-hour figure."""
     r_join = client.post("/ext/collab/v1/join",
-                         json={"invite": session["invite"], "name": "bob", "hello": {}})
+                         json={"protocol_major": 2, "version": "2.0.0", "invite": session["invite"], "name": "bob", "hello": {}})
     token = r_join.json()["token"]
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {token}"}
     client.post("/ext/collab/v1/stats", headers=headers, json={"stats": {
         "model": "gpt-5",
         "quotas": {"five_hour": {"used_pct": 55}, "seven_day": {"used_pct": 20}},

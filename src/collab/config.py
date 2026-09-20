@@ -98,6 +98,74 @@ def workspace_home(cwd: Path | None = None) -> Path:
     return state_root() / "repositories" / digest
 
 
+AGENT_SESSION_KEYS = ("COLLAB_AGENT_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID",
+                      "CLAUDE_SESSION_ID")
+
+
+class HomeSelectionError(RuntimeError):
+    """State exists, but this caller cannot safely select an identity."""
+
+
+def _stable_agent_session() -> bool:
+    return any(os.environ.get(key) for key in AGENT_SESSION_KEYS)
+
+
+def bind_home(home: Path | str, cwd: Path | None = None) -> bool:
+    """Remember an explicit selection for this stable agent session only.
+
+    Called by foreground selection commands, never by profile persistence:
+    daemons and background refreshes must not change the next CLI's identity.
+    There is deliberately no repository-wide «current agent» pointer.
+    """
+    if not _stable_agent_session():
+        return False
+    from .atomic import scratch, discard
+    target = Path(home).expanduser().resolve()
+    if not _has_current_profile(target):
+        raise HomeSelectionError(f"cannot bind missing session state at {target}")
+    namespace = base_home(cwd).parent
+    namespace.mkdir(parents=True, exist_ok=True, mode=0o700)
+    namespace.chmod(0o700)
+    path = namespace / "selection.json"
+    tmp = scratch(path)
+    try:
+        tmp.write_text(json.dumps({"home": str(target)}) + "\n")
+        tmp.chmod(0o600)
+        tmp.replace(path)
+    finally:
+        discard(tmp)
+    return True
+
+
+def _has_current_profile(home: Path) -> bool:
+    try:
+        sid = (home / "current").read_text().strip()
+        return bool(sid and Path(sid).name == sid and sid not in (".", "..")
+                    and (home / "sessions" / sid / "profile.json").is_file())
+    except OSError:
+        return False
+
+
+def bound_home(cwd: Path | None = None) -> Path | None:
+    if not _stable_agent_session():
+        return None
+    path = base_home(cwd).parent / "selection.json"
+    try:
+        data = json.loads(path.read_text())
+        selected = data["home"]
+        if not isinstance(selected, str) or not Path(selected).is_absolute():
+            raise ValueError("invalid home")
+        home = Path(selected)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise HomeSelectionError("invalid agent session binding; select state with --home") from exc
+    if not _has_current_profile(home):
+        raise HomeSelectionError(f"this agent's bound session state is missing at {home}; "
+                                 "select state explicitly with --home")
+    return home
+
+
 def agent_key() -> str:
     """Stable across CLI calls, distinct across agent sessions.
 
@@ -106,8 +174,7 @@ def agent_key() -> str:
     Unknown hosts may set COLLAB_AGENT_ID; ordinary shells share their terminal
     session, stamped against PID reuse, rather than a transient command PID.
     """
-    for key in ("COLLAB_AGENT_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID",
-                "CLAUDE_SESSION_ID"):
+    for key in AGENT_SESSION_KEYS:
         if value := os.environ.get(key):
             return hashlib.sha256(f"{key}:{value}".encode()).hexdigest()
     from . import owner
@@ -265,8 +332,26 @@ def resolve_home(name: str = "", cwd: Path | None = None) -> Path:
     Display names do not establish ownership, even when they happen to match.
     """
     base = base_home(cwd)
+    if (selected := bound_home(cwd)) is not None:
+        return selected
     if (mine := claimed_home(cwd)) is not None:
         return mine
+    plausible = [home for home in candidate_homes(cwd) if _has_current_profile(home)]
+    if len(plausible) > 1:
+        raise HomeSelectionError("multiple Collab identities exist for this agent; "
+                                 "select one explicitly with --home or COLLAB_HOME")
+    if not _stable_agent_session() and not plausible:
+        # A fresh executor without the host's ID must not make somebody
+        # else's state look offline by silently inspecting an empty fallback.
+        candidates = workspace_home(cwd).glob("agents/*/.collab*")
+        found = 0
+        for home in candidates:
+            if _has_current_profile(home):
+                found += 1
+                if found > 1:
+                    raise HomeSelectionError("multiple Collab agent sessions exist and "
+                                             "this process has no stable agent ID; "
+                                             "select state with --home or COLLAB_HOME")
 
     held = _held_by(base)
     if held is None:
@@ -381,7 +466,7 @@ def load_config() -> dict[str, Any]:
     p = global_config_path()
     try:
         st = p.stat()
-        stamp = (st.st_mtime, st.st_size)
+        stamp = (str(p.resolve()), st.st_mtime, st.st_size, getattr(st, "st_mtime_ns", None), getattr(st, "st_ino", None))
     except OSError:
         _CACHE.clear()
         return {}
@@ -391,20 +476,26 @@ def load_config() -> dict[str, Any]:
     try:
         data = json.loads(p.read_text())
     except (OSError, ValueError):
-        data = {}
+        return _CACHE.get("data", {}) if _CACHE.get("path") == str(p.resolve()) else {}
     if not isinstance(data, dict):
-        data = {}
+        return _CACHE.get("data", {}) if _CACHE.get("path") == str(p.resolve()) else {}
     # `trusted` is the whole of the second half: an entry read while the stamp
     # was still moving is worth answering from now and not once the stamp has
     # settled, because a write may have landed behind this read.
-    _CACHE.update(stamp=stamp, data=data, trusted=settled)
+    _CACHE.update(stamp=stamp, data=data, trusted=settled, path=str(p.resolve()))
     return data
 
 
 def save_config(cfg: dict[str, Any]) -> None:
     p = global_config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(cfg, indent=2) + "\n")
+    from .atomic import scratch, discard
+    tmp = scratch(p)
+    try:
+        tmp.write_text(json.dumps(cfg, indent=2) + "\n")
+        os.replace(tmp, p)
+    finally:
+        discard(tmp)
     # So a writer never has to wait for their own change to "age": inside the
     # same second the stamp might not have moved yet.
     _CACHE.clear()
@@ -987,27 +1078,19 @@ MAX_REMIND_TEXT = 8_000
 #: kept to what fits in a glance: this arrives mid-session in an agent's own
 #: context every few minutes, and a long reminder is a tax paid every time. The
 #: commands are in it because the point is that they get run.
-DEFAULT_REMIND_HOST = """\
-You are the host, so the state of the room is yours:
-  collab who · collab activity   — who is working, who has stalled, who has gone quiet
-  collab stats --json            — quota, before you hand out anything long
-  collab batch status            — the shared figure; it moves only when a task completes
-  collab check                   — what to fix
-An idle agent is your failure, not theirs. Keep one batch open for as long as any
-task is open, keep the board current, and keep the work in subagents — your own
-context is for coordinating it, not for doing it."""
+DEFAULT_REMIND_HOST = """You are the host. At your next safe task boundary, review the shared outcome:
+  collab who · collab activity · collab batch status — ownership and validated progress
+  collab stats --json · collab check — freshness, quota and listener health
+  collab worker pending — decisions waiting for main-agent context, if a worker is enabled
+Without a worker, read collab recv. Keep the board accurate and validate the
+acceptance criteria. These reminders do not authorize new scope or more agents."""
 
-#: And what a GUEST is reminded of: § 4b, and saying so out loud. A guest's
-#: failure mode is the opposite of the host's — not losing sight of the room,
-#: but going quiet in it while chasing something nobody asked for.
-DEFAULT_REMIND_GUEST = """\
-Keep going on what you were asked to do, and keep saying so:
-  collab working "<what>"        — and collab idle the moment you stop
-  collab task complete --id T_x  — a claimed task is not progress until this
-  collab recv                    — anything waiting for you
-Stay on the objective you were given; write down what else you find rather than
-chasing it. If you are blocked, or finished, say so in the room rather than
-going quiet."""
+DEFAULT_REMIND_GUEST = """At your next safe task boundary, check the assigned outcome:
+  collab working "<what>" · collab idle — accurate current activity
+  collab worker pending — decisions awaiting your input, if a worker is enabled
+Without a worker, read collab recv. Report a blocker with its dependency, or a
+completed task with validation evidence. Stay on the objective you were given.
+Use collab task complete only after its acceptance checks pass."""
 
 
 def reminder_settings(is_host: bool = False) -> dict[str, Any]:
@@ -2260,6 +2343,7 @@ def settings() -> tuple[Setting, ...]:
                 list(STATUSLINE_SEGMENTS), _as_list,
                 lambda: list(statusline_settings()["segments"]),
                 _write_statusline_segments),
+        *_runtime_settings(),
     )
 
 
@@ -2438,3 +2522,17 @@ class SessionProfile:
             return None
         sid = pointer.read_text().strip()
         return cls.load(sid, cwd) if sid else None
+
+
+def watch_participant_settings():
+    from .runtime_settings import get
+    return {"fields": get("watch_participant_fields"), "details": get("watch_participant_details")}
+
+def stats_stale_after():
+    from .runtime_settings import get
+    return get("stats_stale_after")
+
+
+def _runtime_settings():
+    from .runtime_settings import settings
+    return settings()

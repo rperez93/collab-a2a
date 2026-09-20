@@ -43,6 +43,18 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_room ON events(room, seq);
 
+CREATE TABLE IF NOT EXISTS shared_skills (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    updated_at REAL NOT NULL,
+    UNIQUE(owner_id, name)
+);
+
 CREATE TABLE IF NOT EXISTS worker_deliveries (
     sender_id TEXT NOT NULL,
     delivery_key TEXT NOT NULL,
@@ -459,6 +471,71 @@ class Store:
                 " FROM files f JOIN participant_names n ON n.name = f.acked_by"
                 " WHERE f.acked_by IS NOT NULL")
 
+    def publish_skill(self, owner_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        from ..skill_sharing import (MAX_OWNER_BYTES, MAX_PER_OWNER,
+                                     MAX_ROOM_SKILLS, validate_publication)
+        data = validate_publication(data)
+        with self._lock:
+            # The count and insert share a write transaction, including when
+            # another process opens this hub DB. Concurrent uploads cannot
+            # both see the last free slot and exceed the publication budget.
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                if self._db.execute("SELECT 1 FROM participants WHERE id=? AND revoked=0",
+                                    (owner_id,)).fetchone() is None:
+                    raise ValueError('only an active participant may publish a skill')
+                old = self._db.execute("SELECT id, size_bytes FROM shared_skills WHERE owner_id=? AND name=?",
+                                       (owner_id, data['name'])).fetchone()
+                totals = self._db.execute("SELECT COUNT(*) AS n, COALESCE(SUM(size_bytes),0) AS bytes "
+                                          "FROM shared_skills WHERE owner_id=?", (owner_id,)).fetchone()
+                room = self._db.execute("SELECT COUNT(*) FROM shared_skills").fetchone()[0]
+                if old is None and (totals['n'] >= MAX_PER_OWNER or room >= MAX_ROOM_SKILLS):
+                    raise ValueError('shared skill inventory is full; withdraw a skill first')
+                if totals['bytes'] - (old['size_bytes'] if old else 0) + data['size_bytes'] > MAX_OWNER_BYTES:
+                    raise ValueError('shared skills exceed the 512 KiB owner budget')
+                skill_id = old['id'] if old else 'sk_' + uuid.uuid4().hex[:20]
+                self._db.execute(
+                    "INSERT INTO shared_skills VALUES (?,?,?,?,?,?,?,?) "
+                    "ON CONFLICT(owner_id,name) DO UPDATE SET description=excluded.description, "
+                    "sha256=excluded.sha256, size_bytes=excluded.size_bytes, "
+                    "content=excluded.content, updated_at=excluded.updated_at",
+                    (skill_id, owner_id, data['name'], data['description'], data['sha256'],
+                     data['size_bytes'], data['content'], time.time()),
+                )
+                row = self._db.execute("SELECT s.*, p.name AS owner FROM shared_skills s "
+                                       "JOIN participants p ON p.id=s.owner_id WHERE s.id=?",
+                                       (skill_id,)).fetchone()
+                self._db.commit()
+            except BaseException:
+                self._db.rollback()
+                raise
+        return {key: value for key, value in dict(row).items() if key != 'content'}
+
+    def shared_skills(self, *, after: str = '', limit: int = 100) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT s.id, s.owner_id, p.name AS owner, s.name, s.description, "
+                "s.sha256, s.size_bytes, s.updated_at FROM shared_skills s "
+                "JOIN participants p ON p.id=s.owner_id WHERE p.revoked=0 AND s.id > ? "
+                "ORDER BY s.id LIMIT ?", (after, max(1, min(limit, 200))),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def shared_skill(self, skill_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT s.*, p.name AS owner FROM shared_skills s JOIN participants p ON p.id=s.owner_id "
+                "WHERE s.id=? AND p.revoked=0", (skill_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def withdraw_skill(self, skill_id: str, owner_id: str) -> bool:
+        with self._lock:
+            removed = self._db.execute("DELETE FROM shared_skills WHERE id=? AND owner_id=?",
+                                       (skill_id, owner_id)).rowcount
+            self._db.commit()
+        return bool(removed)
+
     def close(self) -> None:
         with self._lock:
             self._db.close()
@@ -511,7 +588,7 @@ class Store:
         return self.since_page(seq, viewer=viewer, limit=limit)[0]
 
     def since_page(self, seq: int, *, viewer: str | None = None,
-                   limit: int = 500) -> tuple[list[Envelope], int]:
+                   limit: int = 500, through: int | None = None) -> tuple[list[Envelope], int]:
         """One page of ``since``, plus how far the read actually got.
 
         The cursor is the last seq READ, not the last one returned. They differ
@@ -522,8 +599,8 @@ class Store:
         with self._lock:
             rows = self._db.execute(
                 "SELECT seq, payload, recipient_id, sender_id FROM events WHERE seq > ?"
-                " ORDER BY seq LIMIT ?",
-                (seq, limit),
+                " AND (? IS NULL OR seq <= ?) ORDER BY seq LIMIT ?",
+                (seq, through, through, limit),
             ).fetchall()
         out = []
         for r in rows:
@@ -757,6 +834,10 @@ class Store:
                 "UPDATE participants SET revoked=1 WHERE id=? AND is_host=0",
                 (participant_id,),
             )
+            if cur.rowcount:
+                # Revoked owners cannot withdraw their publications. Keeping
+                # invisible entries would permanently consume the room budget.
+                self._db.execute("DELETE FROM shared_skills WHERE owner_id=?", (participant_id,))
             self._db.commit()
         return cur.rowcount > 0
 

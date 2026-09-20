@@ -61,7 +61,7 @@ def test_join_bounds_a_hostile_name_and_hello(client, session):
     endpoint and not only in the helper: an unbounded name would be replayed to
     every roster, and a nested `stats` in hello would sidestep its sanitiser.
     """
-    r = client.post("/ext/collab/v1/join", json={
+    r = client.post("/ext/collab/v1/join", json={"protocol_major": 2, "version": "2.0.0",
         "invite": session["invite"],
         "name": "z" * 5000,
         "hello": {"focus": "f" * 5000, "stats": {"cost_usd": "9" * 5000}},
@@ -71,7 +71,7 @@ def test_join_bounds_a_hostile_name_and_hello(client, session):
     token = joined["token"]
 
     snap = client.get("/ext/collab/v1/snapshot",
-                      headers={"Authorization": f"Bearer {token}"}).json()
+                      headers={"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {token}"}).json()
     me = next(p for p in snap["participants"] if p["id"] == joined["id"])
     assert len(me["name"]) <= MAX_NAME
     assert len(me["focus"]) <= MAX_META_VALUE

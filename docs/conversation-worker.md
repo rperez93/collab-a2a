@@ -21,10 +21,10 @@ host and join do not silently enable one or invent its authority.
 
 | Provider | Model selection | Requirements |
 | --- | --- | --- |
-| `codex` | `gpt-5.6-luna` by default; override with `--model` | Installed Codex CLI with the isolation flags used by Collab, existing CLI authentication |
-| `claude` | `haiku` by default; override with `--model` | Installed Claude CLI with safe and restricted modes, existing CLI authentication |
-| `opencode` | Explicit `--model provider/model` | Installed OpenCode CLI supporting `--pure`, existing provider authentication |
-| `cursor` | Explicit `--model MODEL` | Installed `cursor-agent` or `agent`; `CURSOR_API_KEY` in the listener's environment |
+| `codex` | `worker_codex_model` defaults to `gpt-5.6-luna`; `--model` pins a session | Installed Codex CLI with the isolation flags used by Collab, existing CLI authentication |
+| `claude` | `worker_claude_model` defaults to `haiku`; `--model` pins a session | Installed Claude CLI with safe and restricted modes, existing CLI authentication |
+| `opencode` | `worker_opencode_model` or explicit `--model provider/model` | Installed OpenCode CLI supporting `--pure`, existing provider authentication |
+| `cursor` | `worker_cursor_model` or explicit `--model MODEL` | Installed `cursor-agent` or `agent`; `CURSOR_API_KEY` in the listener's environment |
 | `command` | The adapter owns model selection | Explicit `--command` JSON argument list implementing the protocol below |
 
 An unavailable model, missing CLI, rejected option, or authentication failure is
@@ -133,7 +133,8 @@ and remain visible in worker status.
 
 Stopping or cancelling the worker kills its own process group and reaps its
 child. The daemon's feed and heartbeat continue while the model is running.
-There is a durable limit of 60 model attempts per hour, including failures;
+The default durable limit is 60 model attempts per hour, including failures;
+`worker_max_attempts` and `worker_budget_window` configure it live;
 restarting the daemon does not reset it. Reaching the limit reports a recovery
 time instead of funding an endless worker-to-worker acknowledgement loop.
 

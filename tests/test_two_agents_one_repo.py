@@ -158,10 +158,11 @@ def test_a_proven_agent_speaks_as_itself(repo, hub, monkeypatch):
     assert [t for t, _ in hub] == ["t_bob", "t_alice"]
 
 
-def test_reads_keep_the_fallback(repo, hub, monkeypatch):
-    """A command that has to show something still shows something."""
+def test_reads_refuse_an_unproven_identity(repo, hub, monkeypatch, capsys):
+    """A diagnostic under the wrong identity is as misleading as a wrong write."""
     _as(monkeypatch, [os.getpid()])
-    assert _run(["lock"]) == 0
+    assert _run(["lock"]) == 1
+    assert "COLLAB_HOME" in capsys.readouterr().err
 
 
 # --- the ordinary case: both chains readable ---------------------------------

@@ -12,12 +12,12 @@ from __future__ import annotations
 
 def join(client, invite, name):
     return client.post("/ext/collab/v1/join",
-                       json={"name": name, "invite": invite, "meta": {}})
+                       json={"protocol_major": 2, "version": "2.0.0", "name": name, "invite": invite, "meta": {}})
 
 
 def snapshot(client, token):
     return client.get("/ext/collab/v1/snapshot",
-                      headers={"Authorization": f"Bearer {token}"})
+                      headers={"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {token}"})
 
 
 def test_joining_under_a_taken_name_is_refused(client, session):

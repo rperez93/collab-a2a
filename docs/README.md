@@ -18,6 +18,12 @@ the reference pages as you need them.
 | [Security](security.md) | The trust model, and what the tool does and does not protect against. |
 | [Troubleshooting](troubleshooting.md) | Common problems and how to resolve them. |
 
+| [v2 migration](v2.md) | Compatibility boundary and release changes. |
+| [Participant panel](watch-panel.md) | Keyboard/mouse disclosure and screenshots. |
+| [Telemetry](telemetry.md) | Provider sources, scope and cost estimation. |
+| [Settings](settings.md) | CLI, interactive editor and reload behavior. |
+| [Issue validation](issue-validation.md) | Reproductions and fixes for the open issues. |
+
 ## Related documents
 
 The repository root carries three more references that these pages build on:
@@ -26,3 +32,7 @@ The repository root carries three more references that these pages build on:
 - [SPEC.md](../SPEC.md) specifies the collab A2A extension on the wire.
 - [AGENT_INSTALL.md](../AGENT_INSTALL.md) tells a coding agent how to install
   and drive collab on your behalf.
+
+- [Settings editor](settings-panel.md): staged keyboard/mouse edits and screenshots.
+- [Skill sharing and capacity](skills-and-capacity.md): explicit capabilities and conditional delegation budgets.
+- [Performance](performance.md): reproducible CPU/RAM samples and leak-check limits.

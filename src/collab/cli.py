@@ -38,6 +38,7 @@ from .client.hub_client import HubClient, HubError
 from .client.inbox import Inbox
 from .config import (
     COLLAB_DIRNAME,
+    HomeSelectionError,
     SessionProfile,
     agent_home,
     collab_executable,
@@ -233,7 +234,8 @@ def _acting_as_a_stranger(args: argparse.Namespace) -> bool:
     Reads keep the fallback. When it stops, this prints the exact command that
     would not be ambiguous, one per directory, so the fix is a paste.
     """
-    if os.environ.get("COLLAB_HOME") or claimed_home() is not None:
+    from .config import bound_home
+    if os.environ.get("COLLAB_HOME") or bound_home() is not None or claimed_home() is not None:
         return False
     held = held_homes()
     if len(held) < 2:
@@ -355,7 +357,7 @@ def _rules_briefing(cwd: Path | None = None) -> str:
     lines: list[str] = []
     shipped = rules_enabled()
     if shipped:
-        lines += ["", c(RULES_HEADING, "1"), rules.default_rules().rstrip("\n")]
+        lines += ["", c(RULES_HEADING, "1"), rules.configured_rules().rstrip("\n")]
 
     local = rules.local_rules(cwd)
     lines += ["", c(f"The repository's own rules: ./{rules.LOCAL_RULES_NAME}", "1")]
@@ -886,6 +888,8 @@ def _take_lock(profile: SessionProfile, *, role: str, hub_pid: int = 0) -> None:
         hub=exclusive.stamp_for(hub_pid).encode() if hub_pid else "",
         listener=exclusive.stamp_for(listener).encode() if listener else "",
     ), profile.home)
+    from .config import bind_home
+    bind_home(profile.home)
 
 
 def _effective(profile: SessionProfile, status: dict[str, Any]) -> str:
@@ -1621,12 +1625,16 @@ def cmd_listen(args: argparse.Namespace) -> int:
     inbox = Inbox(profile.dir)
     compact = getattr(args, "delivery", "notice") == "notice"
     digest = attention.Digest()
+    kinds = tuple(getattr(args, "kind", None) or ())
+    def selected(env):
+        return (not kinds or env.kind in kinds) and not (getattr(args, "no_activity", False) and env.kind == "activity")
     path = inbox.jsonl
     path.touch(exist_ok=True)
 
     if not args.follow:
         for env in inbox.all_events(limit=args.limit):
-            print(_format(env, args.json))
+            if selected(env):
+                print(_format(env, args.json))
         return 0
 
     # WHAT THIS PRINTS, THE AGENT HAS SEEN. A followed stream is the agent's
@@ -1642,6 +1650,8 @@ def cmd_listen(args: argparse.Namespace) -> int:
     # at the transcript, like `collab watch`, and marks nothing.
     if args.replay:
         for env in inbox.all_events(limit=args.replay):
+            if not selected(env):
+                continue
             if args.room and env.room != args.room:
                 continue
             if not args.mine_too and env.sender == profile.name:
@@ -1679,6 +1689,9 @@ def cmd_listen(args: argparse.Namespace) -> int:
         fh.seek(0, os.SEEK_END)
         while True:
             now = time.monotonic()
+            from .runtime_settings import get as runtime_setting
+            digest.settle = runtime_setting("attention_settle")
+            digest.gap = runtime_setting("attention_gap")
             if compact and now - worker_checked >= 1.0:
                 worker_checked = now
                 worker_enabled = worker_notices.enabled(root)
@@ -1705,7 +1718,7 @@ def cmd_listen(args: argparse.Namespace) -> int:
                     for env in inbox.notice_events(
                             room=args.room,
                             exclude_sender="" if args.mine_too else profile.name,
-                            exclude_sender_id="" if args.mine_too else profile.participant_id):
+                            exclude_sender_id="" if args.mine_too else profile.participant_id, kinds=kinds):
                         digest.add(env, now)
             # A busy transcript must not open SQLite and a lock for each line.
             # The counters are constant-memory; checking the doorbell once per
@@ -1742,6 +1755,8 @@ def cmd_listen(args: argparse.Namespace) -> int:
             try:
                 env = Envelope.from_dict(json.loads(line))
             except ValueError:
+                continue
+            if not selected(env):
                 continue
             if args.room and env.room != args.room:
                 continue
@@ -1782,6 +1797,17 @@ def _format_reminder(drop: dict[str, Any], as_json: bool) -> str:
 def cmd_recv(args: argparse.Namespace) -> int:
     """Drain unread messages; optionally wait for one to arrive."""
     profile = _require_profile(args)
+    if getattr(args, "repair", False):
+        from .client.recovery import repair_inbox
+        try:
+            with _client(profile) as client:
+                result = repair_inbox(profile, client, after=max(0, args.repair_after))
+            print(json.dumps(result) if args.json else
+                  f"Recovered {result['recovered']} event(s); cursor {result['cursor']}; complete={result['complete']}")
+            return 0 if result["complete"] else 2
+        except HubError as exc:
+            fail(str(exc))
+            return 1
     inbox = Inbox(profile.dir)
     # Say that somebody is reading, even though nothing is holding a stream:
     # polling is the documented fallback, and it used to leave `collab status`
@@ -2444,8 +2470,19 @@ def cmd_stats(args: argparse.Namespace) -> int:
     if args.report is not None:
         from . import stats as statmod
 
-        raw = sys.stdin.read() if args.report == "-" else args.report
-        figures = statmod.normalise(raw)
+        raw = sys.stdin.read(1048577) if args.report == "-" else args.report
+        if len(raw) > 1048576:
+            fail("usage report exceeds 1 MiB")
+            return 1
+        if getattr(args, "provider", None):
+            from .telemetry import parse
+            try:
+                figures = parse(args.provider, json.loads(raw))
+            except (ValueError, TypeError) as exc:
+                fail(str(exc))
+                return 1
+        else:
+            figures = statmod.normalise(raw)
         if not figures:
             fail("nothing recognisable in that report")
             print(dim("  expected a JSON object, e.g. "
@@ -2466,8 +2503,16 @@ def cmd_stats(args: argparse.Namespace) -> int:
         #
         # Stamped with whose they are: two agents in one repo publish from two
         # directories, and an unstamped file is one anybody can be given.
-        statmod.write_stats(profile, {k: v for k, v in figures.items()
-                                      if v is not None})
+        from .telemetry import stamp_observations
+        previous = statmod.read_stats(profile)
+        if "quotas" in figures:
+            previous = {k: v for k, v in previous.items() if k not in statmod.QUOTA_FIELDS}
+            figures.setdefault("quota_observed_at", time.time())
+        if any(k not in ("subagents", "worker") for k in figures):
+            figures.setdefault("observed_at", time.time())
+        figures = stamp_observations(figures)
+        merged = {**previous, **figures}
+        statmod.write_stats(profile, {k: v for k, v in merged.items() if v is not None})
         if not share_stats_enabled():
             warn("recorded, but sharing is off (collab stats --share on)")
             return 0
@@ -2542,8 +2587,8 @@ def cmd_stats(args: argparse.Namespace) -> int:
             # THE DAEMON'S OWN BUDGET, not a more generous one. Checking with
             # longer would bless a command that only just fits here and fails
             # there, two minutes later, in a log nobody is reading.
-            done = sp.run(command, shell=True, capture_output=True,
-                          text=True, timeout=20)
+            from .source_command import run as run_source
+            done = run_source(command, timeout=20)
         except (OSError, sp.SubprocessError) as exc:
             warn(f"the command was saved, but running it failed ({type(exc).__name__})")
             return 0
@@ -2568,8 +2613,8 @@ def cmd_stats(args: argparse.Namespace) -> int:
             from . import stats as statmod
             import subprocess as sp
             try:
-                probe = sp.run(command, shell=True, capture_output=True,
-                               text=True, timeout=20)
+                from .source_command import run as run_source
+                probe = run_source(command, timeout=20)
                 figures = statmod.normalise(probe.stdout)
             except (OSError, sp.SubprocessError):
                 figures = {}
@@ -3618,11 +3663,10 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
     missing = _missing_events(profile)
     if missing:
         add("messages", CHECK_WARN,
-            f"{len(missing)} message(s) never arrived (seq"
+            f"{len(missing)} unverified global sequence jump(s), sampled (seq"
             f" {', '.join(str(n) for n in missing[:6])}"
             + (" …" if len(missing) > 6 else "") + ")",
-            f"{exe} watch on another participant shows what this log is"
-            " missing; the room's own copy is complete")
+            f"{exe} recv --repair checks authenticated history; gaps may be other participants’ private messages")
     return out
 
 
@@ -5444,6 +5488,12 @@ def cmd_config(args: argparse.Namespace) -> int:
     to be handed the right one of nine commands. The commands all still work
     and none of them changed; this is the index they never had.
     """
+    if getattr(args, "tui", False):
+        if args.key or args.value is not None or args.unset or args.json:
+            fail("--tui cannot be combined with a key, value, --unset or --json")
+            return 2
+        from .client.settings_tui import run
+        return run(on_change=lambda name: _settle_in_the_session(name, args))
     known = settings()
 
     if not args.key:
@@ -6153,12 +6203,11 @@ def cmd_logs(args: argparse.Namespace) -> int:
     # and the unread count cannot see it — only the numbers can.
     missing = _missing_events(profile)
     if missing:
-        warn(f"{len(missing)} message(s) never arrived: seq"
+        warn(f"{len(missing)} unverified global sequence jump(s), sampled: seq"
              f" {', '.join(str(n) for n in missing[:12])}"
              + (" …" if len(missing) > 12 else ""))
-        print(dim("  the feed dropped and came back without them; the room's"
-                  " own copy is complete, so `collab watch` on another"
-                  " participant will show what this one is missing"))
+        print(dim("  Other participants’ private messages also create gaps. Run"
+                  " `collab recv --repair` to recover only missing visible events."))
         print()
 
     if not diag.enabled():
@@ -6328,8 +6377,70 @@ def _follow(paths: list[Path], *, rolling=None) -> None:
                 fh.close()
 
 
+def cmd_capacity(args: argparse.Namespace) -> int:
+    from .capacity import estimate_capacity
+    from .stats import read_stats
+    try:
+        if args.report is not None:
+            raw = sys.stdin.read(1048577) if args.report == "-" else args.report
+            if len(raw) > 1048576:
+                raise ValueError("capacity input exceeds 1 MiB")
+            figures = json.loads(raw)
+        else:
+            profile = _require_profile(args)
+            figures = read_stats(profile)
+            if args.participant:
+                with _client(profile) as client:
+                    people = client.participants().get("participants", [])
+                matches = [p for p in people if args.participant in (p.get("id"), p.get("name"))]
+                if len(matches) != 1:
+                    raise ValueError("participant must identify exactly one session member")
+                figures = matches[0].get("stats") or {}
+        active = args.active
+        if active is None and isinstance(figures, dict):
+            observed = figures.get("subagents") or {}
+            stamp = observed.get("observed_at") if isinstance(observed, dict) else None
+            if isinstance(stamp, (float, int)) and 0 <= time.time() - stamp <= args.max_age:
+                active = observed.get("active")
+        result = estimate_capacity(figures, concurrency_limit=args.limit, active_children=active,
+            reserve_percent=args.reserve, percent_per_child=args.percent_per_child,
+            task_budget_percent=args.task_budget, max_age_seconds=args.max_age,
+            windows=args.window)
+        print(json.dumps(result, indent=2))
+        return 0
+    except (ValueError, TypeError, HubError) as exc:
+        fail(str(exc))
+        return 1
+
+
 def cmd_skills(args: argparse.Namespace) -> int:
     from . import skills as sk
+
+    if args.action in ("publish", "shared", "show", "withdraw"):
+        from .skill_sharing import read_selected
+        profile = _require_own_profile(args) if args.action in ("publish", "withdraw") else _require_profile(args)
+        try:
+            with _client(profile) as client:
+                if args.action == "publish":
+                    if not args.target:
+                        raise ValueError("skills publish needs a selected SKILL.md path")
+                    result = client.publish_skill(read_selected(args.target, name=args.name, description=args.description))
+                elif args.action == "shared":
+                    result = client.shared_skills(after=args.after, limit=args.limit)
+                elif args.action == "show":
+                    if not args.target:
+                        raise ValueError("skills show needs a publication ID")
+                    result = client.shared_skill(args.target)
+                else:
+                    if not args.target:
+                        raise ValueError("skills withdraw needs a publication ID")
+                    result = client.withdraw_skill(args.target)
+            # JSON quotes peer-authored controls and makes trust metadata explicit.
+            print(json.dumps(result, indent=2, ensure_ascii=True))
+            return 0
+        except (HubError, OSError, ValueError) as exc:
+            fail(str(exc))
+            return 1
 
     if args.action == "status":
         if args.json:
@@ -6646,6 +6757,8 @@ def build_parser() -> argparse.ArgumentParser:
     l = sub.add_parser("listen", help="stream events as lines (arm a Monitor on this)")
     l.add_argument("--follow", "-f", action="store_true", help="keep streaming as events arrive")
     l.add_argument("--json", action="store_true", help="emit JSON events or notices instead of formatted lines")
+    l.add_argument("--kind", action="append", help="only this event kind; repeat to select several")
+    l.add_argument("--no-activity", action="store_true", help="omit activity events from full delivery")
     l.add_argument("--room", help="only this room")
     l.add_argument("--limit", type=int, default=50, help="how many past events to print")
     l.add_argument("--delivery", choices=("notice", "full"), default="notice",
@@ -6659,6 +6772,8 @@ def build_parser() -> argparse.ArgumentParser:
     l.set_defaults(func=cmd_listen)
 
     r = sub.add_parser("recv", help="drain unread messages, optionally waiting")
+    r.add_argument("--repair", action="store_true", help="recover missing visible events from authenticated hub history")
+    r.add_argument("--repair-after", type=int, default=0, help="resume a bounded repair after this sequence")
     r.add_argument("--wait", type=float, default=0.0, help="seconds to wait for a message")
     r.add_argument("--limit", type=int, default=100)
     r.add_argument("--json", action="store_true")
@@ -6882,6 +6997,7 @@ def build_parser() -> argparse.ArgumentParser:
     stt.add_argument("--json", action="store_true")
     stt.add_argument("--share", choices=["on", "off"],
                      help="share your own usage with the session (default: on)")
+    stt.add_argument("--provider", choices=("codex", "claude", "opencode", "cursor"), help="native snapshot format for --report")
     stt.add_argument("--report", metavar="JSON",
                      help="report your own usage as a JSON object, or '-' for stdin "
                           "— this is how any agent shares figures; a report that "
@@ -7037,6 +7153,7 @@ def build_parser() -> argparse.ArgumentParser:
     cf.add_argument("--unset", action="store_true",
                     help="put a setting back to its default")
     cf.add_argument("--json", action="store_true")
+    cf.add_argument("--tui", action="store_true", help="interactive keyboard/mouse settings editor")
     cf.set_defaults(func=cmd_config)
 
     col = sub.add_parser("color", help="show or set the colour others see you in")
@@ -7062,7 +7179,7 @@ def build_parser() -> argparse.ArgumentParser:
         wp.set_defaults(func=cmd_worker)
         if action == "start":
             wp.add_argument("--agent", required=True, choices=("codex", "claude", "opencode", "cursor", "command"))
-            wp.add_argument("--model", help="model id (defaults: Codex gpt-5.6-luna, Claude haiku; required for OpenCode/Cursor)")
+            wp.add_argument("--model", help="pin model id; omission follows worker_PROVIDER_model from collab config")
             wp.add_argument("--scope", required=True, help="explicit authority delegated to the conversation worker")
             wp.add_argument("--command", dest="worker_command", help="with --agent command: JSON argv array; reads a JSON turn on stdin")
         elif action == "reply":
@@ -7082,9 +7199,29 @@ def build_parser() -> argparse.ArgumentParser:
     add_session_flag(d)
     d.set_defaults(func=cmd_daemon)
 
+    cap = sub.add_parser("capacity", help="estimate additional native teammates from fresh quota and explicit budgets")
+    cap.add_argument("--report", metavar="JSON", help="canonical stats snapshot or - for stdin; otherwise use own session")
+    cap.add_argument("--participant", help="session member name or ID")
+    cap.add_argument("--limit", type=int, help="native host maximum concurrent children")
+    cap.add_argument("--active", type=int, help="current active native children")
+    cap.add_argument("--reserve", type=float, help="percentage points kept for the main agent")
+    cap.add_argument("--percent-per-child", type=float, help="calibrated percentage points per child in each quota window")
+    cap.add_argument("--task-budget", type=float, help="explicit per-child task budget, alternative to calibration")
+    cap.add_argument("--max-age", type=float, default=120, help="maximum observation age in seconds")
+    cap.add_argument("--window", action="append", help="applicable quota window; repeat to select several")
+    cap.add_argument("--json", action="store_true", help="structured output (also the default)")
+    add_session_flag(cap)
+    cap.set_defaults(func=cmd_capacity)
+
     sk = sub.add_parser("skills",
                         help="teach your coding agents to use collab")
-    sk.add_argument("action", choices=["install", "uninstall", "status"])
+    sk.add_argument("action", choices=["install", "uninstall", "status", "publish", "shared", "show", "withdraw"])
+    sk.add_argument("target", nargs="?", help="selected SKILL.md path or shared publication ID")
+    sk.add_argument("--name", help="published skill name override")
+    sk.add_argument("--description", help="published skill description override")
+    sk.add_argument("--after", default="", help="shared inventory page cursor")
+    sk.add_argument("--limit", type=int, default=100, help="shared inventory page size")
+    add_session_flag(sk)
     sk.add_argument("--agent", metavar="NAME",
                     help="just this agent (default: every one detected here)")
     sk.add_argument("--copy", action="store_true",
@@ -7118,6 +7255,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     try:
         return int(args.func(args) or 0)
+    except HomeSelectionError as exc:
+        fail(str(exc))
+        return 1
     except exclusive.UnsupportedPlatform as exc:
         # Once, here, and only for the commands that actually needed a daemon.
         # Refusing every command on such a platform would be a wall in front

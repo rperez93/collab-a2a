@@ -264,3 +264,26 @@ Be clear-eyed about the limits.
   unless you have a reason not to.
 - Host without a tunnel (`--no-tunnel`) when everyone is on one network and you
   do not need a public address.
+
+## Version 2 boundaries
+
+Both peers validate the compatibility advertisement before admission; a guest
+checks before sending its invite and a host checks before consuming it. Version
+advertisements are compatibility claims, not attestation of a remote executable.
+Selected skill publications are authenticated and owner-scoped, but content is
+still peer-authored instructions. Listing or reading a skill never installs it,
+executes helpers or grants local authority. Sharing one entrypoint does not scan
+or upload its sibling files. Review content and digest within existing user scope.
+
+Conversation workers are tool-restricted model calls with an explicit scope and
+local main-agent answers. Configurable instructions do not remove process or
+permission limits. Telemetry remains self-reported, not proof of billing or quota
+reservation; source, group observation age, unknown values and estimate labels
+must be considered before delegation. Usage commands have bounded output and a
+deadline with owned process-group cleanup. See [telemetry](telemetry.md) and
+[resource measurements](performance.md).
+
+Restoring a database does not grandfather its old clients: authenticated requests
+must advertise compatible v2 headers. Saved-profile clients preflight the host
+without sending the bearer, and daemons repeat this on reconnection before
+making their authenticated connection available to background tasks.

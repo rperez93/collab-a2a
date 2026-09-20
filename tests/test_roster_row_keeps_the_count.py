@@ -168,7 +168,7 @@ def test_the_count_is_on_the_row_for_host_and_guest_at_every_pane_width(
     viewer = _viewer(tmp_path, view, moved=me == "alice", me=me)
     win = Screen(height, width)
     _draw(viewer, win)
-    head = "PARTICIPANTS" in win.row(2 if view == "both" else 0)
+    head = any(word in win.row(2 if view == "both" else 0) for word in ("PARTICIPANTS", "PEOPLE"))
     assert head, "nothing drawn"
     assert not win.overruns, win.overruns[:1]
     y = (_split_geometry(height)[0] - 1) if view == "both" else height - 1
