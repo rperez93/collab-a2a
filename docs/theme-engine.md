@@ -56,7 +56,7 @@ three strokes in rail/thumb/unloaded order. `chars` contains six frame strokes
 in top-left/top-right/bottom-left/bottom-right/horizontal/vertical order.
 Control characters, combining marks and double-width strokes are refused.
 
-`roster_spacing` accepts 0–2 blank rows; `roster_indent` accepts 0–4 columns.
+`roster_spacing` accepts 0–2 blank rows; `roster_indent` accepts 0–4 columns (default 3).
 `roster_columns` accepts `auto`, `one` or `two`; two columns fall back to one
 when the pane cannot fit them. Panel sizing remains the existing
 `watch_roster_size` setting rather than a second competing theme preference.
@@ -73,7 +73,7 @@ selection_fg: "#100b20"
 roster: $DEFAULT_COLOR
 roster_columns: auto
 roster_spacing: 1
-roster_indent: 1
+roster_indent: 3
 divider_char: ─
 scrollbar_chars: │█░
 ```

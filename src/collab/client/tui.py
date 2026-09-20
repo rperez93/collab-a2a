@@ -1835,7 +1835,7 @@ def _participant_card(person: dict[str, Any], width: int, *, who: str,
     # narrow pane the worker section may otherwise be several pages below it.
     rows = _participant_card(person, width, who=who, state=state, online=online,
                              selected=selected, fields=fields, detailed=False)
-    indent = " " * min(max(3, theme["roster_indent"]), max(width - 4, 0))
+    indent = " " * min(theme["roster_indent"], max(width - 4, 0))
     usable = max(width - len(indent), 1)
 
     def add(text: str, *, heading: bool = False) -> None:
@@ -1855,7 +1855,7 @@ def _participant_card(person: dict[str, Any], width: int, *, who: str,
         result: list[str] = []
         pending = ""
         for fact in facts:
-            joined = pending + " · " + fact if pending else fact
+            joined = pending + " │ " + fact if pending else fact
             if pending and _w(joined) > columns:
                 result.extend(_wrap(pending, max(columns, 4)))
                 pending = fact
@@ -2645,6 +2645,15 @@ class Tui:
             self._where_at = now
         return self._where_label
 
+    def _navigation_keys(self) -> tuple[str, str]:
+        if self.view == "roster":
+            return ("↑↓: select · Enter: details · j/k/PgUp/PgDn: scroll · Home/End: top/end · q: quit",
+                    "↑↓: pick · ↵: more · q: quit")
+        if self.view == "chat":
+            return ("↑↓/PgUp/PgDn: scroll · Home: top · End: newest · q: quit",
+                    "End: newest · q: quit")
+        return (ROSTER_KEYS, ROSTER_KEYS_SHORT) if self.focus == "roster" else (CHAT_KEYS, CHAT_KEYS_SHORT)
+
     def _hint(self, win, height: int, width: int,
               keys: tuple[str, str] | None = None,
               notice: bool = True, roster: bool = False) -> None:
@@ -2685,7 +2694,7 @@ class Tui:
         if not (self._bar or (roster and self._roster_settings["enabled"])):
             return
         if keys is None:
-            keys = (ROSTER_KEYS, ROSTER_KEYS_SHORT) if self.focus == "roster" else (CHAT_KEYS, CHAT_KEYS_SHORT)
+            keys = self._navigation_keys()
         behind = 0 if self.chat.follow or not notice else self.behind()
         what = ""
         if notice and not self.chat.follow:
@@ -3365,7 +3374,7 @@ class Tui:
             # long one, the legend never fits its cell and the foot reserved
             # one row while `_hint` drew two into it.
             want, _fits = self._foot_wants(
-                self._roster_bar(keys=(ROSTER_KEYS, ROSTER_KEYS_SHORT)), width)
+                self._roster_bar(keys=self._navigation_keys()), width)
             foot = min(want, max(height - 3, 1)) if want else 0
             row = foot or (1 if self._bar else 0)
             rule = bool(foot) and height - 2 - foot >= 2
@@ -3402,7 +3411,7 @@ class Tui:
             # figures are least otherwise available: the split view's title bar
             # says «2/3 online» and this one has no title bar to say it in.
             self._hint(win, height, width, notice=False, roster=True,
-                       keys=(ROSTER_KEYS, ROSTER_KEYS_SHORT))
+                       keys=self._navigation_keys())
         else:
             self._hint(win, height, width)
 

@@ -272,7 +272,7 @@ DEFAULTS: dict[str, Any] = {
     "scrollbar_side": "auto",
     **PALETTE, "roster": "$DEFAULT_COLOR", "divider_char": "─",
     "scrollbar_chars": "┆█┊",
-    "roster_spacing": 1, "roster_indent": 1, "roster_columns": "auto",
+    "roster_spacing": 1, "roster_indent": 3, "roster_columns": "auto",
 }
 
 BUILTIN.update({
