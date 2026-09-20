@@ -66,27 +66,28 @@ raise SystemExit(tui.run(m.profile, view='roster', model=m))
     try:
         call("-f", "/dev/null", "new-session", "-d", "-x", "38", "-y", "20",
              shlex.join(["env", "TERM=xterm-256color", sys.executable, str(harness)]))
-        initial = expect("▸○ Alice")
-        assert "stale" in initial and "live" in initial
+        initial = expect("▸◌ Alice")
+        assert "m:example-model" in initial and "live" in initial
+        assert "◌?" in initial
         call("send-keys", "Enter")
         expect("128,000 / 200,000")
-        call("send-keys", "J")
+        call("send-keys", "Down")
         call("send-keys", "Enter")
-        expect("▾○ Bob")
+        expect("▾◌ Bob")
         call("send-keys", "g")
-        expect("▾○ Alice")
+        expect("▾◌ Alice")
         # Click Alice's first content row, with coordinates counted from 1.
         mouse(0, 4, 2)
-        expect("▸○ Alice")
+        expect("▸◌ Alice")
         mouse(0, 4, 2)
-        expect("▾○ Alice")
+        expect("▾◌ Alice")
         mouse(65, 5, 5)
         # The cost row can already be visible before the wheel event.
         # Await the changed viewport, not a substring from its old frame.
-        scrolled = expect("est. cost $1.25", absent="▾○ Alice")
-        assert "▾○ Alice" not in scrolled, "the actual wheel report did not scroll"
+        scrolled = expect("est. cost $1.25", absent="▾◌ Alice")
+        assert "▾◌ Alice" not in scrolled, "the actual wheel report did not scroll"
         call("send-keys", "g")
-        expect("▾○ Alice")
+        expect("▾◌ Alice")
         before = expect("[v] [f]")
         column = before.splitlines()[0].index("[f]") + 1
         mouse(0, column, 1)

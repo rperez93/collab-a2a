@@ -142,3 +142,55 @@ def test_token_only_source_switch_withdraws_old_quota_relationship(tmp_path):
     store.report_stats({'source': 'account B', 'quota_scope': 'shared_account'})
     store.report_stats({'source': 'account B', 'tokens_in': 20})
     assert worker.metrics(tmp_path)['quota_scope'] == 'shared_account'
+
+
+def test_claude_stream_retains_actual_model_context_and_both_quota_windows(tmp_path):
+    """Assistant context is a snapshot; result usage is the total, not another turn."""
+    from collab.worker_usage import extract
+    records = [
+        {'type': 'assistant', 'message': {'usage': {'input_tokens': 10, 'cache_read_input_tokens': 20, 'cache_creation_input_tokens': 30}}},
+        {'type': 'rate_limit_event', 'rate_limit_info': {'rateLimitType': 'seven_day', 'utilization': .95,
+          'unifiedWindows': {'five_hour': {'utilization': 1, 'resetsAt': 1790000000}, 'seven_day': {'utilization': .95}}}},
+        {'type': 'result', 'usage': {'input_tokens': 10, 'output_tokens': 15, 'cache_read_input_tokens': 20,
+          'cache_creation_input_tokens': 30}, 'total_cost_usd': .01,
+          'modelUsage': {'claude-haiku-4-5': {'canonicalModel': 'claude-haiku-4-5', 'contextWindow': 200000}}},
+    ]
+    figures = extract('claude', '\n'.join(json.dumps(row) for row in records).encode(), 'haiku')
+    store = worker.Store(tmp_path)
+    store.configure({'agent': 'claude', 'model': 'haiku', 'scope': 'Coordinate'})
+    store.record_usage(figures)
+    value = stats.sanitise({'worker': worker.metrics(tmp_path)})['worker']
+    assert value['last_model'] == 'claude-haiku-4-5'
+    assert value['model'] == 'haiku'
+    assert value['tokens_in'] == 10 and value['tokens_out'] == 15
+    assert value['context_tokens'] == 60 and value['context_limit'] == 200000
+    assert value['quotas']['five_hour']['used_pct'] == 100
+    assert value['quotas']['seven_day']['used_pct'] == 95
+    assert value['cost_kind'] == 'estimated'
+    assert value['context_observed_at'] > 0
+
+
+def test_pretty_printed_legacy_claude_usage_is_still_readable():
+    from collab.worker_usage import extract
+    value = extract('claude', json.dumps({'type': 'result', 'usage': {'input_tokens': 2, 'output_tokens': 3}}, indent=2).encode(), 'haiku')
+    assert value['tokens_out'] == 3
+
+
+def test_configured_alias_is_never_promoted_to_a_verified_native_model(tmp_path):
+    from collab.worker_usage import extract
+    record = {'type': 'result', 'usage': {'input_tokens': 2, 'output_tokens': 3}}
+    figures = extract('claude', json.dumps(record).encode(), 'haiku')
+    assert 'last_model' not in figures
+    store = worker.Store(tmp_path)
+    store.record_usage(figures)
+    assert 'last_model' not in worker.metrics(tmp_path)
+    record['modelUsage'] = {'one': {}, 'two': {}}
+    assert extract('claude', json.dumps(record).encode(), 'haiku')['last_model'] == 'multiple models'
+
+
+def test_invalid_native_quota_does_not_erase_a_previous_measurement(tmp_path):
+    store = worker.Store(tmp_path)
+    store.record_usage({'quotas': {'five_hour': {'used_pct': 15}}, 'quota_observed_at': 10})
+    store.record_usage({'quotas': 'invalid'})
+    value = worker.metrics(tmp_path)
+    assert value['quotas']['five_hour']['used_pct'] == 15 and value['quota_observed_at'] == 10

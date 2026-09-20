@@ -53,6 +53,29 @@ def test_context_only_turns_are_also_committed_once(tmp_path):
     assert len(store.outbox()) == 1
 
 
+def test_explicit_facts_survive_a_summary_that_forgets_them(tmp_path):
+    """The real worker forgot a token it had already delivered to another peer."""
+    store = configured(tmp_path)
+    context_id = store.context("Validation token: panel-v202-ready")
+    assert turn(store, context_ids=[context_id], summary="Tests are complete")
+    assert store.snapshot()["context"] == []
+    assert turn(store, expected_cursor=3, cursor=4, summary="No token in summary")
+    restarted = worker.Store(tmp_path).snapshot()
+    assert restarted["retained_context"][0]["text"] == "Validation token: panel-v202-ready"
+
+
+def test_retained_facts_have_a_fixed_byte_and_record_budget(tmp_path):
+    import json
+    store = configured(tmp_path)
+    for i in range(20):
+        ident = store.context(str(i) + "漢" * 2000)
+        assert turn(store, expected_cursor=0, cursor=0, context_ids=[ident], replies=[], escalations=[])
+    kept = store.snapshot()["retained_context"]
+    assert len(kept) <= 8
+    assert len(json.dumps(kept, ensure_ascii=False).encode()) <= 16_384
+    assert kept[-1]["text"].startswith("19")
+
+
 def test_off_and_reconfiguration_discard_a_stale_provider_response(tmp_path):
     store = configured(tmp_path)
     generation = store.snapshot()["generation"]

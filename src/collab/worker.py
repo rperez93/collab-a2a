@@ -216,6 +216,17 @@ class Store:
                     or (expected_generation is not None and state["generation"] != expected_generation)):
                 return False
             for kind, ids in (("context", context_ids), ("answer", answer_ids)):
+                if kind == "context" and ids:
+                    # The model summary dropped a supplied validation token
+                    # after several successful turns. Explicit main-agent facts
+                    # must survive summarisation. Retain whole recent records,
+                    # oldest first, capped at eight records and 16 KiB total.
+                    retained = state.get("retained_context", []) + [
+                        row for row in self._records(db, "context") if row["id"] in ids]
+                    retained = retained[-8:]
+                    while retained and len(json.dumps(retained, ensure_ascii=False).encode()) > 16_384:
+                        retained.pop(0)
+                    state["retained_context"] = retained
                 db.executemany("DELETE FROM records WHERE id=? AND kind=?", [(rid, kind) for rid in ids])
             for reply in outgoing:
                 self._add(db, "outbox", reply)
@@ -316,6 +327,8 @@ class Store:
             state = self._state(db)
             usage = state.setdefault("usage", {})
             model = str(figures.get("model") or "unknown")[:150]
+            if isinstance(figures.get("last_model"), str):
+                usage["last_model"] = figures["last_model"][:150]
             previous_model = usage.get("usage_model")
             usage["usage_model"] = model if previous_model in (None, model) else "mixed models"
             # Keep observed costs computed at the original model/rate, even if
@@ -335,10 +348,19 @@ class Store:
                 old_kind = usage.get("cost_kind")
                 usage["cost_kind"] = "mixed" if old_kind and old_kind != figures["cost_kind"] else figures["cost_kind"]
             usage.update(observed_at=time.time(), cost_scope="observed worker lifetime")
+            if "quotas" in figures:
+                from .telemetry import worker_report
+                native = worker_report(figures)
+                if native.get("quotas") or figures["quotas"] == {}:
+                    usage["quotas"] = native.get("quotas", {})
+                    usage["quota_observed_at"] = number(figures.get("quota_observed_at")) or time.time()
             # Only groups present in this native envelope become fresh. A
             # token-only result must not freshen an older cost observation.
             stamps = stamp_observations(figures)
-            for group in ("tokens", "cost"):
+            for field in ("context_tokens", "context_limit", "context_pct"):
+                if number(figures.get(field)) is not None:
+                    usage[field] = figures[field]
+            for group in ("tokens", "cost", "context"):
                 key = group + "_observed_at"
                 if key in stamps:
                     usage[key] = stamps[key]

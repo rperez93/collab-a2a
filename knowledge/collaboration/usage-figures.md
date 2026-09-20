@@ -289,3 +289,11 @@ locally and on the hub; child-only reports cannot refresh main measurements.
 applicable quota, known concurrency/active counts and calibrated or explicitly
 budgeted per-child cost. It neither launches nor reserves quota. Provider source
 contracts and limitations are in `docs/telemetry.md` and `docs/skills-and-capacity.md`.
+
+### Later than the pin – v2.0.2
+
+The Codex probe resolves only the inherited thread ID with thread/read and reads
+a bounded tail of identity-checked telemetry records at its returned path. It
+publishes actual model, cumulative tokens and current context; quota keeps its
+own observation clock. No directory scan or model guess from quota buckets is
+needed. A solo participant keeps its own stats card.

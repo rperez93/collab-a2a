@@ -665,7 +665,7 @@ def test_turning_the_row_off_returns_its_line_in_a_single_pane_view(
     config.save_watch_roster(enabled=False)
     win = _Pane()
     _draw(viewer, win)
-    assert 29 not in win.rows, "the row is gone"
+    assert ("●" in win.rows.get(29, "")) if view == "roster" else 29 not in win.rows
     # The roster's foot is a grid: two rows of figures, a rule above them and
     # a blank row above that, so that pane gets four lines back. The
     # conversation's row has neither a rule nor padding and gives back one.
@@ -891,7 +891,7 @@ def test_a_session_with_nothing_to_say_does_not_reserve_the_row(tmp_path, cfg):
     win = _Pane()
     _draw(viewer, win)
     empty = viewer.roster.rows
-    assert not any(y in win.rows for y in (7, 8, 9))
+    assert not any(y in win.rows and "●" not in win.rows[y] for y in (7, 8, 9))
 
     viewer.model.status = _roster_row()
     win = _Pane()

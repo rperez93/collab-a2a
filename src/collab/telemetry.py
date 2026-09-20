@@ -4,11 +4,11 @@ import math
 import time
 
 NUMBERS = {'quota_observed_at', 'observed_at', 'tokens_cached', 'tokens_cache_write', 'context_tokens', 'context_limit', 'model_observed_at', 'context_observed_at', 'cost_observed_at', 'tokens_observed_at'}
-TEXT = {'source', 'cost_kind', 'cost_scope'}
+TEXT = {'last_model', 'source', 'cost_kind', 'cost_scope'}
 NESTED = {
  'subagents': {'active', 'total', 'source', 'observed_at'},
  'worker': {'enabled', 'running', 'agent', 'model', 'turns', 'attempts', 'pending', 'errors',
-            'tokens_in', 'tokens_out', 'tokens_cached', 'tokens_cache_write', 'cost_usd', 'cost_kind', 'cost_scope', 'usage_model', 'observed_at', 'source',
+            'tokens_in', 'tokens_out', 'tokens_cached', 'tokens_cache_write', 'cost_usd', 'cost_kind', 'cost_scope', 'usage_model', 'last_model', 'observed_at', 'source',
             'context_pct', 'context_tokens', 'context_limit', 'quotas', 'quota_scope', 'quota_observed_at',
             'quota_used_pct', 'quota_five_hour', 'quota_seven_day', 'quota_reset_at',
             'model_observed_at', 'context_observed_at', 'cost_observed_at', 'tokens_observed_at'},
@@ -22,6 +22,30 @@ def number(value):
 
 def mapping(value):
     return value if isinstance(value, dict) else {}
+
+
+def claude_rate_limits(event):
+    """Native stream windows use fractions, including the exact integer one.
+
+    Observed in Claude Code's rate_limit_event: unifiedWindows contains both
+    5h and 7d even when the outer warning names only the busiest window.
+    """
+    from .quotas import _at
+    info = mapping(event.get('rate_limit_info', event.get('rateLimitInfo')))
+    windows = mapping(info.get('unifiedWindows'))
+    if not windows and info.get('rateLimitType'):
+        windows = {info['rateLimitType']: info}
+    result = {}
+    for name, raw in list(windows.items())[:32]:
+        raw = mapping(raw)
+        value = number(raw.get('utilization'))
+        if value is None or value > 1 or name not in ('five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet'):
+            continue
+        result[name] = {'used_pct': value * 100}
+        reset = _at(raw.get('resetsAt'))
+        if reset:
+            result[name]['resets_at'] = reset
+    return result
 
 def extended(data):
     out = {}
@@ -139,6 +163,10 @@ def parse(provider, data):
         # Statusline totals describe the current context, not lifetime spend.
         if 'rate_limits' in data:
             out['quotas'] = collect_quotas(data)
+        if data.get('type') == 'rate_limit_event':
+            limits = claude_rate_limits(data)
+            if limits:
+                out['quotas'] = limits
         # Subagent statusline describes visible tasks, not lifetime children.
         # This documented hook contains only visible subagent rows.
         if isinstance(data.get('tasks'), list):

@@ -1279,7 +1279,8 @@ because someone who left a minute ago and someone who left yesterday are
 different situations — then a line of whatever they share: repo and branch,
 machine, model, every quota window, spend and context.
 
-`tab` switches pane, `↑↓`/`pgup`/`pgdn` scroll the focused one, `End` (or `G`)
+`tab` switches pane; `↑↓` selects participants in the roster and scrolls chat.
+`j`/`k` and `pgup`/`pgdn` scroll details. `End` (or `G`)
 jumps back to the live end and `Home` (or `g`) to the start, `q` quits. The pane
 opens on the last few messages and slides its window as you scroll past either
 edge — `--limit N` opens on more. The conversation follows new messages until
@@ -1360,6 +1361,7 @@ fallback on a terminal that cannot do full-screen.
 **In tmux**, give it its own pane and keep working beside it:
 
 ```bash
+collab watch --panel                 # tmux or native macOS Ghostty/iTerm2
 collab watch --tmux                  # 35% to the right
 collab watch --tmux --vertical       # split below
 collab watch --tmux --percent 50
@@ -2717,3 +2719,15 @@ See [resource measurements](docs/performance.md) for CPU/RAM and leak-check limi
 ## License
 
 MIT
+
+In v2.0.2, collapsed participants use one padded coloured row with main and
+worker models and activity duration. Up/Down selects participants; Page Up/Down
+and the wheel scroll details. Stats remain available for a solo participant.
+See [panel controls and terminal support](docs/watch-panel.md). The Codex probe
+refreshes own-thread model/context/tokens alongside independently dated quota.
+Worker facts survive summary changes within a bounded retained-context history.
+
+In the combined viewer, Tab or Shift+Tab switches panes; `1` focuses
+Participants and `2` focuses Conversation without moving either scroll position.
+The footer shows keys for the focused pane. Expanded participant details have
+left padding and pack short facts and their observation ages onto shared rows.

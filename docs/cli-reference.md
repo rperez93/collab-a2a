@@ -588,6 +588,8 @@ usage: collab watch [-h] [--tmux] [--vertical] [--percent PERCENT]
 options:
   -h, --help            show this help message and exit
   --tmux                open it in a new tmux pane instead of here
+  --panel [{auto,tmux,ghostty,iterm2}]
+                        open a tmux or native macOS terminal split
   --vertical            with --tmux, split below instead of to the right
   --percent PERCENT     with --tmux, how much of the window to give the pane
   --no-follow           print and exit

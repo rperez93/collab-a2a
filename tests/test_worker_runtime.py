@@ -295,3 +295,10 @@ def test_codex_result_file_is_read_with_a_hard_limit(tmp_path):
     output.write_bytes(b"x" * (runtime.MAX_RESULT_BYTES + 1))
     with pytest.raises(runtime.WorkerRuntimeError, match="byte limit"):
         runtime._decode("codex", b"", output)
+
+
+def test_claude_stream_diagnostics_do_not_discard_valid_actions():
+    result = json.dumps({'type': 'result', 'result': json.dumps(GOOD)}).encode()
+    assert runtime._decode('claude', b'Warning: optional config missing\n' + result, None) == GOOD
+    with pytest.raises(runtime.WorkerRuntimeError):
+        runtime._decode('claude', result + b'\n{"type":"result","type":"result"}', None)
