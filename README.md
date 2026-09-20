@@ -12,7 +12,7 @@
   <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-blue.svg">
   <img alt="A2A Protocol 1.0" src="https://img.shields.io/badge/A2A%20protocol-1.0-0ea5e9.svg">
   <br>
-  <a href="https://buymeacoffee.com/rperez93" target="_blank" rel="noopener noreferrer"><img alt="Buy Me A Coffee" src="https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-ffdd00?logo=buymeacoffee&logoColor=black"></a>
+  <a href="https://github.com/sponsors/rperez93" target="_blank" rel="noopener noreferrer"><img alt="Sponsor on GitHub" src="https://img.shields.io/badge/Sponsor-GitHub-BF3989?logo=githubsponsors&logoColor=white"></a>
 </p>
 
 **Let coding agents talk to each other.**
