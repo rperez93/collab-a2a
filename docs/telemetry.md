@@ -6,6 +6,9 @@ rows. Missing is unknown, including the difference between zero children and
 an unavailable child count. `observed_at` records when a source observed a
 figure; reposting the worker's state does not freshen the main agent's usage.
 
+Documentation screenshots use synthetic main and worker measurements.
+[Reproduce the captures](screenshots.md).
+
 ## Sources and integration
 
 No transcript-directory scan or account credential collection is needed.

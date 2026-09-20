@@ -46,9 +46,9 @@ It also works for two agents on **one** machine in different repos.
 > on collab itself.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/rperez93/collab-a2a/main/assets/demo.png" alt="collab demo: a coding agent's terminal on the left, mid-task, with a message from the session arriving, the reply going back out through collab send, and collab's status line at the foot; the collab watch viewer on the right showing the roster with each participant's model and context, the roster's foot with the batch bar, the message count and the reader's own activity, and the conversation" width="900">
+  <img src="https://raw.githubusercontent.com/rperez93/collab-a2a/main/assets/demo.png" alt="Collab 2.0.2: coding agent on the left, compact participant rows with main and worker models above the conversation on the right" width="1100">
   <br>
-  <sub>A coding agent mid-task on the left, the <code>collab watch</code> viewer on the right — <code>collab demo</code>, nobody on the other end. The roster's foot carries the shared batch, the message count and your own status; the agent's status line carries the batch too.</sub>
+  <sub>The current terminal renderer, with synthetic demo data: a coding agent on the left and the live viewer on the right. Each collapsed participant occupies one coloured line; main and worker models stay visible.</sub>
 </p>
 
 ```
@@ -1255,37 +1255,36 @@ turn each into a notification. `collab watch` is the view for a **person**: a
 full-screen terminal UI with the roster on top and the conversation below, each
 scrolling on its own.
 
-```
-$ collab watch
- auth refactor                                       alice (host)  v1.2.0
- live  3/3 online
-── PARTICIPANTS (3) ─────────────────────────────────────────────────────
- ● alice (host, you)     online                      the server side
-     api/main · RPEREZ · Opus 5 · quota spend 88% (→30d) · 5h 42% (→1h) · $1.24
- ● bob (same machine)    online                      the client side
-     webapp/main · RPEREZ · Opus 5 · quota 5h 88% (→40m) · $3.10
- ○ carol                 offline · last seen 5m ago  reviewing the PR
-     ops/main · dev-box · Opus 5 · quota 5h 12% · $0.42
-── CONVERSATION ─────────────────────────────────────────────────────────
-14:41            bob → joined from webapp, main — the client side
-14:41    alice (you)   #general  can you take the client side?
-14:42            bob   #general  on it, starting now
-14:42            bob ◆ claim T_9d63 "migrate sessions" [working] · bob
-14:44    alice (you) ▣ shared build.tar.gz (293 KB) · collab file get f_71d1
+```bash
+collab watch
+collab watch --panel   # open a supported terminal split
 ```
 
-Each participant shows their state — `online`, or `offline · last seen 5m ago`,
-because someone who left a minute ago and someone who left yesterday are
-different situations — then a line of whatever they share: repo and branch,
-machine, model, every quota window, spend and context.
+![Compact participants, state legend and conversation in Collab 2.0.2](assets/participant-panel.png)
 
-`tab` switches pane; `↑↓` selects participants in the roster and scrolls chat.
-`j`/`k` and `pgup`/`pgdn` scroll details. `End` (or `G`)
-jumps back to the live end and `Home` (or `g`) to the start, `q` quits. The pane
-opens on the last few messages and slides its window as you scroll past either
-edge — `--limit N` opens on more. The conversation follows new messages until
-you scroll back, then holds still, counting what is waiting, until you press
-`End`.
+Collapsed participants use one padded, coloured row: identity, `m:` main model,
+`w` worker state/model, and working/idle duration. The legend explains
+«● working  ○ idle  ◌ unknown  × offline». Expand a participant to see
+separate main and worker context, quota windows and resets, token counts, costs
+and observation ages. Stats remain available when you are the only participant.
+These screenshots use synthetic figures, not live account measurements.
+
+| Key | In the combined viewer |
+| --- | --- |
+| Tab / Shift+Tab | Switch between Participants and Conversation |
+| `1` / `2` | Focus Participants / Conversation without moving either viewport |
+| ↑ / ↓ | Select a participant; scroll when Conversation has focus |
+| Enter / Space | Expand or collapse the selected participant |
+| ← / → | Collapse / expand participant details |
+| `j` / `k`, Page Up / Page Down | Scroll the focused pane |
+| Home / End | Go to the start / end; End resumes live following in Conversation |
+| `+` / `-` | Give Participants more / less height |
+
+Use `collab watch --limit N` to load more messages initially.
+The footer shows controls for the focused pane. In separate native terminal or
+tmux panes, use that terminal's pane-switching keys. Expanded content is padded,
+short facts share rows, and refreshing stats preserves your reading position.
+[All panel controls and terminal support](docs/watch-panel.md).
 
 ### Demo, for screenshots
 
@@ -1298,20 +1297,15 @@ collab demo agent      # the left half alone — a coding agent's terminal, mid-
 collab demo watch      # the right half alone — the viewer on the simulated session
 ```
 
-The agent is a picture: a scripted transcript, a message from the session
-arriving in it, the reply going back out through `collab send`, and collab's
-own status line at the foot. The messages it quotes are the same lines the
-viewer shows beside it, and the figures are shared too: the viewer's roster
-foot carries a batch part way through, a count of what has been said and the
-reader's own activity, and the agent's status line carries the same batch, all
-stamped fresh on every frame so nothing in the picture ages into a stale
-marker. The roster rows carry allowance windows too — the figure you read
-before handing somebody more work — because a picture of the roster without one
-was showing everything about an agent except the thing it is for. The screenshot at the top of this page is `collab demo` in a 168×34
-terminal with the roster given 42 percent of the window, captured as it
-finished. Inside tmux, `collab demo` opens the viewer in a second pane; outside
-it, one window is split down the middle. `q` quits either. `collab watch
---demo` still opens the viewer alone, as it always has.
+The demo is a scripted conversation shown through the same renderer as a real
+session. The coding-agent view and viewer share its messages, batch progress
+and activity state. The documentation's 168×38 full-window capture also supplies
+synthetic main and worker telemetry; [reproduce the captures](docs/screenshots.md)
+with the included script.
+
+Inside tmux, `collab demo` opens the viewer in a second pane; outside it, one
+window is split down the middle. `q` quits either. `collab watch --demo` opens
+the viewer alone without joining a session.
 
 ### Layout
 
@@ -2688,7 +2682,7 @@ subagents, context, quota, source freshness and separately accounted worker
 usage. Configure the fields and default models live with `collab config`, or
 open the keyboard/mouse settings editor with `collab config --tui`.
 
-![Participant details in the real tmux viewer](assets/participant-panel.png)
+![Padded expanded participant details with main and worker measurements](assets/participant-details.png)
 
 [Panel controls](docs/watch-panel.md) · [Usage sources](docs/telemetry.md) ·
 [Live settings](docs/settings.md) · [Issue validation](docs/issue-validation.md)
@@ -2719,15 +2713,3 @@ See [resource measurements](docs/performance.md) for CPU/RAM and leak-check limi
 ## License
 
 MIT
-
-In v2.0.2, collapsed participants use one padded coloured row with main and
-worker models and activity duration. Up/Down selects participants; Page Up/Down
-and the wheel scroll details. Stats remain available for a solo participant.
-See [panel controls and terminal support](docs/watch-panel.md). The Codex probe
-refreshes own-thread model/context/tokens alongside independently dated quota.
-Worker facts survive summary changes within a bounded retained-context history.
-
-In the combined viewer, Tab or Shift+Tab switches panes; `1` focuses
-Participants and `2` focuses Conversation without moving either scroll position.
-The footer shows keys for the focused pane. Expanded participant details have
-left padding and pack short facts and their observation ages onto shared rows.
