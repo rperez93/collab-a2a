@@ -57,7 +57,8 @@ def waker(tmp_path, *, attended=False, clock=None, armed=True, **config):
     clock = clock or [1000.0]
     if armed:
         wake.write_config(tmp_path, wake.WakeConfig(
-            command=config.pop("command", ["true"]), **config))
+            command=config.pop("command", ["true"]),
+            delivery=config.pop("delivery", "full"), **config))
     w = wake.Waker(tmp_path, "s_test",
                    attended=lambda: attended() if callable(attended) else attended,
                    now=lambda: clock[0])
@@ -181,7 +182,7 @@ def test_no_two_turns_at_once(tmp_path):
     """However much arrives, the agent is not woken twice in a breath."""
     w, clock = waker(tmp_path)
     wake.write_config(tmp_path, wake.WakeConfig(command=["true"], settle=0,
-                                                min_gap=90))
+                                                min_gap=90, delivery="full"))
     w.note(chat())
     clock[0] += 5
     batch = w.take()
@@ -562,7 +563,7 @@ def test_the_daemon_runs_the_command_and_feeds_it_the_batch(profile, tmp_path):
         command=[sys.executable, "-c",
                  f"import sys; open({str(landed)!r}, 'w')"
                  f".write(sys.stdin.read())"],
-        settle=0, min_gap=0))
+        settle=0, min_gap=0, delivery="full"))
     daemon.waker.note(chat("please review the patch"))
     time.sleep(0.01)
 
@@ -580,7 +581,7 @@ def test_a_failing_command_keeps_the_work(profile):
     daemon = a_daemon(profile)
     wake.write_config(daemon.paths.root, wake.WakeConfig(
         command=[sys.executable, "-c", "import sys; sys.exit(3)"],
-        settle=0, min_gap=0))
+        settle=0, min_gap=0, delivery="full"))
     daemon.waker.note(chat())
     asyncio.run(_wake_once(daemon))
     assert daemon.waker.outstanding(), "a failed turn threw the messages away"
@@ -615,7 +616,7 @@ def test_one_turn_at_a_time(profile):
     daemon = a_daemon(profile)
     wake.write_config(daemon.paths.root, wake.WakeConfig(
         command=[sys.executable, "-c", "import time; time.sleep(0.4)"],
-        settle=0, min_gap=0))
+        settle=0, min_gap=0, delivery="full"))
     daemon.waker.note(chat())
 
     async def race():
@@ -1364,7 +1365,7 @@ def test_the_delivery_is_told_where_the_prompt_is(profile):
     seen = daemon.paths.root / "seen.txt"
     wake.write_config(daemon.paths.root, wake.WakeConfig(
         command=["sh", "-c", f'cp "$COLLAB_WAKE_PROMPT" "{seen}"'],
-        settle=0, min_gap=0))
+        settle=0, min_gap=0, delivery="full"))
     daemon.waker.note(chat("look at the failing test"))
     asyncio.run(_wake_once(daemon))
     body = seen.read_text()

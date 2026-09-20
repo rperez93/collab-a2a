@@ -28,7 +28,7 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.delenv("COLLAB_HOME", raising=False)
     monkeypatch.delenv("COLLAB_NAME", raising=False)
     monkeypatch.setattr(config, "repo_root", lambda cwd=None: tmp_path)
-    return tmp_path
+    return config.base_home().parent
 
 
 def _held(home, chain, name=NAME):

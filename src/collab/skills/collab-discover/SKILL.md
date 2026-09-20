@@ -5,7 +5,7 @@ description: Find collab sessions already running on this machine and join one w
 
 # Finding and joining a session on this machine
 
-Session state is per repository, so an agent in another checkout on this same
+Session state is isolated by workspace and agent, so an agent in another checkout on this same
 computer is invisible until you look for it. That is what this is for — and it
 means you rarely need a link when both agents are local.
 
@@ -22,9 +22,11 @@ command -v collab || ls .venv/bin/collab
 If `collab` is on `PATH`, use it as written. If only `.venv/bin/collab` exists,
 prefix every command with it. If neither, follow `AGENT_INSTALL.md` first.
 
-Run commands from **inside the repository** you are working in: state is per
-repo, in `<repo>/.collab/`, so the same command in a different directory talks
-about a different session — or none.
+Run commands from **inside the repository** you are working in. State is
+isolated by the canonical checkout (or folder outside Git) and the agent session,
+but stored outside the checkout under `$XDG_STATE_HOME/collab`, defaulting to
+`~/.local/state/collab`. A different workspace or agent session has separate state.
+`COLLAB_HOME` explicitly selects an existing participant directory.
 
 ## Which command connects you
 
@@ -115,11 +117,9 @@ The first form takes **no session id and no link**. `--local` says «not a URL»
 and with nothing else to go on `join` already means that: when exactly one
 session is running here, `collab join` is the entire procedure.
 
-**It is a full join, so it does everything the link form does first.** It reads
-this repo's lock, takes `--name` for who is arriving, and when another agent
-already holds `.collab` it puts you in your own `.collab-<you>` and says so —
-same checkout, same files, separate state. `--home` and `--agent` work exactly
-as they do with a URL. Nothing about having no link makes it a lesser join.
+**It is a full join.** It resolves this agent's external workspace namespace
+before connecting, just like the link form. `--name`, `--home` and `--agent`
+work the same way. Two agents can share their checkout without sharing state.
 
 That single command joins, announces you, starts the listener and prints the
 session snapshot. There is no separate step to start receiving.
@@ -140,17 +140,16 @@ list and let them choose — do not pick for them.
 
 ## If another agent is already in this repo
 
-Sharing one `.collab/` would have you overwrite each other's profile and stop
-each other's listener. Collab spots that from the lock and gives you your own
-state directory instead:
+Stay in the same checkout. New state lives outside it, under
+`~/.local/state/collab/repositories/<workspace-sha256>/agents/<agent-sha256>/.collab`
+(or the equivalent root selected by `XDG_STATE_HOME` or `COLLAB_STATE_DIR`).
+A stable host thread/session ID or stamped agent process separates ownership;
+display names do not. Logical agents sharing one process without separate host
+markers need distinct, stable `COLLAB_AGENT_ID` values.
 
-```
-[ok]   alice is using this repo's .collab — yours is .collab-bob
-       same checkout and same files; only the session state is separate
-```
-
-You stay where you are — same working tree, same files. It is removed when you
-leave.
+Old repo-local homes are never automatically adopted. `COLLAB_HOME` or an
+explicit `host`/`join --home` can select a directory you own; carry that exact
+home in subsequent commands. Sharing an explicit home bypasses isolation.
 
 ## Knowing who you are: the lock file
 
@@ -166,9 +165,9 @@ collab lock
 collab lock
   bob  guest  in s_bb9c59a3
   you are   p_e3fae444ab54
-  state     /home/perez/Pycharm/api/.collab-bob
-  session   /home/perez/Pycharm/api/.collab-bob/sessions/s_bb9c59a3
-  profile   /home/perez/Pycharm/api/.collab-bob/sessions/s_bb9c59a3/profile.json
+  state     /home/perez/.local/state/collab/repositories/WORKSPACE_HASH/agents/AGENT_HASH/.collab
+  session   /home/perez/.local/state/collab/repositories/WORKSPACE_HASH/agents/AGENT_HASH/.collab/sessions/s_bb9c59a3
+  profile   /home/perez/.local/state/collab/repositories/WORKSPACE_HASH/agents/AGENT_HASH/.collab/sessions/s_bb9c59a3/profile.json
   pids      440970, 441056  (alive)
 ```
 
@@ -231,7 +230,7 @@ The same applies to `collab join --local <id>` when the session is down: it
 tells you the session is on disk, how much it holds, and which repo to run
 `collab host` in.
 
-`collab sessions` lists everything this repo has, running or not.
+`collab sessions` lists this agent namespace’s sessions for the workspace, running or not.
 
 ## Never host as a fallback
 
@@ -293,26 +292,19 @@ such. If every session shows `stale` and `collab lock` says the holder is
 `gone` while the other agent is plainly working, collab is out of date: run
 `collab update`.
 
-**Process ancestry may be.** After a join that gave you `.collab-<you>`, later
-commands recognise that directory by the process they descend from. A sandbox
-that hides your parent processes leaves them nothing to go on, and they fall
-back to the repo's `.collab` — the other agent's. So carry the directory on
-every later command, in so many words:
+**Agent identity may be hidden.** Stable host thread markers normally resolve
+the same namespace across commands. If the sandbox hides the needed identity,
+carry the exact state path printed by the successful join or `collab whoami`:
 
 ```bash
-COLLAB_HOME=/home/perez/Pycharm/api/.collab-bob collab send "on it"
-COLLAB_HOME=/home/perez/Pycharm/api/.collab-bob collab stats --report '{"model":"gpt-5"}'
+COLLAB_HOME=/path/to/your/state collab send "on it"
+COLLAB_HOME=/path/to/your/state collab stats --report '{"model":"gpt-5"}'
 ```
 
-Which directory: the `state` line of `collab lock` (run it in the directory the
-join named), the `state` line of `collab whoami`, or the monitor command the
-join printed — it already carries the `COLLAB_HOME=…` prefix. Two signs you
-need this: `collab lock` names them and not you; or a command that acts as you
-— `send`, `working`, `task claim`, `stats --report`, `kill` — refuses with *2
-agents hold collab state in this repo, and nothing proves which one you are*.
-That refusal is collab declining to speak or publish under their name, and it
-prints the exact command to re-run for each directory: run the one that is
-yours.
+A missing identity does not adopt another agent's directory. Never choose a
+state path merely because its display name matches yours or it is the only one
+found. A statusline hook without thread markers can recover state only from a
+unique, fully stamped matching parent agent process.
 
 **`TMUX` may be missing from your environment** even while the user's tmux is
 running. `collab watch --tmux` then says *not inside a tmux session*. Split the
@@ -320,7 +312,7 @@ pane yourself from any shell, carrying the directory, or tell the user to open
 `collab watch` in a second terminal:
 
 ```bash
-tmux split-window -d "COLLAB_HOME=/home/perez/Pycharm/api/.collab-bob collab watch --session s_bb9c59a3"
+tmux split-window -d "COLLAB_HOME=/home/perez/.local/state/collab/repositories/WORKSPACE_HASH/agents/AGENT_HASH/.collab collab watch --session s_bb9c59a3"
 ```
 
 ## Notes

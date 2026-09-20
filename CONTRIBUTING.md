@@ -24,7 +24,9 @@ profile owns, so one repo can hold several:
 
 | Variable | Isolates |
 |---|---|
-| `COLLAB_HOME` | session state (normally `<repo>/.collab`) |
+| `COLLAB_HOME` | explicit participant state directory |
+| `COLLAB_STATE_DIR` | external state root (normally `$XDG_STATE_HOME/collab`) |
+| `COLLAB_AGENT_ID` | explicit stable agent-session identity for isolation |
 | `COLLAB_CONFIG` | global settings (name, stats sharing, viewer layout) |
 | `COLLAB_PEERS_DIR` | the machine-wide session registry |
 
@@ -55,7 +57,7 @@ kill "$(cat /tmp/A/sessions/<id>/daemon.pid)"
 ```
 src/collab/
   protocol.py      the envelope and the extension's shared constants
-  config.py        per-repo .collab/ resolution, names, session profiles
+  config.py        external repository/agent state resolution, names, session profiles
   cli.py           every command
   server/
     app.py         the FastAPI app: A2A routes + the extension

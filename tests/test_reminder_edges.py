@@ -76,6 +76,8 @@ def test_a_reminder_nobody_configured_is_not_mentioned(profile, monkeypatch):
 def test_a_reminder_somebody_configured_is_mentioned(profile, monkeypatch,
                                                      key, value):
     config.setting(key).write(value)
+    # Editing text alone does not enable an opt-in reminder.
+    config.setting("remind_every").write(15)
     code, out = _wake_show(profile, monkeypatch)
     assert code == 0 and "disarmed" in out
     assert "reminder" in out, f"{key} was written and nothing said so: {out}"

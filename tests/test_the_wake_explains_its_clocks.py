@@ -37,6 +37,7 @@ from collab.client import daemon as d
 def _own_config(tmp_path, monkeypatch):
     monkeypatch.setenv("COLLAB_CONFIG", str(tmp_path / "global-config.json"))
     cfg._CACHE.clear()
+    cfg.setting("remind_every").write(10)
     yield
     cfg._CACHE.clear()
 
@@ -113,7 +114,7 @@ def test_explaining_does_not_start_the_reminders_interval(tmp_path):
     # The daemon asking is what starts it, and then the answer is a real time.
     waker.due()
     assert waker._state["reminded_at"] == 1000.0
-    assert waker.next_reminder_at() == 1000.0 + cfg.DEFAULT_REMIND_EVERY * 60
+    assert waker.next_reminder_at() == 1000.0 + 10 * 60
 
 
 def test_the_reminder_line_says_off_rather_than_inventing_a_next_time(tmp_path):
@@ -137,7 +138,7 @@ def test_a_reminder_that_went_out_says_when_and_when_the_next_is(tmp_path):
     waker.reminded()
     told = waker.explain()
     line = cli._reminder_line(told)
-    assert f"every {cfg.DEFAULT_REMIND_EVERY}m" in line
+    assert f"every {10}m" in line
     assert "last " in line and "next " in line
 
 
@@ -189,7 +190,7 @@ def test_wake_show_json_carries_the_same_facts(profile, monkeypatch):
     assert payload["why"]
     assert payload["due"] is False
     assert payload["retry_pause"] == wake.RETRY_PAUSE
-    assert payload["reminder"]["every"] == cfg.DEFAULT_REMIND_EVERY
+    assert payload["reminder"]["every"] == 10
 
 
 def test_wake_show_leaves_the_reminders_clock_where_it_found_it(
@@ -219,7 +220,7 @@ def test_status_carries_the_wake_and_the_reminder_in_two_lines(
              if line.strip().startswith(("wake ", "reminder "))]
     assert len(lines) == 2, text
     assert "settle" in lines[0] and "gap" in lines[0]
-    assert f"every {cfg.DEFAULT_REMIND_EVERY}m" in lines[1]
+    assert f"every {10}m" in lines[1]
 
 
 def test_status_says_not_armed_rather_than_printing_clocks_nothing_runs_on(

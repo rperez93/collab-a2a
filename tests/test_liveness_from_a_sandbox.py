@@ -135,15 +135,15 @@ def test_the_daemon_liveness_check_agrees(monkeypatch):
 def test_a_sandboxed_join_is_still_sent_to_its_own_directory(tmp_path, monkeypatch):
     """The bug as the user met it: from inside the sandbox the other agent's
     lock read as stale, so `join` walked into their `.collab`."""
-    base = tmp_path / ".collab"
-    base.mkdir()
+    base = config.base_home()
+    base.mkdir(parents=True)
     lockfile.acquire(lockfile.Lock(name="alice", session_id="s_1", role="host",
                                    hub_pid=999_999, state_dir=str(base)), base)
     monkeypatch.setattr(os, "kill", _not_ours_to_signal)
     args = cli.build_parser().parse_args(["join", "--name", "bob"])
 
     assert cli._own_state_dir(args, "bob") is None, "carry on with the join"
-    assert os.environ.get("COLLAB_HOME") == str(tmp_path / ".collab-bob")
+    assert os.environ.get("COLLAB_HOME") == str(config.agent_home("bob"))
 
 
 # --- discover: say the state on every row, in words ---------------------------

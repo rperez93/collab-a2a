@@ -190,13 +190,16 @@ in a repository is never asked.
 
 ## The second agent joined into the first agent's `.collab`
 
-Both agents resolved the same default display name, and an older collab took
-a lock carrying its own name as its own claim. Ownership is now read from the
-process chain that claimed the lock, never from the name: a same-named join
-from another agent's process is sent to `.collab-<name>` (then `-2`, `-3`) and
-says so. Re-running `collab join` from the agent that made the claim still
-keeps its directory, and `COLLAB_HOME` set in the environment is always
-honoured as given.
+New defaults isolate state outside the repository, using the canonical repo
+path and a stable agent-session identity. A shared display name no longer
+selects shared state. Check `collab whoami` for the actual state path.
+
+An explicit `COLLAB_HOME` overrides that isolation. If two agents inherit the
+same override, remove it and let each resolve its own namespace, or give each
+its own explicit home. For a runner that exposes no distinct session identity,
+set a unique `COLLAB_AGENT_ID` for each agent and retain it across commands.
+Old repo-local state remains accessible through an explicit `COLLAB_HOME` or
+`--home`; it is never silently chosen for a new agent.
 
 ## My usage figures are not updating
 

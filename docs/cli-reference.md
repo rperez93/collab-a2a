@@ -249,6 +249,7 @@ collab listen [--follow] [--json] [--room ROOM] [--limit LIMIT]
 | Flag | Meaning |
 |---|---|
 | `--follow`, `-f` | Keep streaming as events arrive. |
+| `--delivery notice\|full` | Compact notices by default; `full` streams peer text and marks printed events read. |
 | `--json` | Emit raw JSON instead of formatted lines. |
 | `--room ROOM` | Only this room. |
 | `--limit LIMIT` | How many past events to print. |
@@ -257,7 +258,12 @@ collab listen [--follow] [--json] [--room ROOM] [--limit LIMIT]
 | `--exit-when-idle` | Stop if the daemon is not running. |
 | `--session SESSION` | Act on this session id instead of the current one. |
 
-A followed stream also carries the [standing
+A followed stream coalesces compact notices without marking the inbox read.
+Read it with `collab recv` at a task boundary; an outstanding notice suppresses
+further notices until its batch is consumed. Explicit `--delivery full` restores
+full event delivery, suitable for a separate bridge agent.
+
+When enabled (off by default), a followed stream also carries the [standing
 reminder](../README.md#the-standing-reminder), as a line of its own every
 `remind_every` minutes. It is not an event: it never enters the inbox, never
 counts as unread, never reaches the hub and never appears in `collab watch`.
@@ -492,14 +498,15 @@ See [the wake](concepts.md#the-wake) for the model.
 ```text
 collab wake [--to KIND] [--expect-command NAME] [--expect-pid PID]
             [--agent NAME] [--target ID] [--notify NOTIFY] [--settle SECONDS]
-            [--min-gap SECONDS] [--timeout SECONDS] [--yes] [--json]
+            [--min-gap SECONDS] [--timeout SECONDS] [--delivery {notice,full}] [--yes] [--json]
             [--session SESSION] [{show,set,off,agents,deliver}] [COMMAND ...]
 ```
 
 | Argument or flag | Meaning |
 |---|---|
 | `{show,set,off,agents,deliver}` | The action: show the armed wake, set one, turn it off, list recipes, or deliver a batch. |
-| `COMMAND` | With `set`, the command to run; the messages arrive on its standard input. |
+| `COMMAND` | With `set`, the command to run; a compact notice arrives on standard input by default. |
+| `--delivery notice\|full` | Set compact notices (default) or full peer text for a dedicated conversation consumer. |
 | `--agent NAME` | Use the known recipe for this agent. `collab wake agents` lists them. |
 | `--target ID` | Which live session to reach — a Codex thread id or a tmux pane. Taken from your own environment if unset. |
 | `--notify NOTIFY` | Optional command told after each turn. |
@@ -524,7 +531,7 @@ either on a loop does not push its own reminder over the horizon. See
 [When the wake fires](concepts.md#when-the-wake-fires).
 
 The wake is one of the two routes for the **standing reminder**: with nothing
-unread, the daemon spends a turn every `remind_every` minutes putting the
+unread, an explicitly enabled reminder spends a turn every `remind_every` minutes putting the
 standing instructions back in front of its own agent. It has no flags of its
 own here — `collab config remind_every`, `remind_host` and `remind_guest` are
 the whole of it — and it waits on this command's `--settle` and `--min-gap` and

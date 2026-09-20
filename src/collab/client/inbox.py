@@ -316,7 +316,7 @@ class Inbox:
         """How many messages are waiting for you — that is, NOT YET DELIVERED.
 
         «Read» here means what `mark_read` says it means: the row was drained
-        by `collab recv`, or printed by the monitor the agent is watching. It
+        by `collab recv`, or printed by a full-delivery monitor. Compact notices leave it unread. It
         is not «somebody scrolled past it in `collab watch`», which is a human
         looking at the transcript and says nothing about whether the agent has
         seen it.
@@ -351,6 +351,31 @@ class Inbox:
         with self._lock:
             row = self._db.execute(sql, tuple(args)).fetchone()
         return int(row["c"])
+
+    def notice_events(self, *, limit: int = 100, room: str | None = None,
+                      exclude_sender: str = "", exclude_sender_id: str = "") -> list[Envelope]:
+        """Peek at relevant unread events; filter before applying the page limit.
+
+        A hundred presence rows or own echoes must not conceal a request just
+        beyond the first page. No row is consumed by ringing the doorbell.
+        """
+        query = ("SELECT payload FROM inbox WHERE read=0 AND kind IN "
+                 "('chat','task','project','request','response')")
+        params: list[Any] = []
+        if room:
+            query += " AND json_extract(payload, '$.room')=?"
+            params.append(room)
+        if exclude_sender_id:
+            query += " AND NOT (sender_id=? OR (sender_id='' AND sender=?))"
+            params.extend([exclude_sender_id, exclude_sender])
+        elif exclude_sender:
+            query += " AND sender!=?"
+            params.append(exclude_sender)
+        query += " ORDER BY seq LIMIT ?"
+        params.append(limit)
+        with self._lock:
+            rows = self._db.execute(query, params).fetchall()
+        return [Envelope.from_dict(json.loads(row["payload"])) for row in rows]
 
     def take_unread(self, limit: int = 100, *, mark: bool = True) -> list[Envelope]:
         with self._lock:

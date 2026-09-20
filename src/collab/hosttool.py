@@ -128,7 +128,8 @@ def advice(kind: str, exe: str = "collab") -> list[str]:
     which = route(kind)
     if which == "monitor":
         return [f"{name_of(kind)} holds a watcher across turns: arm it on"
-                f" `{exe} listen --follow` and keep it armed."]
+                f" `{exe} listen --follow` and keep it armed. It emits compact inbox notices; read `collab recv`"
+                " at a safe task boundary."]
     if which == "wake":
         return [f"{name_of(kind)} has no watcher that survives a turn, so arm"
                 f" the wake now:",

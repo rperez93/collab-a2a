@@ -23,6 +23,16 @@ sources:
 stale_after: 2026-10-01T00:00:00Z
 ---
 
+## Quiet delivery (later than the pin, 1.44.0)
+
+Default wakes and followed monitors deliver compact notices without peer
+message text. The agent reads the durable inbox with `collab recv` at an
+appropriate task boundary. Full delivery is an explicit opt-in, suitable for
+a dedicated bridge. Standing reminders are off by default; enabling
+`remind_every` remains a deliberate choice because every reminder consumes
+attention even when a monitor avoids starting another process.
+
+
 # The gap it fills
 
 Claude Code holds a Monitor across turns and needs none of this: it watches the

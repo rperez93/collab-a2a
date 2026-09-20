@@ -90,10 +90,10 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.delenv("COLLAB_HOME", raising=False)
     monkeypatch.setattr(config, "repo_root", lambda cwd=None: tmp_path)
     for name in (".collab", ".collab-bob"):
-        home = tmp_path / name
+        home = config.base_home().parent / name
         _profile(home)
         (home / "current").write_text("s\n")
-    return tmp_path
+    return config.base_home().parent
 
 
 PAYLOAD = json.dumps({"model": {"display_name": "Opus 5"}, "cost": {"total_cost_usd": 3.2}})

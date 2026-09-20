@@ -58,9 +58,10 @@ def test_repo_state_is_not_the_global_folder(tmp_path, monkeypatch):
     that directory — including `$HOME`, which then holds a `~/.collab` that
     looks like, but is not, the global folder.
     """
-    from collab.config import collab_home
+    from collab.config import collab_home, state_root
 
     monkeypatch.delenv("COLLAB_HOME", raising=False)
     monkeypatch.chdir(tmp_path)
-    assert collab_home() == tmp_path / ".collab"
+    assert collab_home().is_relative_to(state_root())
+    assert collab_home() != tmp_path / ".collab"
     assert collab_home() != global_config_path().parent

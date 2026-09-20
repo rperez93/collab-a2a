@@ -54,6 +54,7 @@ def isolated(tmp_path, monkeypatch):
     """A throwaway global config. Never the machine's own."""
     monkeypatch.setenv("COLLAB_CONFIG", str(tmp_path / "global-config.json"))
     cfg._CACHE.clear()
+    cfg.setting("remind_every").write(10)
     yield
     cfg._CACHE.clear()
 
@@ -95,7 +96,7 @@ async def _one_turn(daemon):
 
 def _fire_a_reminder(daemon, clock, command):
     """Arm this command, let the interval pass, and run the turn it earns."""
-    wake.write_config(daemon.paths.root, wake.WakeConfig(
+    wake.write_config(daemon.paths.root, wake.WakeConfig(delivery="full",
         command=command, settle=0, min_gap=0))
     asyncio.run(_one_turn(daemon))          # starts the interval, sends nothing
     clock[0] += 10 * MINUTE
@@ -256,7 +257,7 @@ def test_an_agent_holding_both_routes_is_reminded_once(profile, monkeypatch, tmp
     landed = tmp_path / "woken.txt"
     clock = [10_000.0]
     daemon = a_daemon(profile, clock)
-    wake.write_config(daemon.paths.root, wake.WakeConfig(
+    wake.write_config(daemon.paths.root, wake.WakeConfig(delivery="full",
         command=[sys.executable, "-c",
                  f"import sys; open({str(landed)!r}, 'a').write(sys.stdin.read())"],
         settle=0, min_gap=0))
@@ -282,7 +283,7 @@ def test_a_reminder_riding_with_a_batch_goes_underneath_the_messages(
     landed = tmp_path / "both.txt"
     clock = [10_000.0]
     daemon = a_daemon(profile, clock)
-    wake.write_config(daemon.paths.root, wake.WakeConfig(
+    wake.write_config(daemon.paths.root, wake.WakeConfig(delivery="full",
         command=[sys.executable, "-c",
                  f"import sys; open({str(landed)!r}, 'w').write(sys.stdin.read())"],
         settle=0, min_gap=0))
@@ -346,7 +347,7 @@ def test_asking_for_one_now_makes_the_next_heartbeat_deliver_it(
     landed = tmp_path / "asked.txt"
     clock = [10_000.0]
     daemon = a_daemon(profile, clock)
-    wake.write_config(daemon.paths.root, wake.WakeConfig(
+    wake.write_config(daemon.paths.root, wake.WakeConfig(delivery="full",
         command=[sys.executable, "-c",
                  f"import sys; open({str(landed)!r}, 'w').write(sys.stdin.read())"],
         settle=0, min_gap=0))
@@ -368,7 +369,7 @@ def test_the_request_is_consumed_and_does_not_fire_twice(profile, monkeypatch,
     landed = tmp_path / "once.txt"
     clock = [10_000.0]
     daemon = a_daemon(profile, clock)
-    wake.write_config(daemon.paths.root, wake.WakeConfig(
+    wake.write_config(daemon.paths.root, wake.WakeConfig(delivery="full",
         command=[sys.executable, "-c",
                  f"import sys; open({str(landed)!r}, 'a').write('turn\\n')"],
         settle=0, min_gap=0))
@@ -386,7 +387,7 @@ def test_reading_the_state_does_not_eat_the_request(profile, monkeypatch):
     must not consume a request they are only reporting."""
     clock = [10_000.0]
     daemon = a_daemon(profile, clock)
-    wake.write_config(daemon.paths.root, wake.WakeConfig(command=["true"]))
+    wake.write_config(daemon.paths.root, wake.WakeConfig(delivery="full", command=["true"]))
     monkeypatch.setattr(cli, "is_running", lambda p: 4242)
     monkeypatch.setattr(cli, "watchers", lambda p: [])
     _remind(profile, monkeypatch)
@@ -424,7 +425,7 @@ def test_with_no_daemon_the_monitors_drop_is_written_directly(profile, monkeypat
 def test_with_no_daemon_and_only_a_wake_it_says_to_start_the_listener(
         profile, monkeypatch):
     wake.write_config(d.DaemonPaths(profile.dir).root,
-                      wake.WakeConfig(command=["true"]))
+                      wake.WakeConfig(delivery="full", command=["true"]))
     monkeypatch.setattr(cli, "is_running", lambda p: None)
     monkeypatch.setattr(cli, "watchers", lambda p: [])
     code, out = _remind(profile, monkeypatch)
@@ -458,7 +459,7 @@ def test_check_and_remind_agree_about_whether_a_wake_is_armed(profile, monkeypat
     armed and no daemon that no wake was armed, while `collab remind now` said
     the opposite in the same minute."""
     root = d.DaemonPaths(profile.dir).root
-    wake.write_config(root, wake.WakeConfig(command=["true"]))
+    wake.write_config(root, wake.WakeConfig(delivery="full", command=["true"]))
     (profile.dir / "status.json").write_text(json.dumps(
         {"state": "live", "heartbeat": time.time(), "unread_messages": 0}))
     cfg.setting("remind_every").write(10)
@@ -474,7 +475,7 @@ def test_check_and_remind_agree_about_whether_a_wake_is_armed(profile, monkeypat
 
 def test_wake_show_says_the_route_the_last_one_took(profile, monkeypatch):
     root = d.DaemonPaths(profile.dir).root
-    wake.write_config(root, wake.WakeConfig(command=["true"]))
+    wake.write_config(root, wake.WakeConfig(delivery="full", command=["true"]))
     wake.Waker(root, "s").reminded("wake")
     monkeypatch.setattr(cli.SessionProfile, "current", classmethod(lambda c: profile))
     monkeypatch.setattr(cli, "watchers", lambda p: [])

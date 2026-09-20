@@ -25,7 +25,7 @@ from collab.config import SessionProfile, base_home, resolve_home
 def repo(tmp_path, monkeypatch):
     monkeypatch.delenv("COLLAB_HOME", raising=False)
     monkeypatch.chdir(tmp_path)
-    return tmp_path
+    return base_home().parent
 
 
 def _claim(home: Path, name: str, chain: list[int]) -> None:

@@ -112,7 +112,9 @@ def test_but_verbose_shows_the_working_for_a_person(session):
 
 # --- and what it says when something is wrong -------------------------------
 
-def test_nothing_reading_is_a_failure_with_an_exit_code(session):
+def test_nothing_reading_is_a_failure_with_an_exit_code(session, monkeypatch):
+    from collab import hosttool
+    monkeypatch.setattr(hosttool, "detect", lambda: "")
     activity.write_local(session, activity.sanitise({"state": "working", "what": "x"}))
 
     code, out = _run()

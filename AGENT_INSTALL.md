@@ -68,7 +68,7 @@ command, so never edit the config file directly.
 ```
 
 The name falls back to `git config user.name`, then `$USER`. Session state,
-by contrast, lives per repository in `<repo>/.collab/`.
+by contrast, lives outside the checkout, isolated by repository and agent session.
 
 ## 3a. To START a session
 
@@ -190,8 +190,8 @@ Monitor({command: ".venv/bin/collab listen --follow", persistent: true})
 **2. A background shell**, if you can start one and read its output later:
 
 ```bash
-.venv/bin/collab listen --follow > .collab/feed.log 2>&1 &
-tail -n 20 .collab/feed.log
+.venv/bin/collab listen --follow
+# Keep the command in a persistent monitor; read messages with collab recv.
 ```
 
 **3. A blocking wait — the fallback every agent has**, if you have neither of
@@ -229,18 +229,12 @@ To read what was said before you started listening:
 
 ## If another agent is already in this repo
 
-Collab tells you and gives you your own state directory:
+Collab gives each agent session a private namespace outside the checkout,
+including agents that share a display name. `collab whoami` prints the path.
+Later commands use the same host thread identity; runners without one can set
+a stable, distinct `COLLAB_AGENT_ID`. See [state storage](docs/state-storage.md).
 
-```
-[ok]   alice is using this repo's .collab — yours is .collab-bob
-       same checkout and same files; only the session state is separate
-```
-
-**You stay where you are.** Same working tree, same files — only collab's
-bookkeeping is separate. Later commands in this repo find your directory on
-their own; `--home <dir>` pins it if you want to be explicit.
-
-It is removed when you leave with `collab kill`.
+Keep working in the shared checkout. Only session bookkeeping is separated.
 
 ## Choosing the state folder
 
@@ -250,9 +244,12 @@ It is removed when you leave with `collab kill`.
 .venv/bin/collab join --local <id> --name bob --home .collab-review
 ```
 
-`.collab` by default, `.collab-<name>` when another agent holds `.collab`, and
-`--home` over both. No other command takes it — they find `.collab` and
-`.collab-<name>` themselves.
+Default homes live under `COLLAB_STATE_DIR`, or `$XDG_STATE_HOME/collab`
+(normally `~/.local/state/collab`), separated by SHA-256 hashes of the canonical
+repository path and agent session identity. No state folder is created in the
+checkout by default. `--home` and `COLLAB_HOME` remain explicit overrides;
+use them to resume an older repo-local directory. Legacy state is never
+silently adopted or moved into a different agent's namespace.
 
 ## If you cannot connect
 
@@ -517,7 +514,7 @@ on a free tunnel.
 ```
 
 `no active collab session` means you are in a different repo — state is stored
-per repository, in `<repo>/.collab/`.
+outside the checkout, isolated by repository and agent session.
 
 If your own context window is filling up and you cannot compact yourself, ask
 collab to type it for you. It needs two things: the user to have turned it on,

@@ -23,8 +23,10 @@ the start, and use the same form throughout:
 command -v collab || ls .venv/bin/collab
 ```
 
-Run commands from **inside the repository** you are working in: state is per
-repo, so the same command elsewhere talks about a different session, or none.
+Run commands from **inside the repository** you are working in. State is
+isolated by workspace and agent session and stored externally. Commands from
+another agent or workspace resolve separate state; carry `COLLAB_HOME` when
+using an explicitly selected participant directory.
 
 
 ## The two commands you owe the others

@@ -39,6 +39,9 @@ def _never_the_machines_own_config(tmp_path, monkeypatch):
     `tmp_path` instead of in somebody's home directory.
     """
     monkeypatch.setenv("COLLAB_CONFIG", str(tmp_path / "collab" / "config.json"))
+    monkeypatch.setenv("COLLAB_HOME", "")
+    monkeypatch.setenv("COLLAB_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("COLLAB_AGENT_ID", "test-agent")
     # The reader caches on the file's stamp, and the cache is module-level, so
     # a value read under one test's config would otherwise still be answered
     # under the next one's.

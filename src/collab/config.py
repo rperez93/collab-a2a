@@ -1,17 +1,9 @@
-"""Where state lives, and how a participant's name is resolved.
-
-Session state is **per repo**: a ``.collab/`` directory at the repository root
-(or the current directory when that is not a repo).  Two checkouts on one
-machine therefore hold two independent sessions, which is exactly what you want
-when two agents on the same box are working on different projects.
-
-Only the default display name is global — that is a property of the person, not
-of the project.
-"""
+"""Private session state, isolated by workspace and agent invocation identity."""
 
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -93,31 +85,76 @@ def safe_slug(name: str) -> str:
     return slug.strip("-") or "agent"
 
 
+def state_root() -> Path:
+    """Local state belongs outside the checkout, including non-git folders."""
+    if override := os.environ.get("COLLAB_STATE_DIR"):
+        return Path(override).expanduser().resolve()
+    root = Path(os.environ.get("XDG_STATE_HOME", "~/.local/state")).expanduser()
+    return root.resolve() / "collab"
+
+
+def workspace_home(cwd: Path | None = None) -> Path:
+    digest = hashlib.sha256(os.fsencode(repo_root(cwd))).hexdigest()
+    return state_root() / "repositories" / digest
+
+
+def agent_key() -> str:
+    """Stable across CLI calls, distinct across agent sessions.
+
+    Names are labels, never ownership. Hash opaque host IDs so neither path
+    separators nor very long thread IDs can escape the private namespace.
+    Unknown hosts may set COLLAB_AGENT_ID; ordinary shells share their terminal
+    session, stamped against PID reuse, rather than a transient command PID.
+    """
+    for key in ("COLLAB_AGENT_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID",
+                "CLAUDE_SESSION_ID"):
+        if value := os.environ.get(key):
+            return hashlib.sha256(f"{key}:{value}".encode()).hexdigest()
+    from . import owner
+    from .client.exclusive import stamp_for
+    who = owner.current()
+    if who is not None:
+        identity = "owner:" + who.encode()
+    else:
+        identity = "terminal:" + stamp_for(os.getsid(0)).encode()
+    return hashlib.sha256(identity.encode()).hexdigest()
+
+
 def base_home(cwd: Path | None = None) -> Path:
-    """The repo's default state directory, whoever ends up using it."""
-    return repo_root(cwd) / COLLAB_DIRNAME
+    return workspace_home(cwd) / "agents" / agent_key() / COLLAB_DIRNAME
 
 
 def agent_home(name: str, cwd: Path | None = None) -> Path:
-    """This agent's own state directory, beside the default one.
-
-    ``.collab-bob`` rather than a second checkout: what two agents in one repo
-    actually collide over is collab's state — one profile, one listener, one
-    inbox — and that is the only thing worth separating. Their files are the
-    thing they are collaborating on.
-    """
-    base = base_home(cwd)
-    return base.parent / f"{COLLAB_DIRNAME}-{safe_slug(name)}"
+    return base_home(cwd).with_name(f"{COLLAB_DIRNAME}-{safe_slug(name)}")
 
 
 def sibling_homes(cwd: Path | None = None) -> list[Path]:
-    """Every per-agent state directory in this repo."""
-    base = base_home(cwd)
+    """Named profiles belonging to this agent, never a neighbour's defaults."""
+    return sorted(d for d in base_home(cwd).parent.glob(f"{COLLAB_DIRNAME}-*")
+                  if d.is_dir())
+
+
+def repo_for_home(home: Path | str) -> Path:
+    """Recover the workspace for detached daemons and status renderers."""
+    home = Path(home).resolve()
     try:
-        found = base.parent.glob(f"{COLLAB_DIRNAME}-*")
-    except OSError:
-        return []
-    return sorted(d for d in found if d.is_dir())
+        data = json.loads((home / "workspace.json").read_text())
+        return Path(data["path"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return home.parent              # explicit and legacy repository homes
+
+
+def _record_workspace(home: Path, cwd: Path | None = None) -> None:
+    from .atomic import scratch, discard
+    path = home / "workspace.json"
+    if path.exists():
+        return
+    tmp = scratch(path)
+    try:
+        tmp.write_text(json.dumps({"path": str(repo_root(cwd))}) + "\n")
+        tmp.replace(path)
+    finally:
+        discard(tmp)
 
 
 def _held_by(home: Path) -> Any:
@@ -129,20 +166,17 @@ def _held_by(home: Path) -> Any:
 
 
 def candidate_homes(cwd: Path | None = None) -> list[Path]:
-    """Every directory in this repo that holds a collab claim.
+    """Homes in this owner's namespace; never infer ownership from a name.
 
-    Not only `.collab-*`: a folder somebody named themselves with `--home` is
-    just as much theirs, and must not be handed to the next agent along.
+    Legacy repo directories remain usable with explicit --home/COLLAB_HOME.
+    They are deliberately not auto-adopted: their names and stale ancestry do
+    not prove which modern agent session owns their credentials.
     """
-    from . import lockfile
-
     base = base_home(cwd)
     found = [base]
     try:
-        for child in sorted(base.parent.iterdir()):
-            if child != base and child.is_dir() \
-                    and (child / lockfile.LOCK_NAME).exists():
-                found.append(child)
+        found.extend(child for child in sorted(base.parent.iterdir())
+                     if child != base and child.is_dir())
     except OSError:
         pass
     return found
@@ -197,20 +231,38 @@ def claimed_home(cwd: Path | None = None) -> Path | None:
     return None
 
 
+def process_owned_home(cwd: Path | None = None) -> Path | None:
+    """A hook without the host's thread environment can prove its parent.
+
+    Search external namespaces only, require a fully stamped agent process,
+    and require a unique match. Sharing a terminal or a display name is never
+    sufficient. Multiple threads served by one host process remain ambiguous
+    and need an explicit COLLAB_HOME instead of publishing under a guess.
+    """
+    from . import owner
+    from .client.exclusive import decode
+    if any(os.environ.get(key) for key in (
+            "COLLAB_AGENT_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID",
+            "CLAUDE_SESSION_ID")):
+        return None                     # an explicit different actor is not ours
+    who = owner.current()
+    if who is None or not who.started or not who.boot:
+        return None
+    matches = []
+    for home in workspace_home(cwd).glob("agents/*/.collab*"):
+        lock = _held_by(home)
+        if lock is not None and decode(lock.owner) == who:
+            matches.append(home)
+    return matches[0] if len(matches) == 1 else None
+
+
 def resolve_home(name: str = "", cwd: Path | None = None) -> Path:
-    """Which state directory this invocation should use.
+    """Resolve profiles only inside this workspace and agent's namespace.
 
-    A later command — `collab send`, minutes after the join, as a fresh
-    process — has to reach the same directory the join chose, and must not
-    reach the other agent's. Names cannot decide it: two agents on one machine
-    resolve the same default name, which is why they collided to begin with.
-    Their process trees do differ, so ownership is read from there.
-
-    An earlier version guessed instead: if exactly one per-agent directory was
-    in use, it assumed that one was ours. For the agent holding the *default*
-    directory that was precisely backwards — every bare command it ran was
-    redirected into the other agent's state, where it sent messages under their
-    name and stopped their listener.
+    Process ancestry distinguishes named profiles belonging to the same actor.
+    The namespace itself distinguishes concurrent actors before either has a
+    lock, so simultaneous first joins cannot race for one default directory.
+    Display names do not establish ownership, even when they happen to match.
     """
     base = base_home(cwd)
     if (mine := claimed_home(cwd)) is not None:
@@ -219,12 +271,9 @@ def resolve_home(name: str = "", cwd: Path | None = None) -> Path:
     held = _held_by(base)
     if held is None:
         return base
-    if name and held.name == name:
-        return base                      # the claim on it is ours
     if name:
         return agent_home(name, cwd)
-    # Nothing here proves which agent is asking, so answer with the repo's own
-    # directory rather than guessing at somebody else's.
+    # No named profile is proven; retain this actor's own default.
     return base
 
 
@@ -256,6 +305,7 @@ def ensure_home(cwd: Path | None = None, name: str = "") -> Path:
     home.mkdir(parents=True, exist_ok=True)
     with contextlib.suppress(OSError):
         home.chmod(0o700)
+    _record_workspace(home, cwd)
     gitignore = home / ".gitignore"
     if not gitignore.exists():
         gitignore.write_text(GITIGNORE_BODY)
@@ -918,10 +968,9 @@ def set_stats_source(command: str | None = None,
 # by every agent every ten minutes, is N copies of the same text in everybody's
 # transcript, and the transcript is for what people said.
 
-#: How often, in minutes. Ten because that is the lower end of the loop § 7 asks
-#: the host to run, and because an agent that has drifted has usually drifted
-#: within one of them.
-DEFAULT_REMIND_EVERY = 10
+#: Reminders add instructions to the working context even when no peer needs
+#: anything. Keep that attention cost opt-in; zero leaves the agent on its task.
+DEFAULT_REMIND_EVERY = 0
 #: And a floor under it, for the same reason `watch_status_interval` has one —
 #: the typo in a hand-edited file. Higher than that row's five seconds, because
 #: this one is not a redraw: every reminder spends a real turn of somebody's
@@ -1629,7 +1678,11 @@ def agent_identity(cwd=None, name: str = "") -> dict:
     #
     # COLLAB_HOME is part of the key because it overrides everything, and a
     # test that changes it has to see the change.
-    key = (os.environ.get("COLLAB_HOME", ""), str(cwd or ""), name)
+    key = (str(Path(cwd or Path.cwd()).resolve()), name,
+           *(os.environ.get(var, "") for var in (
+               "COLLAB_HOME", "COLLAB_STATE_DIR", "XDG_STATE_HOME",
+               "COLLAB_AGENT_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID",
+               "CLAUDE_SESSION_ID")))
     home = _HOME_CACHE.get(key)
     if home is None:
         home = collab_home(cwd, name)
@@ -2331,8 +2384,14 @@ class SessionProfile:
         pointer is not: it would silently switch which session the CLI answers
         about while somebody is working in another one.
         """
-        ensure_home(Path(self.home).parent if self.home else None)
         Path(self.home).mkdir(parents=True, exist_ok=True)
+        # Detached writers may run from another repository. A legacy/custom
+        # home without a binding retains its historical parent; only a new
+        # external namespace can infer its first binding from the caller.
+        home_path = Path(self.home).resolve()
+        external = home_path.is_relative_to(state_root() / "repositories")
+        _record_workspace(home_path, None if external and make_current
+                          else repo_for_home(home_path))
         # This home may be a custom --home or a COLLAB_HOME the resolver above
         # did not land on, so its privacy is asserted here too rather than left
         # to chance: the profile beside it holds the bearer token, and the

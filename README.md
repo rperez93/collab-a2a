@@ -346,11 +346,23 @@ told to arm a monitor it does not have arms nothing and stops looking.
 `collab check`'s `watching` line says the same thing whenever nothing is
 reading.
 
+Automatic delivery is a compact inbox notice, with no peer message text. One
+outstanding notice stays latched until the announced batch is read with
+`collab recv`; later chatter does not keep interrupting the task. Followed
+monitors coalesce for 20 seconds and leave at least 90 seconds between notices.
+The full conversation remains available through `recv` and the human viewer.
+Use `collab listen --follow --delivery full` or
+`collab wake set --delivery full` only when full context delivery is wanted,
+for example in a dedicated bridge agent. Collab does not require a second model:
+choosing a cheaper bridge is optional, with its own context and lifecycle costs.
+
 **Claude Code** — arm a Monitor once per session:
 ```
 Monitor({command: "collab listen --follow", persistent: true})
 ```
-or over WebSocket (`collab status` prints the port):
+A dedicated bridge may instead consume the full WebSocket feed
+(`collab status` prints the port); do not attach this unfiltered feed to the
+main agent context:
 ```
 Monitor({ws: {url: "ws://127.0.0.1:45855/events"}, persistent: true})
 ```
@@ -359,8 +371,8 @@ Monitor({ws: {url: "ws://127.0.0.1:45855/events"}, persistent: true})
 watch tool, a persistent background shell, a hook that fires per line. Arm it on
 `collab listen --follow` and leave it armed.
 ```bash
-collab listen --follow > .collab/feed.log 2>&1 &   # start it once
-tail -n 20 .collab/feed.log                        # read it whenever you act
+collab listen --follow                         # keep in a persistent monitor
+collab recv                                    # read messages at a task boundary
 ```
 
 **No background of any kind** — then poll, and do it deliberately: before you
@@ -447,7 +459,7 @@ $ collab wake show
   waiting   0 unread, 0 undelivered
   last woke 4m ago
   reading   nobody is
-  reminder  every 10m, as the guest
+  reminder  off
 ```
 
 ### The standing reminder
@@ -456,8 +468,9 @@ An agent drifts. Twenty minutes in it has stopped saying what it is doing, the
 host has stopped looping over the roster, and nothing anywhere is a fault: the
 daemon is live, the feed is read, the board has simply stopped moving.
 
-So the same daemon puts the standing instructions back in front of **its own
-agent**, every ten minutes. It is not a message to the room — a paragraph
+Standing reminders are **off by default**. Enable them explicitly with
+`collab config remind_every 10` to have the daemon put standing instructions
+back in front of **its own agent** every ten minutes. It is not a message to the room — a paragraph
 nobody said, posted by every agent every ten minutes, would be one copy per
 participant in everybody's transcript — and it creates no task, moves no batch,
 publishes no activity and never reaches the hub.
@@ -465,8 +478,7 @@ publishes no activity and never reaches the hub.
 **It travels by whichever route your agent has**, and there are two:
 
 - **Your monitor.** `collab listen --follow` is the stream every agent here is
-  told to arm, and the reminder comes down it as a line of its own. It costs no
-  turn, it is not an event, and it does not touch the unread count.
+  told to arm, and the reminder comes down it as a line of its own. It enters the agent context, is not an event, and it does not touch the unread count.
 - **Your wake.** For an agent that cannot hold a monitor between turns, the
   reminder rides the wake instead, and inherits the whole gate that comes with
   it: it does not interrupt a turn in flight, it waits on `--min-gap` and
@@ -478,7 +490,7 @@ publishes no activity and never reaches the hub.
 **One clock, one reminder.** The daemon decides when one is due, not the
 monitor, so an agent holding both a monitor and an armed wake gets one every
 ten minutes rather than two. The monitor is offered it first, because that
-route costs the agent nothing.
+route avoids starting a separate wake process, but still consumes agent attention.
 
 The host and the guests are reminded of different things, decided by the role
 the hub assigned rather than by any name. Both are drawn from [the shipped
@@ -1365,16 +1377,20 @@ belongs to whoever is reading it.
 
 ### Who each agent is
 
-Two agents in one repo get separate state directories — `.collab-alice`
-beside `.collab` — because what they collide over is collab's state, not their
-files. Each one carries its own identity:
+State now lives outside the checkout, under
+`$XDG_STATE_HOME/collab` (normally `~/.local/state/collab`), or
+`COLLAB_STATE_DIR`. The canonical repository path (the current folder outside
+Git) is hashed with SHA-256; a second namespace identifies the agent session.
+Each namespace holds its own profiles and `sessions/<session-id>` tree.
+Two agents using the same display name therefore keep separate locks, inboxes,
+usage figures and wake settings. Each one carries its own identity:
 
 ```
 $ collab whoami
   id      alice@workstation/alice
   name    alice
   colour  #00cccc  (this agent)
-  state   ~/work/.collab-alice
+  state   ~/.local/state/collab/repositories/<repo-hash>/agents/<agent-hash>/.collab-alice
 ```
 
 **The id joins the machine and the bot** because either half alone repeats: two
@@ -1629,68 +1645,30 @@ strength of a pid from a boot that has ended.
 
 ## Two agents in one checkout
 
-State lives in `<repo>/.collab/` — right for one agent per checkout, wrong the
-moment two share one. They would hold a single profile between them, write the
-same status file, and each stop the other's listener as a leftover. The first
-agent goes quiet and nothing says why.
+Each agent session gets a private state namespace outside the checkout. The
+canonical Git root (or current folder outside Git) and stable agent-session
+identity are SHA-256 hashed under `COLLAB_STATE_DIR`, or
+`$XDG_STATE_HOME/collab` (normally `~/.local/state/collab`).
 
-`collab host` and `collab join` read the lock first, and when the repo's
-`.collab` is already held they give the arriving agent its own directory beside
-it:
+The agents keep working on the same files. Their profiles, locks, inboxes,
+current-session pointers and wake settings are separate even when their display
+names match. Host thread IDs are preferred to process ancestry; unknown runners
+can set a unique `COLLAB_AGENT_ID` and retain it across commands.
 
-```
-$ collab join --local s_bb9c59a3 --name bob      # from a repo alice is in
-[ok]   alice is using this repo's .collab — yours is .collab-bob
-       the lock says: alice (host) in s_bb9c59a3
-       same checkout and same files; only the session state is separate
-[ok]   joined s_bb9c59a3 as bob (host: alice)
-```
-
-Nobody moves. Same working tree, same files, same branch — two agents in one
-repo are collaborating on one codebase, and only collab's bookkeeping needs to
-be apart. The directory ignores itself, so `git status` stays clean.
-
-**Later commands find it.** `collab send` runs as a fresh process with no
-memory of the join, so ownership is read from the claim itself. Names cannot
-decide it — two agents on one machine resolve the same default name, which is
-why they collide in the first place — so the lock records the **process chain**
-that took it, and a command belongs to the directory whose claim its own
-lineage meets first.
-
-That last part matters: two agents started from one terminal share everything
-above that terminal, so "shares an ancestor" would answer yes for every claim
-in the repo. Each agent meets *its own* process before it meets anything held
-in common, so the nearest match wins and an equal match decides nothing.
-
-An earlier version guessed instead — if exactly one per-agent directory was in
-use, it assumed that one was ours. For the agent holding the default directory
-that was precisely backwards: every bare command it ran resolved into the other
-agent's state, sending messages under their name and stopping their listener.
-
-If the lineage is gone — your agent restarted since joining — say which you
-mean with `COLLAB_HOME=<folder>`, or re-run `collab join --local <id> --name
-<you>`, which reattaches and re-claims the directory under the new process.
-
-**It leaves when you do.** `collab kill` removes the per-agent directory once
-nothing of yours remains in it. A directory that hosts a session is kept —
-that holds the only copy of the conversation, and stopping is not losing.
+`collab whoami` prints the actual home. Detached listeners and viewers receive
+that exact path, while workspace metadata keeps discovery and learnings tied to
+the original checkout. See [state storage](docs/state-storage.md) for the layout,
+identity precedence and fallback behavior.
 
 ### Choosing the folder
 
-`collab host` and `collab join` take `--home <folder>` — a folder name in this
-repo rather than a path from the current directory:
+`collab host` and `collab join` accept `--home <folder>`. A bare name is relative
+to the repository root; a path with separators is relative to the current
+working directory. `COLLAB_HOME` selects an exact home for later commands too.
 
-```bash
-collab join --local s_bb9c59a3 --name bob --home .collab-review
-```
-
-In order: `.collab` by default; `.collab-<name>` when another agent's lock
-already holds `.collab`; whatever `--home` says, always.
-
-The flag is on `host` and `join` alone, because those are the commands that
-decide where a session lives. Later commands resolve `.collab` and
-`.collab-<name>` on their own; a folder named outside that convention has to be
-carried with `COLLAB_HOME=<folder>`, which collab points out when you pick one.
+Old repo-local `.collab` directories remain intact and can be selected explicitly.
+They are never silently adopted by a new agent session. An explicit shared home
+bypasses isolation, so give each participant its own path.
 
 ## The lock file
 
@@ -2317,7 +2295,7 @@ collab config --json              # the same table, for an agent to read
 | `watch_roster_position` | `top`, `bottom`, `left` or `right` | `collab watch --roster-position <p> --save` | `top` |
 | `stats_command` | a command printing your usage as JSON, re-run on a timer | `collab stats --source <cmd>`, or `--agent codex` for one collab ships | none |
 | `stats_interval` | how often to run it, in seconds | `collab stats --interval <n>` | `120` |
-| `remind_every` | minutes between the standing reminder your daemon puts back in front of your agent; `0` turns it off | — | `10` |
+| `remind_every` | minutes between the standing reminder your daemon puts back in front of your agent; `0` turns it off | — | `0` |
 | `remind_host` | what that reminder says when you are the host; empty for the shipped one | — | none |
 | `remind_guest` | what it says when you are a guest; empty for the shipped one | — | none |
 | `activity_stale_after` | minutes before an unrenewed «working» is questioned in the reminder and decayed to «quiet»; `0` leaves it alone | — | `30` |
@@ -2536,10 +2514,12 @@ update-check.json         the cached answer about newer releases
 
 ### Per-repository state
 
-Created on first `host` or `join`, and self-gitignoring because it holds tokens:
+Created outside the checkout on first `host` or `join`; explicit legacy homes
+retain the same internal layout:
 
 ```
-<repo-root>/.collab/
+<state-root>/repositories/<repo-hash>/agents/<agent-hash>/.collab/
+  workspace.json          original canonical working folder
   .gitignore              contains "*", so none of this is ever committed
   current                 which session this repo is in
   sessions/<id>/
@@ -2562,7 +2542,9 @@ Mostly for testing and for running two profiles against one repo.
 
 | Variable | Effect |
 |---|---|
-| `COLLAB_HOME` | use this directory instead of `<repo>/.collab` |
+| `COLLAB_HOME` | explicit participant state directory |
+| `COLLAB_STATE_DIR` | external state root, overriding `$XDG_STATE_HOME/collab` |
+| `COLLAB_AGENT_ID` | explicit stable identity for this agent session |
 | `COLLAB_CONFIG` | use this file instead of `~/.config/collab/config.json` |
 | `COLLAB_PEERS_DIR` | use this directory for the local session registry |
 | `COLLAB_NAME` | display name, overriding the global setting |

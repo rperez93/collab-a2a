@@ -83,7 +83,8 @@ def test_the_file_is_not_re_read_when_nothing_changed(cfg, monkeypatch):
     config.set_theme("other")
     long_ago = time.time() - 3600
     os.utime(cfg, (long_ago, long_ago))
-    config.theme()                                   # fills the cache
+    config.theme()                                   # fills the global cache
+    config.default_color()                           # resolves this agent once
     reads = []
     real = type(cfg).read_text
     monkeypatch.setattr(type(cfg), "read_text",

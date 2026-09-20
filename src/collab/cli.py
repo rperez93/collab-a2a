@@ -42,6 +42,7 @@ from .config import (
     agent_home,
     collab_executable,
     base_home,
+    repo_for_home,
     claimed_home,
     collab_home,
     held_homes,
@@ -304,13 +305,13 @@ def _monitor_hint(profile: SessionProfile, status: dict[str, Any]) -> None:
     if port:
         print(f"  {c('ws', '36')}        ws://127.0.0.1:{port}/events")
     print(f"  {c('no watcher?', '36')} {exe} recv --wait 60  "
-          + dim("— before you end a turn, every turn"))
+          + dim("— at a safe task boundary"))
     # Polling only covers the turns an agent happens to take. The wake covers
     # the hours between them, which is where a message actually goes unread.
     print(f"  {c('cannot hold one?', '36')} {exe} wake agents  "
           + dim("— then `wake set --agent <you>`, from in here"))
-    print(dim("  Either stream carries the same events and the daemon handles"
-              " reconnects,"))
+    print(dim("  The monitor sends compact inbox notices; `recv` reads the"
+              " conversation."))
     print(dim("  but nothing re-arms a watcher you lost: if yours stops, arm it"
               " again."))
     print(dim("  Nothing notices for you either — which is what the loop below"
@@ -662,7 +663,7 @@ def cmd_host(args: argparse.Namespace) -> int:
     try:
         peers.announce(
             session_id=cfg.session_id, name=cfg.host_name, role="host",
-            url=profile.url, repo=str(Path(cfg.home).parent), home=cfg.home,
+            url=profile.url, repo=str(repo_for_home(cfg.home)), home=cfg.home,
             invite=cfg.invite, host_name=cfg.host_name, pid=cfg.pid or None,
         )
     except OSError:
@@ -960,7 +961,8 @@ def _home_from(given: str) -> Path:
     value = Path(given).expanduser()
     if value.is_absolute() or len(value.parts) > 1:
         return value.resolve()
-    return base_home().parent / given
+    from .config import repo_root
+    return repo_root() / given
 
 def _which_agent_to_join(args: argparse.Namespace):
     """Which agent joins: the one asked for, the only one, or the one picked.
@@ -1001,12 +1003,7 @@ def _own_state_dir(args: argparse.Namespace, name: str) -> int | None:
         chosen = _home_from(args.home)
         os.environ["COLLAB_HOME"] = str(chosen)
         ok(f"using {c(chosen.name, '1')} for this session")
-        # Later commands find .collab and .collab-<name> by themselves. A folder
-        # you named yourself is outside that convention, so it has to be carried.
-        if not chosen.name.startswith(COLLAB_DIRNAME):
-            print(dim(f"       later commands need COLLAB_HOME={chosen}"
-                      f" — or name it {COLLAB_DIRNAME}-<something> and they"
-                      " will find it"))
+        print(dim(f"       later commands need COLLAB_HOME={chosen}"))
         return None
 
     # WHICH AGENT IS JOINING is a decision when there is more than one here,
@@ -1149,7 +1146,7 @@ def cmd_join(args: argparse.Namespace) -> int:
             if stopped:
                 # It exists, it just is not up. Only the repo holding it can
                 # bring it back, so say which repo that is.
-                where = Path(stopped[0][0].home).parent.name
+                where = repo_for_home(stopped[0][0].home).name
                 print(dim(f"  but this repo has it on disk, stopped:"))
                 _describe_stopped(stopped)
                 print(dim(f"\n  `collab host` in {where} brings it back"
@@ -1302,7 +1299,7 @@ def _learnings_here(cwd: Path | None = None):
     if where is None:
         profile = SessionProfile.current()
         if profile is not None and profile.home:
-            where = Path(profile.home).parent
+            where = repo_for_home(profile.home)
     key = learnings.repo_key(where)
     return key, learnings.bundle_dir(key)
 
@@ -1618,8 +1615,12 @@ def _learnings_pointer(cwd: Path | None = None) -> str:
 
 def cmd_listen(args: argparse.Namespace) -> int:
     """Stream events as lines.  This is what a Monitor watches."""
+    from . import attention
+
     profile = _require_profile(args)
     inbox = Inbox(profile.dir)
+    compact = getattr(args, "delivery", "notice") == "notice"
+    digest = attention.Digest()
     path = inbox.jsonl
     path.touch(exist_ok=True)
 
@@ -1641,8 +1642,15 @@ def cmd_listen(args: argparse.Namespace) -> int:
     # at the transcript, like `collab watch`, and marks nothing.
     if args.replay:
         for env in inbox.all_events(limit=args.replay):
-            print(_format(env, args.json), flush=True)
-            inbox.mark_read([env.seq])
+            if args.room and env.room != args.room:
+                continue
+            if not args.mine_too and env.sender == profile.name:
+                continue
+            if compact:
+                digest.add(env, time.monotonic())
+            else:
+                print(_format(env, args.json), flush=True)
+                inbox.mark_read([env.seq])
 
     # AND THE STANDING REMINDER COMES DOWN HERE TOO. It shipped on the wake
     # alone, which is the one route the agent reading this stream is told not
@@ -1658,6 +1666,8 @@ def cmd_listen(args: argparse.Namespace) -> int:
     waiting = wake.reminder_waiting(root)
     reminded_at = waiting["at"] if waiting else 0.0
     looked = 0.0
+    notice_checked = float("-inf")
+    backlog_checked = float("-inf")
 
     # Say that somebody is reading, for as long as they are. A monitor that
     # dropped —a restart, a compaction, a closed shell— is indistinguishable
@@ -1666,6 +1676,35 @@ def cmd_listen(args: argparse.Namespace) -> int:
     with watching(profile), path.open("r", encoding="utf-8") as fh:
         fh.seek(0, os.SEEK_END)
         while True:
+            now = time.monotonic()
+            # Recover unread backlog on startup and after each consumed page.
+            # Filtering happens in SQL before LIMIT, so presence/own echoes
+            # cannot hide a relevant request forever behind the first page.
+            if compact and not digest.count and now - backlog_checked >= 1.0:
+                backlog_checked = now
+                if not attention.pending(root):
+                    for env in inbox.notice_events(
+                            room=args.room,
+                            exclude_sender="" if args.mine_too else profile.name,
+                            exclude_sender_id="" if args.mine_too else profile.participant_id):
+                        digest.add(env, now)
+            # A busy transcript must not open SQLite and a lock for each line.
+            # The counters are constant-memory; checking the doorbell once per
+            # second keeps a remote flood from turning into local IO churn.
+            if compact and digest.due(now) and now - notice_checked >= 1.0:
+                notice_checked = now
+                if attention.all_read(root, [*digest.seqs, digest.seq]):
+                    digest.sent(now)
+                elif attention.claim(root, digest.seq, digest.seqs):
+                    message = attention.notice(profile.session_id, digest.count, digest.seq)
+                    try:
+                        print(json.dumps({"kind": "notice", "local": True, "text": message})
+                              if args.json else message, flush=True)
+                    except (OSError, BrokenPipeError):
+                        attention.release(root, digest.seq)
+                        raise
+                    attention.delivered(root, digest.seq, digest.seqs)
+                    digest.sent(now)
             # Throttled, because a busy stream would otherwise stat and read
             # this file once per line for something that changes every ten
             # minutes. A second's lateness on a ten-minute reminder is nothing.
@@ -1690,8 +1729,11 @@ def cmd_listen(args: argparse.Namespace) -> int:
             if args.mine_too is False and env.sender == profile.name:
                 continue
             # flush on every line: a Monitor only sees what is actually written.
-            print(_format(env, args.json), flush=True)
-            inbox.mark_read([env.seq])
+            if compact:
+                digest.add(env, time.monotonic())
+            else:
+                print(_format(env, args.json), flush=True)
+                inbox.mark_read([env.seq])
 
 
 def _format(env: Envelope, as_json: bool) -> str:
@@ -3582,7 +3624,7 @@ def _stats_health(profile: SessionProfile) -> tuple[str, str, str] | None:
 
     # Figures the status line received and could give to nobody, more recent
     # than anything this agent owns: the number the room sees stopped here.
-    marker = unattributed(Path(profile.home).parent)
+    marker = unattributed(repo_for_home(profile.home))
     marker_at = _moment(marker.get("at"))
     if marker_at and marker_at > written_at:
         return (CHECK_WARN,
@@ -3904,6 +3946,7 @@ def cmd_wake(args: argparse.Namespace) -> int:
             # Everything said before this moment is history, not news. Without
             # this line, arming in a room with a few hundred messages behind it
             # delivered every one of them as a single first turn.
+            delivery=getattr(args, "delivery", None) or config.delivery,
             since_seq=Inbox(profile.dir).last_seq())
         if shutil.which(config.command[0]) is None and not Path(config.command[0]).exists():
             # Saved anyway — a command installed later is a fair thing to
@@ -3912,6 +3955,7 @@ def cmd_wake(args: argparse.Namespace) -> int:
             warn(f"{config.command[0]!r} is not on PATH here")
         wk.write_config(root, config)
         ok(f"armed: {shlex.join(config.command)}")
+        print(dim(f"  delivery: {config.delivery}; notices stay outstanding until read"))
         print(dim(f"  fires when messages are unread for {int(config.settle)}s"
                   " and nothing is reading them"))
         print(dim(f"  at most one message turn every {int(config.min_gap)}s,"
@@ -3938,6 +3982,7 @@ def cmd_wake(args: argparse.Namespace) -> int:
             "command": config.command,
             "notify": config.notify,
             "settle": config.settle,
+            "delivery": config.delivery,
             "min_gap": config.min_gap,
             "timeout": config.timeout,
             "attended": reading,
@@ -4406,7 +4451,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         # like nothing being wrong from in here.
         payload["hint"] = (f"NOTHING IS READING THIS SESSION — arm your monitor on "
                            f"`{exe} listen --follow` and keep it armed, or poll "
-                           f"`{exe} recv --wait 60` every turn")
+                           f"`{exe} recv --wait 60` at task boundaries")
     elif payload["polling"] and not payload["watchers"]:
         # Not a fault. Worth one line, because a poller only hears anything on
         # its own next turn, and whoever is waiting for an answer feels that.
@@ -4551,7 +4596,7 @@ def _readvertise(cfg: HubConfig) -> None:
         peers.announce(
             session_id=cfg.session_id, name=cfg.host_name, role="host",
             url=cfg.public_url or cfg.local_url, local_url=cfg.local_url,
-            repo=str(Path(cfg.home).parent), home=cfg.home,
+            repo=str(repo_for_home(cfg.home)), home=cfg.home,
             invite=cfg.invite, host_name=cfg.host_name, pid=cfg.pid,
         )
     except OSError:
@@ -6368,8 +6413,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="interface to bind; 0.0.0.0 exposes it on your LAN")
     h.add_argument("--focus", default="", help="what you are working on, shown to others")
     h.add_argument("--home", default="", metavar="FOLDER",
-                   help="state folder for this session (default .collab, or"
-                        " .collab-<name> when another agent already holds it)")
+                   help="explicit state folder (default: private external repo/agent namespace)")
     h.add_argument("--title", default="",
                    help="a name for the session, shown to everyone")
     h.add_argument("--domain", default="",
@@ -6424,8 +6468,7 @@ def build_parser() -> argparse.ArgumentParser:
     j.add_argument("--name", help="your display name")
     j.add_argument("--focus", default="", help="what you are working on, announced on arrival")
     j.add_argument("--home", default="", metavar="FOLDER",
-                   help="state folder for this session (default .collab, or"
-                        " .collab-<name> when another agent already holds it)")
+                   help="explicit state folder (default: private external repo/agent namespace)")
     j.add_argument("--no-daemon", action="store_true", help="do not start listening")
     j.add_argument("--keep", action="store_true",
                    help="leave it running when this agent quits")
@@ -6476,9 +6519,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     l = sub.add_parser("listen", help="stream events as lines (arm a Monitor on this)")
     l.add_argument("--follow", "-f", action="store_true", help="keep streaming as events arrive")
-    l.add_argument("--json", action="store_true", help="emit raw JSON instead of formatted lines")
+    l.add_argument("--json", action="store_true", help="emit JSON events or notices instead of formatted lines")
     l.add_argument("--room", help="only this room")
     l.add_argument("--limit", type=int, default=50, help="how many past events to print")
+    l.add_argument("--delivery", choices=("notice", "full"), default="notice",
+                   help="coalesced inbox notices (default), or full event text")
     l.add_argument("--replay", type=int, default=0, help="replay this many past events first")
     l.add_argument("--mine-too", action="store_true", default=False,
                    help="include your own messages")
@@ -6584,6 +6629,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="which live session to reach — a Codex thread id, a"
                          " tmux pane. Taken from your own environment if unset")
     wa.add_argument("--notify", help="optional command told after each turn")
+    wa.add_argument("--delivery", choices=("notice", "full"),
+                    help="compact inbox notices (default), or full batch text")
     wa.add_argument("--settle", type=float, metavar="SECONDS",
                     help="how long to let a burst finish before waking")
     wa.add_argument("--min-gap", dest="min_gap", type=float, metavar="SECONDS",

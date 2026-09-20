@@ -37,7 +37,7 @@ def repo(tmp_path, monkeypatch):
     # which is exactly where we want to look.
     monkeypatch.setattr(peers, "find", lambda *a, **k: None)
     monkeypatch.setattr(peers, "candidates", lambda *a, **k: [])
-    return tmp_path
+    return config.base_home().parent
 
 
 def _somebody_here(repo, name="alice", chain=()):
@@ -123,7 +123,7 @@ def test_an_unheld_repo_stays_the_default(repo):
 def test_home_is_honoured_too(repo, capsys):
     main(["join", "--home", ".collab-review", "--no-update-check"])
 
-    assert os.environ.get("COLLAB_HOME") == str(repo / ".collab-review")
+    assert os.environ.get("COLLAB_HOME") == str(config.repo_root() / ".collab-review")
 
 
 def test_the_decisions_happen_before_anything_is_looked_up(repo, monkeypatch):

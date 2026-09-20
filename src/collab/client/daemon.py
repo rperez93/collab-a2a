@@ -27,7 +27,7 @@ from httpx_sse import aconnect_sse
 from .. import (__version__, activity as act, diagnostics, lockfile,
                owner as ownership, peers, wake)
 from ..batch import DELTA_SHOWN_FOR
-from ..config import (SessionProfile, follow_agent_enabled,
+from ..config import (SessionProfile, follow_agent_enabled, repo_for_home,
                       share_stats_enabled, stats_source)
 from ..protocol import (EXT_PREFIX, KIND_CHAT, KIND_HELLO, KIND_PRESENCE,
                         KIND_PROJECT, KIND_SYSTEM, KIND_TASK, Envelope,
@@ -843,7 +843,7 @@ class Daemon:
                 role="host" if self.profile.is_host else "guest",
                 url=url,
                 local_url=local_url,
-                repo=str(Path(self.profile.home).parent),
+                repo=str(repo_for_home(self.profile.home)),
                 home=self.profile.home,
                 participant_id=self.profile.participant_id,
                 invite=invite,
@@ -1605,11 +1605,29 @@ class Daemon:
         self._waking = asyncio.create_task(self._wake(batch, reminder))
 
     async def _wake(self, batch: wake.Batch | None, reminder: str = "") -> None:
+        from .. import attention
+
+        notice_seq = None
+        cfg = self.waker.config()
+        if batch is not None and cfg.delivery == "notice":
+            seqs = [e["seq"] for e in batch.events()
+                    if e.get("seq") and e.get("kind") in attention.KINDS]
+            if seqs:
+                notice_seq = max(seqs)
+                # A monitor can start after due() checked attendance. Reserve
+                # the same doorbell before starting an external delivery, and
+                # let a crashed delivery's reservation expire after its timeout.
+                if not attention.claim(self.paths.root, notice_seq, seqs,
+                                       lease=cfg.timeout + 30):
+                    return
         try:
             if batch is not None:
                 await self._say_it_is_working(batch)
             await self._wake_once(batch, reminder)
         finally:
+            if notice_seq is not None:
+                # succeeded() commits the latch; failure leaves only a lease.
+                attention.release(self.paths.root, notice_seq, provisional_only=True)
             with contextlib.suppress(Exception):
                 await self._say_the_turn_is_over()
             # A woken turn is the one moment this agent's usage certainly
@@ -2018,7 +2036,7 @@ class Daemon:
         """
         from .. import learnings
 
-        key = learnings.repo_key(Path(self.profile.home).parent)
+        key = learnings.repo_key(repo_for_home(self.profile.home))
         return key, learnings.bundle_dir(key)
 
     def _drain_learning_spool(self) -> list:
