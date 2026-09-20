@@ -14,6 +14,9 @@ background, pale green text and brighter green focus; warning and error colours
 remain distinct. The same palette applies to the participant panel, conversation
 and `collab config --tui`.
 
+These captures show the current renderer with synthetic main and worker
+measurements. [Reproduce the screenshots](screenshots.md).
+
 ![Cyberpunk participant panel](../assets/theme-cyberpunk.png)
 
 ![Matrix participant panel](../assets/theme-matrix.png)

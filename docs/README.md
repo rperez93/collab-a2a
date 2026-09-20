@@ -36,3 +36,5 @@ The repository root carries three more references that these pages build on:
 - [Settings editor](settings-panel.md): staged keyboard/mouse edits and screenshots.
 - [Skill sharing and capacity](skills-and-capacity.md): explicit capabilities and conditional delegation budgets.
 - [Performance](performance.md): reproducible CPU/RAM samples and leak-check limits.
+
+[Reproduce the documentation screenshots](screenshots.md) with isolated terminal captures.

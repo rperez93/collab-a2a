@@ -1,10 +1,10 @@
 # Reading the live participant panel
 
-![Expanded participant measurements in a real 110-column tmux pane](../assets/participant-panel.png)
+![Compact participants above the conversation in the current viewer](../assets/participant-panel.png)
 
-The image above renders a real tmux terminal buffer with synthetic participants.
-The [38-column capture](../assets/participant-panel-narrow.png) shows the same
-measurements wrapped for a narrow side panel.
+The screenshots use the released terminal renderer with synthetic participants
+and usage figures. The combined view above is 90 columns wide; the full
+[coding-agent and viewer window](../assets/demo.png) is 168×38.
 
 Each collapsed participant occupies exactly one padded, participant-coloured line:
 identity, `m:` main model, `w` worker state/model, and working/idle duration.
@@ -12,13 +12,22 @@ Both model columns remain present when expanded field filters change. Long names
 are shortened to fit; expansion shows full model names and every selected stat.
 Up/Down (or J/K) selects participants. Right opens, Left closes, and Enter/Space
 or clicking a header toggles details. Page Up/Down, j/k and the mouse wheel scroll
-long details. Tab changes panes. End/G in the conversation resumes live following.
+long details. In the combined view, Tab or Shift+Tab changes panes; `1` focuses Participants
+and `2` focuses Conversation. Separate terminal panes use the terminal's own
+pane-switching keys. End/G in the conversation resumes live following.
 
-The fixed legend reads «● working ○ idle ◌ unknown × offline»; the worker uses
-its own dot, with «off» when disabled. Unknown activity is never called idle.
+The legend reads «● working ○ idle ◌ unknown × offline»; the worker uses
+its own dot, with «off» when disabled. The legend abbreviates in narrow panes
+and is hidden when the roster is too short. Unknown activity is never called idle.
 Participant colours are dealt randomly without reuse while colours remain, and
 stay stable while present. Automatic colours adapt for contrast on known theme
 backgrounds; a terminal default background without COLORFGBG cannot be measured.
+
+![Expanded main and worker details in a 120-column pane](../assets/participant-details.png)
+
+The [52-column capture](../assets/participant-panel-narrow.png) shows details
+stacked and wrapped in a narrow side panel. Expanded content defaults to three
+spaces of left padding; short facts share rows with a visible separator.
 
 Expanded cards separate main and worker measurements, side by side at 88 content
 columns and stacked below that. A solo participant retains its local statistics
@@ -107,3 +116,5 @@ In the combined viewer, Tab or Shift+Tab switches panes; `1` focuses
 Participants and `2` focuses Conversation without moving either scroll position.
 The footer shows keys for the focused pane. Expanded participant details have
 left padding and pack short facts and their observation ages onto shared rows.
+
+[How these screenshots are captured](screenshots.md).
