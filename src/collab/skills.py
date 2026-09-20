@@ -41,7 +41,7 @@ from .config import short_executable
 
 SKILL_NAMES = ("collab-host", "collab-join", "collab-watch",
                "collab-discover", "collab-activity", "collab-learn",
-               "collab-configure")
+               "collab-configure", "collab-share-skills", "collab-capacity")
 
 
 def bundled_skills_dir() -> Path | None:

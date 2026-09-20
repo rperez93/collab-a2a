@@ -295,7 +295,7 @@ def test_the_split_view_pays_for_the_foot_only_out_of_a_roster_that_can(
             where = f"at {height}x{width}"
             win = Screen(height, width)
             _draw(viewer, win)
-            assert "PARTICIPANTS" in win.row(2), f"nothing drawn {where}"
+            assert any(word in win.row(2) for word in ("PARTICIPANTS", "PEOPLE")), f"nothing drawn {where}"
             assert not win.overruns, f"drawn past the last column {where}: {win.overruns[0]}"
 
             chat_top, panel = _split_geometry(height)
@@ -412,7 +412,7 @@ def test_the_roster_only_view_rules_off_its_own_row_and_no_other(
             where = f"at {height}x{width}"
             win = Screen(height, width)
             _draw(viewer, win)
-            assert "PARTICIPANTS" in win.row(0), f"nothing drawn {where}"
+            assert any(word in win.row(0) for word in ("PARTICIPANTS", "PEOPLE")), f"nothing drawn {where}"
             assert not win.overruns, f"drawn past the last column {where}: {win.overruns[0]}"
 
             bottom = win.row(height - 1)

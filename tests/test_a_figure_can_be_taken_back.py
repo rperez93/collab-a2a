@@ -25,13 +25,13 @@ from collab.stats import CANONICAL, QUOTA_FIELDS, normalise, sanitise
 
 def _join(client, session, name):
     r = client.post("/ext/collab/v1/join",
-                    json={"invite": session["invite"], "name": name, "hello": {}})
+                    json={"protocol_major": 2, "version": "2.0.0", "invite": session["invite"], "name": name, "hello": {}})
     assert r.status_code == 200, r.text
     return r.json()
 
 
 def _headers(joined):
-    return {"Authorization": f"Bearer {joined['token']}"}
+    return {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {joined['token']}"}
 
 
 def _person(client, headers, name):

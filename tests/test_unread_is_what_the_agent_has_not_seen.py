@@ -230,7 +230,7 @@ def test_the_daemon_counts_by_id_after_a_rename(profile):
 
 def _join(base, session, name):
     r = httpx.post(f"{base}/ext/collab/v1/join",
-                   json={"invite": session["invite"], "name": name, "hello": {}},
+                   json={"protocol_major": 2, "version": "2.0.0", "invite": session["invite"], "name": name, "hello": {}},
                    timeout=10)
     r.raise_for_status()
     return r.json()
@@ -272,7 +272,7 @@ def streaming_guest(live_server, session, tmp_path, monkeypatch):
     thread.start()
     _wait(lambda: (profile.dir / "status.json").exists(), what="the daemon's first status")
     yield {"daemon": daemon, "profile": profile, "base": base,
-           "bob": {"Authorization": f"Bearer {joined['token']}"}}
+           "bob": {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {joined['token']}"}}
     if "task" in holder:
         loop.call_soon_threadsafe(holder["task"].cancel)
     thread.join(timeout=10)
@@ -310,7 +310,7 @@ def test_the_badge_tracks_what_bob_has_not_seen(streaming_guest, live_server, se
 
     # Carol arrives: an event, not a message. `unread` moves, the badge does not.
     carol = _join(base, session, "carol")
-    carol_h = {"Authorization": f"Bearer {carol['token']}"}
+    carol_h = {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {carol['token']}"}
     status = landed(_say(base, host_headers, "welcome"))
     assert status["unread_messages"] == 5
     assert status["unread"] > status["unread_messages"], "the presence event counts only in `unread`"

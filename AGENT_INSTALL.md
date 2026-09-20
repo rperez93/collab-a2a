@@ -1,5 +1,12 @@
 # collab — agent install
 
+> Collab v2 requires both host and guest to run stable 2.x. Upgrade and restart
+> the hub before reconnecting; an old or unversioned peer is refused. After
+> upgrading, refresh installed guidance with `collab skills install`. Read
+> [the v2 migration guide](https://github.com/rperez93/collab-a2a/blob/main/docs/v2.md)
+> for state, worker, panel and telemetry changes.
+
+
 Instructions for a coding agent. Run these in order. No prose, no options you
 do not need.
 

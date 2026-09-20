@@ -148,11 +148,15 @@ replayed to every roster. They are capped rather than trusted.[^protocol-src]
 | `MAX_NAME` | 64 |
 | `MAX_ROOM` | 64 |
 | `MAX_TITLE` | 200 |
-| `MAX_DETAIL` | 4 000 |
+| `MAX_DETAIL` | 4 000 at the pin; 8 000 later |
 | `MAX_META_VALUE` | 500 |
 | `MAX_META_KEYS` | 24 |
 | `MAX_FILE_BYTES` | 10 MiB |
 | `FILE_TTL_SECONDS` | 24 h |
+
+Later than the pin: `MAX_DETAIL` applies to stored descriptions and comments,
+which are refused above the limit rather than clipped. Identity fields still
+use the bounded roster rules.
 
 `bounded_meta` keeps only scalar values out of a joiner's self-declared
 `hello`. A nested dict or list is dropped on purpose, because a `stats` or

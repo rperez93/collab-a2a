@@ -24,6 +24,10 @@ from .store import Store
 TOKEN_BYTES = 32
 
 
+class CompatibilityError(AuthenticationError):
+    """The token is valid, but this running client must upgrade before use."""
+
+
 def new_secret() -> str:
     """A session invite or participant token.
 
@@ -72,6 +76,9 @@ class BearerBackend(AuthenticationBackend):
         if participant is None:
             # Revoked and never-valid look identical from outside, on purpose.
             raise AuthenticationError("invalid or revoked token")
+        from ..compatibility import header_advertisement, incompatibility
+        if reason := incompatibility(header_advertisement(conn.headers), role='guest'):
+            raise CompatibilityError(reason)
         scopes = ["authenticated"] + (["host"] if participant.is_host else [])
         return AuthCredentials(scopes), ParticipantUser(
             participant.name, is_host=participant.is_host,

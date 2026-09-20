@@ -213,7 +213,7 @@ def hosted(home):
 
 def _join(cfg: HubConfig, invite: str, name: str) -> httpx.Response:
     return httpx.post(f"{cfg.local_url}/ext/collab/v1/join",
-                      json={"invite": invite, "name": name, "hello": {}},
+                      json={"protocol_major": 2, "version": "2.0.0", "invite": invite, "name": name, "hello": {}},
                       timeout=10.0)
 
 
@@ -248,10 +248,10 @@ def test_a_rotation_reaches_a_hub_that_is_already_running(hosted):
     # (a) bob is untouched: his token still sends, and he can still read.
     sent = httpx.post(f"{hosted.local_url}/ext/collab/v1/messages",
                       json={"text": "still here", "room": "general"},
-                      headers={"Authorization": f"Bearer {bob_token}"}, timeout=10.0)
+                      headers={"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {bob_token}"}, timeout=10.0)
     assert sent.status_code == 200, sent.text
     seen = httpx.get(f"{hosted.local_url}/ext/collab/v1/history",
-                     headers={"Authorization": f"Bearer {bob_token}"}, timeout=10.0)
+                     headers={"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {bob_token}"}, timeout=10.0)
     assert seen.status_code == 200, seen.text
     assert any(m.get("text") == "still here" for m in seen.json()["events"])
 

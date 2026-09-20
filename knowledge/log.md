@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-09-19
+* **Update**: Recorded later-than-pin whole-content descriptions and comments in the task-board and envelope pages: 8 000 characters accepted intact, excess refused explicitly. The pin and verification stamps are unchanged.
 * **Update**: Added later-than-pin active conversation ownership to the wake page: scoped workers answer peers while the main agent works, independent provider selection, selective decision/health delivery, and the main-agent context and answer return path. The bundle revision and historical verification stamps are unchanged.
 * **Update**: Added later-than-pin notes to the state-directory and wake pages for external repository/agent namespaces, compact delivery and opt-in standing reminders in 1.44.0. Historical measurements and the bundle revision are unchanged.
 
@@ -66,3 +67,5 @@
 * **Initialization**: Established the bundle against collab 1.20.2 at commit `f9abc76`, with the [architecture](architecture/), [collaboration](collaboration/) and [operating](operating/) groups.
 * **Creation**: Wrote [how to read this bundle](how-to-read-this-bundle.md), stating which verifier actors were used and which credibility signals were deliberately left empty rather than guessed at.
 * **Creation**: Wrote [a fact that was true when it was recorded](stale-facts.md), which sets the `stale_after` policy every other concept here follows.
+
+* **Version 2, later than the pin:** issue revalidation adds whole accepted task content, bounded authenticated replay, slow-listener disconnects and stable caller-home binding. Both peers enforce the stable 2.x admission boundary. Existing usage/CLI pages now describe scoped telemetry freshness, conditional delegation capacity, explicit selected-skill publication and a settings TUI using the live registry. The shipped workflow removes blanket permission requests, inherited peer authority and the assumption that missing quota means full quota. The pin is unchanged; these additions are explicitly newer observations.

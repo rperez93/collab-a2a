@@ -1,0 +1,590 @@
+{
+  "version": "2.0.0",
+  "python": "3.13.12",
+  "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "timestamp_utc": "2026-09-20T04:22:21Z",
+  "soak": {
+    "workload": {
+      "warmup_rounds": 2,
+      "measured_rounds": 8,
+      "events_per_round": 2000,
+      "fast_subscribers": 4,
+      "slow_subscribers": 1,
+      "message_characters": 256,
+      "worker_metrics_and_expanded_formatting_every": 20
+    },
+    "wall_seconds_including_warmup": 79.3216,
+    "cpu_seconds_including_warmup": 17.6771,
+    "slow_disconnects": 1,
+    "samples": [
+      {
+        "round": 1,
+        "phase": "warmup",
+        "events_total": 2000,
+        "wall_seconds": 6.9255,
+        "cpu_seconds": 1.5241,
+        "rss_kib": 32580,
+        "python_live_bytes": 183921,
+        "python_peak_bytes": 592044,
+        "open_fds": 13,
+        "slow_queue": 1,
+        "persistent_bytes": 10952781
+      },
+      {
+        "round": 2,
+        "phase": "warmup",
+        "events_total": 4000,
+        "wall_seconds": 6.8115,
+        "cpu_seconds": 1.5031,
+        "rss_kib": 34616,
+        "python_live_bytes": 179325,
+        "python_peak_bytes": 592044,
+        "open_fds": 13,
+        "slow_queue": 1,
+        "persistent_bytes": 13760589
+      },
+      {
+        "round": 3,
+        "phase": "measured",
+        "events_total": 6000,
+        "wall_seconds": 7.6782,
+        "cpu_seconds": 1.5999,
+        "rss_kib": 34868,
+        "python_live_bytes": 175914,
+        "python_peak_bytes": 592044,
+        "open_fds": 13,
+        "slow_queue": 1,
+        "persistent_bytes": 16486525
+      },
+      {
+        "round": 4,
+        "phase": "measured",
+        "events_total": 8000,
+        "wall_seconds": 7.7543,
+        "cpu_seconds": 1.6384,
+        "rss_kib": 34872,
+        "python_live_bytes": 171090,
+        "python_peak_bytes": 592044,
+        "open_fds": 13,
+        "slow_queue": 1,
+        "persistent_bytes": 19183741
+      },
+      {
+        "round": 5,
+        "phase": "measured",
+        "events_total": 10000,
+        "wall_seconds": 7.9381,
+        "cpu_seconds": 1.7963,
+        "rss_kib": 34872,
+        "python_live_bytes": 166298,
+        "python_peak_bytes": 592044,
+        "open_fds": 13,
+        "slow_queue": 1,
+        "persistent_bytes": 21692542
+      },
+      {
+        "round": 6,
+        "phase": "measured",
+        "events_total": 12000,
+        "wall_seconds": 8.279,
+        "cpu_seconds": 1.8167,
+        "rss_kib": 34884,
+        "python_live_bytes": 161720,
+        "python_peak_bytes": 592044,
+        "open_fds": 13,
+        "slow_queue": 1,
+        "persistent_bytes": 24391758
+      },
+      {
+        "round": 7,
+        "phase": "measured",
+        "events_total": 14000,
+        "wall_seconds": 9.8328,
+        "cpu_seconds": 2.0887,
+        "rss_kib": 34884,
+        "python_live_bytes": 174682,
+        "python_peak_bytes": 592044,
+        "open_fds": 13,
+        "slow_queue": 1,
+        "persistent_bytes": 27090974
+      },
+      {
+        "round": 8,
+        "phase": "measured",
+        "events_total": 16000,
+        "wall_seconds": 8.2307,
+        "cpu_seconds": 1.9689,
+        "rss_kib": 34884,
+        "python_live_bytes": 187853,
+        "python_peak_bytes": 592044,
+        "open_fds": 13,
+        "slow_queue": 1,
+        "persistent_bytes": 29794286
+      },
+      {
+        "round": 9,
+        "phase": "measured",
+        "events_total": 18000,
+        "wall_seconds": 7.7356,
+        "cpu_seconds": 1.8252,
+        "rss_kib": 34884,
+        "python_live_bytes": 183120,
+        "python_peak_bytes": 592044,
+        "open_fds": 13,
+        "slow_queue": 1,
+        "persistent_bytes": 32296894
+      },
+      {
+        "round": 10,
+        "phase": "measured",
+        "events_total": 20000,
+        "wall_seconds": 8.1217,
+        "cpu_seconds": 1.9015,
+        "rss_kib": 34884,
+        "python_live_bytes": 178456,
+        "python_peak_bytes": 592044,
+        "open_fds": 13,
+        "slow_queue": 1,
+        "persistent_bytes": 35000206
+      }
+    ],
+    "largest_retained_growth_after_warmup": [
+      {
+        "location": "/tmp/collab-observability-work/benchmarks/runtime.py:85",
+        "bytes": 3712,
+        "count": 16
+      },
+      {
+        "location": "/tmp/collab-observability-work/src/collab/server/store.py:568",
+        "bytes": -2416,
+        "count": -14
+      },
+      {
+        "location": "/tmp/collab-observability-work/src/collab/client/inbox.py:178",
+        "bytes": -2384,
+        "count": -16
+      },
+      {
+        "location": "/tmp/collab-observability-work/src/collab/client/inbox.py:166",
+        "bytes": -1200,
+        "count": -15
+      },
+      {
+        "location": "/tmp/collab-observability-work/src/collab/server/store.py:575",
+        "bytes": -1040,
+        "count": -13
+      },
+      {
+        "location": "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py:558",
+        "bytes": 560,
+        "count": 10
+      },
+      {
+        "location": "/tmp/collab-observability-work/benchmarks/runtime.py:84",
+        "bytes": 512,
+        "count": 16
+      },
+      {
+        "location": "/tmp/collab-observability-work/src/collab/client/inbox.py:172",
+        "bytes": -336,
+        "count": -14
+      }
+    ],
+    "limits": "In-process durable writes and fanout with tracemalloc enabled. RSS includes interpreter and SQLite; persistent logs intentionally grow. Excludes HTTP/TLS and provider CLI memory.",
+    "rusage_rss_high_water_kib": 34100,
+    "sampled_rss_peak_kib": 34884,
+    "rss_note": "rusage high-water may be inherited across exec and differs from /proc on this WSL host; sampled current RSS is the basis of the stated memory range."
+  },
+  "panels": {
+    "viewer": {
+      "wall_seconds": 12.0,
+      "cpu_seconds": 0.08,
+      "one_core_percent": 0.667,
+      "initial_rss_kib": 30696,
+      "initial_open_fds": 3,
+      "samples": [
+        {
+          "cpu_seconds": 0.09,
+          "rss_kib": 30704,
+          "open_fds": 3,
+          "elapsed_seconds": 2.001
+        },
+        {
+          "cpu_seconds": 0.11,
+          "rss_kib": 30708,
+          "open_fds": 3,
+          "elapsed_seconds": 4.001
+        },
+        {
+          "cpu_seconds": 0.12,
+          "rss_kib": 30712,
+          "open_fds": 3,
+          "elapsed_seconds": 6.001
+        },
+        {
+          "cpu_seconds": 0.13,
+          "rss_kib": 30716,
+          "open_fds": 3,
+          "elapsed_seconds": 8.002
+        },
+        {
+          "cpu_seconds": 0.15,
+          "rss_kib": 30724,
+          "open_fds": 3,
+          "elapsed_seconds": 10.002
+        },
+        {
+          "cpu_seconds": 0.16,
+          "rss_kib": 31260,
+          "open_fds": 3,
+          "elapsed_seconds": 12.0
+        }
+      ],
+      "tmux_server_cpu_seconds": 0.0,
+      "limits": "120x40 real curses terminal; isolated tmux server; idle fake demo log or settings. 2s warmup. Python pane CPU excludes its child processes and tmux; no real session I/O."
+    },
+    "settings": {
+      "wall_seconds": 12.002,
+      "cpu_seconds": 0.04,
+      "one_core_percent": 0.333,
+      "initial_rss_kib": 27956,
+      "initial_open_fds": 3,
+      "samples": [
+        {
+          "cpu_seconds": 0.08,
+          "rss_kib": 27956,
+          "open_fds": 3,
+          "elapsed_seconds": 2.001
+        },
+        {
+          "cpu_seconds": 0.09,
+          "rss_kib": 27956,
+          "open_fds": 3,
+          "elapsed_seconds": 4.001
+        },
+        {
+          "cpu_seconds": 0.1,
+          "rss_kib": 27956,
+          "open_fds": 3,
+          "elapsed_seconds": 6.002
+        },
+        {
+          "cpu_seconds": 0.11,
+          "rss_kib": 27956,
+          "open_fds": 3,
+          "elapsed_seconds": 8.002
+        },
+        {
+          "cpu_seconds": 0.12,
+          "rss_kib": 27956,
+          "open_fds": 3,
+          "elapsed_seconds": 10.003
+        },
+        {
+          "cpu_seconds": 0.12,
+          "rss_kib": 27956,
+          "open_fds": 3,
+          "elapsed_seconds": 12.002
+        }
+      ],
+      "tmux_server_cpu_seconds": 0.0,
+      "limits": "120x40 real curses terminal; isolated tmux server; idle fake demo log or settings. 2s warmup. Python pane CPU excludes its child processes and tmux; no real session I/O."
+    }
+  },
+  "probes": {
+    "source-flood": {
+      "wall_seconds": 0.0198,
+      "controller_cpu_seconds": 0.0052,
+      "controller_rss_peak_kib": 24692,
+      "controller_rss_peak_growth_kib": 1236,
+      "controller_rss_before_kib": 23460,
+      "controller_rss_after_kib": 23660,
+      "python_live_bytes": 472,
+      "python_peak_bytes": 1248334,
+      "fd_before": 4,
+      "fd_after": 4,
+      "outcome": {
+        "error_type": "SubprocessError"
+      },
+      "limits": "Fresh Python process; fake local child; .5s deadline. CPU/RSS are the Python controller, excluding fake child and any real provider CLI."
+    },
+    "source-silent": {
+      "wall_seconds": 0.5041,
+      "controller_cpu_seconds": 0.0031,
+      "controller_rss_peak_kib": 23436,
+      "controller_rss_peak_growth_kib": 88,
+      "controller_rss_before_kib": 23352,
+      "controller_rss_after_kib": 23436,
+      "python_live_bytes": 592,
+      "python_peak_bytes": 60390,
+      "fd_before": 4,
+      "fd_after": 4,
+      "outcome": {
+        "error_type": "TimeoutExpired"
+      },
+      "limits": "Fresh Python process; fake local child; .5s deadline. CPU/RSS are the Python controller, excluding fake child and any real provider CLI."
+    },
+    "worker-flood": {
+      "wall_seconds": 0.0179,
+      "controller_cpu_seconds": 0.0063,
+      "controller_rss_peak_kib": 24040,
+      "controller_rss_peak_growth_kib": 584,
+      "controller_rss_before_kib": 23460,
+      "controller_rss_after_kib": 24040,
+      "python_live_bytes": 3743,
+      "python_peak_bytes": 573463,
+      "fd_before": 4,
+      "fd_after": 4,
+      "outcome": {
+        "error_type": "WorkerRuntimeError"
+      },
+      "limits": "Fresh Python process; fake local child; .5s deadline. CPU/RSS are the Python controller, excluding fake child and any real provider CLI."
+    },
+    "worker-silent": {
+      "wall_seconds": 0.5059,
+      "controller_cpu_seconds": 0.0085,
+      "controller_rss_peak_kib": 23596,
+      "controller_rss_peak_growth_kib": 144,
+      "controller_rss_before_kib": 23456,
+      "controller_rss_after_kib": 23596,
+      "python_live_bytes": 3649,
+      "python_peak_bytes": 302542,
+      "fd_before": 4,
+      "fd_after": 4,
+      "outcome": {
+        "error_type": "WorkerRuntimeError"
+      },
+      "limits": "Fresh Python process; fake local child; .5s deadline. CPU/RSS are the Python controller, excluding fake child and any real provider CLI."
+    },
+    "quota-flood": {
+      "wall_seconds": 0.0197,
+      "controller_cpu_seconds": 0.0036,
+      "controller_rss_peak_kib": 24180,
+      "controller_rss_peak_growth_kib": 724,
+      "controller_rss_before_kib": 23460,
+      "controller_rss_after_kib": 23828,
+      "python_live_bytes": 1215,
+      "python_peak_bytes": 414424,
+      "fd_before": 4,
+      "fd_after": 4,
+      "outcome": {
+        "report": {},
+        "reason": "codex answered nothing"
+      },
+      "limits": "Fresh Python process; fake local child; .5s deadline. CPU/RSS are the Python controller, excluding fake child and any real provider CLI."
+    },
+    "quota-silent": {
+      "wall_seconds": 0.505,
+      "controller_cpu_seconds": 0.0038,
+      "controller_rss_peak_kib": 23696,
+      "controller_rss_peak_growth_kib": 244,
+      "controller_rss_before_kib": 23456,
+      "controller_rss_after_kib": 23696,
+      "python_live_bytes": 1199,
+      "python_peak_bytes": 87188,
+      "fd_before": 4,
+      "fd_after": 4,
+      "outcome": {
+        "report": {},
+        "reason": "codex did not answer in time"
+      },
+      "limits": "Fresh Python process; fake local child; .5s deadline. CPU/RSS are the Python controller, excluding fake child and any real provider CLI."
+    }
+  },
+  "viewer_allocation_investigation": {
+    "samples": [
+      {
+        "elapsed_seconds": 5.006,
+        "rss_kib": 35452,
+        "open_fds": 4,
+        "python_live_bytes": 2055072,
+        "python_peak_bytes": 2375924
+      },
+      {
+        "elapsed_seconds": 10.041,
+        "rss_kib": 36232,
+        "open_fds": 4,
+        "python_live_bytes": 2061294,
+        "python_peak_bytes": 2409448
+      },
+      {
+        "elapsed_seconds": 15.077,
+        "rss_kib": 37124,
+        "open_fds": 4,
+        "python_live_bytes": 2063038,
+        "python_peak_bytes": 2419173
+      },
+      {
+        "elapsed_seconds": 20.113,
+        "rss_kib": 37668,
+        "open_fds": 4,
+        "python_live_bytes": 2063735,
+        "python_peak_bytes": 2419173
+      },
+      {
+        "elapsed_seconds": 25.155,
+        "rss_kib": 37668,
+        "open_fds": 4,
+        "python_live_bytes": 2064697,
+        "python_peak_bytes": 2419173
+      },
+      {
+        "elapsed_seconds": 30.19,
+        "rss_kib": 37668,
+        "open_fds": 4,
+        "python_live_bytes": 2065420,
+        "python_peak_bytes": 2419173
+      },
+      {
+        "elapsed_seconds": 35.23,
+        "rss_kib": 37720,
+        "open_fds": 4,
+        "python_live_bytes": 2066072,
+        "python_peak_bytes": 2419173
+      },
+      {
+        "elapsed_seconds": 40.265,
+        "rss_kib": 37976,
+        "open_fds": 4,
+        "python_live_bytes": 2066517,
+        "python_peak_bytes": 2419173
+      },
+      {
+        "elapsed_seconds": 45.299,
+        "rss_kib": 37976,
+        "open_fds": 4,
+        "python_live_bytes": 2067075,
+        "python_peak_bytes": 2419173
+      },
+      {
+        "elapsed_seconds": 50.336,
+        "rss_kib": 37976,
+        "open_fds": 4,
+        "python_live_bytes": 2067816,
+        "python_peak_bytes": 2419173
+      },
+      {
+        "elapsed_seconds": 55.369,
+        "rss_kib": 37976,
+        "open_fds": 4,
+        "python_live_bytes": 2068503,
+        "python_peak_bytes": 2419173
+      },
+      {
+        "elapsed_seconds": 60.403,
+        "rss_kib": 37976,
+        "open_fds": 4,
+        "python_live_bytes": 2069103,
+        "python_peak_bytes": 2419173
+      }
+    ],
+    "growth_after_first_sample": [
+      {
+        "location": "/tmp/collab-observability-work/benchmarks/panel_memory.py:45",
+        "bytes": 2768,
+        "count": 30
+      },
+      {
+        "location": "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/subprocess.py:1036",
+        "bytes": 2006,
+        "count": 34
+      },
+      {
+        "location": "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/subprocess.py:1031",
+        "bytes": 2006,
+        "count": 34
+      },
+      {
+        "location": "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py:173",
+        "bytes": 1641,
+        "count": 15
+      },
+      {
+        "location": "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py:537",
+        "bytes": 1143,
+        "count": 8
+      },
+      {
+        "location": "/tmp/collab-observability-work/benchmarks/panel_memory.py:41",
+        "bytes": 1096,
+        "count": 23
+      },
+      {
+        "location": "/tmp/collab-observability-work/benchmarks/panel_memory.py:37",
+        "bytes": 704,
+        "count": 22
+      },
+      {
+        "location": "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py:560",
+        "bytes": 568,
+        "count": 2
+      },
+      {
+        "location": "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py:423",
+        "bytes": 568,
+        "count": 2
+      },
+      {
+        "location": "/tmp/collab-observability-work/benchmarks/runtime.py:28",
+        "bytes": 308,
+        "count": 11
+      },
+      {
+        "location": "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/calendar.py:128",
+        "bytes": -303,
+        "count": -6
+      },
+      {
+        "location": "/tmp/collab-observability-work/benchmarks/panel_memory.py:44",
+        "bytes": 240,
+        "count": 3
+      },
+      {
+        "location": "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py:508",
+        "bytes": 224,
+        "count": 2
+      },
+      {
+        "location": "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py:558",
+        "bytes": 224,
+        "count": 4
+      },
+      {
+        "location": "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/pathlib/_local.py:274",
+        "bytes": 210,
+        "count": 4
+      }
+    ],
+    "limits": "Idle demo viewer, 120x40 real tmux. Tracemalloc and forced GC every 5s. No real session or provider calls."
+  },
+  "stdlib_subprocess_control": {
+    "python": "3.13.12",
+    "samples": [
+      {
+        "calls": 500,
+        "retained_subprocess_bytes": 9676,
+        "live_text_wrappers": 3,
+        "open_fds": 4
+      },
+      {
+        "calls": 1000,
+        "retained_subprocess_bytes": 9145,
+        "live_text_wrappers": 3,
+        "open_fds": 4
+      },
+      {
+        "calls": 1500,
+        "retained_subprocess_bytes": 10089,
+        "live_text_wrappers": 3,
+        "open_fds": 4
+      },
+      {
+        "calls": 2000,
+        "retained_subprocess_bytes": 11269,
+        "live_text_wrappers": 3,
+        "open_fds": 4
+      }
+    ],
+    "limits": "No Collab imports. Retained allocations do not prove a leak; this short run does not establish a long-term bound."
+  }
+}

@@ -96,9 +96,11 @@ OPEN_EXCLUDES = frozenset({"TASK_STATE_COMPLETED", "TASK_STATE_CANCELED",
 
 
 def _on_auth_error(conn, exc: Exception) -> JSONResponse:
+    from .auth import CompatibilityError
+    incompatible = isinstance(exc, CompatibilityError)
     return JSONResponse(
-        {"error": "unauthorized", "detail": str(exc)},
-        status_code=401,
+        {"error": "incompatible" if incompatible else "unauthorized", "detail": str(exc)},
+        status_code=426 if incompatible else 401,
         headers={"WWW-Authenticate": 'Bearer realm="collab"'},
     )
 
@@ -251,6 +253,13 @@ def create_app(
         person = store.participant_by_id(pid)
         return (person.name if person else name), pid
 
+    @app.get(f"{EXT_PREFIX}/compatibility", tags=["collab"])
+    async def compatibility() -> dict[str, Any]:
+        # Public and side-effect free: an incompatible guest must learn this
+        # before posting its invite or creating any participant identity.
+        from ..compatibility import advertisement
+        return advertisement()
+
     # --- extension: join ------------------------------------------------------
 
     @app.post(f"{EXT_PREFIX}/join", tags=["collab"])
@@ -265,6 +274,11 @@ def create_app(
             raise HTTPException(status_code=429, detail="too many join attempts, slow down")
 
         body = await request.json()
+        from ..compatibility import incompatibility
+        if reason := incompatibility(body, role="guest"):
+            # Before consume_invite and before name lookup/rebinding. Refusing
+            # old software must not spend a one-use invite or retire a token.
+            raise HTTPException(status_code=426, detail=reason)
         code = str(body.get("invite") or "")
         ok, reason = await asyncio.to_thread(store.consume_invite, code)
         if not ok:
@@ -380,6 +394,22 @@ def create_app(
             store.history, room=room, viewer=user.id, limit=min(limit, 500)
         )
         return {"events": [e.to_dict() for e in items]}
+
+    @app.get(f"{EXT_PREFIX}/replay", tags=["collab"])
+    async def replay(request: Request, after: int = 0, through: int | None = None,
+                     limit: int = 200) -> dict[str, Any]:
+        """A bounded, authenticated page, including progress past hidden DMs."""
+        user = _require(request)
+        if after < 0 or (through is not None and through < after):
+            raise HTTPException(status_code=400, detail="invalid replay cursor")
+        top = store.max_seq() if through is None else min(through, store.max_seq())
+        top = max(after, top)
+        items, cursor = await asyncio.to_thread(
+            store.since_page, after, viewer=user.id, limit=max(1, min(limit, 500)),
+            through=top,
+        )
+        return {"events": [e.to_dict() for e in items], "cursor": cursor,
+                "through": top}
 
     # --- extension: rooms, roster, snapshot -------------------------------------
 
@@ -636,7 +666,7 @@ def create_app(
                 # Absent means leave it. `or ""` here wiped the description
                 # on every claim, complete and move — the verb that reads the
                 # detail before taking the work deleted it for everyone after.
-                detail=(clip(str(body["detail"]), MAX_DETAIL)
+                detail=(_content(str(body["detail"]), "detail")
                         if "detail" in body else None),
                 join_open_batch=joins_a_batch,
                 project=(project or None) if action == "propose" else project,
@@ -825,7 +855,7 @@ def create_app(
         # store's None sentinel could not be reached by any caller. Absent
         # means leave it; present and empty means clear it. Third time this
         # class has failed here; the test now posts every verb and checks.
-        detail = (clip(str(body["detail"]), MAX_DETAIL)
+        detail = (_content(str(body["detail"]), "detail")
                   if "detail" in body else None)
         record = await asyncio.to_thread(
             store.upsert_project, project_id, title=title,
@@ -861,8 +891,8 @@ def create_app(
             raise HTTPException(status_code=400,
                                 detail="subject is 'project' or 'task'")
         subject_id = clip(str(body.get("id") or ""), MAX_NAME)
-        text = clip(str(body.get("text") or ""), MAX_DETAIL)
-        if not text:
+        text = _content(str(body.get("text") or ""), "comment")
+        if not text.strip():
             raise HTTPException(status_code=400, detail="a comment needs text")
 
         # READ FOR ITS TITLE ONLY. Whether the subject EXISTS is settled by the
@@ -1256,6 +1286,9 @@ def create_app(
             "uptime_seconds": round(time.time() - app.state.started_at, 1),
         }
 
+    from ..skill_sharing import register_routes as register_skill_routes
+    register_skill_routes(app, store, _require)
+
     # Mounted after the extension routes on purpose: the SDK's REST binding
     # registers a greedy "/{tenant}" mount at the root, and Starlette matches in
     # registration order, so anything mounted before it would be shadowed.
@@ -1332,3 +1365,16 @@ def create_app(
         on_error=_on_auth_error,
     )
     return app
+
+
+def _content(value: str, field: str) -> str:
+    """Content is stored whole or refused, never silently cut mid-instruction.
+
+    Eight thousand characters matches chat's finite storage limit and accepts
+    the 4,001-character comments that previously succeeded while losing data.
+    """
+    if len(value) > MAX_DETAIL:
+        raise HTTPException(status_code=413,
+                            detail=f"{field} is {len(value):,} characters; the limit "
+                                   f"is {MAX_DETAIL:,} — split it or send a file")
+    return value

@@ -277,3 +277,15 @@ day they were written, and the outside world is what changes. Hence the short
 
 [^stats-src]: collab.stats — the canonical shape and everything translated into it
 [^config-src]: collab.config — the stats source command and its interval
+
+# Version 2 observations — later than the pin
+
+The v2 implementation adds explicit provider snapshot adapters, separate native
+subagent and conversation-worker objects, and independent observation clocks for
+quota, model, context, cost and tokens. Missing counters stay unknown. Exact-model
+price maps produce labeled estimates, not billing claims. Partial reports merge
+locally and on the hub; child-only reports cannot refresh main measurements.
+`collab capacity` computes a conditional additional-child estimate from fresh
+applicable quota, known concurrency/active counts and calibrated or explicitly
+budgeted per-child cost. It neither launches nor reserves quota. Provider source
+contracts and limitations are in `docs/telemetry.md` and `docs/skills-and-capacity.md`.

@@ -37,6 +37,7 @@ class HubClient:
                  *, timeout: float = DEFAULT_TIMEOUT) -> None:
         self.base_url = base_url.rstrip("/")
         self.token = token
+        self._verified_url: str | None = None
         import httpx
 
         self._client = httpx.Client(timeout=timeout, follow_redirects=True)
@@ -52,18 +53,31 @@ class HubClient:
 
     # --- plumbing -------------------------------------------------------------
 
-    def _headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
-        h = dict(extra or {})
-        if self.token:
-            h["Authorization"] = f"Bearer {self.token}"
-        return h
+    def _headers(self, extra: dict[str, str] | None = None, *, authenticated: bool = True) -> dict[str, str]:
+        from ..compatibility import request_headers
+        if authenticated and self.token:
+            self.check_host()
+        return request_headers(self.token if authenticated else None, extra)
+
+    def check_host(self, *, force: bool = False) -> None:
+        if not force and self._verified_url == self.base_url:
+            return
+        from ..compatibility import incompatibility
+        try:
+            peer = self._bounded_request('GET', f'{EXT_PREFIX}/compatibility',
+                maximum=64 * 1024, label='compatibility', authenticated=False)
+        except HubError as exc:
+            raise HubError('cannot establish host compatibility; Collab 2.0.0 or newer stable 2.x is required on both sides — upgrade/restart the host or check its address. No invite or bearer was submitted') from exc
+        if reason := incompatibility(peer, role='host'):
+            raise HubError(reason + '; no invite or bearer was submitted')
+        self._verified_url = self.base_url
 
     def _request(self, method: str, path: str, **kw: Any) -> Any:
         import httpx
 
         try:
             r = self._client.request(
-                method, f"{self.base_url}{path}", headers=self._headers(kw.pop("headers", None)), **kw
+                method, f"{self.base_url}{path}", headers=self._headers(kw.pop("headers", None)), follow_redirects=False, **kw
             )
         except httpx.HTTPError as exc:
             raise HubError(f"cannot reach the hub at {self.base_url}: {exc}") from exc
@@ -77,7 +91,7 @@ class HubClient:
                 detail = ""
             raise HubError(detail or "the hub rejected this token — you may have "
                                      "been removed from the session")
-        if r.status_code >= 400:
+        if r.status_code >= 300:
             detail = ""
             try:
                 detail = r.json().get("detail") or r.text
@@ -89,9 +103,11 @@ class HubClient:
     # --- session --------------------------------------------------------------
 
     def join(self, invite: str, name: str, hello: dict[str, Any]) -> dict[str, Any]:
+        from ..compatibility import advertisement
+        self.check_host(force=True)
         return self._request(
             "POST", f"{EXT_PREFIX}/join",
-            json={"invite": invite, "name": name, "hello": hello},
+            json={"invite": invite, "name": name, "hello": hello, **advertisement()},
         )
 
     def health(self) -> dict[str, Any]:
@@ -109,6 +125,85 @@ class HubClient:
             params["room"] = room
         data = self._request("GET", f"{EXT_PREFIX}/history", params=params)
         return [Envelope.from_dict(e) for e in data["events"]]
+
+    def replay_page(self, after: int = 0, *, through: int | None = None,
+                    limit: int = 200) -> dict[str, Any]:
+        """Read one viewer-filtered page without guessing from global seqs."""
+        params = {"after": after, "limit": limit}
+        if through is not None:
+            params["through"] = through
+        # Eight MiB fits 200 complete 8,000-character messages even when
+        # every character occupies four bytes. Compatibility needs only 64 KiB.
+        return self._bounded_get(f"{EXT_PREFIX}/replay", params=params,
+                                 maximum=8 * 1024 * 1024, label="replay")
+
+    def _bounded_get(self, path: str, *, params: dict[str, Any],
+                     maximum: int, label: str) -> Any:
+        return self._bounded_request("GET", path, params=params, maximum=maximum, label=label)
+
+    def _bounded_request(self, method: str, path: str, *, params: dict[str, Any] | None = None,
+                         body: dict[str, Any] | None = None, maximum: int, label: str,
+                         authenticated: bool = True) -> Any:
+        # Inspect bytes as they arrive. A buffered request has already spent
+        # the memory before it can reject a flooding or malformed peer.
+        import httpx
+        import time
+
+        deadline = time.monotonic() + 15
+        try:
+            with self._client.stream(
+                method, f"{self.base_url}{path}", params=params, json=body,
+                headers=self._headers({"Accept-Encoding": "identity"}, authenticated=authenticated), timeout=5.0,
+                follow_redirects=False,
+            ) as response:
+                if response.headers.get("content-encoding", "identity") != "identity":
+                    raise HubError(f"hub sent compressed {label} despite identity encoding")
+                data = bytearray()
+                # No chunk_size: waiting to fill a large chunk lets a peer
+                # dribble bytes forever without returning to the clock check.
+                for chunk in response.iter_raw():
+                    if time.monotonic() > deadline:
+                        raise HubError(f"{label} page exceeded its 15-second deadline")
+                    if len(data) + len(chunk) > maximum:
+                        raise HubError(f"{label} page exceeded the {maximum // 1024} KiB response limit")
+                    data.extend(chunk)
+                import json
+                try:
+                    parsed = json.loads(data)
+                except (ValueError, UnicodeError, RecursionError) as exc:
+                    raise HubError(f"hub returned an invalid {label} page ({response.status_code})") from exc
+                if response.status_code >= 300:
+                    detail = str(parsed.get('detail', 'request refused'))[:1000] if isinstance(parsed, dict) else 'request refused'
+                    raise HubError(f"{label} failed ({response.status_code}): {detail}")
+                return parsed
+        except httpx.HTTPError as exc:
+            raise HubError(f"cannot read {label} from the hub: {exc}") from exc
+
+    def publish_skill(self, publication: dict[str, Any]) -> dict[str, Any]:
+        from ..skill_sharing import validate_publication
+        return self._bounded_request("POST", f"{EXT_PREFIX}/shared-skills",
+                                     body=validate_publication(publication), maximum=64 * 1024,
+                                     label='skill publication')
+
+    def shared_skills(self, *, after: str = '', limit: int = 100) -> dict[str, Any]:
+        return self._bounded_get(f"{EXT_PREFIX}/shared-skills",
+                                 params={'after': after, 'limit': limit},
+                                 maximum=1024 * 1024, label='shared skill inventory')
+
+    def shared_skill(self, skill_id: str) -> dict[str, Any]:
+        if not re.fullmatch(r"sk_[0-9a-f]{20}", skill_id):
+            raise ValueError("invalid shared skill ID")
+        from ..skill_sharing import validate_publication
+        data = self._bounded_get(f"{EXT_PREFIX}/shared-skills/{skill_id}", params={},
+                                 maximum=512 * 1024, label='shared skill')
+        validate_publication(data.get('skill'))
+        return data
+
+    def withdraw_skill(self, skill_id: str) -> dict[str, Any]:
+        if not re.fullmatch(r"sk_[0-9a-f]{20}", skill_id):
+            raise ValueError("invalid shared skill ID")
+        return self._bounded_request("DELETE", f"{EXT_PREFIX}/shared-skills/{skill_id}",
+                                     maximum=64 * 1024, label='skill withdrawal')
 
     def rooms(self) -> list[str]:
         return self._request("GET", f"{EXT_PREFIX}/rooms")["rooms"]

@@ -367,7 +367,7 @@ def as_bob(session, client):
 
     token = new_secret()
     session["store"].add_participant("bob2", token, is_host=False, meta={})
-    return {"Authorization": f"Bearer {token}"}
+    return {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {token}"}
 
 
 def test_a_stranger_cannot_delete_your_project(api, client, as_bob):
@@ -410,7 +410,7 @@ def test_the_owner_and_the_host_both_may(api, session, client):
 
     r = client.post(EXT + "/projects",
                     json={"action": "assign", "id": made["id"], "owner": "bob"},
-                    headers={"Authorization": f"Bearer {token}"})
+                    headers={"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {token}"})
     assert r.status_code == 200, "the owner may hand it on"
 
     # alice is the host and did not own it after that reassignment
@@ -702,7 +702,7 @@ def test_taking_a_name_does_not_take_the_projects_that_went_with_it(session, api
 
     r = client.post(EXT + "/projects",
                     json={"action": "delete", "id": made["id"]},
-                    headers={"Authorization": f"Bearer {impostor}"})
+                    headers={"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {impostor}"})
     assert r.status_code == 403, "the name is not the person"
 
 

@@ -26,8 +26,8 @@ EXT = "/ext/collab/v1"
 
 def _join(client, session, name):
     r = client.post(f"{EXT}/join",
-                    json={"invite": session["invite"], "name": name, "hello": {}})
-    return {"Authorization": f"Bearer {r.json()['token']}"}
+                    json={"protocol_major": 2, "version": "2.0.0", "invite": session["invite"], "name": name, "hello": {}})
+    return {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {r.json()['token']}"}
 
 
 def _upload(client, headers, content=b"payload", name="build.tar.gz", **params):
@@ -294,7 +294,7 @@ def test_an_older_session_opens_and_still_serves_its_room_file(old_hub):
         from fastapi.testclient import TestClient
 
         with TestClient(app) as client:
-            bob = {"Authorization": "Bearer bbb"}
+            bob = {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": "Bearer bbb"}
             listed = client.get(f"{EXT}/files", headers=bob).json()["files"]
             assert [f["id"] for f in listed] == ["f_old"]
             got = client.get(f"{EXT}/files/f_old/content", headers=bob)

@@ -57,7 +57,7 @@ async def event_stream(request: Request, hub: Hub, participant: str,
                 cursor = resume_from
                 while cursor < top:
                     missed, moved = await asyncio.to_thread(
-                        hub.store.since_page, cursor, viewer=participant
+                        hub.store.since_page, cursor, viewer=participant, through=top
                     )
                     for env in missed:
                         yield _frame(env)
@@ -85,9 +85,15 @@ async def event_stream(request: Request, hub: Hub, participant: str,
                     # than merely quiet, so a dead link is detectable.
                     yield {"event": "keepalive", "data": "{}"}
                     continue
-                if item is None:  # revoked
-                    yield {"event": "closed", "data": json.dumps({"reason": "revoked"})}
+                if item is None:
+                    reason = sub.close_reason or "revoked"
+                    # Old clients treat `closed` as revocation; a distinct
+                    # retry frame followed by EOF also makes them reconnect.
+                    yield {"event": "retry" if reason == "slow-consumer" else "closed",
+                           "data": json.dumps({"reason": reason})}
                     break
+                if resume_from is not None and resume_from <= top and item.seq <= cursor:
+                    continue  # a publish during replay was also queued live
                 yield _frame(item)
         except asyncio.CancelledError:
             raise

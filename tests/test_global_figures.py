@@ -34,11 +34,11 @@ from collab.server.store import Store
 
 
 def _headers(token):
-    return {"Authorization": f"Bearer {token}"}
+    return {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {token}"}
 
 
 def _join(client, session, name):
-    r = client.post("/ext/collab/v1/join", json={
+    r = client.post("/ext/collab/v1/join", json={"protocol_major": 2, "version": "2.0.0",
         "invite": session["invite"], "name": name, "hello": {},
     })
     assert r.status_code == 200, r.text

@@ -9,7 +9,7 @@ a correct answer.
 from __future__ import annotations
 
 import asyncio
-import contextlib
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -22,12 +22,14 @@ from ..protocol import (DEFAULT_ROOM, Envelope, KIND_CHAT, KIND_HELLO,
 from .store import Store
 
 QUEUE_MAXSIZE = 1000
+logger = logging.getLogger(__name__)
 
 
 @dataclass
 class Subscription:
     participant: str  # a participant id, never a display name
     queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(QUEUE_MAXSIZE))
+    close_reason: str = ""
 
 
 class Hub:
@@ -39,6 +41,8 @@ class Hub:
         self._host_name = host_name
         self._subs: dict[str, list[Subscription]] = {}
         self._lock = asyncio.Lock()
+        self._publish_lock = asyncio.Lock()
+        self.slow_subscriber_disconnects = 0
 
     @property
     def host_name(self) -> str:
@@ -88,9 +92,13 @@ class Hub:
             # Usage rides along with ordinary traffic; fold it into the sender's
             # profile so the next roster everyone reads is already current.
             await asyncio.to_thread(self.merge_stats, env.sender_id, env.stats)
-        env, created = await asyncio.to_thread(self.store.append_once, env)
-        if created:
-            await self._deliver(env)
+        # Thread completion order is not persistence order. A later seq must
+        # never reach a subscriber before an earlier one: reconnect resumes
+        # from the highest durable seq and would otherwise skip the earlier.
+        async with self._publish_lock:
+            env, created = await asyncio.to_thread(self.store.append_once, env)
+            if created:
+                await self._deliver(env)
         return env
 
     async def _deliver(self, env: Envelope) -> None:
@@ -100,16 +108,23 @@ class Hub:
             if not self._entitled(env, name):
                 continue
             for sub in subs:
+                if sub.close_reason:
+                    continue
                 try:
                     sub.queue.put_nowait(env)
                 except asyncio.QueueFull:
-                    # A consumer this far behind is not coming back; it will
-                    # resume from its stored seq on reconnect rather than
-                    # holding up delivery for everyone else.
-                    with contextlib.suppress(asyncio.QueueEmpty):
+                    # Evicting the oldest and continuing lets a higher seq
+                    # advance the client's resume cursor past unseen events.
+                    # Stop this feed before any later seq escapes instead;
+                    # the durable log will replay from the last received seq.
+                    sub.close_reason = "slow-consumer"
+                    self.slow_subscriber_disconnects += 1
+                    while not sub.queue.empty():
                         sub.queue.get_nowait()
-                    with contextlib.suppress(asyncio.QueueFull):
-                        sub.queue.put_nowait(env)
+                    sub.queue.put_nowait(None)
+                    logger.warning("closing slow subscriber participant=%s seq=%s "
+                                   "disconnects=%s", name, env.seq,
+                                   self.slow_subscriber_disconnects)
 
     @staticmethod
     def _entitled(env: Envelope, participant_id: str) -> bool:
@@ -134,9 +149,11 @@ class Hub:
             async with self._lock:
                 subs = self._subs.pop(participant_id, [])
             for sub in subs:
+                sub.close_reason = "revoked"
                 # None is the close sentinel the SSE generator watches for.
-                with contextlib.suppress(asyncio.QueueFull):
-                    sub.queue.put_nowait(None)
+                while not sub.queue.empty():
+                    sub.queue.get_nowait()
+                sub.queue.put_nowait(None)
             await self.publish(Envelope(
                 kind=KIND_PRESENCE, sender=name, sender_id=participant_id,
                 room=DEFAULT_ROOM,
@@ -202,7 +219,8 @@ class Hub:
         merged = dict(meta.get("stats") or {})
         # Usage goes onto every participant's roster, so it is capped in size
         # and shape on the way in rather than trusted.
-        incoming = sanitise(stats)
+        from ..telemetry import stamp_observations
+        incoming = stamp_observations(sanitise(stats))
 
         # A `quotas` MAP IS THE WHOLE STATEMENT ABOUT THE QUOTA, AND ONLY A
         # MAP IS. This rule has been wrong twice, in opposite directions, and
@@ -238,6 +256,10 @@ class Hub:
         # with no stats file posts `stats: {}` beside its machine: neither
         # carries `quotas`, so neither can touch it.
         if "quotas" in incoming:
+            if incoming["quotas"]:
+                incoming.setdefault("quota_observed_at", incoming.get("observed_at") or time.time())
+            else:
+                incoming.pop("quota_observed_at", None)
             for key in QUOTA_FIELDS:
                 merged.pop(key, None)
 
@@ -407,6 +429,7 @@ class Hub:
             "recent": [e.to_dict() for e in self.store.history(viewer=viewer, limit=history)],
             "seq": self.store.max_seq(),
             "server_time": time.time(),
+            "slow_subscriber_disconnects": self.slow_subscriber_disconnects,
             # WHICH COLLAB THIS HUB RUNS. The hub is its own process, and an
             # upgrade underneath a running session leaves it on the old code as
             # surely as it leaves the daemon — the daemon says so about itself

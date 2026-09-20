@@ -179,7 +179,7 @@ def _prepare(agent: str, model: str, scratch: Path, env: dict[str, str]) -> tupl
         schema.write_text(json.dumps(OUTPUT_SCHEMA))
         output = scratch / "response.json"
         args = ["codex", "exec", "--ignore-user-config", "--ignore-rules", "--ephemeral",
-                "--skip-git-repo-check", "--sandbox", "read-only", "--model", model,
+                "--json", "--skip-git-repo-check", "--sandbox", "read-only", "--model", model,
                 "--output-schema", str(schema), "--output-last-message", str(output),
                 "-c", 'approval_policy="never"', "-c", 'web_search="disabled"',
                 "-c", "project_doc_max_bytes=0", "-c", "agents.enabled=false"]
@@ -368,7 +368,7 @@ def _decode(agent: str, output: bytes, result_path: Path | None) -> dict:
 
 
 async def run_turn(agent: str, model: str, payload: dict, directory: Path, *,
-                   command: list[str] | None = None, timeout: float = 60) -> dict:
+                   command: list[str] | None = None, timeout: float = 60, on_usage=None) -> dict:
     """Run one isolated turn; custom adapters use JSON stdin and JSON stdout.
 
     ``directory`` identifies the owning profile but is deliberately never the
@@ -410,4 +410,9 @@ async def run_turn(agent: str, model: str, payload: dict, directory: Path, *,
             data = (INSTRUCTIONS + "\nResponse schema:\n" + json.dumps(OUTPUT_SCHEMA)
                     + "\nConversation input:\n").encode() + encoded
         output = await _exchange(args, data, scratch, env, timeout, result_path)
+        if on_usage is not None and decoder != "custom":
+            from .worker_usage import extract
+            figures = extract(decoder, output, model)
+            if figures:
+                on_usage(figures)
         return _decode(decoder, output, result_path)

@@ -49,3 +49,9 @@ def local_rules(cwd: Path | None = None) -> Path | None:
         return candidate.resolve() if candidate.is_file() else None
     except OSError:
         return None
+
+
+def configured_rules() -> str:
+    """Local user guidance; the shipped template remains available verbatim."""
+    from .runtime_settings import get
+    return get("rules_text") or default_rules()

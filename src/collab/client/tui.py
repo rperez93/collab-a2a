@@ -61,6 +61,7 @@ from ..config import watch_roster_settings, watch_status_settings
 from ..stats import read_stats
 from . import statusbar
 from .statusbar import money_text
+from . import participant_metrics
 from .daemon_files import DaemonPaths, effective_state, is_running, read_status
 from .inbox import Inbox
 
@@ -87,8 +88,8 @@ POLL_SECONDS = 0.25
 CHAT_KEYS = ("wheel/tab: pane · ↑↓ pgup/pgdn: scroll · [ ]: roster · "
              "End/G: newest · Home/g: top · q: quit")
 CHAT_KEYS_SHORT = "End/G: newest · tab: pane · q: quit"
-ROSTER_KEYS = "wheel · ↑↓ pgup/pgdn: scroll · Home/End: top/end · q: quit"
-ROSTER_KEYS_SHORT = "Home/End: top/end · q: quit"
+ROSTER_KEYS = "J/K: select · Enter/click: details · v: all details · f: fields · ↑↓/wheel: scroll · q: quit"
+ROSTER_KEYS_SHORT = "J/K: pick · ↵: more · q: quit"
 
 #: KINDS THAT ARE STATE, NOT CONVERSATION.
 #:
@@ -1242,6 +1243,10 @@ class Row:
     #: name in the person's colour, the state and the focus in the neutral one.
     #: Splitting the row in two would have split a line that reads as one thing.
     head: int = 0
+    #: Stable participant identity and disclosure target, independent of row
+    #: position: wrapping or a roster refresh must not open somebody else.
+    participant: str = ""
+    participant_header: bool = False
 
 
 #: The bubble's strokes. Drawn with box characters because the frame is what
@@ -1716,7 +1721,13 @@ def ago(seen: Any) -> str:
     return f"{minutes // (60 * 24)}d ago"
 
 
-def roster_rows(model: Model, width: int) -> list[Row]:
+def participant_key(person: dict[str, Any]) -> str:
+    return str(person.get("id") or person.get("participant_id") or person.get("name") or "?")
+
+
+def roster_rows(model: Model, width: int, *,
+                fields: list[str] | tuple[str, ...] | None = None,
+                opened: set[str] | None = None, selected: str = "") -> list[Row]:
     """One participant per two lines: who and how, then what they are using.
 
     WHO IS ONLINE IS SOMETHING WE LEARN FROM THE HUB, so when we cannot reach
@@ -1773,7 +1784,9 @@ def roster_rows(model: Model, width: int) -> list[Row]:
         # The state keeps its own green/grey: whether someone is here is not a
         # matter of who they are, and a dot that carried both meanings would
         # tell you neither.
-        who = f" {glyph} {name}{suffix}"
+        person_id = participant_key(person)
+        disclosure = ("▾" if person_id in (opened or set()) else "▸") if fields is not None else " "
+        who = f"{disclosure}{glyph} {name}{suffix}"
         head = who
         # COLUMNS, not characters. A name in Japanese costs two columns per
         # glyph, so `28 - len(head)` left the state word starting at column 28,
@@ -1793,15 +1806,31 @@ def roster_rows(model: Model, width: int) -> list[Row]:
         # with a wide name was built wider than the pane and the terminal
         # dropped whatever hung over — the state word, usually.
         rows.append(Row(_clip(head, width), C_ONLINE if online else C_OFFLINE,
-                        curses.A_BOLD if online else curses.A_DIM,
-                        edge=colour, head=min(len(who), width)))
+                        (curses.A_BOLD if online else curses.A_DIM)
+                        | (curses.A_REVERSE if person_id == selected else 0),
+                        edge=colour, head=min(len(who), width),
+                        participant=person_id, participant_header=True))
 
         # The description line too, dimmed: it belongs to that person, and at a
         # glance the two lines read as one block rather than as two entries.
-        detail = stat_line(person) or "nothing shared yet"
-        line = f"     {detail}"[:width]
-        rows.append(Row(line, C_DIM, curses.A_DIM,
-                        edge=colour, head=len(line)))
+        if fields is None:
+            lines = [_clip(stat_line(person) or "nothing shared yet", max(width - 5, 0))]
+        else:
+            detailed = person_id in (opened or set())
+            facts = participant_metrics.metric_lines(person, fields, detailed=detailed)
+            if detailed:
+                # Four columns are enough for a double-width glyph. Passing
+                # width 1 to the word wrapper cannot consume such a glyph.
+                lines = [part for fact in facts for part in _wrap(fact, max(width - 5, 4))]
+            else:
+                summary = " · ".join(facts) or "fields hidden"
+                lines = [_clip(summary, max(width - 5, 0))]
+        for detail in lines:
+            line = _clip(f"     {detail}", width)
+            rows.append(Row(line, C_TEXT if fields is not None else C_DIM,
+                            0 if fields is not None else curses.A_DIM,
+                            edge=0 if fields is not None else colour,
+                            head=0 if fields is not None else len(line), participant=person_id))
     if not rows:
         rows.append(Row("  (waiting for the roster…)", C_DIM, curses.A_DIM))
     return rows
@@ -1833,6 +1862,16 @@ class Tui:
         self.focus = "roster" if self.view == "roster" else "chat"
         #: Messages unfolded by hand. Empty = everything folded.
         self.expanded: set[int] = set()
+        self.selected_participant = ""
+        # Overrides belong to this viewer. A changed saved setting clears
+        # them so live configuration remains an effective control.
+        self.participant_overrides: dict[str, bool] = {}
+        self.participant_details: bool | None = None
+        self.participant_field_mode = 0
+        self._participant_settings_key: tuple = ()
+        self._roster_top = -1
+        self._roster_controls: tuple[int, int, int, int] = (-1, 0, 0, 0)
+        self._participant_anchor = ""
         #: Where the conversation starts on screen and which rows are showing.
         #: Filled by draw() and read by the click handler; it also lets the
         #: wheel tell the panes apart.
@@ -1949,11 +1988,37 @@ class Tui:
         people = self.model.participants()
         # The whole roster as text, plus a coarse clock: the rows carry «4m
         # ago», which goes stale while the snapshot itself says the same thing.
+        from ..config import watch_participant_settings
+        settings = watch_participant_settings()
+        settings_key = (tuple(settings["fields"]), settings["details"])
+        if self._participant_settings_key and settings_key != self._participant_settings_key:
+            self.participant_overrides.clear()
+            self.participant_details = None
+            self.participant_field_mode = 0
+        self._participant_settings_key = settings_key
+        configured = settings["fields"]
+        fields = configured if self.participant_field_mode == 0 else [
+            f for f in configured if f in (participant_metrics.RESOURCE_FIELDS
+                if self.participant_field_mode == 1 else participant_metrics.IDENTITY_FIELDS)]
+        details = settings["details"] if self.participant_details is None else self.participant_details
+        ids = [participant_key(person) for person in people]
+        self.participant_overrides = {k: v for k, v in self.participant_overrides.items() if k in ids}
+        if self.selected_participant not in ids:
+            self.selected_participant = ids[0] if ids else ""
+        opened = {k for k in ids if self.participant_overrides.get(k, details)}
         key = (width, _theme_version(), _colour_stamp(), repr(people),
-               int(time.monotonic() // 5))
+               int(time.monotonic() // 5), tuple(fields), frozenset(opened),
+               self.selected_participant, self.participant_field_mode, self.focus,
+               self.model.roster_is_current())
         if key != self._roster_key:
             self._roster_key = key
-            self._roster_rows = roster_rows(self.model, width)
+            self._roster_rows = roster_rows(
+                self.model, width, fields=fields, opened=opened,
+                selected=self.selected_participant if self.focus == "roster" else "")
+            if self._participant_anchor:
+                self.roster.offset = next((i for i, row in enumerate(self._roster_rows)
+                    if row.participant_header and row.participant == self._participant_anchor), self.roster.offset)
+                self._participant_anchor = ""
         return self._roster_rows
 
     # -- drawing ------------------------------------------------------------
@@ -2028,6 +2093,8 @@ class Tui:
         # Forgotten with the frame they belong to: a gutter left behind from a
         # pane that no longer has one is a click target over live text.
         self._gutters = []
+        self._roster_top = -1
+        self._roster_controls = (-1, 0, 0, 0)
         # ASKED ONCE PER FRAME, from the config, so a change made in another
         # terminal reaches a pane that is already open — the same live reload
         # `theme` has. `load_config` re-reads only when the file's mtime or
@@ -2197,7 +2264,9 @@ class Tui:
         if hidden or self.roster.offset:
             more = ("▴" if self.roster.offset else "") + ("▾" if hidden else "")
             label += f" · scroll {more} (tab, or [ ])"
-        self._hline(win, body_top, width, label)
+        self._hline(win, body_top, width, label.replace("PARTICIPANTS", "PEOPLE") if width < 32 else label)
+        self._paint_participant_controls(win, body_top, width)
+        self._roster_top = body_top + 1
         for i in range(self.roster.rows):
             idx = self.roster.offset + i
             if idx >= len(rows):
@@ -2730,10 +2799,19 @@ class Tui:
             # else it does nothing — the mouse must not move the focus or
             # select by accident while somebody is reading.
             if state & _CLICK:
-                if y == self._jump_y:
+                control_y, left, middle, right = self._roster_controls
+                if y == control_y and left <= x < right:
+                    if x < middle:
+                        self._toggle_participant_details()
+                    else:
+                        self.participant_field_mode = (self.participant_field_mode + 1) % 3
+                elif y == self._jump_y:
                     self._bar_click(x)
                 elif not self._gutter_click(x, y):
-                    self._fold_at(y, where)
+                    if where == "roster":
+                        self._participant_click(x, y)
+                    else:
+                        self._fold_at(y, where)
             return True
         # Scrolling a pane is also a statement about which one you care about.
         if self.view == "both":
@@ -2741,6 +2819,66 @@ class Tui:
         if where == "chat":
             self.reach_back() if up else self.reach_forward()
         return True
+
+    def _paint_participant_controls(self, win, y: int, width: int, *, reserve: int = 0) -> None:
+        # Controls live on the existing heading: spending another content row
+        # made the minimum-size panel show controls and half a participant.
+        mode = ("saved", "usage", "identity")[self.participant_field_mode]
+        first, second = ("[v details]", f"[f {mode}]") if width >= 48 else ("[v]", "[f]")
+        text = first + " " + second
+        left = max(width - reserve - len(text) - 2, 0)
+        # Clear the heading underneath, including the gap before the status
+        # badge. Painting just the buttons left fragments of the title on
+        # either side (seen in an actual 38-column tmux capture).
+        start = max(left - 1, 0)
+        room = max(min(width - reserve, width - 1) - start, 0)
+        win.addnstr(y, start, " " * room, room, curses.color_pair(C_TITLE))
+        win.addnstr(y, left, text, width - left - 1,
+                    curses.color_pair(C_ACCENT) | curses.A_BOLD)
+        self._roster_controls = (y, left, left + len(first) + 1, left + len(text))
+
+    def _participant_click(self, x: int, y: int) -> None:
+        index = self.roster.offset + y - self._roster_top
+        if self._roster_top < 0 or not (self._roster_top <= y < self._roster_top + self.roster.rows):
+            return
+        if not 0 <= index < len(self._roster_rows):
+            return
+        row = self._roster_rows[index]
+        if row.participant:
+            self.focus = "roster"
+            self.selected_participant = row.participant
+            if row.participant_header:
+                self._disclose_participant()
+
+    def _toggle_participant_details(self) -> None:
+        from ..config import watch_participant_settings
+        current = watch_participant_settings()["details"] if self.participant_details is None else self.participant_details
+        self.participant_details = not current
+        self.participant_overrides.clear()
+        self._participant_anchor = self.selected_participant
+
+    def _disclose_participant(self, opened: bool | None = None) -> None:
+        from ..config import watch_participant_settings
+        if not self.selected_participant:
+            return
+        default = watch_participant_settings()["details"] if self.participant_details is None else self.participant_details
+        current = self.participant_overrides.get(self.selected_participant, default)
+        self.participant_overrides[self.selected_participant] = not current if opened is None else opened
+        self._participant_anchor = self.selected_participant
+
+    def _select_participant(self, step: int) -> None:
+        headers = [(i, row.participant) for i, row in enumerate(self._roster_rows)
+                   if row.participant_header]
+        if not headers:
+            return
+        current = next((i for i, (_, ident) in enumerate(headers)
+                        if ident == self.selected_participant), 0)
+        target = min(max(current + step, 0), len(headers) - 1)
+        index, self.selected_participant = headers[target]
+        if index < self.roster.offset:
+            self.roster.offset = index
+        elif index >= self.roster.offset + self.roster.rows:
+            self.roster.offset = max(0, index - self.roster.rows + 1)
 
     #: The keys that mean «earlier» and «later». Reaching for more history is
     #: decided by which of these was pressed, not by where the offset landed.
@@ -2760,7 +2898,16 @@ class Tui:
         if key in (ord("q"), ord("Q")):
             return False
         if key == ord("\t"):
-            self.focus = "roster" if self.focus == "chat" else "chat"
+            if self.view == "both":
+                self.focus = "roster" if self.focus == "chat" else "chat"
+        elif self.focus == "roster" and key in (ord("J"), ord("K")):
+            self._select_participant(1 if key == ord("J") else -1)
+        elif self.focus == "roster" and key in (10, 13, curses.KEY_ENTER, ord(" "), curses.KEY_LEFT, curses.KEY_RIGHT):
+            self._disclose_participant(False if key == curses.KEY_LEFT else True if key == curses.KEY_RIGHT else None)
+        elif self.focus == "roster" and key == ord("v"):
+            self._toggle_participant_details()
+        elif self.focus == "roster" and key == ord("f"):
+            self.participant_field_mode = (self.participant_field_mode + 1) % 3
         elif key in (curses.KEY_UP, ord("k")):
             pane.scroll(-1)
         elif key in (curses.KEY_DOWN, ord("j")):
@@ -2903,6 +3050,7 @@ class Tui:
         gutter = self._gutter_width(pane)
         content = width - 1 - gutter * 2
         if self.view == "roster":
+            self._roster_top = 1
             rows = self._roster(content)
             label = self._roster_label(people)
         else:
@@ -2913,6 +3061,8 @@ class Tui:
         state = m.state()
         state_pair = {"live": C_ONLINE, "reconnecting": C_WARN}.get(state, C_OFFLINE)
         head = f" {m.title()} · {label} "
+        if self.view == "roster":
+            head = f" {label} · {m.title()} " if width >= 48 else f" PEOPLE ({len(people)}) · {m.title()} "
         win.attron(curses.color_pair(C_TITLE) | curses.A_BOLD)
         win.hline(0, 0, " ", width)
         win.addnstr(0, 0, head[:max(width - 1, 0)], max(width - 1, 0))
@@ -2923,6 +3073,7 @@ class Tui:
                     curses.color_pair(state_pair) | curses.A_BOLD)
 
         if self.view == "roster":
+            self._paint_participant_controls(win, 0, width, reserve=len(badge) + 1)
             # THE ROW IS RESERVED BY WHICHEVER SWITCH CLAIMS IT — the same
             # test `_hint` makes before it draws one. Reserved on `_bar` alone,
             # the session's row drawn with the personal one off landed on top
@@ -3038,14 +3189,6 @@ def run(profile: SessionProfile, view: str = "both", limit: int = OPEN_WITH,
     tui = Tui(model, view=view, follow_layout=follow_layout)
 
     def loop(win) -> int:
-        # The mouse, for the «show more» button and the wheel. mouseinterval(0)
-        # delivers the click on press instead of waiting for a double click,
-        # which feels like an odd lag on a button.
-        try:
-            curses.mousemask(curses.ALL_MOUSE_EVENTS)
-            curses.mouseinterval(0)
-        except curses.error:
-            pass
         _init_colors()
         try:
             curses.curs_set(0)
@@ -3061,7 +3204,11 @@ def run(profile: SessionProfile, view: str = "both", limit: int = OPEN_WITH,
             # Buttons only. Asking for motion reports as well turns every
             # pointer movement over the pane into an event to drain.
             curses.mousemask(curses.ALL_MOUSE_EVENTS)
-            curses.mouseinterval(0)
+            # Zero delivered one press/release pair and then swallowed every
+            # later SGR click on this ncurses build, measured in real tmux.
+            # A 100 ms click interval accepts repeated clicks and the wheel;
+            # the host integration test exercises that exact input stream.
+            curses.mouseinterval(100)
         except (AttributeError, curses.error):
             pass
         # Swallow the terminal's own replies rather than treating them as input.

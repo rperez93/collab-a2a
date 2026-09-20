@@ -49,8 +49,11 @@ def _save(db, data):
     db.execute("INSERT OR REPLACE INTO notice VALUES(1,?)", (json.dumps(data),))
 
 
-def claim(root: Path, *, now: float | None = None, repeat: float = 300,
-          min_gap: float = 15, lease: float = 120) -> dict | None:
+def claim(root: Path, *, now: float | None = None, repeat: float | None = None,
+          min_gap: float | None = None, lease: float = 120) -> dict | None:
+    from .runtime_settings import get
+    repeat = get("worker_notice_repeat") if repeat is None else repeat
+    min_gap = get("worker_notice_gap") if min_gap is None else min_gap
     if not enabled(root):
         return None
     state = Store(root).status()

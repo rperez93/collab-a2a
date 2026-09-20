@@ -15,7 +15,7 @@ from collab.client import tui
 
 def join(client, invite, name):
     return client.post("/ext/collab/v1/join",
-                       json={"name": name, "invite": invite, "meta": {}})
+                       json={"protocol_major": 2, "version": "2.0.0", "name": name, "invite": invite, "meta": {}})
 
 
 def token_of(response):
@@ -25,7 +25,7 @@ def token_of(response):
 
 def roster(client, token):
     r = client.get("/ext/collab/v1/snapshot",
-                   headers={"Authorization": f"Bearer {token}"})
+                   headers={"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {token}"})
     assert r.status_code < 400, r.text
     return r.json()["participants"]
 
@@ -47,7 +47,7 @@ def set_colour(client, token, value):
     # My first version of this posted {"figures", "identity"} and failed against
     # correct code — a test that invents its own protocol proves nothing.
     return client.post("/ext/collab/v1/stats",
-                       headers={"Authorization": f"Bearer {token}"},
+                       headers={"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {token}"},
                        json={"stats": {}, "color": value})
 
 
@@ -107,7 +107,7 @@ def test_setting_a_colour_does_not_wipe_the_rest_of_the_identity(
     """`/stats` merges rather than replaces — reporting one number used to
     erase everything else, and a colour must not bring that back."""
     client.post("/ext/collab/v1/stats",
-                headers={"Authorization": f"Bearer {bob}"},
+                headers={"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {bob}"},
                 json={"stats": {"spend_usd": 1.5}, "machine": "webapp-box"})
     set_colour(client, bob, "#00cccc")
 

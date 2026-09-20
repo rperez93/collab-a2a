@@ -14,7 +14,7 @@ from collab import activity
 
 
 def _join(client, session, name="bob", **hello):
-    r = client.post("/ext/collab/v1/join", json={
+    r = client.post("/ext/collab/v1/join", json={"protocol_major": 2, "version": "2.0.0",
         "invite": session["invite"], "name": name, "hello": hello or {"focus": "client"},
     })
     assert r.status_code == 200, r.text
@@ -22,7 +22,7 @@ def _join(client, session, name="bob", **hello):
 
 
 def _headers(joined):
-    return {"Authorization": f"Bearer {joined['token']}"}
+    return {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {joined['token']}"}
 
 
 def _roster(client, headers):

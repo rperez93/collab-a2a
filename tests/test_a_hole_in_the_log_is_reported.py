@@ -106,7 +106,8 @@ def test_logs_reports_it(profile, monkeypatch, capsys):
     cli.cmd_logs(argparse.Namespace(lines=40, follow=False, session=None))
 
     out = capsys.readouterr().out
-    assert "never arrived" in out
+    assert "unverified" in out and "never arrived" not in out
+    assert "recv --repair" in out
     assert "3" in out
 
 

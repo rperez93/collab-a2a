@@ -49,7 +49,9 @@ def test_a_profile_reads_back_its_own_figures(tmp_path):
     profile = _profile(tmp_path / ".collab")
     stats.write_stats(profile, {"model": "Opus 5"})
 
-    assert stats.read_stats(profile) == {"model": "Opus 5"}, "and no stamp in them"
+    assert stats.read_stats(profile)["model"] == "Opus 5"
+    assert stats.read_stats(profile)["observed_at"] > 0
+    assert stats.OWNER_KEY not in stats.read_stats(profile)
 
 
 def test_somebody_elses_figures_are_not_published_as_yours(tmp_path):
@@ -78,7 +80,7 @@ def test_a_profile_with_no_participant_id_still_owns_its_figures(tmp_path):
     profile = _profile(tmp_path / ".collab", pid="")
     stats.write_stats(profile, {"model": "Opus 5"})
 
-    assert stats.read_stats(profile) == {"model": "Opus 5"}
+    assert stats.read_stats(profile)["model"] == "Opus 5"
 
 
 # --- the status line, which is where the wrong directory was chosen ---------
@@ -135,6 +137,7 @@ def test_claimed_home_is_none_when_nothing_proves_ownership(repo):
     assert config.claimed_home(repo) is None
 
 
-def test_a_command_still_gets_an_answer(repo):
-    """resolve_home must keep falling back: a command has to act on something."""
-    assert config.resolve_home(cwd=repo) == repo / ".collab"
+def test_ambiguous_command_requires_explicit_identity(repo):
+    """A read must not silently diagnose the wrong participant."""
+    with pytest.raises(config.HomeSelectionError, match="multiple Collab identities"):
+        config.resolve_home(cwd=repo)

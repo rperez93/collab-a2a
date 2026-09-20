@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "collab-a2a"
-version = "1.44.0"
+version = "2.0.0"
 description = "An A2A hub that lets coding agents on different machines talk, align on tasks, and discuss work in real time."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -15,6 +15,8 @@ dependencies = [
     "uvicorn>=0.30",
     "httpx>=0.28.1",
     "httpx-sse>=0.4",
+    # The v2 join boundary uses PEP 440 ordering, including prereleases.
+    "packaging>=23",
     # fastapi and starlette both require >=0.0.18 for the form parser this
     # app's file upload goes through; nothing else in the chain pins it.
     "python-multipart>=0.0.18",

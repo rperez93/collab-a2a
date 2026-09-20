@@ -13,7 +13,9 @@ import json
 import time
 
 from .. import activity, worker, worker_runtime
+from ..runtime_settings import get as setting
 from ..protocol import EXT_PREFIX
+from ..compatibility import request_headers
 
 # A busy room can feed a worker forever. Keep turns separate from daemon beats
 # and cap model invocation frequency; a slow model never blocks SSE or health.
@@ -53,6 +55,7 @@ class Conversation:
         self.task: asyncio.Task | None = None
         self.next_at = 0.0
         self.generation = None
+        self.policy = None
 
     def configured(self) -> bool:
         return (self.root / "worker.db").exists()
@@ -72,6 +75,7 @@ class Conversation:
         if not self.configured():
             return
         store = worker.Store(self.root)
+        worker.notify_repairs(self.root, self.daemon.inbox)
         state = store.snapshot()
         cfg = state["config"]
         generation = state["generation"]
@@ -92,9 +96,13 @@ class Conversation:
                 store = worker.Store(self.root)
                 store.health(error="worker state unavailable", running=False)
             self.task = None
+        policy = (setting("worker_max_attempts"), setting("worker_budget_window"), setting("worker_turn_gap"))
+        if self.policy is not None and self.policy != policy:
+            self.next_at = 0  # reserve_turn rechecks the durable history before launch
+        self.policy = policy
         if time.time() < self.next_at or self.daemon._http is None:
             return
-        self.next_at = time.time() + TURN_GAP
+        self.next_at = time.time() + setting("worker_turn_gap")
         self.task = asyncio.create_task(self.turn())
 
     async def _flush(self, store, generation) -> None:
@@ -109,11 +117,11 @@ class Conversation:
             try:
                 response = await self.daemon._http.post(
                     f"{self.daemon.profile.url}{EXT_PREFIX}/messages",
-                    headers={"Authorization": f"Bearer {self.daemon.profile.token}"},
+                    headers=request_headers(self.daemon.profile.token),
                     json={"kind": "chat", "text": message["text"],
                           "to": message.get("to") or None,
                           "room": message.get("room") or None,
-                          "body": {"collab_worker_delivery": message["id"]}}, timeout=15)
+                          "body": {"collab_worker_delivery": message["id"]}}, timeout=setting("worker_delivery_timeout"))
                 response.raise_for_status()
                 store.acknowledge(message["id"])
             except asyncio.CancelledError:
@@ -121,9 +129,9 @@ class Conversation:
             except Exception as exc:
                 # A departed peer must not hold every other conversation behind
                 # its outbox entry. Keep the entry, retry later, and report it.
-                store.defer(message["id"], retry_at=time.time() + 30,
+                store.defer(message["id"], retry_at=time.time() + setting("worker_retry_delay"),
                             error=type(exc).__name__)
-            if attempts >= 4:
+            if attempts >= setting("worker_delivery_batch"):
                 break
 
     def _source(self, record):
@@ -159,7 +167,7 @@ class Conversation:
             return
         try:
             await self._flush(store, snapshot["generation"])
-            events = self.daemon.inbox.after(snapshot["cursor"], limit=PAGE_SIZE)
+            events = self.daemon.inbox.after(snapshot["cursor"], limit=setting("worker_page_size"))
             selected = []
             size = 0
             for event in events:
@@ -207,6 +215,8 @@ class Conversation:
                 return
             payload = {
                 "scope": cfg["scope"], "summary": snapshot["summary"],
+                "local_guidance": setting("worker_instructions"),
+                "local_rules": setting("rules_text"),
                 "main_context": contexts, "main_answers": answers,
                 "main_activity": _excerpt(json.dumps(activity.read_local(self.daemon.profile), ensure_ascii=False), 4000),
                 "events": selected,
@@ -232,7 +242,8 @@ class Conversation:
             while selected and len(json.dumps(payload, ensure_ascii=False).encode()) > worker_runtime.MAX_INPUT_BYTES - 1024:
                 omitted = selected.pop()
                 cursor = min(cursor, omitted["seq"] - 1)
-            reserved = store.reserve_turn(expected_generation=snapshot["generation"])
+            reserved = store.reserve_turn(expected_generation=snapshot["generation"],
+                limit=setting("worker_max_attempts"), window=setting("worker_budget_window"))
             if reserved is None:
                 return
             if reserved:
@@ -240,8 +251,8 @@ class Conversation:
                 return
             store.health(running=True, expected_generation=snapshot["generation"])
             result = await worker_runtime.run_turn(
-                cfg["agent"], cfg.get("model", ""), payload, self.root / "worker-runtime",
-                command=cfg.get("command") or None, timeout=cfg.get("timeout", 60))
+                cfg["agent"], (setting(f"worker_{cfg['agent']}_model") if cfg.get("model_default") else cfg.get("model", "")), payload, self.root / "worker-runtime",
+                command=cfg.get("command") or None, timeout=setting("worker_timeout"), on_usage=store.record_usage)
             known = {p.get("name") for p in self.daemon.snapshot.get("participants", [])}
             known.update(e["sender"] for e in selected)
             known.update(a["source"]["sender"] for a in answers if "source" in a)
@@ -276,5 +287,5 @@ class Conversation:
             # Exception details can include a bearer URL or provider output;
             # status needs a class of failure, not private subprocess logs.
             detail = str(exc) if isinstance(exc, worker_runtime.WorkerRuntimeError) else type(exc).__name__
-            self.next_at = time.time() + 30
+            self.next_at = time.time() + setting("worker_retry_delay")
             store.health(error=detail[:300], retry_at=self.next_at, running=False, expected_generation=snapshot["generation"])

@@ -132,14 +132,17 @@ speak them.
 
 ### 3.2 The extension surface
 
-All of these require `Authorization: Bearer <participant token>` except `/join`.
+All of these require `Authorization: Bearer <participant token>` except
+`/join`, `/compatibility` and `/health`.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/ext/collab/v1/join` | invite + `hello` → token, id **+ session snapshot**. `409` if the name is taken |
+| `GET` | `/ext/collab/v1/compatibility` | public protocol major and package version; no invite or identity mutation |
+| `POST` | `/ext/collab/v1/join` | compatible version + invite + `hello` → token, id **+ session snapshot**. `426` if incompatible; `409` if the name is taken |
 | `GET` | `/ext/collab/v1/events` | **SSE feed**, honours `Last-Event-ID` |
 | `POST` | `/ext/collab/v1/messages` | post a `chat` envelope (convenience; `SendMessage` does the same). Any other `kind` is `400` |
-| `GET` | `/ext/collab/v1/history` | backfill, `?room=&limit=` |
+| `GET` | `/ext/collab/v1/history` | recent visible history, `?room=&limit=` |
+| `GET` | `/ext/collab/v1/replay` | bounded visible replay, `?after=&through=&limit=`; cursor advances across hidden DMs |
 | `GET`/`POST` | `/ext/collab/v1/rooms` | list / create rooms |
 | `GET` | `/ext/collab/v1/participants` | roster |
 | `GET` | `/ext/collab/v1/snapshot` | roster + tasks + recent messages |
@@ -156,10 +159,30 @@ All of these require `Authorization: Bearer <participant token>` except `/join`.
 
 ## 4. The join handshake
 
+Before sending the invite, the guest reads `GET /ext/collab/v1/compatibility`.
+Both peers must advertise integer `protocol_major: 2` and a stable package
+`version` at least `2.0.0` within major 2. Missing fields, malformed versions,
+pre-release/development versions, older packages and unsupported future protocol
+majors are refused with an upgrade instruction. A2A transport `0.3`/`1.0` support
+is separate from this Collab session boundary.
+
+Every authenticated request also carries `Collab-Protocol-Major: 2` and
+`Collab-Version: 2.0.0` (or the installed stable 2.x version). A valid bearer
+without a compatible advertisement receives `426`, including tokens restored
+from an older hub database. Invalid credentials still receive `401`.
+Clients preflight the public host advertisement before using a saved bearer;
+daemons repeat the check on reconnection before heartbeat or stream traffic.
+The public preflight sends no bearer and does not follow redirects.
+
+The host checks compatibility before spending an invite or creating/rebinding
+an identity. It returns HTTP `426` on refusal. The guest refuses an older or
+unknown host before submitting the invite; the public check writes no state.
+
 `POST /ext/collab/v1/join`
 
 ```jsonc
-{ "invite": "<code>", "name": "bob",
+{ "protocol_major": 2, "version": "2.0.0",
+  "invite": "<code>", "name": "bob",
   "hello": {"repo": "collab", "branch": "main", "focus": "the client side"} }
 ```
 
@@ -450,3 +473,33 @@ sharing off.
 `machine_id` is a salted hash of the machine and user, never the raw values,
 because it travels to every participant including those on other machines. It
 answers "same box as me" and nothing more.
+
+## 11. Version 2 telemetry and selected capabilities
+
+The v2 join boundary is independent of the retained extension URL/version.
+Usage additionally accepts bounded `subagents` and `worker` objects; nested keys
+are explicitly allowlisted. Subagents describe native coding children; workers
+have separate provider/model, enabled/running state, attempts/turns, pending
+requests, errors and optional observed usage. They are never summed implicitly.
+`source`, `observed_at`, `cost_kind`, `cost_scope`, cached token counters and
+context token/window sizes preserve the meaning of each optional observation.
+Model/context/cost/token groups and quota retain separate observation timestamps;
+partial updates do not refresh other groups. Null erases a field; an empty quota
+map replaces prior quota. Prices are local, explicitly configured estimates.
+See [the source contracts](docs/telemetry.md).
+
+Authenticated selected-skill endpoints:
+
+| Method | Path | Meaning |
+|---|---|---|
+| GET | `/ext/collab/v1/shared-skills?after=&limit=` | metadata inventory; at most 200 records |
+| POST | `/ext/collab/v1/shared-skills` | publish or replace own name with name, description, content and SHA-256 |
+| GET | `/ext/collab/v1/shared-skills/{id}` | untrusted UTF-8 entrypoint text, never installed or executed |
+| DELETE | `/ext/collab/v1/shared-skills/{id}` | owner-only withdrawal |
+
+The content ceiling is 64 KiB, request ceiling 512 KiB with a five-second upload
+deadline, owner inventory 20 entries / 512 KiB, room inventory 500 entries.
+IDs distinguish publishers even when names match. Content hashes cover exact
+UTF-8 bytes. References/assets are not automatically uploaded. Capacity estimates
+are computed locally from observations and declared task budgets; they neither
+reserve remote quota nor create native children.

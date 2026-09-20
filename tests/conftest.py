@@ -135,7 +135,7 @@ def client(session):
 
 @pytest.fixture()
 def host_headers(session):
-    return {"Authorization": f"Bearer {session['host_token']}"}
+    return {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {session['host_token']}"}
 
 
 @pytest.fixture()

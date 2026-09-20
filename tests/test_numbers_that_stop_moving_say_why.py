@@ -58,7 +58,7 @@ def isolated_config(tmp_path, monkeypatch):
 
 def _join(base, session, name):
     rr = httpx.post(f"{base}/ext/collab/v1/join",
-                    json={"invite": session["invite"], "name": name, "hello": {}},
+                    json={"protocol_major": 2, "version": "2.0.0", "invite": session["invite"], "name": name, "hello": {}},
                     timeout=10)
     rr.raise_for_status()
     return rr.json()
@@ -100,7 +100,7 @@ def beating_guest(live_server, session, tmp_path, isolated_config):
     thread.start()
     _wait(lambda: (profile.dir / "status.json").exists(), what="the first heartbeat")
     yield {"daemon": daemon, "profile": profile, "base": base,
-           "bob": {"Authorization": f"Bearer {joined['token']}"}}
+           "bob": {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {joined['token']}"}}
     daemon._stop.set()
     if "task" in holder:
         loop.call_soon_threadsafe(holder["task"].cancel)

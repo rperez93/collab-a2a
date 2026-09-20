@@ -216,3 +216,14 @@ or a proxy log. See [the trust model](/operating/security-model.md).
 [^parser-run]: The parser, walked and every subcommand's --help captured
 [^docs-test]: tests/test_docs_match_cli.py — every documented flag must exist
 [^cli-ref]: docs/cli-reference.md — the full flag-by-flag reference for a human
+
+# Version 2 controls — later than the pin
+
+`collab config --tui` is a keyboard/mouse editor for the existing settings
+registry. Model defaults, worker timing/budgets/guidance and participant fields
+reload at operation boundaries. Explicit worker model selections remain pinned.
+`collab skills publish|shared|show|withdraw` exchanges selected skill entrypoints
+as untrusted data, with no automatic installation. `collab capacity` exposes
+conditional delegation estimates. `collab recv --repair` performs bounded,
+authenticated visible-history repair. `listen --kind` and `--no-activity` filter
+full transcript consumers; compact notices remain the default.

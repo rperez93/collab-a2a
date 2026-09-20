@@ -9,6 +9,7 @@ Every global setting collab has is in one file, `~/.config/collab/config.json`,
 and one command reads and writes all of them:
 
 ```bash
+collab config --tui                 # keyboard/mouse settings editor
 collab config                       # every setting, its value and its default
 collab config theme                 # one of them
 collab config theme chat            # set it
@@ -89,6 +90,31 @@ the project. A session belongs to a repository; a theme does not.
 | `watch_status_roster_rows` | how many rows that foot may grow to | they want it shorter, or want every segment on it at once |
 | `watch_status_messages` | show the session's message count on that row | they want the count gone — **this** key, not the order above |
 | `statusline_segments` | what the agent's own status line carries, in order | they want something off their prompt's collab segment, or want it shorter |
+| `watch_participant_fields` | participant details to show, in order; default `['model', 'context', 'quota', 'cost', 'subagents', 'worker', 'location']` | the user wants to tune this behavior; read current value first |
+| `watch_participant_details` | expand participant details initially; default `False` | the user wants to tune this behavior; read current value first |
+| `stats_stale_after` | usage observation age in seconds before showing stale; default `1800` | the user wants to tune this behavior; read current value first |
+| `stats_prices` | exact model prices in USD per million tokens; estimates only; default `{}` | the user wants to tune this behavior; read current value first |
+| `attention_settle` | seconds to collect a burst before an inbox notice; default `20` | the user wants to tune this behavior; read current value first |
+| `attention_gap` | minimum seconds between inbox notices; default `90` | the user wants to tune this behavior; read current value first |
+| `worker_turn_gap` | minimum seconds between conversation worker turns; default `5` | the user wants to tune this behavior; read current value first |
+| `worker_timeout` | deadline in seconds for a conversation worker call; default `60` | the user wants to tune this behavior; read current value first |
+| `worker_max_attempts` | maximum model calls in each worker budget window; default `60` | the user wants to tune this behavior; read current value first |
+| `worker_budget_window` | rolling worker budget window in seconds; default `3600` | the user wants to tune this behavior; read current value first |
+| `worker_retry_delay` | seconds before retrying worker or delivery failures; default `30` | the user wants to tune this behavior; read current value first |
+| `worker_delivery_timeout` | deadline in seconds for publishing a worker reply; default `15` | the user wants to tune this behavior; read current value first |
+| `worker_delivery_batch` | maximum queued replies delivered per worker pass; default `4` | the user wants to tune this behavior; read current value first |
+| `worker_page_size` | maximum inbox events examined per worker turn; default `24` | the user wants to tune this behavior; read current value first |
+| `worker_notice_repeat` | seconds before repeating an unresolved worker notice; default `300` | the user wants to tune this behavior; read current value first |
+| `worker_notice_gap` | minimum seconds between changed worker notices; default `15` | the user wants to tune this behavior; read current value first |
+| `worker_codex_model` | default Codex conversation model; next default-model turn; default `gpt-5.6-luna` | the user wants to tune this behavior; read current value first |
+| `worker_claude_model` | default Claude conversation model; next default-model turn; default `haiku` | the user wants to tune this behavior; read current value first |
+| `worker_opencode_model` | default OpenCode conversation model; empty requires explicit model; default `` | the user wants to tune this behavior; read current value first |
+| `worker_cursor_model` | default Cursor conversation model; empty requires explicit model; default `` | the user wants to tune this behavior; read current value first |
+| `rules_text` | local replacement briefing; empty uses shipped rules; read again on the next rules command | change only when the user wants custom local collaboration guidance |
+| `worker_instructions` | additional local conversation guidance, read on each worker turn; default `` | the user wants to tune this behavior; read current value first |
+| `delegation_max_children` | native child concurrency limit; default `0` means unknown | set only from the actual host's concurrency limit |
+| `delegation_reserve_pct` | percentage points reserved in every applicable quota window; default `20` | preserve room for ongoing work |
+| `delegation_cost_per_child_pct` | calibrated percentage points per child; default `0` means uncalibrated | use measured comparable tasks, never invent a quota-to-child conversion |
 
 `display_name` and `color` here are the **machine-wide** defaults. An agent
 has an external state namespace of its own; named profiles such as
@@ -415,3 +441,14 @@ If a setting is not doing what the user expects, check the value first: the
 commands that predate `collab config` still work and still write the same keys,
 so `collab theme chat`, `collab color '#00cccc'`, `collab stats --share off`
 and `collab watch --layout tmux --save` all show up here.
+
+
+## v2 operational settings
+
+Worker model defaults, deadlines, turn budgets, delivery batches, notice timing,
+participant detail fields and price maps use this same registry. Existing CLI
+commands remain available alongside the settings TUI. Changes apply at the next
+relevant operation; an in-flight model call keeps its original settings and an
+explicit per-session model stays pinned. No failure selects a more expensive
+model. A source's missing usage stays unknown, never zero. Prices are explicit
+USD-per-million rates, not automatically refreshed guesses.
