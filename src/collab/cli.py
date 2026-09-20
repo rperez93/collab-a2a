@@ -42,6 +42,7 @@ from .config import (
     agent_home,
     collab_executable,
     base_home,
+    repo_for_home,
     claimed_home,
     collab_home,
     held_homes,
@@ -304,13 +305,13 @@ def _monitor_hint(profile: SessionProfile, status: dict[str, Any]) -> None:
     if port:
         print(f"  {c('ws', '36')}        ws://127.0.0.1:{port}/events")
     print(f"  {c('no watcher?', '36')} {exe} recv --wait 60  "
-          + dim("— before you end a turn, every turn"))
+          + dim("— at a safe task boundary"))
     # Polling only covers the turns an agent happens to take. The wake covers
     # the hours between them, which is where a message actually goes unread.
     print(f"  {c('cannot hold one?', '36')} {exe} wake agents  "
           + dim("— then `wake set --agent <you>`, from in here"))
-    print(dim("  Either stream carries the same events and the daemon handles"
-              " reconnects,"))
+    print(dim("  The monitor sends compact inbox notices; `recv` reads the"
+              " conversation."))
     print(dim("  but nothing re-arms a watcher you lost: if yours stops, arm it"
               " again."))
     print(dim("  Nothing notices for you either — which is what the loop below"
@@ -662,7 +663,7 @@ def cmd_host(args: argparse.Namespace) -> int:
     try:
         peers.announce(
             session_id=cfg.session_id, name=cfg.host_name, role="host",
-            url=profile.url, repo=str(Path(cfg.home).parent), home=cfg.home,
+            url=profile.url, repo=str(repo_for_home(cfg.home)), home=cfg.home,
             invite=cfg.invite, host_name=cfg.host_name, pid=cfg.pid or None,
         )
     except OSError:
@@ -960,7 +961,8 @@ def _home_from(given: str) -> Path:
     value = Path(given).expanduser()
     if value.is_absolute() or len(value.parts) > 1:
         return value.resolve()
-    return base_home().parent / given
+    from .config import repo_root
+    return repo_root() / given
 
 def _which_agent_to_join(args: argparse.Namespace):
     """Which agent joins: the one asked for, the only one, or the one picked.
@@ -1001,12 +1003,7 @@ def _own_state_dir(args: argparse.Namespace, name: str) -> int | None:
         chosen = _home_from(args.home)
         os.environ["COLLAB_HOME"] = str(chosen)
         ok(f"using {c(chosen.name, '1')} for this session")
-        # Later commands find .collab and .collab-<name> by themselves. A folder
-        # you named yourself is outside that convention, so it has to be carried.
-        if not chosen.name.startswith(COLLAB_DIRNAME):
-            print(dim(f"       later commands need COLLAB_HOME={chosen}"
-                      f" — or name it {COLLAB_DIRNAME}-<something> and they"
-                      " will find it"))
+        print(dim(f"       later commands need COLLAB_HOME={chosen}"))
         return None
 
     # WHICH AGENT IS JOINING is a decision when there is more than one here,
@@ -1149,7 +1146,7 @@ def cmd_join(args: argparse.Namespace) -> int:
             if stopped:
                 # It exists, it just is not up. Only the repo holding it can
                 # bring it back, so say which repo that is.
-                where = Path(stopped[0][0].home).parent.name
+                where = repo_for_home(stopped[0][0].home).name
                 print(dim(f"  but this repo has it on disk, stopped:"))
                 _describe_stopped(stopped)
                 print(dim(f"\n  `collab host` in {where} brings it back"
@@ -1302,7 +1299,7 @@ def _learnings_here(cwd: Path | None = None):
     if where is None:
         profile = SessionProfile.current()
         if profile is not None and profile.home:
-            where = Path(profile.home).parent
+            where = repo_for_home(profile.home)
     key = learnings.repo_key(where)
     return key, learnings.bundle_dir(key)
 
@@ -1618,8 +1615,12 @@ def _learnings_pointer(cwd: Path | None = None) -> str:
 
 def cmd_listen(args: argparse.Namespace) -> int:
     """Stream events as lines.  This is what a Monitor watches."""
+    from . import attention, worker_notices
+
     profile = _require_profile(args)
     inbox = Inbox(profile.dir)
+    compact = getattr(args, "delivery", "notice") == "notice"
+    digest = attention.Digest()
     path = inbox.jsonl
     path.touch(exist_ok=True)
 
@@ -1641,8 +1642,15 @@ def cmd_listen(args: argparse.Namespace) -> int:
     # at the transcript, like `collab watch`, and marks nothing.
     if args.replay:
         for env in inbox.all_events(limit=args.replay):
-            print(_format(env, args.json), flush=True)
-            inbox.mark_read([env.seq])
+            if args.room and env.room != args.room:
+                continue
+            if not args.mine_too and env.sender == profile.name:
+                continue
+            if compact:
+                digest.add(env, time.monotonic())
+            else:
+                print(_format(env, args.json), flush=True)
+                inbox.mark_read([env.seq])
 
     # AND THE STANDING REMINDER COMES DOWN HERE TOO. It shipped on the wake
     # alone, which is the one route the agent reading this stream is told not
@@ -1658,6 +1666,10 @@ def cmd_listen(args: argparse.Namespace) -> int:
     waiting = wake.reminder_waiting(root)
     reminded_at = waiting["at"] if waiting else 0.0
     looked = 0.0
+    notice_checked = float("-inf")
+    backlog_checked = float("-inf")
+    worker_checked = float("-inf")
+    worker_enabled = False
 
     # Say that somebody is reading, for as long as they are. A monitor that
     # dropped —a restart, a compaction, a closed shell— is indistinguishable
@@ -1666,6 +1678,52 @@ def cmd_listen(args: argparse.Namespace) -> int:
     with watching(profile), path.open("r", encoding="utf-8") as fh:
         fh.seek(0, os.SEEK_END)
         while True:
+            now = time.monotonic()
+            if compact and now - worker_checked >= 1.0:
+                worker_checked = now
+                worker_enabled = worker_notices.enabled(root)
+                if worker_enabled:
+                    # The conversation owner consumes ordinary events. Only
+                    # decisions and failures need a turn in the coding agent.
+                    digest.sent(now)
+                    claim = worker_notices.claim(root)
+                    if claim:
+                        try:
+                            print(json.dumps({"kind": "worker_notice", "local": True,
+                                              "text": claim["text"]})
+                                  if args.json else claim["text"], flush=True)
+                        except (OSError, BrokenPipeError):
+                            worker_notices.release(root, claim["token"])
+                            raise
+                        worker_notices.commit(root, claim["token"])
+            # Recover unread backlog on startup and after each consumed page.
+            # Filtering happens in SQL before LIMIT, so presence/own echoes
+            # cannot hide a relevant request forever behind the first page.
+            if compact and not worker_enabled and not digest.count and now - backlog_checked >= 1.0:
+                backlog_checked = now
+                if not attention.pending(root):
+                    for env in inbox.notice_events(
+                            room=args.room,
+                            exclude_sender="" if args.mine_too else profile.name,
+                            exclude_sender_id="" if args.mine_too else profile.participant_id):
+                        digest.add(env, now)
+            # A busy transcript must not open SQLite and a lock for each line.
+            # The counters are constant-memory; checking the doorbell once per
+            # second keeps a remote flood from turning into local IO churn.
+            if compact and not worker_enabled and digest.due(now) and now - notice_checked >= 1.0:
+                notice_checked = now
+                if attention.all_read(root, [*digest.seqs, digest.seq]):
+                    digest.sent(now)
+                elif attention.claim(root, digest.seq, digest.seqs):
+                    message = attention.notice(profile.session_id, digest.count, digest.seq)
+                    try:
+                        print(json.dumps({"kind": "notice", "local": True, "text": message})
+                              if args.json else message, flush=True)
+                    except (OSError, BrokenPipeError):
+                        attention.release(root, digest.seq)
+                        raise
+                    attention.delivered(root, digest.seq, digest.seqs)
+                    digest.sent(now)
             # Throttled, because a busy stream would otherwise stat and read
             # this file once per line for something that changes every ten
             # minutes. A second's lateness on a ten-minute reminder is nothing.
@@ -1690,8 +1748,12 @@ def cmd_listen(args: argparse.Namespace) -> int:
             if args.mine_too is False and env.sender == profile.name:
                 continue
             # flush on every line: a Monitor only sees what is actually written.
-            print(_format(env, args.json), flush=True)
-            inbox.mark_read([env.seq])
+            if compact:
+                if not worker_enabled:
+                    digest.add(env, time.monotonic())
+            else:
+                print(_format(env, args.json), flush=True)
+                inbox.mark_read([env.seq])
 
 
 def _format(env: Envelope, as_json: bool) -> str:
@@ -3183,6 +3245,14 @@ def cmd_update(args: argparse.Namespace) -> int:
 CHECK_OK, CHECK_WARN, CHECK_FAIL = "ok", "warn", "fail"
 
 
+def _worker_status(profile: SessionProfile) -> dict[str, Any] | None:
+    from .worker import Store
+
+    if not (profile.dir / "worker.db").exists():
+        return None
+    return Store(profile.dir).status()
+
+
 def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
     """Is this agent actually collaborating, or only connected?
 
@@ -3324,12 +3394,22 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
     # 2. Is anything READING what arrives?
     armed = len(watchers(profile)) + int(status.get("ws_clients") or 0)
     since_poll = time.time() - last_poll(profile)
+    worker_state = _worker_status(profile)
+    worker_enabled = bool(worker_state and worker_state["enabled"])
+    if worker_enabled:
+        if worker_state["error"]:
+            add("worker", CHECK_FAIL, "the collaboration worker needs recovery",
+                f"{exe} worker status")
+        else:
+            add("worker", CHECK_OK, "the listener owns an enabled collaboration worker")
     if armed:
         add("watching", CHECK_OK, f"{armed} armed on the feed")
     elif last_poll(profile) and since_poll <= POLL_COUNTS_AS_LISTENING:
         add("watching", CHECK_WARN,
             f"polling — last drained {_ago_seconds(since_poll)}",
             f"a watcher on `{exe} listen --follow` hears things as they land")
+    elif worker_enabled and wake.read_config(profile.dir).enabled:
+        add("watching", CHECK_OK, "worker handles conversation; an armed wake carries decisions")
     else:
         # NAMES THE ROUTE THAT FITS THIS TOOL. «Arm a watcher, or poll» is two
         # options and a decision, and the decision turns on a fact about the
@@ -3351,7 +3431,9 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
             fix = (f"if your tool has a watcher that survives a turn, arm it on"
                    f" `{exe} listen --follow`; if it does not, or you are not"
                    f" sure, `{exe} wake agents` lists the recipes")
-        add("watching", CHECK_FAIL, "nothing is reading this session", fix)
+        detail = ("worker handles conversation, but no route carries decisions to you"
+                  if worker_enabled else "nothing is reading this session")
+        add("watching", CHECK_FAIL, detail, fix)
 
     # 2b. If a wake is standing in for a watcher, is it actually working?
     #
@@ -3467,7 +3549,16 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
     #    promptly, so it is not claimed — a check that pretends to measure
     #    acting, and cannot, is worse than one that says what it measures.
     waiting = int(status.get("unread_messages") or 0)
-    if armed:
+    if worker_enabled:
+        if worker_state["pending"]:
+            add("acting", CHECK_WARN, f"{len(worker_state['pending'])} worker decision(s) await your answer",
+                f"{exe} worker pending; {exe} worker reply ID 'decision'")
+        elif worker_state["error"]:
+            add("acting", CHECK_WARN, "conversation progress is blocked by a worker error",
+                f"{exe} worker status")
+        else:
+            add("acting", CHECK_OK, "worker consumes conversation with its own inbox cursor")
+    elif armed:
         add("acting", CHECK_OK, "a watcher is delivering what arrives")
     elif waiting:
         add("acting", CHECK_WARN, f"{waiting} undrained — nobody has taken them",
@@ -3582,7 +3673,7 @@ def _stats_health(profile: SessionProfile) -> tuple[str, str, str] | None:
 
     # Figures the status line received and could give to nobody, more recent
     # than anything this agent owns: the number the room sees stopped here.
-    marker = unattributed(Path(profile.home).parent)
+    marker = unattributed(repo_for_home(profile.home))
     marker_at = _moment(marker.get("at"))
     if marker_at and marker_at > written_at:
         return (CHECK_WARN,
@@ -3749,6 +3840,7 @@ def _wake_deliver(args: argparse.Namespace, wk) -> int:
         # is; anything else defaults to the older wording rather than guessing.
         about = ("your standing reminder"
                  if os.environ.get("COLLAB_WAKE_KIND") == "reminder"
+                 else "a conversation worker needs input" if os.environ.get("COLLAB_WAKE_KIND") == "worker"
                  else "messages arrived")
         code, detail = wk.deliver_to_tmux(
             target, where, expect_pid=args.expect_pid or "",
@@ -3904,6 +3996,7 @@ def cmd_wake(args: argparse.Namespace) -> int:
             # Everything said before this moment is history, not news. Without
             # this line, arming in a room with a few hundred messages behind it
             # delivered every one of them as a single first turn.
+            delivery=getattr(args, "delivery", None) or config.delivery,
             since_seq=Inbox(profile.dir).last_seq())
         if shutil.which(config.command[0]) is None and not Path(config.command[0]).exists():
             # Saved anyway — a command installed later is a fair thing to
@@ -3912,6 +4005,7 @@ def cmd_wake(args: argparse.Namespace) -> int:
             warn(f"{config.command[0]!r} is not on PATH here")
         wk.write_config(root, config)
         ok(f"armed: {shlex.join(config.command)}")
+        print(dim(f"  delivery: {config.delivery}; notices stay outstanding until read"))
         print(dim(f"  fires when messages are unread for {int(config.settle)}s"
                   " and nothing is reading them"))
         print(dim(f"  at most one message turn every {int(config.min_gap)}s,"
@@ -3938,6 +4032,7 @@ def cmd_wake(args: argparse.Namespace) -> int:
             "command": config.command,
             "notify": config.notify,
             "settle": config.settle,
+            "delivery": config.delivery,
             "min_gap": config.min_gap,
             "timeout": config.timeout,
             "attended": reading,
@@ -4406,7 +4501,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         # like nothing being wrong from in here.
         payload["hint"] = (f"NOTHING IS READING THIS SESSION — arm your monitor on "
                            f"`{exe} listen --follow` and keep it armed, or poll "
-                           f"`{exe} recv --wait 60` every turn")
+                           f"`{exe} recv --wait 60` at task boundaries")
     elif payload["polling"] and not payload["watchers"]:
         # Not a fault. Worth one line, because a poller only hears anything on
         # its own next turn, and whoever is waiting for an answer feels that.
@@ -4431,6 +4526,26 @@ def cmd_status(args: argparse.Namespace) -> int:
         f"settle {int(told['settle'])}s · gap {int(told['min_gap'])}s"
         f" · timeout {int(told['timeout'])}s · {told['why']}"
         if told["armed"] else "not armed")
+    worker_state = _worker_status(profile)
+    if worker_state is not None:
+        payload["worker"] = {
+            "enabled": worker_state["enabled"],
+            "running": bool(pid and worker_state["running"]),
+            "error": worker_state["error"],
+            "pending_decisions": len(worker_state["pending"]),
+            "cursor": worker_state["cursor"],
+            "last_progress": worker_state["last_progress"],
+        }
+        if worker_state["enabled"] and pid:
+            payload["conversation_consumer"] = "worker"
+            if not payload["watching"]:
+                payload["hint"] = (
+                    "worker handles the conversation; an armed wake carries decisions"
+                    if told["armed"] else
+                    "worker handles the conversation, but decisions need a route: "
+                    f"arm `{exe} listen --follow` or `{exe} wake set --agent <host>`")
+            if worker_state["error"]:
+                payload["hint"] = "the collaboration worker needs recovery — run `collab worker status`"
     payload["reminder"] = _reminder_line(told)
     # WHAT BECAME OF THE FACTS, in one line and only when there is one to
     # print. Three figures the daemon keeps and nothing showed a person: how
@@ -4492,11 +4607,19 @@ def cmd_status(args: argparse.Namespace) -> int:
     elif payload["polling"]:
         armed_line = (f"polling · last drained "
                       f"{_ago_seconds(payload['polled_seconds_ago'])}")
+    elif payload.get("worker", {}).get("enabled") and pid:
+        armed_line = "worker owns conversation; decisions use wake" if told["armed"] else "worker owns conversation; decision route missing"
     else:
         armed_line = c("nobody is listening", "31")
         if payload["polled_seconds_ago"] is not None:
             armed_line += dim(f" · last poll {_ago_seconds(payload['polled_seconds_ago'])}")
     print(f"  {'monitor':<16} {armed_line}")
+    if worker_info := payload.get("worker"):
+        worker_line = "enabled" if worker_info["enabled"] else "disabled"
+        worker_line += f" · {worker_info['pending_decisions']} pending decisions"
+        if worker_info["error"]:
+            worker_line += " · error (collab worker status)"
+        print(f"  {'worker':<16} {worker_line}")
     # TWO LINES, and no more than two. This command is a page somebody scans,
     # and the whole of `collab wake show` printed inside it would bury the
     # connection state it exists for. One line for the clocks and what they are
@@ -4551,7 +4674,7 @@ def _readvertise(cfg: HubConfig) -> None:
         peers.announce(
             session_id=cfg.session_id, name=cfg.host_name, role="host",
             url=cfg.public_url or cfg.local_url, local_url=cfg.local_url,
-            repo=str(Path(cfg.home).parent), home=cfg.home,
+            repo=str(repo_for_home(cfg.home)), home=cfg.home,
             invite=cfg.invite, host_name=cfg.host_name, pid=cfg.pid,
         )
     except OSError:
@@ -5412,6 +5535,54 @@ def _settle_in_the_session(name: str, args: argparse.Namespace) -> int:
     if name == "share_stats" and not share_stats_enabled():
         print(dim("       others will keep seeing whatever you last shared"))
     return 0
+
+
+def cmd_worker(args: argparse.Namespace) -> int:
+    """Delegate coordination without consuming the coding agent's inbox."""
+    from .worker import Store
+
+    mutation = args.worker_action in ("start", "off", "reply", "context")
+    profile = _require_own_profile(args) if mutation else _require_profile(args)
+    store = Store(profile.dir)
+    try:
+        if args.worker_action == "start":
+            config = {"agent": args.agent, "model": args.model, "scope": args.scope}
+            if args.worker_command is not None:
+                try:
+                    config["command"] = json.loads(args.worker_command)
+                except json.JSONDecodeError as exc:
+                    raise ValueError("--command must be a JSON argv array") from exc
+            store.configure(config)
+            onboard.ensure_daemon(profile)
+            ok("collaboration worker enabled; the listener owns its lifecycle")
+            print("  `collab worker status` reports provider errors and pending decisions")
+        elif args.worker_action == "off":
+            store.off()
+            ok("collaboration worker disabled; pending decisions and replies are preserved")
+        elif args.worker_action == "reply":
+            store.answer(args.decision_id, args.text)
+            ok("decision queued for the collaboration worker")
+        elif args.worker_action == "context":
+            store.context(args.text)
+            ok("context queued for the collaboration worker")
+        elif args.worker_action == "pending":
+            pending = store.pending()
+            if args.json:
+                print(json.dumps(pending, indent=2))
+            elif not pending:
+                print("No pending collaboration decisions.")
+            else:
+                for item in pending:
+                    print(f"{said(item['id'])} [{said(item['reason'])}] {said(item['question'])}")
+                print("Reply with: collab worker reply ID 'your decision'")
+        else:
+            state = store.status()
+            state["daemon_running"] = is_running(profile) is not None
+            print(json.dumps(state, indent=2))
+        return 0
+    except (ValueError, OSError) as exc:
+        fail(str(exc))
+        return 1
 
 
 def cmd_daemon(args: argparse.Namespace) -> int:
@@ -6368,8 +6539,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="interface to bind; 0.0.0.0 exposes it on your LAN")
     h.add_argument("--focus", default="", help="what you are working on, shown to others")
     h.add_argument("--home", default="", metavar="FOLDER",
-                   help="state folder for this session (default .collab, or"
-                        " .collab-<name> when another agent already holds it)")
+                   help="explicit state folder (default: private external repo/agent namespace)")
     h.add_argument("--title", default="",
                    help="a name for the session, shown to everyone")
     h.add_argument("--domain", default="",
@@ -6424,8 +6594,7 @@ def build_parser() -> argparse.ArgumentParser:
     j.add_argument("--name", help="your display name")
     j.add_argument("--focus", default="", help="what you are working on, announced on arrival")
     j.add_argument("--home", default="", metavar="FOLDER",
-                   help="state folder for this session (default .collab, or"
-                        " .collab-<name> when another agent already holds it)")
+                   help="explicit state folder (default: private external repo/agent namespace)")
     j.add_argument("--no-daemon", action="store_true", help="do not start listening")
     j.add_argument("--keep", action="store_true",
                    help="leave it running when this agent quits")
@@ -6476,9 +6645,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     l = sub.add_parser("listen", help="stream events as lines (arm a Monitor on this)")
     l.add_argument("--follow", "-f", action="store_true", help="keep streaming as events arrive")
-    l.add_argument("--json", action="store_true", help="emit raw JSON instead of formatted lines")
+    l.add_argument("--json", action="store_true", help="emit JSON events or notices instead of formatted lines")
     l.add_argument("--room", help="only this room")
     l.add_argument("--limit", type=int, default=50, help="how many past events to print")
+    l.add_argument("--delivery", choices=("notice", "full"), default="notice",
+                   help="coalesced inbox notices (default), or full event text")
     l.add_argument("--replay", type=int, default=0, help="replay this many past events first")
     l.add_argument("--mine-too", action="store_true", default=False,
                    help="include your own messages")
@@ -6584,6 +6755,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="which live session to reach — a Codex thread id, a"
                          " tmux pane. Taken from your own environment if unset")
     wa.add_argument("--notify", help="optional command told after each turn")
+    wa.add_argument("--delivery", choices=("notice", "full"),
+                    help="compact inbox notices (default), or full batch text")
     wa.add_argument("--settle", type=float, metavar="SECONDS",
                     help="how long to let a burst finish before waking")
     wa.add_argument("--min-gap", dest="min_gap", type=float, metavar="SECONDS",
@@ -6880,6 +7053,25 @@ def build_parser() -> argparse.ArgumentParser:
                      help="a number of lines, 'off' to never fold, or 'auto' "
                           "to let the theme decide")
     fld.set_defaults(func=cmd_fold)
+
+    wk = sub.add_parser("worker", help="delegate the collaboration conversation to a scoped worker")
+    wk_sub = wk.add_subparsers(dest="worker_action", required=True)
+    for action in ("start", "off", "status", "pending", "reply", "context"):
+        wp = wk_sub.add_parser(action)
+        add_session_flag(wp)
+        wp.set_defaults(func=cmd_worker)
+        if action == "start":
+            wp.add_argument("--agent", required=True, choices=("codex", "claude", "opencode", "cursor", "command"))
+            wp.add_argument("--model", help="model id (defaults: Codex gpt-5.6-luna, Claude haiku; required for OpenCode/Cursor)")
+            wp.add_argument("--scope", required=True, help="explicit authority delegated to the conversation worker")
+            wp.add_argument("--command", dest="worker_command", help="with --agent command: JSON argv array; reads a JSON turn on stdin")
+        elif action == "reply":
+            wp.add_argument("decision_id")
+            wp.add_argument("text")
+        elif action == "context":
+            wp.add_argument("text")
+        elif action in ("status", "pending"):
+            wp.add_argument("--json", action="store_true")
 
     d = sub.add_parser("daemon", help="manage the listener")
     d.add_argument("action", choices=["start", "stop", "status"], nargs="?", default="status")

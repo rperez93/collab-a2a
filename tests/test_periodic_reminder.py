@@ -45,6 +45,7 @@ def isolated(tmp_path, monkeypatch):
     path = tmp_path / "config.json"
     monkeypatch.setenv("COLLAB_CONFIG", str(path))
     config._CACHE.clear()
+    config.setting("remind_every").write(10)
     yield path
     config._CACHE.clear()
 
@@ -57,7 +58,7 @@ def write_config(path, **values):
 def waker(tmp_path, *, is_host=False, clock=None, armed=True, **cfg):
     clock = clock or [10_000.0]
     if armed:
-        wake.write_config(tmp_path, wake.WakeConfig(
+        wake.write_config(tmp_path, wake.WakeConfig(delivery="full",
             command=cfg.pop("command", ["true"]), **cfg))
     w = wake.Waker(tmp_path, "s_test", attended=lambda: False,
                    now=lambda: clock[0], is_host=is_host)
@@ -337,7 +338,7 @@ def test_an_older_state_file_does_not_read_as_no_message_turn(tmp_path):
          "delivered_at": 10_000.0, "deferred_since": 0.0, "turn_ended": 0.0,
          "alarmed": 0.0, "reminded_at": 10_000.0}), encoding="utf-8")
     clock = [10_010.0]
-    wake.write_config(tmp_path, wake.WakeConfig(command=["true"],
+    wake.write_config(tmp_path, wake.WakeConfig(delivery="full", command=["true"],
                                                 settle=0, min_gap=90))
     w = wake.Waker(tmp_path, "s_test", attended=lambda: False,
                    now=lambda: clock[0])
@@ -475,7 +476,7 @@ def test_a_value_under_the_floor_is_refused_at_the_command(isolated, capsys):
     """
     assert cli.main(["config", "remind_every", "1"]) == 2
     assert "remind_every" in capsys.readouterr().err
-    assert not isolated.exists() or "remind_every" not in json.loads(isolated.read_text())
+    assert json.loads(isolated.read_text())["remind_every"] == 10
     assert cli.main(["config", "remind_every", "0"]) == 0
     assert config.reminder_settings()["every"] == 0
 
@@ -558,7 +559,7 @@ def test_the_daemon_delivers_the_reminder_with_no_messages_at_all(profile, tmp_p
     landed = tmp_path / "landed.txt"
     clock = [10_000.0]
     daemon = a_daemon(profile, clock=clock)
-    wake.write_config(daemon.paths.root, wake.WakeConfig(
+    wake.write_config(daemon.paths.root, wake.WakeConfig(delivery="full",
         command=[sys.executable, "-c",
                  f"import sys; open({str(landed)!r}, 'w').write(sys.stdin.read())"],
         settle=0, min_gap=0))
@@ -580,7 +581,7 @@ def test_a_reminder_is_not_a_task_and_moves_nothing(profile, tmp_path, monkeypat
 
     clock = [10_000.0]
     daemon = a_daemon(profile, clock=clock)
-    wake.write_config(daemon.paths.root, wake.WakeConfig(
+    wake.write_config(daemon.paths.root, wake.WakeConfig(delivery="full",
         command=[sys.executable, "-c", "import sys; sys.stdin.read()"],
         settle=0, min_gap=0))
     posted = []
@@ -602,7 +603,7 @@ def test_a_reminder_is_not_delivered_while_a_turn_is_in_flight(profile):
     """A second heartbeat during a slow turn must not start a second agent."""
     clock = [10_000.0]
     daemon = a_daemon(profile, clock=clock)
-    wake.write_config(daemon.paths.root, wake.WakeConfig(
+    wake.write_config(daemon.paths.root, wake.WakeConfig(delivery="full",
         command=[sys.executable, "-c", "import time; time.sleep(0.4)"],
         settle=0, min_gap=0))
     daemon.waker.due()
@@ -624,7 +625,7 @@ def test_the_reminder_clock_survives_the_daemon_restarting(profile):
     """Otherwise every restart is a reminder, and a crash loop is a flood."""
     clock = [10_000.0]
     daemon = a_daemon(profile, clock=clock)
-    wake.write_config(daemon.paths.root, wake.WakeConfig(command=["true"]))
+    wake.write_config(daemon.paths.root, wake.WakeConfig(delivery="full", command=["true"]))
     daemon.waker.due()
     clock[0] += 10 * MINUTE
     daemon.waker.reminded()
@@ -640,7 +641,7 @@ def test_a_woken_turn_carries_both_when_both_are_due(profile, tmp_path):
     landed = tmp_path / "landed.txt"
     clock = [10_000.0]
     daemon = a_daemon(profile, clock=clock)
-    wake.write_config(daemon.paths.root, wake.WakeConfig(
+    wake.write_config(daemon.paths.root, wake.WakeConfig(delivery="full",
         command=[sys.executable, "-c",
                  f"import sys; open({str(landed)!r}, 'w').write(sys.stdin.read())"],
         settle=0, min_gap=0))
@@ -667,7 +668,7 @@ def test_a_message_a_second_behind_a_reminder_is_not_held(profile, tmp_path):
     landed = tmp_path / "landed.txt"
     clock = [10_000.0]
     daemon = a_daemon(profile, clock=clock)
-    wake.write_config(daemon.paths.root, wake.WakeConfig(
+    wake.write_config(daemon.paths.root, wake.WakeConfig(delivery="full",
         command=[sys.executable, "-c",
                  f"import sys; open({str(landed)!r}, 'a')"
                  ".write(sys.stdin.read() + '\\n=== turn ===\\n')"],
@@ -803,7 +804,7 @@ def test_wake_show_says_the_reminder_is_riding_on_it(profile, monkeypatch):
     agent. A reminder delivered on this wake and never mentioned on it is a
     thing running unattended that nothing anywhere admits to."""
     wake.write_config(d.DaemonPaths(profile.dir).root,
-                      wake.WakeConfig(command=["true"]))
+                      wake.WakeConfig(delivery="full", command=["true"]))
     code, out = _wake_show(profile, monkeypatch)
     assert code == 0
     assert "reminder" in out and "every 10m" in out
@@ -835,6 +836,7 @@ def test_a_reminder_nobody_asked_for_is_not_a_fault(profile, monkeypatch):
     """Nothing configured is a decision, not a fault — the same rule the stats
     check follows. Warning every user who never armed a wake is the noise that
     gets `collab check` ignored."""
+    config.unset_setting("remind_every")
     (profile.dir / "status.json").write_text(json.dumps({
         "state": "live", "heartbeat": time.time(), "unread_messages": 0}))
     monkeypatch.setattr(cli, "is_running", lambda p: 4242)

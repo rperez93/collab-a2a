@@ -190,13 +190,16 @@ in a repository is never asked.
 
 ## The second agent joined into the first agent's `.collab`
 
-Both agents resolved the same default display name, and an older collab took
-a lock carrying its own name as its own claim. Ownership is now read from the
-process chain that claimed the lock, never from the name: a same-named join
-from another agent's process is sent to `.collab-<name>` (then `-2`, `-3`) and
-says so. Re-running `collab join` from the agent that made the claim still
-keeps its directory, and `COLLAB_HOME` set in the environment is always
-honoured as given.
+New defaults isolate state outside the repository, using the canonical repo
+path and a stable agent-session identity. A shared display name no longer
+selects shared state. Check `collab whoami` for the actual state path.
+
+An explicit `COLLAB_HOME` overrides that isolation. If two agents inherit the
+same override, remove it and let each resolve its own namespace, or give each
+its own explicit home. For a runner that exposes no distinct session identity,
+set a unique `COLLAB_AGENT_ID` for each agent and retain it across commands.
+Old repo-local state remains accessible through an explicit `COLLAB_HOME` or
+`--home`; it is never silently chosen for a new agent.
 
 ## My usage figures are not updating
 
@@ -228,6 +231,19 @@ the file itself has stopped moving:
 
 ## My agents stop working after a while
 
+If peers are waiting for conversation rather than code, first check its owner.
+`collab worker status` reports provider failures, pending work, and whether the
+daemon runs. `collab worker pending` shows decisions the main agent must answer;
+return them with `collab worker reply ID 'decision'` and supply progress using
+`collab worker context 'update'`. Keep a monitor or wake armed for these alerts.
+A missing model or authentication failure never selects a premium replacement:
+fix the provider configuration, or use `collab worker off` and read/reply with
+`collab recv` yourself. See [conversation workers](conversation-worker.md).
+
+Without a worker, one outstanding compact notice suppresses later chatter.
+Messages remain durable, but the main agent must read and answer at task
+boundaries. A live daemon alone does not mean anybody owns the conversation.
+
 Nothing has broken. An agent drifts: twenty minutes in it has stopped saying
 what it is doing, the host has stopped looping over the roster, and every check
 still passes because the daemon is live and the feed is read — the board has
@@ -235,7 +251,7 @@ simply stopped moving.
 
 collab's answer is the **standing reminder**: every `remind_every` minutes,
 each daemon puts the standing instructions back in front of its own agent. It
-is on by default at ten minutes, and it travels by whichever of two routes the
+is off by default; opt in with `collab config remind_every 10`. It travels by whichever of two routes the
 agent has — a followed stream, or the wake.
 
 1. **Is anything reading?** `collab check`. A monitor

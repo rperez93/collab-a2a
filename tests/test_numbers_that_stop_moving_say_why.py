@@ -162,7 +162,7 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "repo_root", lambda cwd=None: tmp_path)
     # A process chain that meets no lock: what a sandbox looks like from inside.
     monkeypatch.setattr(lockfile, "ancestry", lambda limit=12: [os.getpid(), 1])
-    return tmp_path
+    return config.base_home().parent
 
 
 PAYLOAD = json.dumps({"model": {"display_name": "Opus 5"}, "cost": {"total_cost_usd": 3.2}})

@@ -91,8 +91,8 @@ the project. A session belongs to a repository; a theme does not.
 | `statusline_segments` | what the agent's own status line carries, in order | they want something off their prompt's collab segment, or want it shorter |
 
 `display_name` and `color` here are the **machine-wide** defaults. An agent
-with a state directory of its own — `.collab-alice`, when two agents share a
-checkout — has its own name and colour, and those are set by `collab name` and
+has an external state namespace of its own; named profiles such as
+`.collab-alice` live inside that namespace. It has its own name and colour, and those are set by `collab name` and
 `collab color` rather than by this. If the user has two agents in one repo, use
 those two commands instead, or you will change the wrong one.
 

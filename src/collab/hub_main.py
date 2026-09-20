@@ -22,6 +22,7 @@ from .config import follow_agent_enabled
 from .server.app import create_app
 from .server.session import HubConfig, update_fields
 from .server.store import Store
+from .config import repo_for_home
 from .server.tunnel import TunnelSupervisor
 
 logger = logging.getLogger(__name__)
@@ -91,7 +92,7 @@ class RegistryHeartbeat:
                 session_id=latest.session_id, name=latest.host_name, role="host",
                 url=latest.public_url or latest.local_url,
                 local_url=latest.local_url,
-                repo=str(Path(latest.home).parent), home=latest.home,
+                repo=str(repo_for_home(latest.home)), home=latest.home,
                 invite=latest.invite, host_name=latest.host_name,
                 pid=os.getpid(),
             )

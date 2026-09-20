@@ -48,6 +48,7 @@ def isolated(tmp_path, monkeypatch):
     path = tmp_path / "config.json"
     monkeypatch.setenv("COLLAB_CONFIG", str(path))
     config._CACHE.clear()
+    path.write_text(json.dumps({"remind_every": 10}))
     yield path
     config._CACHE.clear()
 
@@ -491,6 +492,8 @@ def test_the_check_warns_with_neither_a_monitor_nor_a_wake(profile, monkeypatch,
     assert "remind_every 0" in said["fix"]
 
 
-def test_the_check_stays_quiet_for_a_reminder_nobody_configured(profile, monkeypatch):
+def test_the_check_stays_quiet_for_a_reminder_nobody_configured(profile, monkeypatch, isolated):
     """Unchanged: nothing configured is a decision, not a fault."""
+    isolated.unlink()
+    config._CACHE.clear()
     assert "reminder" not in _checks(profile, monkeypatch, monitors=0, armed=False)

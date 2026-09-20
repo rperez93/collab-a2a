@@ -48,6 +48,7 @@ MINUTES = MINUTE
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("COLLAB_CONFIG", str(tmp_path / "config.json"))
     config._CACHE.clear()
+    config.setting("remind_every").write(10)
     yield tmp_path
     config._CACHE.clear()
 

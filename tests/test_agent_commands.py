@@ -17,7 +17,6 @@ from collab import cli, config, identity, peers
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
-    (tmp_path / ".collab").mkdir()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(config, "repo_root", lambda cwd=None: tmp_path)
     monkeypatch.setattr(peers, "current_user", lambda: "alice")
@@ -26,7 +25,8 @@ def repo(tmp_path, monkeypatch):
     identity._CACHE.clear()
     config._CACHE.clear()
     config._HOME_CACHE.clear()
-    yield tmp_path
+    config.base_home().mkdir(parents=True, exist_ok=True)
+    yield config.base_home().parent
     identity._CACHE.clear()
     config._CACHE.clear()
     config._HOME_CACHE.clear()

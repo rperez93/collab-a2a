@@ -34,9 +34,11 @@ command -v collab || ls .venv/bin/collab
 If `collab` is on `PATH`, use it as written. If only `.venv/bin/collab` exists,
 prefix every command with it. If neither, follow `AGENT_INSTALL.md` first.
 
-Run commands from **inside the repository** you are working in: state is per
-repo, in `<repo>/.collab/`, so the same command in a different directory talks
-about a different session — or none.
+Run commands from **inside the repository** you are working in. State is
+isolated by the canonical checkout (or folder outside Git) and the agent session,
+but stored outside the checkout under `$XDG_STATE_HOME/collab`, defaulting to
+`~/.local/state/collab`. A different workspace or agent session has separate state.
+`COLLAB_HOME` explicitly selects an existing participant directory.
 
 ## If the user is in tmux — give them a pane
 
@@ -65,7 +67,7 @@ carry the state directory because a new pane inherits the tmux server's
 environment, not yours:
 
 ```bash
-tmux split-window -d "COLLAB_HOME=/home/perez/Pycharm/api/.collab-bob collab watch --session s_bb9c59a3"
+tmux split-window -d "COLLAB_HOME=/home/perez/.local/state/collab/repositories/WORKSPACE_HASH/agents/AGENT_HASH/.collab collab watch --session s_bb9c59a3"
 ```
 
 `collab lock` prints the directory as `state` and the session id on its first
@@ -279,5 +281,6 @@ more often a setting than a fault.
   is briefly unreachable, and it fills in whatever was missed once the daemon
   reconnects.
 - There is no session to break: it only reads. Closing the pane stops nothing.
-- If it says there is no active session, the user is in a different repo —
-  collab keeps state per repository in `<repo>/.collab/`.
+- If it says there is no active session, check the workspace and agent identity.
+  An external viewer terminal needs the exact `COLLAB_HOME` printed by the
+  participating agent; it cannot infer that agent’s state from the repo alone.

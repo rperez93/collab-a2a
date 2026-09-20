@@ -83,7 +83,7 @@ def _listen(monkeypatch, profile, *, replay=0, room=None):
     monkeypatch.setattr(cli, "print", lambda *a, **k: printed.append(" ".join(map(str, a))),
                         raising=False)
     monkeypatch.setattr(cli.SessionProfile, "current", classmethod(lambda c: profile))
-    args = argparse.Namespace(session=None, follow=True, json=False, room=room,
+    args = argparse.Namespace(session=None, follow=True, delivery="full", json=False, room=room,
                               limit=50, replay=replay, mine_too=False,
                               exit_when_idle=True)
     thread = threading.Thread(target=cli.cmd_listen, args=(args,), daemon=True)
@@ -336,7 +336,7 @@ def test_the_badge_tracks_what_bob_has_not_seen(streaming_guest, live_server, se
     monkeypatch.setattr(cli, "is_running", lambda _p: 4242 if alive.is_set() else None)
     monkeypatch.setattr(cli, "print", lambda *a, **k: printed.append(" ".join(map(str, a))),
                         raising=False)
-    args = argparse.Namespace(session=None, follow=True, json=False, room=None, limit=50,
+    args = argparse.Namespace(session=None, follow=True, delivery="full", json=False, room=None, limit=50,
                               replay=0, mine_too=False, exit_when_idle=True)
     monitor = threading.Thread(target=cli.cmd_listen, args=(args,), daemon=True)
     monitor.start()

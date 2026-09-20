@@ -21,6 +21,17 @@ sources:
 stale_after: 2027-03-01T00:00:00Z
 ---
 
+## External state (later than the pin, 1.44.0)
+
+The layout measured below is historical. New default homes live under
+`COLLAB_STATE_DIR`, or `$XDG_STATE_HOME/collab` (normally `~/.local/state/collab`),
+separated by SHA-256 hashes of the canonical repository path and the stable
+agent session identity. Each participant retains a `sessions/<session-id>`
+tree, its own current pointer, lock and identity. An explicit `COLLAB_HOME`
+or `--home` still selects a legacy or custom directory; defaults do not adopt
+another agent's state. No new repo-local state directory is required.
+
+
 # Where it is
 
 Session state is **per repository**: a `.collab/` directory at the git top

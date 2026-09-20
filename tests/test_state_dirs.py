@@ -30,7 +30,7 @@ from collab.config import (
 def repo(tmp_path, monkeypatch):
     monkeypatch.delenv("COLLAB_HOME", raising=False)
     monkeypatch.chdir(tmp_path)
-    return tmp_path
+    return base_home().parent
 
 
 def _claim(home, name="alice", session_id="s_1", pid=None, owner_pids=None):

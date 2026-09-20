@@ -56,9 +56,9 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.delenv("COLLAB_HOME", raising=False)
     monkeypatch.delenv("COLLAB_NAME", raising=False)
     monkeypatch.setattr(config, "repo_root", lambda cwd=None: tmp_path)
-    alice = _agent(tmp_path / ".collab", "alice", "p_alice", "t_alice",
+    alice = _agent(config.base_home(), "alice", "p_alice", "t_alice",
                    ALICE_CHAIN, is_host=True)
-    bob = _agent(tmp_path / ".collab-bob", "bob", "p_bob", "t_bob",
+    bob = _agent(config.agent_home("bob"), "bob", "p_bob", "t_bob",
                  BOB_CHAIN, is_host=False)
     return {"root": tmp_path, "alice": alice, "bob": bob}
 
@@ -141,7 +141,7 @@ def test_a_lone_agent_is_never_asked(tmp_path, hub, monkeypatch):
     monkeypatch.setenv("COLLAB_CONFIG", str(tmp_path / "config.json"))
     monkeypatch.delenv("COLLAB_HOME", raising=False)
     monkeypatch.setattr(config, "repo_root", lambda cwd=None: tmp_path)
-    _agent(tmp_path / ".collab", "alice", "p_alice", "t_alice", ALICE_CHAIN,
+    _agent(config.base_home(), "alice", "p_alice", "t_alice", ALICE_CHAIN,
            is_host=True)
     _as(monkeypatch, [os.getpid()])
 
@@ -153,7 +153,7 @@ def test_a_lone_agent_is_never_asked(tmp_path, hub, monkeypatch):
 def test_a_proven_agent_speaks_as_itself(repo, hub, monkeypatch):
     _as(monkeypatch, BOB_CHAIN)
     assert _run(["send", "hello"]) == 0
-    monkeypatch.setenv("COLLAB_HOME", str(repo["root"] / ".collab"))
+    monkeypatch.setenv("COLLAB_HOME", repo["alice"].home)
     assert _run(["send", "hello"]) == 0
     assert [t for t, _ in hub] == ["t_bob", "t_alice"]
 
@@ -180,7 +180,7 @@ def test_each_agents_report_lands_in_its_own_directory(repo, hub, monkeypatch):
 
 
 def test_an_explicit_home_is_always_honoured(repo, hub, monkeypatch):
-    monkeypatch.setenv("COLLAB_HOME", str(repo["root"] / ".collab-bob"))
+    monkeypatch.setenv("COLLAB_HOME", repo["bob"].home)
     _as(monkeypatch, [os.getpid()])          # proves nothing; the env does
 
     _report('{"cost_usd":2.0}')
@@ -219,7 +219,7 @@ def test_a_lone_agent_that_cannot_prove_itself_still_reports(
     monkeypatch.setenv("COLLAB_CONFIG", str(tmp_path / "config.json"))
     monkeypatch.delenv("COLLAB_HOME", raising=False)
     monkeypatch.setattr(config, "repo_root", lambda cwd=None: tmp_path)
-    alice = _agent(tmp_path / ".collab", "alice", "p_alice", "t_alice",
+    alice = _agent(config.base_home(), "alice", "p_alice", "t_alice",
                    ALICE_CHAIN, is_host=True)
     _as(monkeypatch, [os.getpid()])
 

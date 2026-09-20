@@ -42,6 +42,16 @@ Your agent never has to know a reconnect happened.
 Manage the daemon with `collab daemon start`, `collab daemon stop`, and
 `collab daemon status`.
 
+An explicitly enabled [conversation worker](conversation-worker.md) runs beside
+that feed. It reads an independent durable cursor, answers routine coordination
+within a supplied scope, and escalates decisions to the main coding agent.
+`collab worker context` supplies progress and constraints; `collab worker pending`
+and `collab worker reply` form the decision return path. The coding host and
+worker provider are independent. With a worker active, compact monitor/wake
+delivery carries its decisions and health notices; the full inbox and viewer
+remain available. Without one, compact notices require the main agent to read
+and respond deliberately.
+
 ## Sessions
 
 A session is a durable conversation with a stable id, an event log, and a task
@@ -599,7 +609,8 @@ delivery, and by two commands that only report.
 
 ### The standing reminder
 
-Every `remind_every` minutes — ten by default — the daemon puts the standing
+Reminders are off by default (`remind_every=0`). When enabled, every
+`remind_every` minutes the daemon puts the standing
 instructions back in front of its own agent, so that a session which has
 drifted is pulled back to the way of working it agreed to. The host and the
 guests are reminded of different things, by the role the session assigned
@@ -611,7 +622,7 @@ hub, and it never appears in `collab watch` — that pane is the human's window
 and this is for the agent.
 
 It travels by whichever route the agent has. A followed stream
-(`collab listen --follow`) carries it as a line of its own, which costs no turn
+(`collab listen --follow`) carries it as a line of its own, which enters the agent context
 and is not an event: it never enters the inbox and never counts as unread. An
 agent that cannot hold a monitor between turns gets it on the wake instead,
 where it never competes with the conversation — with unread messages due at the
@@ -620,7 +631,7 @@ turn.
 
 The daemon owns the clock either way, so an agent with both routes is reminded
 once per interval and not twice, and the monitor is offered it first because
-that route is free.
+that route avoids a separate wake process.
 
 `collab config remind_every`, `remind_host` and `remind_guest` are the whole of
 its configuration, and `collab remind` is the way to work on the text: `show`
@@ -721,7 +732,11 @@ instruction instead — run `collab new`, or restart the session by hand.
 ## Settings
 
 Two kinds of state, split on purpose.
-A session belongs to a repository, so it lives in that repository's `.collab/`.
+Session state lives outside the checkout under `COLLAB_STATE_DIR`, or
+`$XDG_STATE_HOME/collab` (normally `~/.local/state/collab`). SHA-256 hashes
+of the canonical repository path and the agent session identity separate
+participants; each has its own `sessions/<session-id>` tree. Explicit
+`COLLAB_HOME` and `--home` still select a particular state directory.
 Who you are and how you like things belongs to the person, so it lives once, in
 `~/.config/collab/config.json`.
 

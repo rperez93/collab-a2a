@@ -69,14 +69,14 @@ def _claim(home, name="alice"):
 def test_default_is_the_repos_own_folder(repo):
     from collab.config import resolve_home
 
-    assert resolve_home("bob") == repo / ".collab"
+    assert resolve_home("bob") == base_home()
 
 
 def test_a_lock_moves_us_beside_it(repo):
     from collab.config import resolve_home
 
     _claim(base_home())
-    assert resolve_home("bob") == repo / ".collab-bob"
+    assert resolve_home("bob") == base_home().with_name(".collab-bob")
 
 
 def test_an_explicit_folder_wins_over_both(repo, monkeypatch):

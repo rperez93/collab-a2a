@@ -23,8 +23,6 @@ from collab import cli, config, identity, peers
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
-    for d in (".collab", ".collab-alice", ".collab-bob"):
-        (tmp_path / d).mkdir()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(config, "repo_root", lambda cwd=None: tmp_path)
     monkeypatch.setattr(peers, "current_user", lambda: "alice")
@@ -33,7 +31,9 @@ def repo(tmp_path, monkeypatch):
     identity._CACHE.clear()
     config._CACHE.clear()
     config._HOME_CACHE.clear()
-    yield tmp_path
+    for d in (".collab", ".collab-alice", ".collab-bob"):
+        (config.base_home().parent / d).mkdir(parents=True)
+    yield config.base_home().parent
     identity._CACHE.clear()
     config._CACHE.clear()
     config._HOME_CACHE.clear()
@@ -115,14 +115,14 @@ def test_an_unknown_agent_name_is_refused(repo, monkeypatch, capsys):
 def test_one_directory_is_not_a_choice(tmp_path, monkeypatch):
     """Asking when there is a single option is noise, not care."""
     (tmp_path / ".git").mkdir()
-    (tmp_path / ".collab-solo").mkdir()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(config, "repo_root", lambda cwd=None: tmp_path)
     monkeypatch.delenv("COLLAB_HOME", raising=False)
     config._HOME_CACHE.clear()
+    config.agent_home("solo").mkdir(parents=True)
     no_terminal(monkeypatch)
     assert run(cli.cmd_color, value="#008080") == 0
-    assert identity.load(tmp_path / ".collab-solo")["color"] == "#008080"
+    assert identity.load(config.agent_home("solo"))["color"] == "#008080"
 
 
 # --- with a person there, it asks --------------------------------------------

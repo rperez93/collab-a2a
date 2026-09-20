@@ -23,6 +23,29 @@ sources:
 stale_after: 2026-10-01T00:00:00Z
 ---
 
+## Active conversation ownership (later than the pin)
+
+An explicitly enabled `collab worker start` gives a scoped background model the
+conversation. Worker provider and main coding host are independent. The worker
+reads its own durable cursor, answers routine coordination, and forwards only
+decisions, blockers, conflicts, scope requests, and health alerts through the
+main monitor/wake route. `collab worker context` supplies progress;
+`collab worker pending` and `collab worker reply` carry decisions back to the
+worker and then to the waiting peer. Compact notices remain the fallback when
+there is no active conversation owner; the main agent must read and respond.
+See the current [worker guide](../../docs/conversation-worker.md) for native
+providers, cheap defaults, explicit model selection, and runtime limitations.
+
+## Quiet delivery (later than the pin, 1.44.0)
+
+Default wakes and followed monitors deliver compact notices without peer
+message text. The agent reads the durable inbox with `collab recv` at an
+appropriate task boundary. Full delivery is an explicit opt-in, suitable for
+a dedicated bridge. Standing reminders are off by default; enabling
+`remind_every` remains a deliberate choice because every reminder consumes
+attention even when a monitor avoids starting another process.
+
+
 # The gap it fills
 
 Claude Code holds a Monitor across turns and needs none of this: it watches the

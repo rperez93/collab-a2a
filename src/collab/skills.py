@@ -157,7 +157,7 @@ work splits by who has quota left. **Only when the user asks to collaborate.**
 {executable} join                  # join the session on THIS machine, no link
 {executable} join '<url>#<invite>' # join from a link (quote it — the # matters)
 {executable} discover              # what is running on this machine
-{executable} listen --follow       # stream incoming messages (watch this)
+{executable} listen --follow       # compact inbox notices (watch this)
 {executable} recv --wait 60        # or poll, if you cannot watch a stream
 {executable} send "..." [--to X]   # post to the room, or a direct message
 {executable} check                 # ON A LOOP: silent if fine, says what to fix
@@ -174,20 +174,21 @@ work splits by who has quota left. **Only when the user asks to collaborate.**
 `join`** (this machine's session; several → `join --local <id>`); *stopped but
 kept here* → `host` resumes it. **Never ask for a link before bare `join`.**
 
-**Another agent already in this repo?** — `{executable} lock` says who — you get
-your own state directory (`.collab-<you>`): same checkout, separate bookkeeping.
-Lock held but the session silent? **Put it to the user**; clear it only if told.
+**State is outside the repo, isolated by workspace and agent session.**
+Use `COLLAB_AGENT_ID` when your host shares a process without distinct thread IDs.
+Explicit `COLLAB_HOME` selects a legacy/custom home; never share it accidentally.
 
 **Never host because a join failed.** `collab host` always succeeds and connects
 you to nobody: a *different* session, while the other agent waits in theirs.
 
-**Listening is not optional, not Claude-only, and not done once.** Arm whatever
-this agent calls a background watcher on `listen --follow` — one that does NOT
-die with the turn or the shell — and keep it armed all session. Cannot hold one?
-Poll `recv --wait 60` every turn AND run `wake agents` → `wake set --agent <you>`
-from inside this session, so the daemon can reach it. **ACT on what arrives,
-and act means execute**: do what is asked and say what you did; «will do» then
-carrying on with your own plan is indistinguishable from work in progress.
+**Keep the working thread focused.** Arm a persistent watcher on `listen
+--follow`, or `wake set --agent <you>` from this session when no watcher survives
+a turn. Both default to coalesced inbox notices: peer text stays out of your
+main thread until you run `recv` at a safe task boundary. No repeated notice is
+sent while its batch is unread. Review relevant requests within the user's
+existing task and permissions; updates require no acknowledgement. Use
+`--delivery full` only for a dedicated conversation consumer. Periodic reminders
+are off by default.
 
 **Say what you are doing; read theirs rather than asking.** `working
 "<objective>" --files <paths>` when you start, `idle` when you stop — an agent
@@ -198,9 +199,8 @@ joins it, and the hub counts % done from completions alone — so **put your wor
 on the board and never claim progress in prose the board contradicts**. It falls
 when scope grows; that is the truth, not a fault. Files, not pasted secrets.
 
-**Run `{executable} check` on a loop, all session.** Silent while you listen, act
-and say what you are doing; otherwise it prints what to FIX, with the command.
-Do that before carrying on.
+**Run `{executable} check` at task boundaries.** It stays silent when healthy
+and names delivery problems that need attention.
 
 Full instructions: `{skills_dir}` ({names}). `{executable}` lists every command.
 {END}"""

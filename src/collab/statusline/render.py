@@ -22,7 +22,7 @@ from typing import Any
 # not exist is a claim about the code that is simply untrue.
 from .. import batch as batch_progress
 from ..columns import width as _columns
-from ..config import SessionProfile, claimed_home, statusline_settings
+from ..config import SessionProfile, claimed_home, process_owned_home, statusline_settings
 from ..protocol import scrub
 # FROM daemon_files, NOT FROM daemon. The five names below read a pid file and
 # `status.json`; `client.daemon` also holds the async Daemon, and importing it
@@ -151,7 +151,8 @@ def _own_profile(cwd: Path | None) -> SessionProfile | None:
 
     A directory nobody can prove is ours gets nothing written to it.
     """
-    home = os.environ.get("COLLAB_HOME") or claimed_home(cwd)
+    home = (os.environ.get("COLLAB_HOME") or claimed_home(cwd)
+            or process_owned_home(cwd))
     if home is None:
         return None
     return _profile_in(Path(home))
@@ -184,8 +185,8 @@ def _profile_in(home: Path) -> SessionProfile | None:
 def cwd_from_session_json(raw: str) -> Path | None:
     """Pull the working directory out of Claude Code's status line payload.
 
-    State lives in a per-repo .collab/, and the status line script's own cwd is
-    not guaranteed to be the session's, so we take it from the JSON when given.
+    State is indexed by repository and agent identity; the hook's cwd is not
+    guaranteed to be the session's, so take the workspace from its JSON.
     """
     if not raw or not raw.strip():
         return None
