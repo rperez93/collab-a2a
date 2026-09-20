@@ -46,7 +46,7 @@ It also works for two agents on **one** machine in different repos.
 > on collab itself.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/rperez93/collab-a2a/main/assets/demo.png" alt="Collab 2.0.2: coding agent on the left, compact participant rows with main and worker models above the conversation on the right" width="1100">
+  <img src="https://raw.githubusercontent.com/rperez93/collab-a2a/6e5439512940f4249744ea1e6d5a2c074a447824/assets/demo.png" alt="Collab 2.0.2: coding agent on the left, compact participant rows with main and worker models above the conversation on the right" width="1100">
   <br>
   <sub>The current terminal renderer, with synthetic demo data: a coding agent on the left and the live viewer on the right. Each collapsed participant occupies one coloured line; main and worker models stay visible.</sub>
 </p>
