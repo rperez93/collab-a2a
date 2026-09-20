@@ -13,7 +13,7 @@ def _number(value: Any) -> float | None:
     try:
         number = float(value)
         return number if math.isfinite(number) else None
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         return None
 
 
@@ -125,9 +125,16 @@ def estimate_capacity(stats: dict[str, Any], *, concurrency_limit: int | None = 
             return result
         per_child = _number(cost.get(name)) if isinstance(cost, dict) else _number(cost)
         row['per_child_percent'] = per_child
-        if per_child is None or active_children is None:
+        if per_child is None or active_children is None or concurrency_limit is None:
             continue
-        count = max(0, math.floor((available + 1e-10) / per_child) - active_children)
+        # A valid tiny calibration (for example 1e-320 percentage points)
+        # makes floating-point division infinite. Compare against the finite
+        # native ceiling first; beyond it extra quota cannot add children.
+        # When division is needed, this comparison bounds its ratio to 10,000.
+        if available + 1e-10 >= per_child * concurrency_limit:
+            count = available_slots
+        else:
+            count = max(0, math.floor((available + 1e-10) / per_child) - active_children)
         row['maximum_additional_children'] = count
         capacities.append((count, name))
     if unavailable:
@@ -136,7 +143,8 @@ def estimate_capacity(stats: dict[str, Any], *, concurrency_limit: int | None = 
         result['reasons'].append('native concurrency limit is unknown; supply it explicitly')
     if active_children is None:
         result['reasons'].append('current active native-child count is unknown')
-    if len(capacities) != len(quota) and not unavailable:
+    if (len(capacities) != len(quota) and not unavailable
+            and concurrency_limit is not None and active_children is not None):
         result['reasons'].append('a calibrated child cost or explicit task budget is missing for a quota window')
     if result['reasons']:
         return result

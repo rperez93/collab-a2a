@@ -100,10 +100,25 @@ class Conversation:
         if self.policy is not None and self.policy != policy:
             self.next_at = 0  # reserve_turn rechecks the durable history before launch
         self.policy = policy
-        if time.time() < self.next_at or self.daemon._http is None:
+        if self.daemon._http is None:
+            return
+        if time.time() < self.next_at:
+            # Provider backoff and the model budget govern inference, not
+            # delivery. A main-agent handoff must still leave the outbox while
+            # the model is unavailable or its next allowance is an hour away.
+            if any(row.get("retry_at", 0) <= time.time() for row in store.outbox()):
+                self.task = asyncio.create_task(self._deliver_only(store, generation))
             return
         self.next_at = time.time() + setting("worker_turn_gap")
         self.task = asyncio.create_task(self.turn())
+
+    async def _deliver_only(self, store, generation) -> None:
+        await self._flush(store, generation)
+        current = store.status()
+        # Do not erase a provider/budget failure just because an independent
+        # HTTP delivery succeeded. Delivery-only errors can clear on recovery.
+        if not current["error"] or current["error"].startswith("Worker replies are awaiting delivery"):
+            self._delivery_health(store, generation)
 
     async def _flush(self, store, generation) -> None:
         attempts = 0
@@ -115,14 +130,22 @@ class Conversation:
                 return
             attempts += 1
             try:
-                response = await self.daemon._http.post(
-                    f"{self.daemon.profile.url}{EXT_PREFIX}/messages",
-                    headers=request_headers(self.daemon.profile.token),
-                    json={"kind": "chat", "text": message["text"],
-                          "to": message.get("to") or None,
-                          "room": message.get("room") or None,
-                          "body": {"collab_worker_delivery": message["id"]}}, timeout=setting("worker_delivery_timeout"))
-                response.raise_for_status()
+                # The success status is the acknowledgement. Eager .post()
+                # buffered an unbounded body from a broken hub, although no
+                # response field was used. Close the stream after its headers;
+                # a total deadline also bounds slow trickles, not only silence.
+                timeout = setting("worker_delivery_timeout")
+                async def acknowledge():
+                    async with self.daemon._http.stream(
+                        "POST", f"{self.daemon.profile.url}{EXT_PREFIX}/messages",
+                        headers=request_headers(self.daemon.profile.token),
+                        json={"kind": "chat", "text": message["text"],
+                              "to": message.get("to") or None,
+                              "room": message.get("room") or None,
+                              "body": {"collab_worker_delivery": message["id"]}}, timeout=timeout) as response:
+                        response.raise_for_status()
+                # wait_for retains the total deadline on supported Python 3.10.
+                await asyncio.wait_for(acknowledge(), timeout=timeout)
                 store.acknowledge(message["id"])
             except asyncio.CancelledError:
                 raise
@@ -242,6 +265,13 @@ class Conversation:
             while selected and len(json.dumps(payload, ensure_ascii=False).encode()) > worker_runtime.MAX_INPUT_BYTES - 1024:
                 omitted = selected.pop()
                 cursor = min(cursor, omitted["seq"] - 1)
+            # Unicode/control escaping in valid local guidance can leave less
+            # room than both independent 24KB main-input pages. Answers already
+            # have waiting peers, so defer newest context first, then answers.
+            # Only IDs actually supplied to the provider are consumed at commit.
+            for records in (contexts, answers):
+                while records and len(json.dumps(payload, ensure_ascii=False).encode()) > worker_runtime.MAX_INPUT_BYTES - 1024:
+                    records.pop()
             reserved = store.reserve_turn(expected_generation=snapshot["generation"],
                 limit=setting("worker_max_attempts"), window=setting("worker_budget_window"))
             if reserved is None:

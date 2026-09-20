@@ -32,7 +32,7 @@ import pytest
 from collab.cli import build_parser
 
 ROOT = Path(__file__).resolve().parent.parent
-AGENT_PAGES = (sorted((ROOT / "src" / "collab" / "skills").glob("*/SKILL.md"))
+AGENT_PAGES = (sorted((ROOT / "src" / "collab" / "skills").rglob("*.md"))
                + [ROOT / "src" / "collab" / "rules" / "COLLAB.md"])
 
 #: Command forms an agent is NOT expected to run, each with the reason. A form

@@ -130,3 +130,106 @@ The existing tests use broad resource ceilings to catch unbounded buffering and
 busy waiting, rather than require this machine's exact timings. Longer production
 runs, concurrent remote sessions and actual provider memory remain outside this
 synthetic validation.
+
+
+## 2.0.1 follow-up measurements
+
+[Patch raw measurements](performance-v201.json) cover new worker accounting and
+source polling. A 1,000-model accounting/snapshot stress run took 9.528 seconds
+wall and 2.057 seconds CPU, with 23,524 KiB RSS, four descriptors, a 20,480-byte
+database and 33 bounded model buckets (32 distinct names plus overflow). Traced
+retained allocations were 133,017–133,465 bytes across its samples.
+
+A 100-call real source lifecycle run took 3.428 seconds wall and 0.452 seconds
+controller CPU. All samples held seven descriptors, with 27,856 KiB final RSS
+and 592,711 bytes peak traced allocation. Retained allocations rose from 221,145
+to 242,138 bytes between calls 10 and 100, prompting a longer controlled
+allocation investigation rather than a claim of zero growth. Each invocation
+used the real bounded reader and disposable local state; provider execution and
+network/TLS were not included.
+
+A synthetic flooding acknowledgement was closed after its headers, without
+reading its body: 27,697 bytes peak traced allocation and 0.003534 seconds CPU.
+A separate silent-peer regression verifies the total delivery deadline. Source
+flooding and cancellation regressions cover bounded output and process cleanup.
+
+Repeat the patch workloads with an absolute import path:
+
+```sh
+env PYTHONPATH="$PWD/src" python benchmarks/worker_accounting.py
+env PYTHONPATH="$PWD/src" python benchmarks/worker_sources.py
+```
+
+
+The follow-up completed 2,000 real source lifecycles with seven descriptors,
+zero live subprocess/transport objects after collection, and only the harness's
+main task. A 961,216-byte pathlib intern-table allocation appeared during warmup
+and remained unchanged from call 500 through 2,000. Of roughly 31 KiB retained
+growth over those last 1,500 calls, about 21 KiB belonged to saved trace reports;
+the remaining leading allocations were small interpreter I/O/callback records.
+No growing Collab queue, live child set or pipe set was identified.
+
+Independent 20,000-write controls reproduced TextIO allocation retention:
+3,083→33,295 bytes in text mode, compared with 1,704→3,568 in binary mode (eight
+saved samples; four descriptors in both). Worker source files now use binary
+I/O and explicit UTF-8 JSON. The first post-change 100-call check held seven
+descriptors and 27,712 KiB RSS. Its timing ran alongside regression tests and is
+not used as a speed comparison. These finite controls support the mitigation
+and stable resource lifetimes, without proving an unrestricted memory bound.
+
+
+The post-fix 1,000-cycle check held seven descriptors and peaked at 29,376 KiB
+RSS. Retained allocations at calls 10/100/500/1,000 were 218,756 / 222,111 /
+1,184,594 / 1,184,842 bytes. The early step matches the traced pathlib intern-table
+resize. Growth over the final 500 calls was only 248 bytes, matching a retained
+benchmark sample. This supports the binary-I/O mitigation and absence of growing
+product resources in this workload; the concurrent test run prevents a meaningful
+throughput comparison.
+
+### Whole-runtime patch check
+
+The final-path synthetic run included 20,000 durable hub publishes and local
+inbox records, four consuming subscribers, one stalled subscriber, worker state
+reads, statistics sanitization and expanded metric formatting. It took 71.544 s
+wall and 16.727 s controller CPU with allocation tracing enabled. Peak RSS was
+34,776 KiB, all ten samples held 13 descriptors, and retained traced allocations
+ended at 181,712 bytes versus 182,227 after warmup. The stalled subscriber was
+disconnected once at the bounded queue limit. Durable history intentionally
+grows on disk; this check does not include remote HTTP/TLS or provider memory.
+
+Real 120×40 terminal processes were sampled for twelve seconds after warmup.
+The viewer used 0.09 s CPU (0.75% of one core); the settings editor used 0.07 s
+(0.58%). Both held three descriptors. Viewer RSS rose 576 KiB during these short
+samples; this is reported as observed warmup/growth, not proof of a leak or of
+its absence. Settings RSS changed by four KiB.
+
+Fresh-process flood and silent-source checks covered main telemetry commands,
+worker subprocesses and quota probes. Flooding stopped in 0.016–0.018 s wall;
+silent peers stopped at the configured half-second test deadline. Controller
+CPU stayed below 0.009 s in all six cases and descriptors returned to four.
+These complement the repeated worker-source and accounting runs above. The
+release gate covers resource ownership and bounded work throughout the runtime,
+not just rendering; finite synthetic runs cannot establish universal leak freedom
+or performance of a provider CLI, remote host or arbitrary custom command.
+
+### Theme and settings reloads
+
+[Theme raw measurements](performance-v201-theme.json) isolate Python parser/cache
+costs with counted palette writes. Profiling found and removed directory
+discovery before the reload throttle. The final 10,000 idle palette checks used
+0.0188 s CPU and wrote zero pairs. Five hundred live edits used 0.4513 s CPU,
+retained 2,713 additional traced bytes including measurement overhead, and ended
+with one cached theme folder and no dynamic-pair/hex entries.
+
+The first 10,000 settings refreshes used 0.2240 s CPU and retained 962,112 bytes;
+a single 939 KiB `pathlib`/`sys.intern` allocation explains that step. Another
+10,000 used 0.2360 s CPU and retained 864 bytes, attributed to measurement. This
+matches the one-time interpreter allocation observed in the source controls.
+The benchmark counts palette writes without a real terminal; separate tmux
+tests exercise actual colors, reload, keyboard and mouse behavior. Hiding the
+divider mid-drag also cancels mouse-motion reporting, so an abandoned gesture
+cannot keep waking the viewer.
+
+```sh
+env PYTHONPATH="$PWD/src" python benchmarks/theme_engine.py
+```

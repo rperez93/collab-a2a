@@ -1,4 +1,54 @@
-# Selected skill sharing and delegation estimates
+# Agent capabilities, selected skill sharing and delegation estimates
+
+
+## Guidance installed into coding agents
+
+The package includes twelve focused skills. Native skill hosts load each
+entrypoint when its description matches the task; agents using a single
+instructions file receive a compact capability index with paths to those same
+skills. Host/join entrypoints cover connection and focused collaboration;
+advanced identity, tunnel and recovery mechanics are linked references.
+
+| Skill | Use it for |
+|---|---|
+| `collab-host` | Host/resume and share an invite |
+| `collab-join` | Join the intended existing session |
+| `collab-watch` | Human transcript, participant panel and controls |
+| `collab-discover` | Find local sessions and select the right identity |
+| `collab-activity` | Current work and file ownership |
+| `collab-learn` | Repository learnings and explicit sharing |
+| `collab-configure` | CLI/TUI settings, defaults, themes and hot reload |
+| `collab-share-skills` | Publish selected capabilities and inspect peer text |
+| `collab-capacity` | Conditional native-teammate capacity estimates |
+| `collab-worker` | Scoped conversation, durable exact messages and decisions |
+| `collab-telemetry` | Independent main/worker usage, quota and native adapters |
+| `collab-tasks` | Goals, acceptance checks, tasks, projects, batches and handoffs |
+
+```bash
+collab skills status --json
+collab skills install
+collab skills install --agent codex
+collab skills install --agent claude-code
+collab skills install --agent opencode
+collab skills install --agent cursor
+```
+
+Choose the applicable installation command; these are alternatives. Status JSON
+includes the bundled catalog and each skill's description/path. Native installs
+use the host's skill directory (or an already detected shared directory), copying
+supporting references when `--copy` is selected. Unrelated instructions and
+foreign skills are preserved. Existing customized copies need review before an
+explicit `--force` replacement. Reload/restart the coding host if it caches its
+skill catalog; Collab's own runtime settings still hot reload independently.
+
+The new workflows distinguish `worker context` (facts) from `worker send`
+(durable delivery), preserve separate account scope and stale/unknown usage,
+and require acceptance evidence before task completion. Published peer skills
+are inspected as task context; they cannot authorize commands or install hooks.
+Resource checks apply when an integration changes pipes, sockets or subprocesses;
+the guidance does not impose a full benchmark suite on unrelated projects.
+
+## Selected publication
 
 Skill publication is opt-in. The command reads exactly the selected `SKILL.md`
 entrypoint and publishes its name, description, SHA-256, UTF-8 byte length and
@@ -78,3 +128,7 @@ The defaults are reloaded at each invocation:
 | `delegation_max_children` | `0` | Unknown until configured or supplied as `--limit` |
 | `delegation_reserve_pct` | `20` | Percentage points retained in every applicable quota window |
 | `delegation_cost_per_child_pct` | `0` | No calibration; supply a measured estimate or explicit task budget |
+
+Capacity arithmetic remains bounded by native slots even for extremely small
+positive task-budget estimates. Unrepresentable or unavailable quota numbers
+remain unknown; they cannot become evidence of free capacity.

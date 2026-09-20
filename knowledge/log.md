@@ -69,3 +69,10 @@
 * **Creation**: Wrote [a fact that was true when it was recorded](stale-facts.md), which sets the `stale_after` policy every other concept here follows.
 
 * **Version 2, later than the pin:** issue revalidation adds whole accepted task content, bounded authenticated replay, slow-listener disconnects and stable caller-home binding. Both peers enforce the stable 2.x admission boundary. Existing usage/CLI pages now describe scoped telemetry freshness, conditional delegation capacity, explicit selected-skill publication and a settings TUI using the live registry. The shipped workflow removes blanket permission requests, inherited peer authority and the assumption that missing quota means full quota. The pin is unchanged; these additions are explicitly newer observations.
+
+* **2.0.1, later than the pin:** challengers found model-backoff delivery delays,
+missing worker telemetry fields and mixed-model accounting labels. Explicit
+worker sends and worker reports now have independent durable paths; source
+polling is cancellable and bounded. The pin remains unchanged.
+
+- Later than the pin, v2.0.1: semantic Cyberpunk/Matrix themes, full-width participant cards and saved keyboard/mouse resizing, twelve progressively loaded skills, and whole-runtime performance evidence; final independent challenge repaired Python 3.10 delivery and partial-source quota scope.

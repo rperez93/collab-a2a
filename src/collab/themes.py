@@ -23,7 +23,7 @@ learn first.
      `fold: six` has to hear about it rather than get a folding they never asked
      for.
 
-  4. A THEME ONLY CHANGES APPEARANCE. The fifteen settings in KEYS and nothing
+  4. A THEME ONLY CHANGES APPEARANCE. The settings in KEYS and nothing
      else: colours, widths, sides, frame strokes, grouping, folding, and whether
      the scrollbar is drawn. There is no
      setting that changes what collab DOES, and one cannot be added by writing
@@ -55,6 +55,8 @@ Anywhere a variable goes, a literal hex colour works too: `#00cccc`, or
 from __future__ import annotations
 
 import unicodedata
+import os
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -102,6 +104,36 @@ TYPES: dict[str, tuple] = {
     "scrollbar_side": ("choice", ("always", "auto", "off")),
 }
 
+# Semantic roles leave the rendering layout independent of particular hues.
+# These are local appearance only: none changes identity, sharing or behavior.
+PALETTE = {
+    "background": "default", "foreground": "white", "system": "white",
+    "status_fg": "black", "status_bg": "cyan", "accent": "cyan",
+    "online": "green", "offline": "red", "good": "green", "bad": "red",
+    "warn": "yellow", "info": "#4888db", "button": "yellow",
+    "divider": "white", "scrollbar_track": "white", "scrollbar_thumb": "cyan",
+    "selection_fg": "black", "selection_bg": "cyan",
+}
+COLOR_NAMES = {"black": 0, "red": 1, "green": 2, "yellow": 3,
+               "blue": 4, "magenta": 5, "cyan": 6, "white": 7}
+for _key in PALETTE:
+    KEYS[_key] = f"{_key.replace('_', ' ')} colour: ANSI name, hex, or default"
+    TYPES[_key] = ("palette", None)
+KEYS.update(roster="participant-name colour; $DEFAULT_COLOR preserves identity colours",
+            divider_char="one printable single-cell divider stroke",
+            scrollbar_chars="three printable single-cell strokes: rail, thumb, unloaded",
+            roster_spacing="blank rows between participant cards (0-2)",
+            roster_indent="indent of participant detail rows (0-4 columns)",
+            roster_columns="auto | one | two; two falls back to one in narrow panes")
+TYPES.update(roster=("colour", None), divider_char=("glyph", 1), scrollbar_chars=("glyph", 3))
+TYPES.update(roster_spacing=("int", (0, 2)), roster_indent=("int", (0, 4)),
+             roster_columns=("choice", ("auto", "one", "two")))
+for _key in ("frame", "header", "text"):
+    TYPES[_key] = ("colour", None)
+
+MAX_THEME_BYTES = 256 * 1024
+MAX_THEME_FILES = 128
+
 
 def validate(key: str, value: Any, where: str = "") -> tuple[Any, str | None]:
     """The value ready to use, or (None, why it will not do).
@@ -130,9 +162,11 @@ def validate(key: str, value: Any, where: str = "") -> tuple[Any, str | None]:
     if kind in ("int", "fraction"):
         if isinstance(value, bool) or isinstance(value, (list, dict, type(None))):
             return None, f"{pre}«{key}» wants a number, not {value!r}"
+        if kind == "int" and isinstance(value, float) and not value.is_integer():
+            return None, f"{pre}«{key}» wants a whole number, not {value!r}"
         try:
             num = int(value) if kind == "int" else float(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None, f"{pre}«{key}» wants a number, not {value!r}"
         # NaN and infinity survive float() and blow up the moment they are used
         # to measure anything. They stop here.
@@ -151,18 +185,29 @@ def validate(key: str, value: Any, where: str = "") -> tuple[Any, str | None]:
         return None, (f"{pre}«{key}» has to be one of "
                       + " or ".join(limit) + f", not {value!r}")
 
-    if kind == "chars":
+    if kind in ("palette", "colour"):
+        text = str(value).strip()
+        variables = {"$DEFAULT_COLOR", "$SPEAKER", "$TEXT", "$GOOD", "$BAD", "$WARN", "$INFO", "$DIM", "$ACCENT"}
+        from .config import parse_color
+        if text == "default" or text in COLOR_NAMES or (kind == "colour" and text.upper() in variables):
+            return text, None
+        if parse_color(text) is None:
+            return None, f"{pre}«{key}» wants a colour, not {value!r}"
+        return text, None
+
+    if kind in ("chars", "glyph"):
         text = str(value)
-        if len(text) != 6:
-            return None, (f"{pre}«chars» needs exactly 6 strokes "
+        count = 6 if kind == "chars" else limit
+        if len(text) != count:
+            return None, (f"{pre}«{key}» needs exactly {count} strokes "
                           f"(╭ ╮ ╰ ╯ ─ │) — {text!r} has {len(text)}")
         # A double-width stroke splits the box: the caps are drawn by repeating
         # the character and the body is measured in columns, so they stop
         # agreeing.
         columns = sum(2 if unicodedata.east_asian_width(c) in "WF" else 1
                     for c in text)
-        if columns != 6:
-            return None, (f"{pre}«chars» needs single-width strokes — "
+        if columns != count or any(not c.isprintable() or unicodedata.category(c).startswith("M") for c in text):
+            return None, (f"{pre}«{key}» needs printable single-width strokes — "
                           f"{text!r} takes {columns} columns")
         return text, None
 
@@ -194,10 +239,8 @@ def validate(key: str, value: Any, where: str = "") -> tuple[Any, str | None]:
 #: about folding behaves like the one that ships.
 FOLD = 8
 
-#: The one that comes in the box. `classic` is the project's original look, and
-#: it is the only built-in on purpose: a second one would be the project having
-#: an opinion about how a conversation should look, and that opinion belongs to
-#: whoever is reading it. Anything else is a file in the themes folder.
+#: Classic preserves the original look. Cyberpunk and Matrix below are optional
+#: starting points; a same-named local Markdown file can override any built-in.
 BUILTIN: dict[str, dict[str, Any]] = {
     "classic": {
         "layout": "log",
@@ -227,7 +270,33 @@ DEFAULTS: dict[str, Any] = {
     # say «there is nowhere to go» is the tmux mistake this scrollbar exists to
     # avoid.
     "scrollbar_side": "auto",
+    **PALETTE, "roster": "$DEFAULT_COLOR", "divider_char": "─",
+    "scrollbar_chars": "┆█┊",
+    "roster_spacing": 1, "roster_indent": 1, "roster_columns": "auto",
 }
+
+BUILTIN.update({
+    "cyberpunk": {
+        **BUILTIN["classic"], "background": "#100b20", "foreground": "#e9e3ff",
+        "system": "#b9acd4", "status_fg": "#100b20", "status_bg": "#f45bce",
+        "accent": "#55e7ff", "online": "#76f7cb", "offline": "#e89cae",
+        "good": "#76f7cb", "bad": "#ff718f", "warn": "#ffdc70", "info": "#75cfff",
+        "button": "#ffdc70", "divider": "#9e79c9", "scrollbar_track": "#77608f",
+        "scrollbar_thumb": "#55e7ff", "selection_fg": "#100b20", "selection_bg": "#55e7ff",
+        "header": "#f49ade", "text": "$TEXT", "frame": "#b679e7", "roster": "#55e7ff",
+        "tones": True, "chars": "┌┐└┘─│", "scrollbar_chars": "│█░",
+    },
+    "matrix": {
+        **BUILTIN["classic"], "background": "#020905", "foreground": "#b6f5c4",
+        "system": "#91bda0", "status_fg": "#020905", "status_bg": "#63de8a",
+        "accent": "#79ffa0", "online": "#79ffa0", "offline": "#b7a77c",
+        "good": "#79ffa0", "bad": "#ff9d85", "warn": "#e9d78b", "info": "#93ddc2",
+        "button": "#bcf5a1", "divider": "#659c78", "scrollbar_track": "#538363",
+        "scrollbar_thumb": "#79ffa0", "selection_fg": "#020905", "selection_bg": "#79ffa0",
+        "header": "#79ffa0", "text": "$TEXT", "frame": "#659c78", "roster": "#b6f5c4",
+        "tones": True, "chars": "++++-|", "divider_char": "─", "scrollbar_chars": "│▓░",
+    },
+})
 
 
 def user_themes_dir(home: Path | None = None) -> Path:
@@ -238,7 +307,8 @@ def user_themes_dir(home: Path | None = None) -> Path:
     does not show up, and a precedence rule to remember. A theme is written by
     hand: the format should be the one people write by hand.
     """
-    base = home or (Path.home() / ".config" / "collab")
+    from .config import global_config_path
+    base = home or global_config_path().parent
     return base / "themes"
 
 
@@ -287,6 +357,8 @@ def parse_md(text: str, name: str = "?") -> tuple[dict[str, Any], list[str]]:
     # fell back to its default with no warning at all — the worst way for a
     # configuration file to fail. Notepad, VS Code's "UTF-8 with BOM" and
     # PowerShell all produce one without asking.
+    if len(text.encode("utf-8", errors="replace")) > MAX_THEME_BYTES:
+        return {}, [f"{name}: theme exceeds 256 KiB"]
     lines = text.lstrip("\ufeff").splitlines()
     inside: list[str] = []
     warnings_open: list[str] = []
@@ -343,6 +415,9 @@ def parse_md(text: str, name: str = "?") -> tuple[dict[str, Any], list[str]]:
         key, _, value = raw.partition(":")
         key = key.strip().strip("`").lower().replace(" ", "_").replace("-", "_")
         v = _parse_value(value)
+        if TYPES.get(key, (None,))[0] == "choice" and isinstance(v, bool):
+            # «off» is a literal scrollbar choice, not a false boolean.
+            v = value.strip()
         if v is None:
             continue
         good, warning = validate(key, v, name)
@@ -363,8 +438,14 @@ def load_md_themes(folder: Path | None = None) -> tuple[dict[str, Any], list[str
     """
     d = folder or user_themes_dir()
     try:
-        files = sorted(p for p in d.iterdir()
-                          if p.suffix.lower() in (".md", ".markdown"))
+        files = []
+        for p in d.iterdir():
+            if p.suffix.lower() in (".md", ".markdown"):
+                files.append(p)
+                if len(files) > MAX_THEME_FILES:
+                    _MD_CACHE.pop(str(d), None)
+                    return {}, ["theme folder exceeds 128 Markdown files"]
+        files.sort()
     except OSError:
         _MD_CACHE.pop(str(d), None)
         return {}, []
@@ -374,7 +455,7 @@ def load_md_themes(folder: Path | None = None) -> tuple[dict[str, Any], list[str
     # many disk reads per second as you have themes. With it, one stat per file,
     # which is the least it takes to be able to say «nothing has changed».
     try:
-        stamp = tuple((p.name, p.stat().st_mtime, p.stat().st_size)
+        stamp = tuple((p.name, p.stat().st_ino, p.stat().st_mtime_ns, p.stat().st_size)
                       for p in files)
     except OSError:
         stamp = None
@@ -390,7 +471,16 @@ def load_md_themes(folder: Path | None = None) -> tuple[dict[str, Any], list[str
         if not name:
             continue
         try:
-            text = p.read_text(encoding="utf-8")
+            fd = os.open(p, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+            with os.fdopen(fd, "rb") as source:
+                if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                    warnings.append(f"{p.name}: select a regular theme file")
+                    continue
+                raw = source.read(MAX_THEME_BYTES + 1)
+            if len(raw) > MAX_THEME_BYTES:
+                warnings.append(f"{p.name}: theme exceeds 256 KiB")
+                continue
+            text = raw.decode("utf-8")
         except OSError as exc:
             warnings.append(f"{p.name}: cannot be read ({exc})")
             continue
@@ -464,7 +554,7 @@ is painted: `$DEFAULT_COLOR` `$SPEAKER` `$TEXT` `$GOOD` `$BAD` `$WARN`
 
 
 def all_themes(folder: Path | None = None) -> dict[str, dict[str, Any]]:
-    """The built-in one plus the .md files in the folder.
+    """The built-ins plus the .md files in the folder.
 
     The folder wins: whoever just wrote a file expects what that file says to be
     what happens, even when it is named after a built-in one.
@@ -479,14 +569,14 @@ def all_warnings(folder: Path | None = None) -> list[str]:
     return load_md_themes(folder)[1]
 
 
-def resolve(name: str, folder: Path | None = None) -> dict[str, Any]:
+def resolve(name: str, folder: Path | None = None, *, available=None) -> dict[str, Any]:
     """The complete theme: what the file says, over the defaults.
 
     Every setting always has a value, so the renderer never has to ask whether
     one is there. A file that leaves fifteen keys out is a valid theme; it is
     just the default one.
     """
-    theme = all_themes(folder).get(name) or {}
+    theme = (all_themes(folder) if available is None else available).get(name) or {}
     out = dict(DEFAULTS)
     out.update(theme)
 

@@ -277,7 +277,9 @@ class SettingsEditor:
         return True
 
     def draw(self, win) -> None:
+        from . import tui
         self.refresh()
+        tui._apply_theme_palette(win)
         win.erase()
         height, width = win.getmaxyx()
         self._buttons = []
@@ -300,7 +302,7 @@ class SettingsEditor:
                 text = f"[{label}]"
                 if x + len(text) >= width:
                     break
-                put(y, text, curses.A_BOLD, x)
+                put(y, text, curses.A_BOLD | curses.color_pair(tui.C_ACCENT), x)
                 self._buttons.append((y, x, x + len(text), action))
                 x += len(text) + 1
 
@@ -309,7 +311,7 @@ class SettingsEditor:
             put(1, "q quits; Esc cancels an edit")
             win.refresh()
             return
-        put(0, "collab settings", curses.A_BOLD | curses.A_REVERSE)
+        put(0, "collab settings".ljust(width - 1), curses.A_BOLD | curses.color_pair(tui.C_TITLE))
         if self.mode == "help":
             buttons([("Back", "cancel")])
             help_text = (
@@ -361,7 +363,8 @@ class SettingsEditor:
                 value = shown(self.values.get(item.name)) or "(empty)"
                 modified = "*" if self.values.get(item.name) != item.default else " "
                 line = modified + clip(item.name, key_width - 1).ljust(key_width) + " " + _safe(value)
-                put(row, line, curses.A_REVERSE if item.name == self.selected else 0)
+                put(row, line.ljust(width - 1), curses.color_pair(tui.C_SELECTION) | curses.A_BOLD
+                    if item.name == self.selected else curses.color_pair(tui.C_TEXT))
             if self.item:
                 put(height - 6, self.selected, curses.A_BOLD)
                 about = edit_lines(self.item.about, 0, width - 2)[0]
@@ -417,6 +420,8 @@ def run(*, on_change: Callable[[str], Any] | None = None) -> int:
     editor = SettingsEditor()
 
     def loop(win):
+        from . import tui
+        tui._init_colors()
         win.keypad(True)
         win.timeout(250)
         curses.mousemask(curses.ALL_MOUSE_EVENTS)
@@ -436,10 +441,14 @@ def run(*, on_change: Callable[[str], Any] | None = None) -> int:
             if not editor.handle(key):
                 return
 
+    from . import tui
+    tui._THEME_POLLING[0] = True
     try:
         curses.wrapper(loop)
     except KeyboardInterrupt:
         pass
+    finally:
+        tui._THEME_POLLING[0] = False
     if on_change:
         for name in sorted(editor.changed):
             on_change(name)

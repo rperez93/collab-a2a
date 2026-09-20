@@ -29,7 +29,13 @@ SUPPORTED_AGENTS = ("codex", "claude", "opencode", "cursor")
 # Four short replies and four decisions fit comfortably here. The pipe ceiling
 # also covers CLI diagnostics; crossing it terminates the exchange immediately
 # rather than spending a full model timeout draining a noisy provider.
-MAX_INPUT_BYTES = 128 * 1024
+# Both configurable guidance fields accept 8,000 characters (up to 48KB each
+# after JSON control escaping), alongside a 16KB scope, 24KB summary, bounded
+# pending/source/activity fields and at least one 16KB main-agent record. The
+# old 128KiB ceiling could reject that valid combination forever. 192KiB keeps
+# the exchange bounded while fitting mandatory guidance and one queued input;
+# the service defers excess records rather than truncating their instructions.
+MAX_INPUT_BYTES = 192 * 1024
 MAX_OUTPUT_BYTES = 256 * 1024
 MAX_RESULT_BYTES = 64 * 1024
 MAX_ACTIONS = 4
@@ -76,6 +82,9 @@ or 0 for an escalation about main-agent context. Do not invent a decision.
 Use supplied main-agent answers to reply to the waiting peer, then continue.
 Do not repeat unresolved escalations or send acknowledgement-only replies to
 acknowledgements; avoid worker-to-worker loops. A useful reply advances work.
+Tie disagreement to the agreed outcome and concrete evidence or an acceptance
+check. If neither facts nor constraints changed, do not repeat an argument;
+record the unresolved choice once for the main agent and continue useful work.
 Send replies to a specific supplied participant, preserving its room (empty
 room means the default). You may reply and escalate in the same turn.
 Keep a compact factual summary including unresolved questions and commitments.
@@ -258,7 +267,7 @@ async def _reap(proc: asyncio.subprocess.Process) -> None:
 
 
 async def _exchange(args: list[str], data: bytes, scratch: Path, env: dict[str, str],
-                    timeout: float, result_path: Path | None) -> bytes:
+                    timeout: float, result_path: Path | None, on_output=None) -> bytes:
     spawn = asyncio.create_task(asyncio.create_subprocess_exec(
         *args, cwd=scratch, env=env, start_new_session=True,
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
@@ -315,6 +324,8 @@ async def _exchange(args: list[str], data: bytes, scratch: Path, env: dict[str, 
     try:
         values = await asyncio.wait_for(asyncio.gather(*tasks), timeout)
         await _reap(proc)
+        if on_output is not None:
+            on_output(values[0])
         if proc.returncode:
             # Never copy provider stderr into main-thread notices: it can
             # contain the prompt, credential-bearing URLs, or hostile text.
@@ -409,10 +420,13 @@ async def run_turn(agent: str, model: str, payload: dict, directory: Path, *,
             decoder = agent
             data = (INSTRUCTIONS + "\nResponse schema:\n" + json.dumps(OUTPUT_SCHEMA)
                     + "\nConversation input:\n").encode() + encoded
-        output = await _exchange(args, data, scratch, env, timeout, result_path)
-        if on_usage is not None and decoder != "custom":
-            from .worker_usage import extract
-            figures = extract(decoder, output, model)
-            if figures:
-                on_usage(figures)
+        def observe(output):
+            if on_usage is not None and decoder != "custom":
+                from .worker_usage import extract
+                figures = extract(decoder, output, model)
+                if figures:
+                    on_usage(figures)
+        # A provider can report billed usage and then exit unsuccessfully.
+        # Observe its bounded envelope before validating exit/result status.
+        output = await _exchange(args, data, scratch, env, timeout, result_path, on_output=observe)
         return _decode(decoder, output, result_path)

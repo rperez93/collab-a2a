@@ -5591,7 +5591,9 @@ def cmd_worker(args: argparse.Namespace) -> int:
     """Delegate coordination without consuming the coding agent's inbox."""
     from .worker import Store
 
-    mutation = args.worker_action in ("start", "off", "reply", "context")
+    mutation = args.worker_action in ("start", "off", "reply", "context", "send")
+    if args.worker_action == "stats":
+        return cmd_worker_stats(args)
     profile = _require_own_profile(args) if mutation else _require_profile(args)
     store = Store(profile.dir)
     try:
@@ -5615,6 +5617,11 @@ def cmd_worker(args: argparse.Namespace) -> int:
         elif args.worker_action == "context":
             store.context(args.text)
             ok("context queued for the collaboration worker")
+        elif args.worker_action == "send":
+            record_id = store.send(args.text, to=args.to, room=args.room or '')
+            onboard.ensure_daemon(profile)
+            ok(f"message queued for worker delivery: {record_id}")
+            print("  `collab worker status` shows pending delivery and retry errors")
         elif args.worker_action == "pending":
             pending = store.pending()
             if args.json:
@@ -5629,6 +5636,38 @@ def cmd_worker(args: argparse.Namespace) -> int:
             state = store.status()
             state["daemon_running"] = is_running(profile) is not None
             print(json.dumps(state, indent=2))
+        return 0
+    except (ValueError, OSError) as exc:
+        fail(str(exc))
+        return 1
+
+
+def cmd_worker_stats(args: argparse.Namespace) -> int:
+    """Keep explicit worker measurements separate from the coding agent's."""
+    from . import worker, worker_telemetry as telemetry
+    mutation = any(getattr(args, key, None) is not None
+                   for key in ('report', 'source', 'interval', 'provider', 'quota_scope'))
+    profile = _require_own_profile(args) if mutation else _require_profile(args)
+    try:
+        if args.report is not None:
+            if args.source is not None or args.interval is not None:
+                raise ValueError('--report cannot be combined with --source or --interval')
+            raw = sys.stdin.read(1048577) if args.report == '-' else args.report
+            figures = telemetry.parse_report(raw, provider=args.provider, quota_scope=args.quota_scope)
+            worker.Store(profile.dir).report_stats(figures)
+            if share_stats_enabled():
+                # The listener owns publication, including retries. Do not
+                # publish a partial worker dictionary over its runtime health.
+                onboard.ensure_daemon(profile)
+        elif mutation:
+            telemetry.configure_source(profile.dir, command=args.source, interval=args.interval,
+                                       provider=args.provider, quota_scope=args.quota_scope)
+            if share_stats_enabled():
+                onboard.ensure_daemon(profile)
+        print(json.dumps({'worker': worker.metrics(profile.dir),
+                          'source': telemetry.source_config(profile.dir),
+                          'source_status': telemetry.source_status(profile.dir),
+                          'sharing': share_stats_enabled()}, indent=2))
         return 0
     except (ValueError, OSError) as exc:
         fail(str(exc))
@@ -6457,6 +6496,9 @@ def cmd_skills(args: argparse.Namespace) -> int:
             print(f"      {dim(str(entry['path']))}")
         if not args.all:
             print(dim("\n  --all also lists agents that are not installed here"))
+        heading("bundled capabilities")
+        for entry in report.get("bundled", []):
+            print(f"  {entry['name']:<24} {entry['description']}")
         print()
         return 0
 
@@ -6570,12 +6612,22 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("watch", "a live view for a person: roster and conversation"),
         ("rooms", "list or create rooms"),
     ]),
+    ("Conversation worker", [
+        ("worker start|status|off", "configure the isolated conversation worker"),
+        ("worker context|send", "give it task context or queue an exact addressed message"),
+        ("worker pending|reply", "read actionable escalations and answer durably"),
+        ("worker stats", "report or collect the worker's own usage and quota"),
+    ]),
     ("Align on work", [
         ("task propose|claim|complete", "the shared task board"),
         ("task comment|pr", "say something about a task, or link its pull requests"),
         ("project propose|assign|show", "a bundle of tasks that belongs to somebody"),
         ("who", "who is here, their focus, repo and machine"),
         ("stats", "each agent's quota and spend, for splitting work"),
+        ("capacity", "quota-aware delegation estimates with unknowns explicit"),
+        ("batch", "coordinate a batch and inspect its progress"),
+        ("skills shared|publish", "discover capabilities or publish a selected skill"),
+        ("skills show|withdraw", "inspect a peer's skill or revoke your publication"),
         ("file send|get", "hand over artifacts instead of pasting them"),
         ("rules", "how to behave in a session — printed at host and join"),
     ]),
@@ -6585,6 +6637,7 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("logs [--follow]", "what this session has recorded, without stopping it"),
         ("name [value]", "show or set your display name"),
         ("config [key] [value]", "every global setting, its value and default"),
+        ("config --tui", "edit the same settings using keyboard or mouse"),
         ("url", "reprint the join line (host)"),
         ("kick <name>", "remove a participant (host)"),
         ("daemon start|stop|status", "the listener that holds the connection"),
@@ -7173,7 +7226,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     wk = sub.add_parser("worker", help="delegate the collaboration conversation to a scoped worker")
     wk_sub = wk.add_subparsers(dest="worker_action", required=True)
-    for action in ("start", "off", "status", "pending", "reply", "context"):
+    for action in ("start", "off", "status", "pending", "reply", "context", "send", "stats"):
         wp = wk_sub.add_parser(action)
         add_session_flag(wp)
         wp.set_defaults(func=cmd_worker)
@@ -7187,6 +7240,19 @@ def build_parser() -> argparse.ArgumentParser:
             wp.add_argument("text")
         elif action == "context":
             wp.add_argument("text")
+        elif action == "send":
+            wp.add_argument("text", help="exact message to queue for reliable worker delivery")
+            wp.add_argument("--to", required=True, help="explicit participant name")
+            wp.add_argument("--room", help="optional room for the addressed message")
+        elif action == "stats":
+            wp.add_argument("--report", metavar="JSON", help="worker usage snapshot, or - for stdin")
+            wp.add_argument("--provider", choices=("canonical", "codex", "claude", "opencode", "cursor"),
+                            help="native snapshot adapter; canonical for a normalized report")
+            wp.add_argument("--source", metavar="CMD", help="local worker usage command; empty clears")
+            wp.add_argument("--interval", type=int, metavar="SECONDS", help="source interval, 10–86400 seconds; default 120")
+            wp.add_argument("--quota-scope", choices=("shared_account", "independent", "unknown"),
+                            help="whether the worker allowance shares the coding agent's account")
+            wp.add_argument("--json", action="store_true", help="JSON output (also the default)")
         elif action in ("status", "pending"):
             wp.add_argument("--json", action="store_true")
 

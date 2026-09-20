@@ -149,6 +149,26 @@ class Store:
         with self._db() as db:
             return self._add(db, "context", {"text": text})
 
+    def send(self, text: str, *, to: str, room: str = "") -> str:
+        """Queue the main agent's exact message without asking a model to repeat it.
+
+        Context supplies facts and can legitimately produce no reply. Treating
+        it as a send instruction used to silently consume intended handoffs.
+        Explicit sends use the same durable, idempotent outbox as model replies;
+        the hub validates the address, and failed delivery remains visible.
+        """
+        text = _text(text, "message")
+        to = _text(to, "recipient")
+        room = _text(room, "room", empty=True)
+        if len(text) > 8000:
+            raise ValueError("message exceeds 8000 characters")
+        if len(to) > 200 or len(room) > 200 or any("\0" in value for value in (text, to, room)):
+            raise ValueError("invalid message routing or NUL in message")
+        with self._db() as db:
+            if not (self._state(db)["config"] or {}).get("enabled"):
+                raise ValueError("start the worker before queueing a message")
+            return self._add(db, "outbox", {"text": text, "to": to, "room": room})
+
     def pending(self) -> list[dict[str, Any]]:
         with self._db() as db:
             return self._records(db, "escalation")
@@ -253,17 +273,75 @@ class Store:
                 "question": f"Recovered older message #{seq}. Inspect collab recv and supply a decision if a reply is still needed; prior worker replies were not replayed."})
             db.execute("INSERT INTO repaired VALUES(?)", (seq,))
 
+    def report_stats(self, figures: dict) -> dict:
+        """Merge a bounded, explicit worker snapshot without changing runtime state.
+
+        Quotas are account observations, never inferred from the main agent's
+        model or copied from its allowance. No credentials/account IDs survive
+        the fixed telemetry allow-list.
+        """
+        from .telemetry import worker_report, stamp_observations
+        from .stats import QUOTA_FIELDS
+        cleaned = worker_report(figures)
+        for key in ("enabled", "running", "agent", "turns", "attempts", "pending", "errors"):
+            cleaned.pop(key, None)
+        if "model" in cleaned:
+            cleaned.setdefault("usage_model", cleaned["model"])
+        cleaned = stamp_observations(cleaned)
+        if "quotas" in cleaned:
+            cleaned.setdefault("quota_observed_at", cleaned.get("observed_at") or time.time())
+        with self._db() as db:
+            state = self._state(db)
+            current = state.setdefault("reported_stats", {})
+            # A token-only update can be the first observation from a new
+            # account. Withdraw the old relationship then, before that source
+            # later supplies quota; otherwise its name already matches and the
+            # previous account's independent/shared scope survives incorrectly.
+            source_changed = "source" in cleaned and cleaned["source"] != current.get("source")
+            if source_changed and ("quota_scope" in current or "quotas" in current):
+                cleaned.setdefault("quota_scope", "unknown")
+            if "quotas" in cleaned:
+                cleaned.setdefault("quota_scope", "unknown" if source_changed else current.get("quota_scope", "unknown"))
+                for key in QUOTA_FIELDS:
+                    current.pop(key, None)
+            # Keep explicit null as a mask over native historical totals;
+            # deleting the override would resurrect the old measurement.
+            current.update(cleaned)
+            self._save(db, state)
+            return dict(current)
+
     def record_usage(self, figures: dict) -> None:
+        from .telemetry import number, stamp_observations
         with self._db() as db:
             state = self._state(db)
             usage = state.setdefault("usage", {})
-            for key in ("tokens_in", "tokens_out", "tokens_cached", "cost_usd"):
-                if key in figures:
-                    usage[key] = usage.get(key, 0) + figures[key]
+            model = str(figures.get("model") or "unknown")[:150]
+            previous_model = usage.get("usage_model")
+            usage["usage_model"] = model if previous_model in (None, model) else "mixed models"
+            # Keep observed costs computed at the original model/rate, even if
+            # defaults or pricing change later. Bounded buckets retain useful
+            # per-model accounting without a model-name cardinality leak.
+            buckets = state.setdefault("usage_by_model", {})
+            bucket_key = model if model in buckets or len(buckets) < 32 else "other models"
+            bucket = buckets.setdefault(bucket_key, {})
+            for key in ("tokens_in", "tokens_out", "tokens_cached", "tokens_cache_write", "cost_usd"):
+                value = number(figures.get(key))
+                if value is not None:
+                    for target in (usage, bucket):
+                        total = target.get(key, 0) + value
+                        if number(total) is not None:
+                            target[key] = total
             if figures.get("cost_kind"):
                 old_kind = usage.get("cost_kind")
                 usage["cost_kind"] = "mixed" if old_kind and old_kind != figures["cost_kind"] else figures["cost_kind"]
-            usage["observed_at"] = time.time()
+            usage.update(observed_at=time.time(), cost_scope="observed worker lifetime")
+            # Only groups present in this native envelope become fresh. A
+            # token-only result must not freshen an older cost observation.
+            stamps = stamp_observations(figures)
+            for group in ("tokens", "cost"):
+                key = group + "_observed_at"
+                if key in stamps:
+                    usage[key] = stamps[key]
             self._save(db, state)
 
     def reserve_turn(self, *, expected_generation: int, now: float | None = None,
@@ -330,11 +408,12 @@ def metrics(root):
     cfg = state["config"] or {}
     from .runtime_settings import get
     model = get(f"worker_{cfg['agent']}_model") if cfg.get("model_default") else cfg.get("model", "")
-    return {**state.get("usage", {}), "enabled": state["enabled"], "running": state["running"],
-        "agent": cfg.get("agent", ""), "model": model, "turns": state["turn"],
+    return {**state.get("usage", {}), **state.get("reported_stats", {}), "enabled": state["enabled"], "running": state["running"],
+        "agent": cfg.get("agent", ""), "model": model or state.get("reported_stats", {}).get("model", ""), "turns": state["turn"],
         "attempts": state.get("attempts_total", 0), "pending": len(state["pending"]),
-        "errors": int(bool(state["error"])), "source": "collab-worker",
-        "observed_at": max(state.get("last_progress", 0), state.get("usage", {}).get("observed_at", 0))}
+        "errors": int(bool(state["error"])), "source": state.get("reported_stats", {}).get("source") or "collab-worker",
+        "observed_at": max(state.get("last_progress", 0), state.get("usage", {}).get("observed_at", 0),
+                           (state.get("reported_stats", {}).get("observed_at") or 0))}
 
 
 def notify_repairs(root, inbox):

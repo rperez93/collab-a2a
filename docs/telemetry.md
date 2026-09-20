@@ -70,3 +70,52 @@ A child-only snapshot cannot refresh the main agent's figures, and a cost-only
 update cannot refresh context or quota. Partial reports merge locally as well as
 on the hub; explicit null removes a figure. Nullable cache counts mean unknown,
 so they cannot be used to produce a price estimate.
+
+## Worker reports and sources (2.0.1)
+
+Main usage still uses `collab stats`; worker observations have their own durable
+store and publication path. The worker provider can differ from the coding host.
+Use any supported native adapter, or canonical JSON from a trusted local tool:
+
+```sh
+collab worker stats --report '{"quotas":{"five_hour":{"used_pct":35}},"quota_scope":"independent","source":"local worker adapter"}'
+collab worker stats --provider claude --report -
+collab worker stats --source '/absolute/path/to/worker-usage' --interval 120
+collab worker stats --source ''
+collab worker stats --json
+```
+
+`--provider` accepts `codex`, `claude`, `opencode`, `cursor` and `canonical`.
+It selects a payload adapter, not a model or account. A source may use native
+hooks, a local SDK, or `collab stats --probe codex` when that probe addresses the
+worker's account. Collab cannot discover private provider data the tool does not
+expose. Missing quotas/context remain unknown; do not fabricate them.
+
+Quota scope is `shared_account`, `independent`, or `unknown`. Only explicit local
+knowledge can establish the relationship to the coding agent's allowance. The
+source payload may carry this field; `--quota-scope` overrides it when configured.
+Do not add shared allowances together. A worker model-call budget is a local
+spending guard, not provider quota.
+
+Worker reports and worker sources are **partial observations**: omitted groups
+retain their previous timestamps, becoming stale normally; `quotas: {}` clears
+worker allowances. Explicit null masks a measurement without resurrecting a
+native aggregate beneath it. Main `stats --source` retains its existing whole
+picture quota behavior. Explicit worker snapshots override observed native
+aggregate values; describe their accounting period with `cost_scope` and source.
+Neither path refreshes the main agent's quota. `share_stats off` stops publication
+and cancels a worker source in flight; previously shared figures retain their
+historical timestamps on peers.
+
+A worker source runs asynchronously in its configured working directory. Changes
+reload on the next heartbeat and cancel the previous command. Output is bounded
+at 256 KiB, with a 20-second deadline and process-group cleanup. Source errors
+are visible locally through `worker stats`, without copying command output into
+peer telemetry. Sources are explicit local commands, never accepted from peers.
+
+Observed native usage now retains cache-write tokens and original model labels.
+Mixed-model lifetime totals are marked as such; bounded model buckets are visible
+in `worker status`. Complete usage envelopes from failed calls are counted;
+missing or interrupted usage remains unknown. Provider-reported cost is not
+necessarily billed cost: Claude reports an estimate at list prices, while Cursor
+SDK `cost.chargedCents` is a settled charge. No model-proposed usage is trusted.

@@ -1,6 +1,6 @@
 ---
 name: collab-watch
-description: Show the human a live, readable transcript of the collab conversation between the agents — optionally in its own tmux pane so they can watch it alongside their work. Use when the user asks to see the conversation, follow along, watch what the agents are saying, open a panel or split for collab, or asks "what did the other agent say".
+description: Open the human Collab transcript and participant panel, inspect conversation history, or adjust its tmux layout. Use when the user wants to follow the agents or inspect their status.
 ---
 
 # Showing the conversation to the user
@@ -284,3 +284,37 @@ more often a setting than a fault.
 - If it says there is no active session, check the workspace and agent identity.
   An external viewer terminal needs the exact `COLLAB_HOME` printed by the
   participating agent; it cannot infer that agent’s state from the repo alone.
+
+## Participant facts and appearance
+
+Enter/Space or clicking a participant expands its measurements; J/K selects
+another participant and arrows/mouse wheel scroll. Model, context, quota, cost,
+native subagents and conversation workers retain separate rows and freshness.
+Use `collab-telemetry` when a measurement is absent or its scope is unclear;
+unknown is never an inferred zero. `watch_participant_fields` selects visible
+fields and `watch_participant_details` sets the starting disclosure state.
+
+The Cyberpunk and Matrix themes are selected with `collab theme cyberpunk` and
+`collab theme matrix`. Theme files and the registry settings hot reload; use
+`collab config --tui` for keyboard/mouse configuration without removing CLI
+support. Read `collab watch --help` for panel geometry controls available in the
+installed version.
+
+Collapsed participant cards use the available width for identity/state and
+compact facts. Expanded cards show main-agent and worker measurements side by
+side in wide panes and stack them in narrow panes. Hidden or stale fields keep
+their meaning when the layout changes.
+
+In the combined viewer, `+`/`-` adjusts the roster share in five-percentage-point
+steps. Drag the CONVERSATION divider with the mouse to preview a size; releasing
+saves it to `watch_roster_size`. Separate tmux panes use tmux's own resizing.
+For persistent proportions through either configuration interface:
+
+```bash
+collab config watch_roster_size 45
+```
+
+Theme-file appearance keys `roster_spacing` (0–2), `roster_indent` (0–4) and
+`roster_columns` (`auto`, `one`, `two`) refine participant cards. Two columns
+still fall back to one when the pane is narrow. These are theme-file keys,
+not global `collab config` setting names.

@@ -1,6 +1,6 @@
 ---
 name: collab-learn
-description: Look up what this repository has already taught the agents working on it, record something the next one will need, say when a learning actually helped, and ask the other agents in the session for theirs. Use when starting a task in an unfamiliar repository, when stuck on something that smells like a known pitfall, when the user asks "what do we know about X" or "did anyone already solve this", when you have just found something out the hard way, when somebody says "record this for the others" or "share what I learned", and when joining a session for a repository you hold no learnings for.
+description: Search and record repository learnings, mark which guidance helped, or explicitly exchange learnings with session peers. Use for known pitfalls, unfamiliar repository behavior or a requested knowledge handoff.
 ---
 
 # What this repository has already taught somebody
