@@ -94,13 +94,13 @@ def test_mouse_controls_match_keyboard_controls(viewer, monkeypatch):
     assert panel.participant_details is False
 
 
-def test_arrow_scroll_and_chat_follow_are_unchanged_by_disclosure(viewer):
+def test_arrows_select_participants_without_changing_chat_follow(viewer):
     """Metric controls cannot turn off following new conversation messages."""
     panel, _, _ = viewer
     panel.handle(ord("v"))
     redraw(panel)
     panel.handle(curses.KEY_DOWN)
-    assert panel.roster.offset == 1
+    assert panel.selected_participant == "b"
     assert panel.chat.follow is True
     panel.handle(ord("\t"))
     assert panel.focus == "roster", "a single pane cannot focus an invisible conversation"
@@ -117,7 +117,8 @@ def test_live_settings_reset_local_overrides_and_rebuild_quiet_rosters(viewer):
     text = "\n".join(row.text for row in rows)
     assert panel.participant_field_mode == 0
     assert "ctx 64%" in text
-    assert "est. cost" not in text and "example-model" not in text
+    assert "est. cost" not in text
+    assert "m:example-model" in text  # models remain on every heading
 
 
 def test_a_departed_participant_does_not_transfer_its_disclosure_to_a_replacement(viewer):

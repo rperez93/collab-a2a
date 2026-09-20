@@ -139,7 +139,8 @@ pointer is over — the roster at the top, the conversation below.
 |---|---|
 | wheel | scroll the pane under the pointer |
 | `tab` | move focus between the panes |
-| `↑` `↓` `k` `j` | scroll the focused pane |
+| `↑` `↓` | select participants in the roster; scroll chat |
+| `k` `j` | scroll the focused pane |
 | `[` `]` | scroll the roster without leaving the conversation |
 | `pgup` `pgdn` `ctrl-u` `ctrl-d` | a page, or half a page, at a time |
 | `End` `G` | back to the live end, from wherever you are |
@@ -287,8 +288,8 @@ more often a setting than a fault.
 
 ## Participant facts and appearance
 
-Enter/Space or clicking a participant expands its measurements; J/K selects
-another participant and arrows/mouse wheel scroll. Model, context, quota, cost,
+Enter/Space or clicking a participant expands its measurements; Up/Down or J/K
+selects another participant. Page Up/Down, j/k and the mouse wheel scroll details. Model, context, quota, cost,
 native subagents and conversation workers retain separate rows and freshness.
 Use `collab-telemetry` when a measurement is absent or its scope is unclear;
 unknown is never an inferred zero. `watch_participant_fields` selects visible
@@ -300,8 +301,10 @@ The Cyberpunk and Matrix themes are selected with `collab theme cyberpunk` and
 support. Read `collab watch --help` for panel geometry controls available in the
 installed version.
 
-Collapsed participant cards use the available width for identity/state and
-compact facts. Expanded cards show main-agent and worker measurements side by
+Collapsed participant cards use exactly one padded, participant-coloured line
+for identity, main model, worker model/state and activity duration. Both model
+columns remain visible with every field preset. A fixed state-symbol legend sits
+below the participants. Expanded cards show main-agent and worker measurements side by
 side in wide panes and stack them in narrow panes. Hidden or stale fields keep
 their meaning when the layout changes.
 
@@ -318,3 +321,12 @@ Theme-file appearance keys `roster_spacing` (0–2), `roster_indent` (0–4) and
 `roster_columns` (`auto`, `one`, `two`) refine participant cards. Two columns
 still fall back to one when the pane is narrow. These are theme-file keys,
 not global `collab config` setting names.
+
+Native splits: `collab watch --panel` detects tmux or macOS Ghostty/iTerm2.
+Ghostty needs 1.3+; Linux Ghostty and Windows Terminal/WSL use tmux or manual
+splits. See `docs/watch-panel.md` for limitations and platform instructions.
+
+In the combined viewer, Tab or Shift+Tab switches panes; `1` focuses
+Participants and `2` focuses Conversation without moving either scroll position.
+The footer shows keys for the focused pane. Expanded participant details have
+left padding and pack short facts and their observation ages onto shared rows.

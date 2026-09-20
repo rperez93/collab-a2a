@@ -74,7 +74,7 @@ def test_the_head_covers_the_dot_and_the_name_but_not_the_state():
     r = next(r for r in rows if "alice" in r.text)
     head = r.text[:r.head]
     assert "alice" in head
-    assert "●" in head or "○" in head
+    assert any(symbol in head for symbol in ("●", "○", "◌"))
     assert "online" not in head
     assert "the viewer" not in head
 

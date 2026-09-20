@@ -15,6 +15,21 @@ from collab import config
 from collab.client.hub_client import HubError
 from collab.client.inbox import Inbox
 from collab.client.recovery import repair_inbox
+
+
+def test_verified_private_sequence_gaps_stop_warning_but_new_gaps_remain(profile):
+    """An authenticated replay confirms invisible DMs, not perpetual loss."""
+    box = Inbox(profile.dir)
+    box.record(Envelope(kind="chat", seq=1))
+    box.record(Envelope(kind="chat", seq=4))
+    assert box.gaps() == [2, 3]
+    box.verify_replay(0, 4)
+    assert box.gaps() == []
+    box.record(Envelope(kind="chat", seq=7))
+    assert box.gaps() == [5, 6]
+    box.verify_replay(6, 7)  # cannot bless an unverified interval before it
+    assert box.gaps() == [5, 6]
+    box.close()
 from collab.protocol import EXT_PREFIX, MAX_DETAIL, Envelope
 from collab.server import hub as hub_module
 from collab.server.hub import Hub

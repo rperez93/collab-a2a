@@ -50,6 +50,26 @@ def incoming(service, seq, text):
 
 
 @pytest.mark.asyncio
+async def test_later_peer_requests_receive_retained_facts_without_idle_model_turns(conversation, tmp_path, monkeypatch):
+    """Summary omission cannot erase the main agent's token on the next request."""
+    service = conversation
+    configure(service, tmp_path)
+    store = worker.Store(service.root)
+    store.context("Token: panel-v202-ready")
+    calls = []
+    async def run(*args, **kwargs):
+        calls.append(args[2])
+        return {"summary": "Nothing about tokens", "replies": [], "escalations": []}
+    monkeypatch.setattr("collab.worker_runtime.run_turn", run)
+    await service.turn()
+    await service.turn()
+    assert len(calls) == 1, "retained facts alone must not spend model calls"
+    incoming(service, 1, "What was the token?")
+    await service.turn()
+    assert calls[-1]["retained_main_context"][0]["text"] == "Token: panel-v202-ready"
+
+
+@pytest.mark.asyncio
 async def test_peer_conversation_and_decision_return_flow_without_main_reading(conversation, tmp_path):
     service = conversation
     configure(service, tmp_path)

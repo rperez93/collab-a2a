@@ -557,6 +557,15 @@ class Inbox:
             ).fetchone()
         return row is not None
 
+    def verify_replay(self, after: int, through: int) -> None:
+        """Remember a contiguous authenticated replay, including private gaps."""
+        with self._lock:
+            row = self._db.execute("SELECT value FROM meta WHERE key='verified_through'").fetchone()
+            before = int(row[0]) if row else 0
+            if after <= before and through > before:
+                self._db.execute("INSERT OR REPLACE INTO meta VALUES ('verified_through', ?)", (str(through),))
+                self._db.commit()
+
     def gaps(self, limit: int = 1000) -> list[int]:
         """Unverified holes in the global sequence, never a loss count.
 
@@ -571,13 +580,16 @@ class Inbox:
         limit = max(0, min(limit, 1000))
         missing: list[int] = []
         with self._lock:
+            verified = self._db.execute("SELECT value FROM meta WHERE key='verified_through'").fetchone()
+            floor = int(verified[0]) if verified else 0
             rows = self._db.execute(
                 "SELECT previous, seq FROM (SELECT seq, LAG(seq) OVER (ORDER BY seq) "
-                "AS previous FROM inbox) WHERE seq > previous + 1 LIMIT ?", (limit,)
+                "AS previous FROM inbox) WHERE seq > previous + 1 AND seq > ? + 1 LIMIT ?", (floor, limit)
             )
             for row in rows:
-                count = min(row["seq"] - row["previous"] - 1, limit - len(missing))
-                missing.extend(range(row["previous"] + 1, row["previous"] + 1 + count))
+                start = max(row["previous"], floor) + 1
+                count = min(row["seq"] - start, limit - len(missing))
+                missing.extend(range(start, start + count))
                 if len(missing) >= limit:
                     break
         return missing

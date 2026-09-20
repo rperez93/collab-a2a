@@ -51,6 +51,10 @@ def repair_inbox(profile: SessionProfile, client: HubClient, *, after: int = 0,
                 if box.record(env, repaired=True):
                     recovered += 1
                     recovered_seqs.append(env.seq)
+            # A visible replay has verified the invisible sequence numbers as
+            # well. Otherwise check kept warning about other people's DMs even
+            # after a complete repair found nothing missing.
+            box.verify_replay(cursor, moved)
             cursor = moved
             pages += 1
             if cursor >= through:

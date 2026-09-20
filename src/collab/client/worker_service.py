@@ -241,6 +241,7 @@ class Conversation:
                 "local_guidance": setting("worker_instructions"),
                 "local_rules": setting("rules_text"),
                 "main_context": contexts, "main_answers": answers,
+                "retained_main_context": snapshot.get("retained_context", []),
                 "main_activity": _excerpt(json.dumps(activity.read_local(self.daemon.profile), ensure_ascii=False), 4000),
                 "events": selected,
                 "pending": _page([self._source(row) for row in store.pending()], budget=12_000),
@@ -269,7 +270,7 @@ class Conversation:
             # room than both independent 24KB main-input pages. Answers already
             # have waiting peers, so defer newest context first, then answers.
             # Only IDs actually supplied to the provider are consumed at commit.
-            for records in (contexts, answers):
+            for records in (payload["retained_main_context"], contexts, answers):
                 while records and len(json.dumps(payload, ensure_ascii=False).encode()) > worker_runtime.MAX_INPUT_BYTES - 1024:
                     records.pop()
             reserved = store.reserve_turn(expected_generation=snapshot["generation"],

@@ -76,3 +76,7 @@ worker sends and worker reports now have independent durable paths; source
 polling is cancellable and bounded. The pin remains unchanged.
 
 - Later than the pin, v2.0.1: semantic Cyberpunk/Matrix themes, full-width participant cards and saved keyboard/mouse resizing, twelve progressively loaded skills, and whole-runtime performance evidence; final independent challenge repaired Python 3.10 delivery and partial-source quota scope.
+
+* **Update (later than the pin, v2.0.2)**: Extended existing usage figures with
+  exact-thread Codex telemetry and solo-participant stats. No pin or verified
+  stamp was moved.

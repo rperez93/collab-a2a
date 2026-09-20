@@ -2536,10 +2536,21 @@ def cmd_stats(args: argparse.Namespace) -> int:
         # command; see `collab.quotas`.
         from . import quotas as quotamod
 
+        from .hosttool import detect
+        kind = detect()
+        if args.probe == "codex" and kind and kind != "codex":
+            print("Codex probe refused for a different active agent; configure that agent's own telemetry source", file=sys.stderr)
+            return 1
         report, why = quotamod.probe(args.probe)
         if why:
             print(why, file=sys.stderr)
             return 1
+        if args.probe == "codex":
+            from .codex_usage import current_usage
+            # This process inherits the participant's own thread identity.
+            # Quota is account-wide; model/context must come from that thread.
+            report.update(current_usage())
+            report["quota_observed_at"] = time.time()
         print(json.dumps(report))
         return 0
 
@@ -3091,19 +3102,28 @@ def cmd_watch(args: argparse.Namespace) -> int:
 
     profile = _require_profile(args)
 
-    if args.tmux:
-        argv = [str(Path(sys.argv[0]).resolve()), "watch",
+    if args.tmux or getattr(args, "panel", None):
+        argv = [*_self_argv(), "watch",
                 "--session", profile.session_id]
+        for field in ("layout", "view", "limit", "roster_size"):
+            value = getattr(args, field, None)
+            if value is not None:
+                argv += ["--" + field.replace("_", "-"), str(value)]
+        for field in ("plain", "no_follow"):
+            if getattr(args, field, False):
+                argv.append("--" + field.replace("_", "-"))
         passthrough = {k: os.environ[k] for k in ("COLLAB_CONFIG", "COLLAB_NAME",
-                                                  "NO_COLOR")
+                                                  "NO_COLOR", "PYTHONPATH")
                        if k in os.environ}
         # Always, not only when it happens to be in our environment: a pane
         # left to resolve the directory for itself can land in another agent's
         # session, and then shows their name as yours.
         passthrough["COLLAB_HOME"] = profile.home
         try:
-            where = w.open_tmux_pane(argv, env=passthrough, percent=args.percent,
-                                     horizontal=not args.vertical)
+            from .client.terminal_panel import open_panel
+            where = open_panel(argv, env=passthrough, percent=args.percent,
+                               horizontal=not args.vertical,
+                               backend="tmux" if args.tmux else args.panel)
         except RuntimeError as exc:
             fail(str(exc))
             if not w.tmux_available():
@@ -3180,6 +3200,10 @@ def cmd_watch(args: argparse.Namespace) -> int:
         return 0
 
 
+def _file_size(size: int) -> str:
+    return f"{size} B" if size < 1024 else f"{size / 1024:.0f} KB"
+
+
 def cmd_file(args: argparse.Namespace) -> int:
     # Sending is under our name, and fetching deletes the host's copy in it.
     profile = (_require_profile(args) if args.action == "list"
@@ -3197,8 +3221,11 @@ def cmd_file(args: argparse.Namespace) -> int:
                          f"{MAX_FILE_BYTES // 1024 // 1024}MB")
                     return 1
                 record = client.upload_file(path, to=args.to, room=args.room)
+                if args.json:
+                    print(json.dumps(record, indent=2))
+                    return 0
                 target = f"@{args.to}" if args.to else f"#{args.room or profile.room}"
-                ok(f"shared {said(record['name'])} ({size / 1024:.0f} KB) with {target}")
+                ok(f"shared {said(record['name'])} ({_file_size(size)}) with {target}")
                 print(f"       {dim('they fetch it with: collab file get ' + record['id'])}")
                 if args.to:
                     print(f"       {dim('it is deleted from the host once they confirm receipt')}")
@@ -3226,7 +3253,7 @@ def cmd_file(args: argparse.Namespace) -> int:
                     who = (f"→ {scrub(str(f['recipient']))}" if f["recipient"]
                            else f"#{scrub(str(f['room']))}")
                     print(f"  {f['id']}  {scrub(str(f['name']))}  "
-                          f"{f['size'] / 1024:.0f} KB  from {scrub(str(f['sender']))} {who}")
+                          f"{_file_size(f['size'])}  from {scrub(str(f['sender']))} {who}")
                 return 0
 
             if args.action == "get":
@@ -3239,7 +3266,12 @@ def cmd_file(args: argparse.Namespace) -> int:
                     path.unlink(missing_ok=True)
                     fail("checksum mismatch — the download was corrupt, not confirming receipt")
                     return 1
-                ok(f"saved {path} ({path.stat().st_size / 1024:.0f} KB, checksum verified)")
+                if args.json:
+                    receipt = None if args.keep else client.ack_file(args.target)
+                    print(json.dumps({"id": args.target, "path": str(path), "sha256": digest,
+                                      "size": path.stat().st_size, "receipt": receipt}, indent=2))
+                    return 0
+                ok(f"saved {path} ({_file_size(path.stat().st_size)}, checksum verified)")
                 if args.keep:
                     if record and not record["recipient"]:
                         minutes = ROOM_FILE_TTL_SECONDS // 60
@@ -3259,7 +3291,10 @@ def cmd_file(args: argparse.Namespace) -> int:
 
             if args.action == "rm":
                 client.delete_file(args.target)
-                ok(f"withdrew {args.target}")
+                if args.json:
+                    print(json.dumps({"id": args.target, "deleted": True}))
+                else:
+                    ok(f"withdrew {args.target}")
                 return 0
     except HubError as exc:
         fail(str(exc))
@@ -6684,8 +6719,23 @@ def print_overview() -> None:
     print(dim("  https://github.com/rperez93/collab-a2a\n"))
 
 
+class _CollabParser(argparse.ArgumentParser):
+    def parse_known_args(self, args=None, namespace=None):
+        parsed, remaining = super().parse_known_args(args, namespace)
+        # argparse stops its optional positional after «comment --id ID».
+        # Recover just that one comment, leaving unknown flags and additional
+        # arguments to the ordinary parser error instead of swallowing typos.
+        if (getattr(parsed, 'func', None) in (cmd_task, cmd_project)
+                and getattr(parsed, 'action', None) == 'comment'
+                and getattr(parsed, 'title', None) is None
+                and len(remaining) == 1 and not remaining[0].startswith('-')):
+            parsed.title = remaining[0]
+            remaining = []
+        return parsed, remaining
+
+
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
+    p = _CollabParser(
         prog="collab",
         description="An A2A hub that lets coding agents talk, align on tasks, and discuss work.",
     )
@@ -7097,8 +7147,12 @@ def build_parser() -> argparse.ArgumentParser:
     up.set_defaults(func=cmd_update)
 
     wa = sub.add_parser("watch", help="a readable live transcript of the conversation")
-    wa.add_argument("--tmux", action="store_true",
+    panel = wa.add_mutually_exclusive_group()
+    panel.add_argument("--tmux", action="store_true",
                     help="open it in a new tmux pane instead of here")
+    panel.add_argument("--panel", nargs="?", const="auto",
+                    choices=["auto", "tmux", "ghostty", "iterm2"],
+                    help="open a terminal split (Ghostty 1.3+ and iTerm2 require macOS)")
     wa.add_argument("--vertical", action="store_true",
                     help="with --tmux, split below instead of to the right")
     wa.add_argument("--percent", type=int, default=35,

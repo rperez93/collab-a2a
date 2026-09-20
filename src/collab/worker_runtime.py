@@ -88,6 +88,9 @@ record the unresolved choice once for the main agent and continue useful work.
 Send replies to a specific supplied participant, preserving its room (empty
 room means the default). You may reply and escalate in the same turn.
 Keep a compact factual summary including unresolved questions and commitments.
+Retained main context is a bounded history of explicit facts, oldest first.
+Use it even if your summary omitted a fact; newer main context and answers
+supersede older facts. Retained context alone does not require a new reply.
 Return only JSON matching the supplied schema, without Markdown fences.
 """
 
@@ -207,7 +210,7 @@ def _prepare(agent: str, model: str, scratch: Path, env: dict[str, str]) -> tupl
         return ["claude", "--print", "--model", model, "--safe-mode", "--restricted",
                 "--tools", "", "--strict-mcp-config", "--no-session-persistence",
                 "--setting-sources", "", "--permission-mode", "dontAsk",
-                "--output-format", "json", "--json-schema", json.dumps(OUTPUT_SCHEMA)], None
+                "--output-format", "stream-json", "--verbose", "--json-schema", json.dumps(OUTPUT_SCHEMA)], None
     if agent == "opencode":
         if "/" not in model:
             raise WorkerRuntimeError("OpenCode requires an explicit provider/model")
@@ -367,7 +370,23 @@ def _decode(agent: str, output: bytes, result_path: Path | None) -> dict:
                 text.append(part["text"])
         value = _json("".join(text))
     else:
-        value = _json(output)
+        if agent == "claude":
+            # Streaming preserves native quota events; only the result record
+            # carries the worker's validated actions. Accept legacy envelopes
+            # for adapters already returning one JSON result.
+            try:
+                value = _json(output)
+            except WorkerRuntimeError:
+                records = []
+                for line in output.splitlines():
+                    # Provider diagnostics are not response records. Malformed
+                    # structured records still fail closed (including duplicate
+                    # keys), rather than selecting an earlier action silently.
+                    if line.lstrip().startswith(b"{"):
+                        records.append(_json(line))
+                value = next((r for r in reversed(records) if isinstance(r, dict) and r.get("type") == "result"), None)
+        else:
+            value = _json(output)
         if agent in ("claude", "cursor"):
             if not isinstance(value, dict) or value.get("is_error"):
                 raise WorkerRuntimeError("Worker reported a provider error")

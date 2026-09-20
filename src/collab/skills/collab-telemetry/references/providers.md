@@ -6,7 +6,7 @@ user hooks and their required output while adding an authorized publisher.
 
 | Provider | Input accepted by `--provider` | Scope and unknowns |
 |---|---|---|
-| Codex | App-server `thread/tokenUsage/updated` params; optional complete parent-filtered `children` wrapper | Account limits use the existing main `collab stats --agent codex` probe or an explicit canonical source. Another app-server cannot establish running children in the original server. |
+| Codex | App-server `thread/tokenUsage/updated` params; optional complete parent-filtered `children` wrapper | The built-in `collab stats --agent codex` probe reads account limits and the inherited thread’s exact model/token/context observations. Another app-server cannot establish running children in the original server. |
 | Claude | Main statusline JSON; `tasks` from a subagent-statusline snapshot | Context counters describe the current window; visible tasks are not lifetime children. `cost.total_cost_usd` is the provider's client-side estimate. |
 | OpenCode | Complete session `messages`, `children`, and `statuses` snapshots | Set `messages_complete`/`children_complete` only after completing pagination; partial pages cannot establish totals. Context and quotas need explicit observations. |
 | Cursor | SDK `getUsage()` aggregate `usage` and settled `cost.chargedCents` | Do not add `runs` again. CLI result text does not promise SDK metrics. Unsupported context/quotas remain unknown. |

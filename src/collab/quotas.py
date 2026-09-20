@@ -381,7 +381,8 @@ def _pump(lines: Callable[[], Iterable[str]], inbox: "queue.Queue[str | None]",
 def speak(send: Callable[[dict[str, Any]], None],
           lines: Callable[[], Iterable[str]], *,
           now: Callable[[], float] = time.time,
-          timeout: float = TIMEOUT) -> tuple[dict[str, Any], str]:
+          timeout: float = TIMEOUT,
+          request: dict[str, Any] | None = None) -> tuple[dict[str, Any], str]:
     """The conversation itself, with the transport handed in.
 
     Separated from the process so the protocol can be tested without a Codex
@@ -449,7 +450,7 @@ def speak(send: Callable[[dict[str, Any]], None],
             if message.get("id") == 1 and not asked:
                 asked = True
                 send({"method": "initialized"})
-                send({"method": "account/rateLimits/read", "id": 2})
+                send(dict(request, id=2) if request else {"method": "account/rateLimits/read", "id": 2})
                 continue
             if message.get("id") == 2:
                 if isinstance(message.get("error"), dict):
@@ -461,7 +462,8 @@ def speak(send: Callable[[dict[str, Any]], None],
 
 
 def from_codex(argv: tuple[str, ...] = CODEX_ARGV,
-               timeout: float = TIMEOUT) -> tuple[dict[str, Any], str]:
+               timeout: float = TIMEOUT, *,
+               request: dict[str, Any] | None = None) -> tuple[dict[str, Any], str]:
     """Ask the local Codex for its rate limits. Returns (quotas, why-not)."""
     try:
         # IN ITS OWN PROCESS GROUP, so the whole tree can be ended rather than
@@ -491,7 +493,7 @@ def from_codex(argv: tuple[str, ...] = CODEX_ARGV,
         return read_lines(proc.stdout.fileno())
 
     try:
-        result, why = speak(send, lines, timeout=timeout)
+        result, why = speak(send, lines, timeout=timeout, **({"request": request} if request else {}))
     except (OSError, ValueError) as exc:
         return {}, f"codex stopped talking ({type(exc).__name__})"
     finally:
@@ -512,6 +514,8 @@ def from_codex(argv: tuple[str, ...] = CODEX_ARGV,
             proc.wait(timeout=2)
     if why:
         return {}, why
+    if request:
+        return result, ""
     quotas = codex_quotas(result)
     return (quotas, "" if quotas else "codex reported no limits")
 

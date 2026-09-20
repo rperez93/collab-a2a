@@ -161,7 +161,7 @@ def test_tab_still_works():
     tui = _tui()
     tui.handle(ord("\t"))
     assert tui.focus == "roster"
-    tui.handle(curses.KEY_DOWN)
+    tui.handle(ord("j"))
     assert tui.roster.offset == 1
 
 

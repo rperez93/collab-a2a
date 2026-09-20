@@ -6,18 +6,25 @@ The image above renders a real tmux terminal buffer with synthetic participants.
 The [38-column capture](../assets/participant-panel-narrow.png) shows the same
 measurements wrapped for a narrow side panel.
 
-The participant panel has a compact summary per person. Select a person with
-`J` / `K`, then press `Enter` or `Space` to open their measurements. `Right`
-opens and `Left` closes. Click a participant header to do the same; clicking a
-measurement selects its person. The selected header spans the available width, with connection state pinned
-at its right edge. Compact cards use at most two measurement rows. Expanded
-cards label main-agent and worker measurements separately: two columns at
-88 content columns or wider, and stacked groups below that width.
+Each collapsed participant occupies exactly one padded, participant-coloured line:
+identity, `m:` main model, `w` worker state/model, and working/idle duration.
+Both model columns remain present when expanded field filters change. Long names
+are shortened to fit; expansion shows full model names and every selected stat.
+Up/Down (or J/K) selects participants. Right opens, Left closes, and Enter/Space
+or clicking a header toggles details. Page Up/Down, j/k and the mouse wheel scroll
+long details. Tab changes panes. End/G in the conversation resumes live following.
 
-Arrow keys, Page Up / Page Down and the mouse wheel scroll. In the combined
-view, `Tab` changes pane and the wheel scrolls the pane under the pointer.
-`End` / `G` in the conversation returns to new messages. Participant controls
-leave conversation following and message disclosure unchanged.
+The fixed legend reads «● working ○ idle ◌ unknown × offline»; the worker uses
+its own dot, with «off» when disabled. Unknown activity is never called idle.
+Participant colours are dealt randomly without reuse while colours remain, and
+stay stable while present. Automatic colours adapt for contrast on known theme
+backgrounds; a terminal default background without COLORFGBG cannot be measured.
+
+Expanded cards separate main and worker measurements, side by side at 88 content
+columns and stacked below that. A solo participant retains its local statistics
+without waiting for another participant or a hub echo. Reaching the roster's
+bottom never starts following new updates; layout changes preserve the reading
+position. The conversation keeps its position within a message when rewrapped.
 
 In the combined view, `+` grows the roster and `-` shrinks it by five percentage
 points. Drag the `CONVERSATION` divider to preview the split; releasing saves
@@ -70,3 +77,33 @@ ordinary messages to fold just because the date appeared.
 See the [theme engine](theme-engine.md) for semantic colors, safe glyphs and
 participant spacing, indentation and column preferences. Cyberpunk and Matrix
 are built-in options; appearance reloads without restarting the viewer.
+
+### Opening terminal splits
+
+`collab watch --panel` selects tmux when present, otherwise native macOS Ghostty
+or iTerm2. Explicit choices are `--panel tmux`, `--panel ghostty`, and
+`--panel iterm2`. Ghostty requires 1.3+ and enabled AppleScript automation.
+Native macOS splits use the terminal's own proportions; `--percent` applies to
+tmux. `--vertical` places the viewer below. macOS may request Automation access.
+These native launchers have host-parsing tests which skip when the app is absent.
+
+Windows Terminal supports WSL panes. From Windows Terminal, split with its menu
+or `wt -w 0 split-pane -H wsl.exe`, then run the viewer inside the same WSL distro
+with the participating agent's printed COLLAB_HOME. From WSL, Microsoft's documented
+launch route is `cmd.exe /c wt.exe`; Windows Terminal does not yet have a Collab
+native auto-launch backend. Ghostty on Linux can use tmux or a manually opened split.
+
+References: [Ghostty automation](https://ghostty.org/docs/features/applescript),
+[iTerm2 scripting](https://iterm2.com/documentation-scripting.html),
+[Windows Terminal arguments](https://learn.microsoft.com/en-us/windows/terminal/command-line-arguments).
+
+Worker details distinguish the configured model from the last model reported by
+the provider. Claude stream responses supply actual model, context and both
+quota windows when present. Codex exec supplies worker token totals but no
+context-window measurement; an explicit worker quota source can report its
+account allowance independently. Missing measurements are never zero.
+
+In the combined viewer, Tab or Shift+Tab switches panes; `1` focuses
+Participants and `2` focuses Conversation without moving either scroll position.
+The footer shows keys for the focused pane. Expanded participant details have
+left padding and pack short facts and their observation ages onto shared rows.

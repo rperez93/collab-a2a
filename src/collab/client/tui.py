@@ -87,9 +87,9 @@ POLL_SECONDS = 0.25
 #: end, and how to leave.
 CHAT_KEYS = ("wheel/tab: pane · +/-: resize · ↑↓ pgup/pgdn: scroll · [ ]: roster · "
              "End/G: newest · Home/g: top · q: quit")
-CHAT_KEYS_SHORT = "End/G: newest · tab: pane · q: quit"
-ROSTER_KEYS = "J/K: select · Enter/click: details · v: all details · f: fields · ↑↓/wheel: scroll · q: quit"
-ROSTER_KEYS_SHORT = "J/K: pick · ↵: more · q: quit"
+CHAT_KEYS_SHORT = "Tab: switch · End: newest · q: quit"
+ROSTER_KEYS = "Tab: switch · 1/2: pane · ↑↓: select · Enter: details · j/k/PgUp/PgDn: scroll · q: quit"
+ROSTER_KEYS_SHORT = "Tab: switch · ↑↓: pick · ↵: details"
 
 #: KINDS THAT ARE STATE, NOT CONVERSATION.
 #:
@@ -677,6 +677,7 @@ class Pane:
     follow: bool = True
     rows: int = 0
     total: int = 0
+    tail: bool = True
 
     def clamp(self) -> None:
         limit = max(self.total - self.rows, 0)
@@ -686,11 +687,11 @@ class Pane:
         self.offset += delta
         self.follow = False
         self.clamp()
-        if self.offset >= max(self.total - self.rows, 0):
+        if self.tail and self.offset >= max(self.total - self.rows, 0):
             self.follow = True
 
     def to_end(self) -> None:
-        self.follow = True
+        self.follow = self.tail
         self.offset = max(self.total - self.rows, 0)
 
     def top_seq(self, rows: "list[Row]") -> int:
@@ -773,6 +774,25 @@ class Model:
         color` mid-session shows up on the next redraw.
         """
         people = list(self.snapshot.get("participants") or [])
+        # Local measurements do not depend on another participant arriving or
+        # on the hub echoing our next heartbeat. Keep the own card available
+        # even while the initial snapshot is missing; do not invent liveness.
+        own_id = getattr(self.profile, "participant_id", "")
+        own_index = next((i for i, person in enumerate(people)
+                          if (own_id and person.get("id") == own_id)
+                          or (not own_id and person.get("name") == self.profile.name)), None)
+        if getattr(self, "own_stats", None):
+            if own_index is None:
+                people.insert(0, {"id": own_id, "name": self.profile.name,
+                                  "stats": self.own_stats, "connected": False})
+            else:
+                # Worker counters are assembled by the daemon for the hub;
+                # the main usage file does not contain that independent group.
+                combined = dict(self.own_stats)
+                worker = (people[own_index].get("stats") or {}).get("worker")
+                if worker is not None:
+                    combined["worker"] = worker
+                people[own_index] = dict(people[own_index], stats=combined)
 
         # WHOSE NAMES ARE NOT MINE — worked out first, because my_names() reads
         # it. my_names() adds the global name so history signed before the hub
@@ -1764,22 +1784,58 @@ def _participant_card(person: dict[str, Any], width: int, *, who: str,
     """Use the pane's width, keeping identity and connection state visible.
 
     Main and worker measurements occupy independent columns when both fit.
-    Narrow terminals retain every expanded fact by wrapping, and compact cards
-    have a fixed two-row measurement budget rather than growing with telemetry.
+    Narrow terminals retain every fact by wrapping. Compact cards omit missing
+    fields, rather than clipping real quota and worker figures after two rows.
     This is pure layout, called only when the roster cache is invalidated.
     """
     theme = _current_theme()
     ident = participant_key(person)
     width = max(width, 1)
     short_state = state.split(" · ", 1)[0]
-    state_room = min(_w(short_state), max(width // 3, 0))
-    left = _clip(who, max(width - state_room - 1, 0))
-    header = left + " " * max(width - _w(left) - state_room, 0) + _clip(short_state, state_room)
-    rows = [Row(header, C_SELECTION if selected else C_ONLINE if online else C_OFFLINE,
-                curses.A_BOLD if selected or online else curses.A_DIM,
-                edge=0 if selected else _theme_colour(theme["roster"], person.get("name", "?")),
-                head=0 if selected else len(left), participant=ident, participant_header=True)]
-    indent = " " * min(theme["roster_indent"], max(width - 4, 0))
+    if not detailed:
+        # A collapsed card is one stable line, including its padding. All
+        # measurements remain in disclosure, even for a solo participant.
+        stats = person.get("stats") or {}
+        worker = stats.get("worker") or {}
+        doing_state = person.get("activity") or {}
+        status = short_state
+        if online and doing_state.get("state") in activity.STATES:
+            status = doing_state["state"]
+            if activity.is_stale(doing_state):
+                status = "last " + status
+            duration = activity.elapsed(doing_state)
+            if duration:
+                status += " " + ("now" if duration == activity.JUST_NOW else duration)
+        # Model columns share the remaining width; neither can consume the
+        # other. The clock is activity.since, not the latest heartbeat.
+        values = [who.split(" (", 1)[0]]
+        values.append("m:" + str(stats.get("model") or "?"))
+        worker_model = "off" if worker.get("enabled") is False else str(worker.get("last_model") or worker.get("model") or "?")
+        worker_state = "●" if worker.get("running") is True else "○" if worker.get("running") is False else "◌"
+        values.append("w" + worker_state + ":" + worker_model)
+        right = _clip(status, max(width // 3, 1))
+        room = max(width - _w(right) - 2 - (len(values) - 1), 0)
+        sizes = [room // len(values)] * len(values)
+        for i in range(room % len(values)):
+            sizes[i] += 1
+        # Redistribute unused name/model space before clipping longer models.
+        spare = sum(max(size - _w(value), 0) for value, size in zip(values, sizes))
+        sizes = [min(size, _w(value)) for value, size in zip(values, sizes)]
+        for i, value in enumerate(values):
+            extra = min(spare, max(_w(value) - sizes[i], 0))
+            sizes[i] += extra
+            spare -= extra
+        text = " " + " ".join(_clip(value, size) for value, size in zip(values, sizes))
+        text += " " * max(width - _w(text) - _w(right), 0) + right
+        return [Row(_clip(text, width), C_SELECTION if selected else C_TEXT,
+                    curses.A_BOLD if selected else 0,
+                    edge=0 if selected else _theme_colour(theme["roster"], person.get("name", "?")),
+                    head=0 if selected else len(text), participant=ident, participant_header=True)]
+    # Keep both models visible at the top of an expanded card too: on a
+    # narrow pane the worker section may otherwise be several pages below it.
+    rows = _participant_card(person, width, who=who, state=state, online=online,
+                             selected=selected, fields=fields, detailed=False)
+    indent = " " * min(max(3, theme["roster_indent"]), max(width - 4, 0))
     usable = max(width - len(indent), 1)
 
     def add(text: str, *, heading: bool = False) -> None:
@@ -1790,37 +1846,44 @@ def _participant_card(person: dict[str, Any], width: int, *, who: str,
         add(_clip(state, usable))
     if doing:
         add(_clip(doing, usable))
-    if not detailed:
-        facts = participant_metrics.metric_lines(person, fields, detailed=False)
-        lines = _wrap(" · ".join(facts) or "fields hidden", max(usable, 4))
-        for i, line in enumerate(lines[:2]):
-            if i == 1 and len(lines) > 2:
-                line = _clip(line, max(usable - 1, 0)) + "…"
-            add(line)
+    main_fields = [field for field in fields if field != "worker"]
+    main = participant_metrics.metric_lines(person, main_fields, detailed=True)
+    worker = participant_metrics.metric_lines(person, ["worker"], detailed=True)[:-1] if "worker" in fields else []
+    def packed(facts: list[str], columns: int) -> list[str]:
+        # Pair short facts with their observation age before wrapping. This
+        # keeps freshness visible without spending a whole row on every clock.
+        result: list[str] = []
+        pending = ""
+        for fact in facts:
+            joined = pending + " · " + fact if pending else fact
+            if pending and _w(joined) > columns:
+                result.extend(_wrap(pending, max(columns, 4)))
+                pending = fact
+            else:
+                pending = joined
+        if pending:
+            result.extend(_wrap(pending, max(columns, 4)))
+        return result
+
+    two = width >= 88 and main and worker and theme["roster_columns"] != "one"
+    if two:
+        col = max((usable - 3) // 2, 4)
+        right = usable - col - 3
+        add("MAIN AGENT".ljust(col) + " │ WORKER", heading=True)
+        first = packed(main, col)
+        second = packed(worker, right)
+        for i in range(max(len(first), len(second))):
+            a = first[i] if i < len(first) else ""
+            b = second[i] if i < len(second) else ""
+            add(a + " " * (col - _w(a)) + " │ " + b)
     else:
-        main_fields = [field for field in fields if field != "worker"]
-        main = participant_metrics.metric_lines(person, main_fields, detailed=True)
-        worker = participant_metrics.metric_lines(person, ["worker"], detailed=True)[:-1] if "worker" in fields else []
-        two = width >= 88 and main and worker and theme["roster_columns"] != "one"
-        if two:
-            col = max((usable - 3) // 2, 4)
-            right = usable - col - 3
-            add("MAIN AGENT".ljust(col) + " │ WORKER", heading=True)
-            first = [part for fact in main for part in _wrap(fact, col)]
-            second = [part for fact in worker for part in _wrap(fact, right)]
-            for i in range(max(len(first), len(second))):
-                a = first[i] if i < len(first) else ""
-                b = second[i] if i < len(second) else ""
-                add(a + " " * (col - _w(a)) + " │ " + b)
-        else:
-            for title, facts in (("MAIN AGENT", main), ("WORKER", worker)):
-                if facts:
-                    add(title, heading=True)
-                for fact in facts:
-                    for part in _wrap(fact, max(usable, 4)):
-                        add(part)
-        if not main and not worker:
-            add("fields hidden")
+        for title, facts in (("MAIN AGENT", main), ("WORKER", worker)):
+            if facts:
+                add(title, heading=True)
+            for part in packed(facts, usable):
+                add(part)
+    if not main and not worker:
+        add("fields hidden")
     rows.extend(Row("", C_DIM, participant=ident) for _ in range(theme["roster_spacing"]))
     return rows
 
@@ -1854,7 +1917,10 @@ def roster_rows(model: Model, width: int, *,
         # It is deliberately not animated: the roster is rebuilt only when
         # something in it changes, and a spinner would mean rebuilding every
         # frame — which is what a redraw used to cost before it was fixed.
-        glyph = "●" if (online and activity.is_working(doing)) else "○"
+        glyph = ("◌" if not known else "×" if not online else
+                 "◌" if not doing or activity.is_stale(doing) else
+                 "●" if doing.get("state") == activity.WORKING else
+                 "○" if doing.get("state") == activity.IDLE else "◌")
 
         tags = []
         if person.get("is_host"):
@@ -1965,7 +2031,9 @@ class Tui:
         self.follow_layout = follow_layout
         # The roster reads from the top — following its tail would hide whoever
         # joined first, including yourself. Only the conversation tails.
-        self.roster = Pane(follow=False)
+        # Reaching the bottom with the wheel used to enable following on the
+        # roster too. The next heartbeat then moved it as card heights changed.
+        self.roster = Pane(follow=False, tail=False)
         self.chat = Pane()
         self.focus = "roster" if self.view == "roster" else "chat"
         #: Messages unfolded by hand. Empty = everything folded.
@@ -2050,11 +2118,22 @@ class Tui:
                self.model.profile.name, _colour_stamp(),
                effective_fold(), timezone_name())
         if key != self._rows_key:
+            old_rows = self._chat_rows
+            old_offset = self.chat.offset
+            anchor = old_rows[old_offset] if old_offset < len(old_rows) else None
+            # A message can span many rows. Remember the row within it as
+            # well as its sequence, so a resize does not jump to its heading.
+            start = next((i for i, row in enumerate(old_rows)
+                          if anchor and anchor.seq and row.seq == anchor.seq), old_offset)
             self._rows_key = key
             self._chat_width = width
             self._chat_rows = conversation_rows(events, width,
                                                 self.model.profile.name,
                                                 self.expanded)
+            if anchor and anchor.seq and not self.chat.follow:
+                indices = [i for i, row in enumerate(self._chat_rows) if row.seq == anchor.seq]
+                if indices:
+                    self.chat.offset = indices[min(old_offset - start, len(indices) - 1)]
         return self._chat_rows
 
     def reach_back(self) -> int:
@@ -2123,10 +2202,18 @@ class Tui:
                self.selected_participant, self.participant_field_mode, self.focus,
                self.model.roster_is_current())
         if key != self._roster_key:
+            old = self._roster_rows
+            offset = self.roster.offset
+            person = old[offset].participant if offset < len(old) else ""
+            start = next((i for i, row in enumerate(old) if row.participant == person), offset)
             self._roster_key = key
             self._roster_rows = roster_rows(
                 self.model, width, fields=fields, opened=opened,
                 selected=self.selected_participant if self.focus == "roster" else "")
+            if person and not self._participant_anchor:
+                indices = [i for i, row in enumerate(self._roster_rows) if row.participant == person]
+                if indices:
+                    self.roster.offset = indices[min(offset - start, len(indices) - 1)]
             if self._participant_anchor:
                 self.roster.offset = next((i for i, row in enumerate(self._roster_rows)
                     if row.participant_header and row.participant == self._participant_anchor), self.roster.offset)
@@ -2353,8 +2440,9 @@ class Tui:
         # row the roster gives up, and the rule the rest of this section
         # follows applies to each of them in turn: a row is taken only while
         # two rows of participants — one whole person — still remain after it.
+        legend_h = 1 if roster_h >= 4 else 0
         session_h = 0
-        while session_h < want_rows and roster_h - 2 - session_h >= 2:
+        while session_h < want_rows and roster_h - 2 - legend_h - session_h >= 2:
             session_h += 1
         # A RULE ABOVE THAT ROW, drawn the way the section headers are and
         # labelled the way they are — `STATUS`, beside `PARTICIPANTS (3)` and
@@ -2366,7 +2454,7 @@ class Tui:
         # remain after it, and below that the rule is what goes, never a
         # participant and never the row. Out of the roster's allocation, so
         # `chat_top` does not move.
-        rule_h = 1 if session_h and roster_h - 2 - session_h >= 2 else 0
+        rule_h = 1 if session_h and roster_h - 2 - legend_h - session_h >= 2 else 0
         # AND A ROW OF AIR ON EITHER SIDE, on the same terms and paid for last:
         # one above the rule, so the last participant and the section header
         # do not touch, and one under the status row, so the figures do not
@@ -2379,9 +2467,9 @@ class Tui:
         # thing at the foot that says nothing at all, so it is the first to be
         # asked to justify itself: on a panel showing one person, a blank row
         # is a quarter of what the reader came for.
-        pad_top = 1 if rule_h and roster_h - 3 - session_h >= 4 else 0
-        pad_bottom = 1 if pad_top and roster_h - 4 - session_h >= 4 else 0
-        self.roster.rows = roster_h - 1 - session_h - rule_h - pad_top - pad_bottom
+        pad_top = 1 if rule_h and roster_h - 3 - legend_h - session_h >= 4 else 0
+        pad_bottom = 1 if pad_top and roster_h - 4 - legend_h - session_h >= 4 else 0
+        self.roster.rows = max(1, roster_h - 1 - legend_h - session_h - rule_h - pad_top - pad_bottom)
         # AND THE HEIGHT IS SETTLED BEFORE THE WIDTH IS ASKED FOR, because
         # `_gutter_width` reads `rows` to decide whether there is anything to
         # scroll. The gutter then costs the content a column, so the rows are
@@ -2398,7 +2486,7 @@ class Tui:
         # more instead, which is the only thing the number was for.
         if hidden or self.roster.offset:
             more = ("▴" if self.roster.offset else "") + ("▾" if hidden else "")
-            label += f" · scroll {more} (tab, or [ ])"
+            label += f" · {more} · Tab: switch"
         self._hline(win, body_top, width, label.replace("PARTICIPANTS", "PEOPLE") if width < 32 else label)
         self._paint_participant_controls(win, body_top, width)
         self._roster_top = body_top + 1
@@ -2416,6 +2504,8 @@ class Tui:
         if roster_gutter:
             self._paint_gutter(win, width - 2, body_top + 1, self.roster.rows,
                                self.roster)
+        if legend_h:
+            self._participant_legend(win, body_top + 1 + self.roster.rows, width)
 
         chat_top = body_top + roster_h
         # From the bottom of the panel up: the padding under the row (left
@@ -2556,7 +2646,7 @@ class Tui:
         return self._where_label
 
     def _hint(self, win, height: int, width: int,
-              keys: tuple[str, str] = (CHAT_KEYS, CHAT_KEYS_SHORT),
+              keys: tuple[str, str] | None = None,
               notice: bool = True, roster: bool = False) -> None:
         """The bottom row: what you are missing, then whatever else fits.
 
@@ -2594,6 +2684,8 @@ class Tui:
         # the personal one was.
         if not (self._bar or (roster and self._roster_settings["enabled"])):
             return
+        if keys is None:
+            keys = (ROSTER_KEYS, ROSTER_KEYS_SHORT) if self.focus == "roster" else (CHAT_KEYS, CHAT_KEYS_SHORT)
         behind = 0 if self.chat.follow or not notice else self.behind()
         what = ""
         if notice and not self.chat.follow:
@@ -2646,6 +2738,13 @@ class Tui:
         self._jump_y = -1 if roster else height - 1
         self._jump = ((0, min(_w(what), _w(line)))
                       if what and not roster else (0, 0))
+
+    def _participant_legend(self, win, y: int, width: int) -> None:
+        text = " ● working  ○ idle  ◌ unknown  × offline"
+        if _w(text) >= width:
+            text = " ●work ○idle ◌? ×off"
+        win.addnstr(y, 0, _clip(text, max(width - 1, 0)), max(width - 1, 0),
+                    curses.color_pair(C_DIM) | curses.A_DIM)
 
     def _roster_bar(self, keys: Any = "") -> list[Any]:
         """The roster panel's row: what is true for EVERY participant, or nothing.
@@ -3066,14 +3165,16 @@ class Tui:
         # replies — so quitting on it makes the view close itself at random.
         if key in (ord("q"), ord("Q")):
             return False
-        if key == ord("\t"):
+        if key in (ord("\t"), curses.KEY_BTAB):
             if self.view == "both":
                 self.focus = "roster" if self.focus == "chat" else "chat"
+        elif self.view == "both" and key in (ord("1"), ord("2")):
+            self.focus = "roster" if key == ord("1") else "chat"
         elif self.view == "both" and key in (ord("+"), ord("-")):
             share = self._split_override if self._split_override is not None else roster_share()
             self._resize_roster(share + (.05 if key == ord("+") else -.05))
-        elif self.focus == "roster" and key in (ord("J"), ord("K")):
-            self._select_participant(1 if key == ord("J") else -1)
+        elif self.focus == "roster" and key in (ord("J"), ord("K"), curses.KEY_DOWN, curses.KEY_UP):
+            self._select_participant(1 if key in (ord("J"), curses.KEY_DOWN) else -1)
         elif self.focus == "roster" and key in (10, 13, curses.KEY_ENTER, ord(" "), curses.KEY_LEFT, curses.KEY_RIGHT):
             self._disclose_participant(False if key == curses.KEY_LEFT else True if key == curses.KEY_RIGHT else None)
         elif self.focus == "roster" and key == ord("v"):
@@ -3271,7 +3372,7 @@ class Tui:
             pad = rule and height - 3 - foot >= 4
         else:
             row, rule, pad = self._bar, False, False
-        pane.rows = height - 1 - row - (1 if rule else 0) - (1 if pad else 0)
+        pane.rows = height - 1 - row - (1 if rule else 0) - (1 if pad else 0) - (1 if self.view == "roster" else 0)
         pane.total = len(rows)
         pane.settle()
         for i in range(pane.rows):
@@ -3286,6 +3387,8 @@ class Tui:
                 more_below=pane is self.chat and bool(m.pending()))
         if rule:
             self._hline(win, height - 1 - row, width, "STATUS")
+        if self.view == "roster":
+            self._participant_legend(win, 1 + pane.rows, width)
 
         if self.view == "roster":
             # Its own keys, and no scrolled-back notice: the roster does not
@@ -3326,6 +3429,43 @@ def _init_colors() -> None:
     _deal_colours(getattr(curses, "COLORS", 0))
     _PALETTE_VERSION[0] = None
     _apply_theme_palette()
+
+
+def _readable_colour(colour: int, background: int) -> int:
+    """Keep automatically dealt text at 4.5:1 against a known background.
+
+    The bright deal was chosen for black and became unreadable on light
+    themes. Move to the nearest readable cube colour, without changing slots
+    (and thus participant identity) when the theme hot reloads.
+    """
+    if getattr(curses, "COLORS", 0) < 256:
+        return colour
+    try:
+        if background < 0:
+            hint = os.environ.get("COLORFGBG", "").split(";")[-1]
+            if not hint.isdigit():
+                return colour  # default terminal background is not queryable here
+            background = int(hint)
+        bg = tuple(c / 1000 for c in curses.color_content(background))
+        fg = tuple(c / 1000 for c in curses.color_content(colour))
+    except (curses.error, ValueError):
+        return colour
+    def luminance(rgb):
+        linear = [v / 12.92 if v <= .04045 else ((v + .055) / 1.055) ** 2.4 for v in rgb]
+        return sum(v * w for v, w in zip(linear, (.2126, .7152, .0722)))
+    ground = luminance(bg)
+    def contrast(rgb):
+        value = luminance(rgb)
+        return (max(value, ground) + .05) / (min(value, ground) + .05)
+    if contrast(fg) >= 4.5:
+        return colour
+    levels = (0, 95, 135, 175, 215, 255)
+    candidates = []
+    for i in range(216):
+        rgb = tuple(levels[n] / 255 for n in (i // 36, i // 6 % 6, i % 6))
+        if contrast(rgb) >= 4.5:
+            candidates.append((sum((a - b) ** 2 for a, b in zip(rgb, fg)), i + 16))
+    return min(candidates)[1] if candidates else colour
 
 
 def _apply_theme_palette(win=None) -> None:
@@ -3369,7 +3509,7 @@ def _apply_theme_palette(win=None) -> None:
         pair(C_TITLE, index("status_fg", curses.COLOR_BLACK), index("status_bg", curses.COLOR_CYAN))
         pair(C_SELECTION, index("selection_fg", curses.COLOR_BLACK), index("selection_bg", curses.COLOR_CYAN))
         for i, colour in enumerate(SPEAKER_COLORS):
-            pair(C_SPEAKER_BASE + i, colour, background)
+            pair(C_SPEAKER_BASE + i, _readable_colour(colour, background), background)
         _PALETTE_VERSION[0] = version
     if win is not None:
         try:

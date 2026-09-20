@@ -75,3 +75,8 @@ so inspect them before changing the worker's scope.
 For worker quota, context, price and provider-source reports, use the installed
 `collab-telemetry` skill. Inspect `collab worker stats --json` separately from
 main `collab stats --json`; a conversation worker is not a coding subagent.
+
+Explicit context consumed by a turn is retained separately from model summaries:
+the latest eight whole records within 16 KiB. Newer facts supersede older ones;
+restate still-needed facts when that bounded history fills. Retained facts alone
+do not trigger model turns.

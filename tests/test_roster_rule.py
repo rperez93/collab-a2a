@@ -257,6 +257,8 @@ def _foot(panel: int, roster_row: bool, width: int = 120,
     have to justify themselves, and on a panel showing one person a blank row
     is a quarter of what the reader came for.
     """
+    legend = 1 if panel >= 3 else 0
+    panel -= legend
     wanted = want if _grid_fits(width) else 1
     bar = 0
     if roster_row:
@@ -265,7 +267,7 @@ def _foot(panel: int, roster_row: bool, width: int = 120,
     rule = 1 if bar and panel - 1 - bar >= 2 else 0
     pad_top = 1 if rule and panel - 2 - bar >= 4 else 0
     pad_bottom = 1 if pad_top and panel - 3 - bar >= 4 else 0
-    return {"bar": bar, "rule": rule, "pad_top": pad_top, "pad_bottom": pad_bottom}
+    return {"bar": bar, "rule": rule, "pad_top": pad_top, "pad_bottom": pad_bottom, "legend": legend}
 
 
 # --- the split view -----------------------------------------------------------
@@ -345,6 +347,9 @@ def test_the_split_view_pays_for_the_foot_only_out_of_a_roster_that_can(
             if foot["pad_top"]:
                 assert _blank(win.row(y)), f"{where}: no blank row above the rule"
                 y -= 1
+            if foot["legend"]:
+                assert "◌" in win.row(y) and "○" in win.row(y), where
+                y -= 1
             # And the last participant row is the one directly above all that.
             assert y == 3 + shown - 1, f"{where}: a gap of unknown rows at the foot"
             # No rule anywhere else in the panel — not painted over a
@@ -378,7 +383,7 @@ def test_the_foot_is_pinned_to_the_panel_when_the_list_is_short(tmp_path, cfg):
     assert _is_status_rule(win.row(chat_top - 2 - foot["bar"]))
     assert " bob" in win.row(3)
     assert all(_blank(win.row(y))
-               for y in range(3 + len(viewer._roster_rows), chat_top - 2 - foot["bar"] - foot["pad_top"])), \
+               for y in range(3 + len(viewer._roster_rows), chat_top - 2 - foot["bar"] - foot["pad_top"] - foot["legend"])), \
         "the rows between the list and the rule are blank"
 
 
@@ -409,7 +414,7 @@ def test_the_roster_only_view_rules_off_its_own_row_and_no_other(
         config.save_watch_roster(enabled=False)
     if not personal:
         config.save_watch_status(enabled=False)
-    viewer = _viewer(tmp_path, "roster", people=40)
+    viewer = _viewer(tmp_path, "roster", people=80)
     saw = {"rule": set(), "pad": set()}
     for height in HEIGHTS:
         for width in WIDTHS:
@@ -452,11 +457,11 @@ def test_the_roster_only_view_rules_off_its_own_row_and_no_other(
 
             rows = viewer._roster_rows
             content = viewer._roster_key[0]
-            expected = height - 1 - row - (1 if rule else 0) - (1 if pad else 0)
+            expected = height - 2 - row - (1 if rule else 0) - (1 if pad else 0)
             shown = _participants_shown(win, 1, rows, content, expected)
             assert shown == viewer.roster.rows, \
                 f"{where}: {viewer.roster.rows} rows reserved, {shown} drawn intact"
-            assert shown == height - 1 - row - (1 if rule else 0) - (1 if pad else 0), \
+            assert shown == height - 2 - row - (1 if rule else 0) - (1 if pad else 0), \
                 f"{where}: {shown} participant rows"
             for y in range(1, 1 + shown):
                 assert not _is_any_rule(win.row(y)), f"{where}: a rule at row {y}"

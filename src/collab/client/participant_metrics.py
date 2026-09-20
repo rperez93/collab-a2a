@@ -110,18 +110,20 @@ def metric_lines(person: dict[str, Any], fields: list[str] | tuple[str, ...],
                 line = "worker unknown"
             if detailed and worker:
                 extra.extend([
-                    f"worker {worker.get('agent') or 'agent unknown'} · {worker.get('model') or 'model unknown'}",
+                    f"worker {worker.get('agent') or 'agent unknown'} · configured {worker.get('model') or 'unknown'}",
                     f"attempts {_count(worker.get('attempts'))} · pending {_count(worker.get('pending'))} · errors {_count(worker.get('errors'))}",
                     f"worker {cost_text(worker)}",
                     f"worker tokens in {_count(worker.get('tokens_in'))} · out {_count(worker.get('tokens_out'))} · cached {_count(worker.get('tokens_cached'))}",
-                    f"worker usage model {worker.get('usage_model') or 'unknown'}",
+                    f"worker last model {worker.get('last_model') or 'not yet reported'}",
                     "worker tokens " + freshness({"observed_at": worker.get("tokens_observed_at")}),
                     "worker cost " + freshness({"observed_at": worker.get("cost_observed_at")}),
                     f"worker cache writes {_count(worker.get('tokens_cache_write'))}",
                     f"worker {quota_summary(worker, with_resets=True) or 'quota unknown'} · {worker.get('quota_scope') or 'unknown'} scope",
                     "worker quota " + freshness({"observed_at": worker.get("quota_observed_at")}),
-                    f"worker ctx {_count(worker.get('context_pct'))}% · {_count(worker.get('context_tokens'))} / {_count(worker.get('context_limit'))} tokens",
-                    "worker context " + freshness({"observed_at": worker.get("context_observed_at")}),
+                    (f"worker ctx {_count(worker.get('context_pct'))}% · {_count(worker.get('context_tokens'))} / {_count(worker.get('context_limit'))} tokens"
+                     if any(_number(worker.get(key)) is not None for key in ('context_pct', 'context_tokens', 'context_limit'))
+                     else "worker context not exposed by Codex exec" if worker.get('agent') == 'codex'
+                     else "worker context not yet reported"),
                     provenance(worker),
                 ])
         elif field == "location":

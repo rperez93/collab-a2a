@@ -73,8 +73,13 @@ cost is a provider estimate; Cursor settled `chargedCents` can be a real zero.
 Native coding children, worker turns/attempts and account quota are separate.
 
 Open a participant in `collab watch` with Enter/Space or click; scroll with
-arrows/wheel and use J/K to select another participant. Configure visible fields
+Page Up/Down or the wheel; use Up/Down or J/K to select another participant. Configure visible fields
 and default expansion with `watch_participant_fields` and
 `watch_participant_details`, through `collab config --tui` or the existing CLI.
 Use the `collab-capacity` skill when estimating how many native teammates fit
 fresh quota and explicit concurrency/cost assumptions.
+
+The Codex built-in probe also resolves the inherited CODEX_THREAD_ID through
+thread/read. It reads bounded token records only from that exact, identity-checked
+thread path – no session-directory scan. Model/context/tokens use their native
+observation clocks; quota keeps its separate polling clock.
