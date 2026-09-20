@@ -234,7 +234,7 @@ See [Sharing what you learn](../README.md#sharing-what-you-learn) and
 Stream events as lines.
 Arm a background watcher on this.
 
-With `--follow`, every line printed is a message the agent has been shown, and
+With `--follow --delivery full`, every event printed is a message the agent has been shown, and
 is marked read — the same mark `collab recv` makes, and what clears the `✉`
 count on the status line. Lines `--room` or `--mine-too` keep off the stream are
 not marked; without `--follow` this is a look at the transcript and marks
@@ -262,6 +262,10 @@ A followed stream coalesces compact notices without marking the inbox read.
 Read it with `collab recv` at a task boundary; an outstanding notice suppresses
 further notices until its batch is consumed. Explicit `--delivery full` restores
 full event delivery, suitable for a separate bridge agent.
+With a [conversation worker](conversation-worker.md) enabled, compact delivery
+instead carries worker decisions and health alerts. The worker reads the
+conversation independently; use `collab worker pending` and `collab worker reply`
+for decisions, and `collab worker context` for progress updates.
 
 When enabled (off by default), a followed stream also carries the [standing
 reminder](../README.md#the-standing-reminder), as a line of its own every
@@ -273,12 +277,43 @@ a kind no hub event uses, with no `seq`, so nothing reading that stream can
 mistake it for something somebody said. A plain `collab listen` is a listing
 rather than a monitor and carries none.
 
+## worker
+
+Delegate the collaboration conversation to a background model while keeping
+the coding host's main thread available for its task.
+
+```text
+collab worker start --agent {codex,claude,opencode,cursor,command} --scope TEXT
+                    [--model MODEL] [--command JSON_ARGV] [--session SESSION]
+collab worker status [--json] [--session SESSION]
+collab worker pending [--json] [--session SESSION]
+collab worker reply DECISION_ID TEXT [--session SESSION]
+collab worker context TEXT [--session SESSION]
+collab worker off [--session SESSION]
+```
+
+`--agent` chooses the worker provider independently of the main coding host.
+Codex defaults to `gpt-5.6-luna`, Claude to `haiku`; OpenCode and Cursor require
+an explicit model. `command` requires a JSON argv array and an adapter that
+accepts JSON stdin and returns structured JSON stdout. There is no premium model
+fallback. `--scope` is mandatory: routine coordination is delegated, while
+decisions, blockers, edit conflicts, and scope changes go back to the main agent.
+
+`context` supplies progress and constraints. `pending` reads questions without
+resolving them; `reply` queues the main agent's answer for delivery to the waiting
+peer. `status` reports configuration, runtime health, and pending work. `off`
+stops worker delivery and restores ordinary notices while preserving durable
+decisions and queued replies. Keep the normal monitor or wake armed for worker
+alerts. See [the worker guide](conversation-worker.md) for authentication,
+platform requirements, isolation controls, and adapter protocol.
+
 ## recv
 
 Drain unread messages, optionally waiting.
 
-Unread means not yet delivered: neither drained here nor printed by a
-`collab listen --follow` monitor. Draining marks them read (`--peek` does not),
+Unread means neither drained here nor printed by a
+`collab listen --follow --delivery full` monitor. Compact notices and worker
+turns do not mark the main inbox read. Draining marks it read (`--peek` does not),
 and the daemon's next status write — within three seconds — clears the `✉` count
 on the status line.
 

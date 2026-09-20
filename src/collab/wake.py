@@ -1317,6 +1317,10 @@ class Waker:
         would push what somebody actually said down the page behind a
         paragraph that arrives every ten minutes.
         """
+        # Worker decisions use this delivery route, but are not periodic
+        # instructions and must not claim that nobody needs an answer.
+        if batch is None and reminder.startswith("Collab worker: "):
+            return reminder
         parts = []
         if batch is not None:
             parts.append(self.prompt(batch))
@@ -1378,7 +1382,8 @@ class Waker:
         """
         self.ensure()
         path = (self.home / f"prompt-{batch.path.stem}.txt" if batch is not None
-                else self.home / "reminder.txt")
+                else self.home / ("worker-notice.txt" if reminder.startswith("Collab worker: ")
+                                  else "reminder.txt"))
         # A TEMPORARY NAME NOBODY ELSE HOLDS. `path.with_suffix(".writing")`
         # was derived from the destination, which is unique for a batch and
         # fixed for the reminder — so two writers of the reminder shared one

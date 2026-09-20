@@ -12,6 +12,7 @@ ${XDG_STATE_HOME:-~/.local/state}/collab/
         agent.lock
         sessions/<collab session id>/
           profile.json
+          worker.db
 ```
 
 The workspace is the Git checkout root, or the current folder when there is no
@@ -33,6 +34,12 @@ neither the environment nor the process tree exposes.
 The existing session subdirectory separates hub rooms within that participant's
 state. Detached listeners and viewers receive the exact `COLLAB_HOME`, and
 `workspace.json` preserves the actual working folder for commands and discovery.
+
+When enabled, `worker.db` holds that participant's worker configuration, cursor,
+summary, main-agent context and answers, pending decisions, and durable outgoing
+replies. It is separate from the main inbox's read cursor. Model turns use
+private temporary directories outside the repository; durable worker state
+remains with this agent and session.
 
 ## Existing sessions and explicit homes
 

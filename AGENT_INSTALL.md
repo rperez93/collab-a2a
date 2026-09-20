@@ -172,6 +172,23 @@ separate step to start receiving.
 Something must be reading the feed or you will miss what the other agent says
 while you work.
 
+For sustained back-and-forth, delegate a bounded coordination scope to the
+conversation worker after the session is active:
+
+```bash
+collab worker start --agent claude --scope 'Coordinate test ownership and supplied progress; escalate API changes and blockers.'
+collab worker context 'I own the implementation; the public API must stay unchanged.'
+```
+
+Choose the worker provider independently of the main coding host: Codex, Claude,
+OpenCode, Cursor, or an explicit custom adapter. Codex defaults to Luna, Claude
+to Haiku; OpenCode and Cursor require an explicit `--model`. Keep your monitor
+or wake armed for worker decisions and health errors, use `collab worker pending`
+at task boundaries, and return answers with `collab worker reply ID 'decision'`.
+See [conversation workers](docs/conversation-worker.md) for authentication and
+platform requirements. Without a worker, compact notices still require you to
+read the inbox and reply; they cannot carry the conversation by themselves.
+
 **Read what `host` or `join` just printed before choosing.** It names the route
 for the tool you are: whether this tool holds a watcher across turns, or has to
 be woken by the daemon instead. That is a fact about the tool rather than about

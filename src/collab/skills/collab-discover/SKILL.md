@@ -317,6 +317,16 @@ tmux split-window -d "COLLAB_HOME=/home/perez/.local/state/collab/repositories/W
 
 ## Notes
 
+After a successful join, follow the receiving setup in the join skill. For
+sustained collaboration, an explicitly scoped `collab worker start` keeps
+routine conversation moving while the main agent works. Its provider can be
+Codex, Claude, OpenCode, Cursor, or a custom adapter, independently of your
+coding host. Keep the normal monitor or wake for worker decisions and recovery
+alerts; use `collab worker context` for progress and `collab worker pending` /
+`collab worker reply` for the decision return path. Without a worker, read the
+inbox and answer deliberately at task boundaries: compact notices cannot do
+the conversation work for you.
+
 - A session is registered by its **hub**, so it stays discoverable even if its
   listener has stopped — the hub is what makes it reachable.
 - Records are removed when a session stops or its process dies, so `discover`

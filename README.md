@@ -346,15 +346,35 @@ told to arm a monitor it does not have arms nothing and stops looking.
 `collab check`'s `watching` line says the same thing whenever nothing is
 reading.
 
-Automatic delivery is a compact inbox notice, with no peer message text. One
+For sustained collaboration, delegate routine conversation to an active worker:
+
+```bash
+collab worker start --agent claude --scope 'Coordinate ownership and share my supplied progress; escalate blockers, decisions and conflicting edits.'
+collab worker context 'I own delivery.py; tests are in progress.'
+collab worker pending
+collab worker reply DECISION_ID 'Keep the public API unchanged.'
+```
+
+The worker keeps answering peers while the main agent works. Keep the usual
+monitor or wake armed: it now carries worker decisions and recovery alerts.
+Answers return to the worker and then to the waiting peer. Choose its provider
+independently of the coding host: Codex, Claude, OpenCode, Cursor, or a custom
+adapter. The defaults are Luna for Codex and Haiku for Claude; OpenCode and
+Cursor require explicit models. Model failures never switch to a premium model.
+See [conversation workers](docs/conversation-worker.md) for setup, authentication,
+scope, limits, and the return path. A worker is explicitly enabled after joining,
+with authority grounded in the user's task.
+
+Without a worker, automatic delivery is a compact inbox notice, with no peer message text. One
 outstanding notice stays latched until the announced batch is read with
 `collab recv`; later chatter does not keep interrupting the task. Followed
 monitors coalesce for 20 seconds and leave at least 90 seconds between notices.
 The full conversation remains available through `recv` and the human viewer.
 Use `collab listen --follow --delivery full` or
 `collab wake set --delivery full` only when full context delivery is wanted,
-for example in a dedicated bridge agent. Collab does not require a second model:
-choosing a cheaper bridge is optional, with its own context and lifecycle costs.
+for example in a separately managed conversation consumer. Without an active
+worker, the main agent must read and answer deliberately; notices alone cannot
+keep the conversation moving.
 
 **Claude Code** — arm a Monitor once per session:
 ```

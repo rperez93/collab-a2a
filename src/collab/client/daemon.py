@@ -1573,6 +1573,48 @@ class Daemon:
             logger.warning("could not %s at %.0f%%: %s",
                            act_name, share, detail)
 
+    async def _tick_conversation(self) -> None:
+        # Lazy creation keeps older daemon fixtures and sessions without a
+        # configured worker on their existing path.
+        from .worker_service import Conversation
+
+        service = getattr(self, "_conversation", None)
+        if service is None:
+            if not (self.profile.dir / "worker.db").exists():
+                return
+            service = self._conversation = Conversation(self)
+        await service.tick()
+
+    async def _maybe_worker_notice(self) -> None:
+        from .. import worker_notices
+
+        cfg = self.waker.config()
+        if not cfg.enabled:
+            self._wake_note = "conversation worker active; no main-agent wake configured"
+            return
+        now = time.time()
+        if self.waker.failed_at and now - self.waker.failed_at < self.waker.retry_pause:
+            return
+        if now - self.waker.last_attempt < 15:
+            return
+        notice = worker_notices.claim(self.profile.dir, lease=cfg.timeout + 30)
+        if notice is None:
+            self._wake_note = "conversation worker active; no decision notice due"
+            return
+        self._waking_batch = None
+        self._waking = asyncio.create_task(self._deliver_worker_notice(notice))
+
+    async def _deliver_worker_notice(self, notice) -> None:
+        from .. import worker_notices
+
+        before = self.waker.last_delivery
+        try:
+            await self._wake(None, notice["text"])
+            if self.waker.last_delivery > before:
+                worker_notices.commit(self.profile.dir, notice["token"])
+        finally:
+            worker_notices.release(self.profile.dir, notice["token"])
+
     async def _maybe_wake(self) -> None:
         """Start a turn in an agent that cannot start one for itself.
 
@@ -1584,6 +1626,11 @@ class Daemon:
             return                       # a turn is already in flight
         self._drain_wake_result(self._waking)
         self._waking = None
+        from .. import worker_notices
+
+        if worker_notices.enabled(self.profile.dir):
+            await self._maybe_worker_notice()
+            return
         due, why = self.waker.due()
         self._wake_note = why
         if not due:
@@ -1725,7 +1772,8 @@ class Daemon:
         # catching up on a later heartbeat, after the turn it was for.
         await self._compact_before_the_turn()
         config = self.waker.config()
-        carrying = batch.name if batch is not None else "the standing reminder"
+        worker_notice = batch is None and reminder.startswith("Collab worker: ")
+        carrying = batch.name if batch is not None else ("a worker decision notice" if worker_notice else "the standing reminder")
         logger.info("waking the agent with %s", carrying)
         # Both are given, because the two ways of delivering want different
         # things: a fresh run reads the prompt off stdin, while a keystroke into
@@ -1738,7 +1786,7 @@ class Daemon:
         env = {**os.environ,
                "COLLAB_WAKE_PROMPT": str(self.waker.write_prompt(batch, reminder)),
                "COLLAB_WAKE_BATCH": str(batch.path) if batch is not None else "",
-               "COLLAB_WAKE_KIND": "messages" if batch is not None else "reminder",
+               "COLLAB_WAKE_KIND": "messages" if batch is not None else ("worker" if worker_notice else "reminder"),
                "COLLAB_SESSION": self.profile.session_id}
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -2322,6 +2370,10 @@ class Daemon:
                 # outer guard alone kept the task alive and still left
                 # status.json stale for as long as the fault lasted.
                 try:
+                    await self._tick_conversation()
+                except Exception:
+                    logger.exception("conversation worker scheduling failed")
+                try:
                     # The monitor first: it is the route that costs the agent
                     # nothing, and asking it here is what keeps the two routes
                     # to one clock. Whichever takes the reminder resets the
@@ -2697,6 +2749,9 @@ class Daemon:
             heartbeat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat
+            service = getattr(self, "_conversation", None)
+            if service is not None:
+                await service.stop()
             await self._finish_any_wake()
             await self.bridge.stop()
             self.state = "stopped"

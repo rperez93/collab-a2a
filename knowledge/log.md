@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-09-19
+* **Update**: Added later-than-pin active conversation ownership to the wake page: scoped workers answer peers while the main agent works, independent provider selection, selective decision/health delivery, and the main-agent context and answer return path. The bundle revision and historical verification stamps are unchanged.
 * **Update**: Added later-than-pin notes to the state-directory and wake pages for external repository/agent namespaces, compact delivery and opt-in standing reminders in 1.44.0. Historical measurements and the bundle revision are unchanged.
 
 ## 2026-09-08

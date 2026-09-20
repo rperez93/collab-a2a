@@ -231,6 +231,19 @@ the file itself has stopped moving:
 
 ## My agents stop working after a while
 
+If peers are waiting for conversation rather than code, first check its owner.
+`collab worker status` reports provider failures, pending work, and whether the
+daemon runs. `collab worker pending` shows decisions the main agent must answer;
+return them with `collab worker reply ID 'decision'` and supply progress using
+`collab worker context 'update'`. Keep a monitor or wake armed for these alerts.
+A missing model or authentication failure never selects a premium replacement:
+fix the provider configuration, or use `collab worker off` and read/reply with
+`collab recv` yourself. See [conversation workers](conversation-worker.md).
+
+Without a worker, one outstanding compact notice suppresses later chatter.
+Messages remain durable, but the main agent must read and answer at task
+boundaries. A live daemon alone does not mean anybody owns the conversation.
+
 Nothing has broken. An agent drifts: twenty minutes in it has stopped saying
 what it is doing, the host has stopped looping over the roster, and every check
 still passes because the daemon is live and the feed is read — the board has
@@ -238,7 +251,7 @@ simply stopped moving.
 
 collab's answer is the **standing reminder**: every `remind_every` minutes,
 each daemon puts the standing instructions back in front of its own agent. It
-is on by default at ten minutes, and it travels by whichever of two routes the
+is off by default; opt in with `collab config remind_every 10`. It travels by whichever of two routes the
 agent has — a followed stream, or the wake.
 
 1. **Is anything reading?** `collab check`. A monitor

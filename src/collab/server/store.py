@@ -43,6 +43,13 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_room ON events(room, seq);
 
+CREATE TABLE IF NOT EXISTS worker_deliveries (
+    sender_id TEXT NOT NULL,
+    delivery_key TEXT NOT NULL,
+    seq INTEGER NOT NULL REFERENCES events(seq),
+    PRIMARY KEY (sender_id, delivery_key)
+);
+
 CREATE TABLE IF NOT EXISTS participants (
     id         TEXT PRIMARY KEY,
     name       TEXT NOT NULL UNIQUE,
@@ -459,25 +466,45 @@ class Store:
     # --- events --------------------------------------------------------------
 
     def append(self, env: Envelope) -> Envelope:
-        """Persist an event and stamp it with its ``seq``.
+        return self.append_once(env)[0]
 
-        Called before fan-out, so a message can never be delivered with a seq
-        that isn't already durable.
+    def append_once(self, env: Envelope) -> tuple[Envelope, bool]:
+        """Persist before fan-out; retrying a durable worker reply is harmless.
+
+        The sender identity comes from authentication, so another participant
+        cannot suppress a reply by guessing its delivery key. The unique key
+        and event commit together, including across independent hub handles.
         """
+        key = (env.body or {}).get("collab_worker_delivery")
+        dedup = env.kind == "chat" and env.sender_id and isinstance(key, str) and 0 < len(key) <= 128
         with self._lock:
-            cur = self._db.execute(
-                "INSERT INTO events (kind, room, sender, recipient, sender_id,"
-                " recipient_id, ts, payload) VALUES (?,?,?,?,?,?,?,?)",
-                (env.kind, env.room, env.sender, env.to,
-                 env.sender_id, env.to_id, env.ts, ""),
-            )
-            env.seq = int(cur.lastrowid)
-            self._db.execute(
-                "UPDATE events SET payload=? WHERE seq=?",
-                (json.dumps(env.to_dict()), env.seq),
-            )
-            self._db.commit()
-        return env
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                if dedup:
+                    row = self._db.execute(
+                        "SELECT e.payload FROM worker_deliveries d JOIN events e ON e.seq=d.seq "
+                        "WHERE d.sender_id=? AND d.delivery_key=?", (env.sender_id, key),
+                    ).fetchone()
+                    if row:
+                        self._db.commit()
+                        return Envelope.from_dict(json.loads(row[0])), False
+                cur = self._db.execute(
+                    "INSERT INTO events (kind, room, sender, recipient, sender_id,"
+                    " recipient_id, ts, payload) VALUES (?,?,?,?,?,?,?,?)",
+                    (env.kind, env.room, env.sender, env.to,
+                     env.sender_id, env.to_id, env.ts, ""),
+                )
+                env.seq = int(cur.lastrowid)
+                self._db.execute("UPDATE events SET payload=? WHERE seq=?",
+                                 (json.dumps(env.to_dict()), env.seq))
+                if dedup:
+                    self._db.execute("INSERT INTO worker_deliveries VALUES (?,?,?)",
+                                     (env.sender_id, key, env.seq))
+                self._db.commit()
+            except BaseException:
+                self._db.rollback()
+                raise
+        return env, True
 
     def since(self, seq: int, *, viewer: str | None = None, limit: int = 500) -> list[Envelope]:
         """Events after ``seq`` that ``viewer`` (a participant id) may see."""

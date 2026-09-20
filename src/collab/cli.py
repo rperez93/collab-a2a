@@ -1615,7 +1615,7 @@ def _learnings_pointer(cwd: Path | None = None) -> str:
 
 def cmd_listen(args: argparse.Namespace) -> int:
     """Stream events as lines.  This is what a Monitor watches."""
-    from . import attention
+    from . import attention, worker_notices
 
     profile = _require_profile(args)
     inbox = Inbox(profile.dir)
@@ -1668,6 +1668,8 @@ def cmd_listen(args: argparse.Namespace) -> int:
     looked = 0.0
     notice_checked = float("-inf")
     backlog_checked = float("-inf")
+    worker_checked = float("-inf")
+    worker_enabled = False
 
     # Say that somebody is reading, for as long as they are. A monitor that
     # dropped —a restart, a compaction, a closed shell— is indistinguishable
@@ -1677,10 +1679,27 @@ def cmd_listen(args: argparse.Namespace) -> int:
         fh.seek(0, os.SEEK_END)
         while True:
             now = time.monotonic()
+            if compact and now - worker_checked >= 1.0:
+                worker_checked = now
+                worker_enabled = worker_notices.enabled(root)
+                if worker_enabled:
+                    # The conversation owner consumes ordinary events. Only
+                    # decisions and failures need a turn in the coding agent.
+                    digest.sent(now)
+                    claim = worker_notices.claim(root)
+                    if claim:
+                        try:
+                            print(json.dumps({"kind": "worker_notice", "local": True,
+                                              "text": claim["text"]})
+                                  if args.json else claim["text"], flush=True)
+                        except (OSError, BrokenPipeError):
+                            worker_notices.release(root, claim["token"])
+                            raise
+                        worker_notices.commit(root, claim["token"])
             # Recover unread backlog on startup and after each consumed page.
             # Filtering happens in SQL before LIMIT, so presence/own echoes
             # cannot hide a relevant request forever behind the first page.
-            if compact and not digest.count and now - backlog_checked >= 1.0:
+            if compact and not worker_enabled and not digest.count and now - backlog_checked >= 1.0:
                 backlog_checked = now
                 if not attention.pending(root):
                     for env in inbox.notice_events(
@@ -1691,7 +1710,7 @@ def cmd_listen(args: argparse.Namespace) -> int:
             # A busy transcript must not open SQLite and a lock for each line.
             # The counters are constant-memory; checking the doorbell once per
             # second keeps a remote flood from turning into local IO churn.
-            if compact and digest.due(now) and now - notice_checked >= 1.0:
+            if compact and not worker_enabled and digest.due(now) and now - notice_checked >= 1.0:
                 notice_checked = now
                 if attention.all_read(root, [*digest.seqs, digest.seq]):
                     digest.sent(now)
@@ -1730,7 +1749,8 @@ def cmd_listen(args: argparse.Namespace) -> int:
                 continue
             # flush on every line: a Monitor only sees what is actually written.
             if compact:
-                digest.add(env, time.monotonic())
+                if not worker_enabled:
+                    digest.add(env, time.monotonic())
             else:
                 print(_format(env, args.json), flush=True)
                 inbox.mark_read([env.seq])
@@ -3225,6 +3245,14 @@ def cmd_update(args: argparse.Namespace) -> int:
 CHECK_OK, CHECK_WARN, CHECK_FAIL = "ok", "warn", "fail"
 
 
+def _worker_status(profile: SessionProfile) -> dict[str, Any] | None:
+    from .worker import Store
+
+    if not (profile.dir / "worker.db").exists():
+        return None
+    return Store(profile.dir).status()
+
+
 def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
     """Is this agent actually collaborating, or only connected?
 
@@ -3366,12 +3394,22 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
     # 2. Is anything READING what arrives?
     armed = len(watchers(profile)) + int(status.get("ws_clients") or 0)
     since_poll = time.time() - last_poll(profile)
+    worker_state = _worker_status(profile)
+    worker_enabled = bool(worker_state and worker_state["enabled"])
+    if worker_enabled:
+        if worker_state["error"]:
+            add("worker", CHECK_FAIL, "the collaboration worker needs recovery",
+                f"{exe} worker status")
+        else:
+            add("worker", CHECK_OK, "the listener owns an enabled collaboration worker")
     if armed:
         add("watching", CHECK_OK, f"{armed} armed on the feed")
     elif last_poll(profile) and since_poll <= POLL_COUNTS_AS_LISTENING:
         add("watching", CHECK_WARN,
             f"polling — last drained {_ago_seconds(since_poll)}",
             f"a watcher on `{exe} listen --follow` hears things as they land")
+    elif worker_enabled and wake.read_config(profile.dir).enabled:
+        add("watching", CHECK_OK, "worker handles conversation; an armed wake carries decisions")
     else:
         # NAMES THE ROUTE THAT FITS THIS TOOL. «Arm a watcher, or poll» is two
         # options and a decision, and the decision turns on a fact about the
@@ -3393,7 +3431,9 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
             fix = (f"if your tool has a watcher that survives a turn, arm it on"
                    f" `{exe} listen --follow`; if it does not, or you are not"
                    f" sure, `{exe} wake agents` lists the recipes")
-        add("watching", CHECK_FAIL, "nothing is reading this session", fix)
+        detail = ("worker handles conversation, but no route carries decisions to you"
+                  if worker_enabled else "nothing is reading this session")
+        add("watching", CHECK_FAIL, detail, fix)
 
     # 2b. If a wake is standing in for a watcher, is it actually working?
     #
@@ -3509,7 +3549,16 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
     #    promptly, so it is not claimed — a check that pretends to measure
     #    acting, and cannot, is worse than one that says what it measures.
     waiting = int(status.get("unread_messages") or 0)
-    if armed:
+    if worker_enabled:
+        if worker_state["pending"]:
+            add("acting", CHECK_WARN, f"{len(worker_state['pending'])} worker decision(s) await your answer",
+                f"{exe} worker pending; {exe} worker reply ID 'decision'")
+        elif worker_state["error"]:
+            add("acting", CHECK_WARN, "conversation progress is blocked by a worker error",
+                f"{exe} worker status")
+        else:
+            add("acting", CHECK_OK, "worker consumes conversation with its own inbox cursor")
+    elif armed:
         add("acting", CHECK_OK, "a watcher is delivering what arrives")
     elif waiting:
         add("acting", CHECK_WARN, f"{waiting} undrained — nobody has taken them",
@@ -3791,6 +3840,7 @@ def _wake_deliver(args: argparse.Namespace, wk) -> int:
         # is; anything else defaults to the older wording rather than guessing.
         about = ("your standing reminder"
                  if os.environ.get("COLLAB_WAKE_KIND") == "reminder"
+                 else "a conversation worker needs input" if os.environ.get("COLLAB_WAKE_KIND") == "worker"
                  else "messages arrived")
         code, detail = wk.deliver_to_tmux(
             target, where, expect_pid=args.expect_pid or "",
@@ -4476,6 +4526,26 @@ def cmd_status(args: argparse.Namespace) -> int:
         f"settle {int(told['settle'])}s · gap {int(told['min_gap'])}s"
         f" · timeout {int(told['timeout'])}s · {told['why']}"
         if told["armed"] else "not armed")
+    worker_state = _worker_status(profile)
+    if worker_state is not None:
+        payload["worker"] = {
+            "enabled": worker_state["enabled"],
+            "running": bool(pid and worker_state["running"]),
+            "error": worker_state["error"],
+            "pending_decisions": len(worker_state["pending"]),
+            "cursor": worker_state["cursor"],
+            "last_progress": worker_state["last_progress"],
+        }
+        if worker_state["enabled"] and pid:
+            payload["conversation_consumer"] = "worker"
+            if not payload["watching"]:
+                payload["hint"] = (
+                    "worker handles the conversation; an armed wake carries decisions"
+                    if told["armed"] else
+                    "worker handles the conversation, but decisions need a route: "
+                    f"arm `{exe} listen --follow` or `{exe} wake set --agent <host>`")
+            if worker_state["error"]:
+                payload["hint"] = "the collaboration worker needs recovery — run `collab worker status`"
     payload["reminder"] = _reminder_line(told)
     # WHAT BECAME OF THE FACTS, in one line and only when there is one to
     # print. Three figures the daemon keeps and nothing showed a person: how
@@ -4537,11 +4607,19 @@ def cmd_status(args: argparse.Namespace) -> int:
     elif payload["polling"]:
         armed_line = (f"polling · last drained "
                       f"{_ago_seconds(payload['polled_seconds_ago'])}")
+    elif payload.get("worker", {}).get("enabled") and pid:
+        armed_line = "worker owns conversation; decisions use wake" if told["armed"] else "worker owns conversation; decision route missing"
     else:
         armed_line = c("nobody is listening", "31")
         if payload["polled_seconds_ago"] is not None:
             armed_line += dim(f" · last poll {_ago_seconds(payload['polled_seconds_ago'])}")
     print(f"  {'monitor':<16} {armed_line}")
+    if worker_info := payload.get("worker"):
+        worker_line = "enabled" if worker_info["enabled"] else "disabled"
+        worker_line += f" · {worker_info['pending_decisions']} pending decisions"
+        if worker_info["error"]:
+            worker_line += " · error (collab worker status)"
+        print(f"  {'worker':<16} {worker_line}")
     # TWO LINES, and no more than two. This command is a page somebody scans,
     # and the whole of `collab wake show` printed inside it would bury the
     # connection state it exists for. One line for the clocks and what they are
@@ -5457,6 +5535,54 @@ def _settle_in_the_session(name: str, args: argparse.Namespace) -> int:
     if name == "share_stats" and not share_stats_enabled():
         print(dim("       others will keep seeing whatever you last shared"))
     return 0
+
+
+def cmd_worker(args: argparse.Namespace) -> int:
+    """Delegate coordination without consuming the coding agent's inbox."""
+    from .worker import Store
+
+    mutation = args.worker_action in ("start", "off", "reply", "context")
+    profile = _require_own_profile(args) if mutation else _require_profile(args)
+    store = Store(profile.dir)
+    try:
+        if args.worker_action == "start":
+            config = {"agent": args.agent, "model": args.model, "scope": args.scope}
+            if args.worker_command is not None:
+                try:
+                    config["command"] = json.loads(args.worker_command)
+                except json.JSONDecodeError as exc:
+                    raise ValueError("--command must be a JSON argv array") from exc
+            store.configure(config)
+            onboard.ensure_daemon(profile)
+            ok("collaboration worker enabled; the listener owns its lifecycle")
+            print("  `collab worker status` reports provider errors and pending decisions")
+        elif args.worker_action == "off":
+            store.off()
+            ok("collaboration worker disabled; pending decisions and replies are preserved")
+        elif args.worker_action == "reply":
+            store.answer(args.decision_id, args.text)
+            ok("decision queued for the collaboration worker")
+        elif args.worker_action == "context":
+            store.context(args.text)
+            ok("context queued for the collaboration worker")
+        elif args.worker_action == "pending":
+            pending = store.pending()
+            if args.json:
+                print(json.dumps(pending, indent=2))
+            elif not pending:
+                print("No pending collaboration decisions.")
+            else:
+                for item in pending:
+                    print(f"{said(item['id'])} [{said(item['reason'])}] {said(item['question'])}")
+                print("Reply with: collab worker reply ID 'your decision'")
+        else:
+            state = store.status()
+            state["daemon_running"] = is_running(profile) is not None
+            print(json.dumps(state, indent=2))
+        return 0
+    except (ValueError, OSError) as exc:
+        fail(str(exc))
+        return 1
 
 
 def cmd_daemon(args: argparse.Namespace) -> int:
@@ -6927,6 +7053,25 @@ def build_parser() -> argparse.ArgumentParser:
                      help="a number of lines, 'off' to never fold, or 'auto' "
                           "to let the theme decide")
     fld.set_defaults(func=cmd_fold)
+
+    wk = sub.add_parser("worker", help="delegate the collaboration conversation to a scoped worker")
+    wk_sub = wk.add_subparsers(dest="worker_action", required=True)
+    for action in ("start", "off", "status", "pending", "reply", "context"):
+        wp = wk_sub.add_parser(action)
+        add_session_flag(wp)
+        wp.set_defaults(func=cmd_worker)
+        if action == "start":
+            wp.add_argument("--agent", required=True, choices=("codex", "claude", "opencode", "cursor", "command"))
+            wp.add_argument("--model", help="model id (defaults: Codex gpt-5.6-luna, Claude haiku; required for OpenCode/Cursor)")
+            wp.add_argument("--scope", required=True, help="explicit authority delegated to the conversation worker")
+            wp.add_argument("--command", dest="worker_command", help="with --agent command: JSON argv array; reads a JSON turn on stdin")
+        elif action == "reply":
+            wp.add_argument("decision_id")
+            wp.add_argument("text")
+        elif action == "context":
+            wp.add_argument("text")
+        elif action in ("status", "pending"):
+            wp.add_argument("--json", action="store_true")
 
     d = sub.add_parser("daemon", help="manage the listener")
     d.add_argument("action", choices=["start", "stop", "status"], nargs="?", default="status")

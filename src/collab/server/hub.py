@@ -88,8 +88,9 @@ class Hub:
             # Usage rides along with ordinary traffic; fold it into the sender's
             # profile so the next roster everyone reads is already current.
             await asyncio.to_thread(self.merge_stats, env.sender_id, env.stats)
-        env = await asyncio.to_thread(self.store.append, env)
-        await self._deliver(env)
+        env, created = await asyncio.to_thread(self.store.append_once, env)
+        if created:
+            await self._deliver(env)
         return env
 
     async def _deliver(self, env: Envelope) -> None:
