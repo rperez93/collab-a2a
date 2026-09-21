@@ -14,6 +14,8 @@ collab config                       # every setting, its value and its default
 collab config theme                 # one of them
 collab config theme chat            # set it
 collab config theme --unset         # put it back to its default
+collab config editor nano           # preferred terminal editor
+collab config rules_text --edit     # interactive external-editor choice
 ```
 
 `collab config` with no arguments is the right first move whenever the user
@@ -37,6 +39,11 @@ The table below is for **your** judgement about when to touch something. The
 command is for the facts.
 
 
+Text edits in the TUI offer an external temporary-file editor or inline input.
+The returned text remains a draft until Save; `r` / **Reset to default** restores
+the default after confirmation. `--edit` needs the human's terminal; agents
+should use a direct value or `--unset` unless explicitly asked to open an editor.
+
 ## Running collab
 
 Examples here say `collab`. Use whichever of these resolves — check once, at
@@ -56,6 +63,7 @@ the project. A session belongs to a repository; a theme does not.
 |---|---|---|
 | `display_name` | the name others see you as, machine-wide | the user says what they want to be called |
 | `color` | the colour others see you in, machine-wide | they ask for a specific colour |
+| `editor` | terminal editor command; empty follows VISUAL, EDITOR, then vi | they prefer vim, nvim, nano or another terminal editor for text settings |
 | `theme` | how `collab watch` lays the conversation out | they say the transcript is hard to read |
 | `fold` | how many lines of a long message show before «show more», whichever theme is on; `auto` gives the decision back to the theme and `0` never folds | they say long messages are cut off, or that the transcript is one wall of text — `collab fold <n>`, `collab fold off` and `collab fold auto` write the same key |
 | `timezone` | the zone dates and times are read in — an IANA name, or `auto` for the computer's own | the machine's clock is not the zone they read in, or timestamps look shifted |

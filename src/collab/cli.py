@@ -5523,13 +5523,20 @@ def cmd_config(args: argparse.Namespace) -> int:
     to be handed the right one of nine commands. The commands all still work
     and none of them changed; this is the index they never had.
     """
+    editing = getattr(args, "edit", False)
     if getattr(args, "tui", False):
-        if args.key or args.value is not None or args.unset or args.json:
-            fail("--tui cannot be combined with a key, value, --unset or --json")
+        if args.key or args.value is not None or args.unset or args.json or editing:
+            fail("--tui cannot be combined with a key, value, --unset, --edit or --json")
             return 2
         from .client.settings_tui import run
         return run(on_change=lambda name: _settle_in_the_session(name, args))
     known = settings()
+    if (args.unset or editing) and not args.key:
+        fail("--unset and --edit require a setting key")
+        return 2
+    if editing and (args.unset or args.value is not None or args.json):
+        fail("--edit cannot be combined with a value, --unset or --json")
+        return 2
 
     if not args.key:
         if args.json:
@@ -5550,6 +5557,7 @@ def cmd_config(args: argparse.Namespace) -> int:
         print(dim(f"  they live in {global_config_path()}"))
         print(dim("  collab config <key> <value>   set one"))
         print(dim("  collab config <key> --unset   put it back to its default"))
+        print(dim("  collab config <key> --edit    edit interactively; text can use an external editor"))
         return 0
 
     item = setting(args.key)
@@ -5569,11 +5577,52 @@ def cmd_config(args: argparse.Namespace) -> int:
         ok(f"{item.name} is back to its default, {_shown(item.default)}")
         return _settle_in_the_session(item.name, args)
 
+    if editing:
+        from .setting_edit import edit_text, editor_draft, shown
+        import copy
+
+        if not sys.stdin.isatty() or not sys.stdout.isatty():
+            fail("--edit needs a terminal; use collab config <key> <value>")
+            return 2
+        baseline = copy.deepcopy(item.read())
+        try:
+            if isinstance(baseline, str) or item.parse is str:
+                answer = input("Edit in an external terminal editor? [Y/n] ").strip().lower()
+                if answer not in ("", "y", "yes", "n", "no"):
+                    raise ValueError("expected yes or no; setting unchanged")
+                if answer in ("", "y", "yes"):
+                    draft = editor_draft(item, edit_text(shown(baseline)))
+                else:
+                    draft = input("New value: ")
+            else:
+                draft = input("New value: ")
+            if draft == shown(baseline):
+                ok("Unchanged")
+                return 0
+            if item.read() != baseline:
+                raise ValueError("Changed elsewhere; reopen the edit before saving")
+            item.write(item.parse(draft))
+        except (EOFError, KeyboardInterrupt):
+            print("\nEdit cancelled; setting unchanged")
+            return 0
+        except (ValueError, TypeError, OSError) as exc:
+            fail(f"{item.name}: {exc}")
+            return 2
+        ok(f"Saved {item.name}")
+        return _settle_in_the_session(item.name, args)
+
     if args.value is None:
         # Bare, on its own line, so `$(collab config theme)` is worth writing.
         print(_shown(item.read()))
         print(dim(f"  {item.about}"))
         print(dim(f"  default {_shown(item.default)}"))
+        print(dim(f"  collab config {item.name} <value>   set directly"))
+        print(dim(f"  collab config {item.name} --unset   restore its default"))
+        print(dim(f"  collab config {item.name} --edit    edit interactively"))
+        print(dim("  collab config --tui   browse, edit, or Reset to default (r)"))
+        if isinstance(item.read(), str) or item.parse is str:
+            print(dim("  Text edits offer an external editor or inline input."))
+            print(dim("  collab config editor nano   choose vim, nvim, nano or a command with arguments"))
         return 0
 
     try:
@@ -6672,7 +6721,10 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("logs [--follow]", "what this session has recorded, without stopping it"),
         ("name [value]", "show or set your display name"),
         ("config [key] [value]", "every global setting, its value and default"),
-        ("config --tui", "edit the same settings using keyboard or mouse"),
+        ("config --tui", "edit with keyboard/mouse; r resets to default"),
+        ("config <key> --unset", "restore one setting to its default"),
+        ("config <key> --edit", "edit inline or choose an external editor for text"),
+        ("config editor <command>", "prefer vim, nvim, nano, or an editor with arguments"),
         ("url", "reprint the join line (host)"),
         ("kick <name>", "remove a participant (host)"),
         ("daemon start|stop|status", "the listener that holds the connection"),
@@ -7254,11 +7306,30 @@ def build_parser() -> argparse.ArgumentParser:
     who = sub.add_parser("whoami", help="this agent's name, colour and state directory")
     who.set_defaults(func=cmd_whoami)
 
-    cf = sub.add_parser("config", help="show or change collab's global settings")
+    cf = sub.add_parser(
+        "config", help="show or change collab's global settings",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Actions:
+  collab config                         list settings, values and defaults
+  collab config KEY                     show one setting and its actions
+  collab config KEY VALUE               set directly
+  collab config KEY --unset             restore the default
+  collab config KEY --edit              edit interactively (terminal required)
+  collab config --tui                   browse/edit; r resets to default
+  collab config editor nano             choose vim, nvim, nano, or a command
+  collab config editor 'nvim -f'         editor arguments are supported
+  collab config editor --unset          use VISUAL, then EDITOR, then vi
+
+Text editing asks whether to use an external terminal editor or inline input.
+Save and quit the external editor to return the temporary file's UTF-8 content.
+The CLI validates and saves; the TUI keeps a draft until Enter/Save.
+TUI controls: arrows/j/k select, / searches, Enter edits, r resets, ? helps,
+Esc cancels a draft, q quits. Editor commands run without a shell.""")
     cf.add_argument("key", nargs="?", help="the setting to show or change")
     cf.add_argument("value", nargs="?", help="its new value")
     cf.add_argument("--unset", action="store_true",
                     help="put a setting back to its default")
+    cf.add_argument("--edit", action="store_true", help="edit a setting interactively; offer an external editor for text")
     cf.add_argument("--json", action="store_true")
     cf.add_argument("--tui", action="store_true", help="interactive keyboard/mouse settings editor")
     cf.set_defaults(func=cmd_config)

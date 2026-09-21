@@ -46,7 +46,7 @@ It also works for two agents on **one** machine in different repos.
 > on collab itself.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/rperez93/collab-a2a/6e5439512940f4249744ea1e6d5a2c074a447824/assets/demo.png" alt="Collab 2.0.2: coding agent on the left, compact participant rows with main and worker models above the conversation on the right" width="1100">
+  <img src="https://raw.githubusercontent.com/rperez93/collab-a2a/v2.0.3/assets/demo.png" alt="Collab 2.0.3: coding agent on the left, compact participant rows with main and worker models above the conversation on the right" width="1100">
   <br>
   <sub>The current terminal renderer, with synthetic demo data: a coding agent on the left and the live viewer on the right. Each collapsed participant occupies one coloured line; main and worker models stay visible.</sub>
 </p>
@@ -1260,7 +1260,7 @@ collab watch
 collab watch --panel   # open a supported terminal split
 ```
 
-![Compact participants, state legend and conversation in Collab 2.0.2](assets/participant-panel.png)
+![Compact participants, state legend and conversation in Collab 2.0.3](assets/participant-panel.png)
 
 Collapsed participants use one padded, coloured row: identity, `m:` main model,
 `w` worker state/model, and working/idle duration. The legend explains
@@ -2295,6 +2295,8 @@ collab config                     # every setting, its value and its default
 collab config theme               # one of them
 collab config theme chat          # set it
 collab config theme --unset       # put it back to its default
+collab config editor nano         # preferred terminal editor (vim/nvim also work)
+collab config rules_text --edit   # choose external editor or inline input
 collab config --json              # the same table, for an agent to read
 ```
 
@@ -2302,6 +2304,7 @@ collab config --json              # the same table, for an agent to read
 |---|---|---|---|
 | `display_name` | the name others see | `collab name <n>` | git `user.name`, else `$USER` |
 | `color` | the colour others see you in | `collab color <hex>` | dealt from the palette |
+| `editor` | terminal editor command; empty follows VISUAL, EDITOR, then vi | — | empty |
 | `theme` | how the conversation is laid out | `collab theme <name>` | `classic` |
 | `timezone` | the zone dates and times are read in; an IANA name, or `auto` for the computer's own | — | `auto` |
 | `share_stats` | share your usage with the session | `collab stats --share on\|off` | `on` |
@@ -2692,7 +2695,9 @@ open the keyboard/mouse settings editor with `collab config --tui`.
 `collab config --tui` edits the same settings as existing CLI commands, including
 provider model defaults, worker budgets, participant fields and explicit model
 prices. Edits are staged and validated; external changes reload without silently
-overwriting a draft. [Editor guide](docs/settings-panel.md).
+overwriting a draft. Text edits offer your preferred terminal editor through a
+temporary file; `r` / **Reset to default** restores the selected default.
+[Editor guide](docs/settings-panel.md).
 
 Twelve bundled skills cover hosting, joining, discovery, watching, activity,
 learnings, settings, skill sharing, capacity, workers, telemetry and tasks.

@@ -140,7 +140,7 @@ class Screen:
 def test_all_editor_modes_fit_the_terminal(width, height):
     editor = editor_for("worker_instructions")
     screen = Screen(height, width)
-    for mode in ("browse", "search", "edit", "reset", "help"):
+    for mode in ("browse", "search", "choose", "edit", "reset", "help"):
         editor.mode = mode
         editor.draft = "機能追加 " * 12 + "\nsecond line"
         editor.cursor = len(editor.draft)
@@ -195,3 +195,76 @@ def test_narrow_editor_retains_every_mouse_action():
     editor.begin()
     editor.draw(screen)
     assert {button[-1] for button in editor._buttons} == {"save", "cancel", "toggle"}
+
+
+def test_text_edit_offers_external_or_inline_input_and_allows_cancelling():
+    """Opening a text setting never launches a process without a choice."""
+    editor = editor_for('worker_instructions')
+    editor.handle('\n')
+    assert editor.mode == 'choose'
+    editor.handle('n')
+    assert editor.mode == 'edit'
+    editor.handle('\x1b')
+    editor.action('edit')
+    editor.handle('\x1b')
+    assert editor.mode == 'browse' and not editor.changed
+    editor.action('edit')
+    editor.handle('y')
+    assert editor.mode == 'external'
+
+
+def test_external_text_is_still_a_draft_until_save(monkeypatch):
+    """Returning from the terminal editor is not permission to save a TUI draft."""
+    editor = editor_for('worker_instructions')
+    editor.request_edit()
+    monkeypatch.setattr('collab.client.settings_tui.edit_text', lambda _: 'new\ntext')
+    editor.external_edit()
+    assert editor.mode == 'edit' and editor.draft == 'new\ntext'
+    assert config.setting(editor.selected).read() == ''
+    assert editor.save()
+    assert config.setting(editor.selected).read() == 'new\ntext'
+
+
+def test_external_edit_failure_keeps_the_original_draft(monkeypatch):
+    """A failing editor should leave a usable inline editor with the old text."""
+    editor = editor_for('worker_instructions')
+    editor.begin()
+    editor.draft = 'keep me'
+    def fail(_):
+        raise OSError('no editor')
+    monkeypatch.setattr('collab.client.settings_tui.edit_text', fail)
+    editor.external_edit()
+    assert editor.mode == 'edit' and editor.draft == 'keep me'
+    assert 'no editor' in editor.notice
+
+
+def test_another_terminal_can_change_a_value_while_the_external_editor_is_open(monkeypatch):
+    """The external draft uses the same baseline conflict guard as inline edits."""
+    editor = editor_for('worker_instructions')
+    editor.request_edit()
+    def edited(_):
+        config.setting(editor.selected).write('another terminal')
+        return 'my draft'
+    monkeypatch.setattr('collab.client.settings_tui.edit_text', edited)
+    editor.external_edit()
+    assert not editor.save()
+    assert config.setting(editor.selected).read() == 'another terminal'
+
+
+def test_reset_remains_visible_with_a_narrow_terminal():
+    """The default line spells out the action even when toolbar labels shrink."""
+    editor = editor_for('worker_timeout')
+    screen = Screen(20, 38)
+    editor.draw(screen)
+    assert any('r: Reset to default:' in line for _, _, line in screen.writes)
+
+
+def test_a_model_from_an_external_editor_loses_only_its_final_line_ending(monkeypatch):
+    """Single-line values and multiline instructions need different newline handling."""
+    editor = editor_for('worker_codex_model')
+    editor.request_edit()
+    monkeypatch.setattr('collab.client.settings_tui.edit_text', lambda _: 'my-model\r\n')
+    editor.external_edit()
+    assert editor.draft == 'my-model'
+    assert editor.save()
+    assert config.setting(editor.selected).read() == 'my-model'

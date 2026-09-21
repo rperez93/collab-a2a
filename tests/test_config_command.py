@@ -167,3 +167,89 @@ def test_the_defaults_shown_are_the_defaults_that_apply():
     config._CACHE.clear()
     for item in config.settings():
         assert item.read() == item.default, item.name
+
+
+def interactive(monkeypatch, answers):
+    monkeypatch.setattr('sys.stdin.isatty', lambda: True)
+    monkeypatch.setattr('sys.stdout.isatty', lambda: True)
+    answers = iter(answers)
+    monkeypatch.setattr('builtins.input', lambda prompt: next(answers))
+
+
+def test_cli_text_edit_asks_before_using_the_editor(monkeypatch):
+    """Declining the editor must use inline input, preserving direct CLI writes."""
+    interactive(monkeypatch, ['n', 'two lines\nof guidance'])
+    monkeypatch.setattr('collab.setting_edit.edit_text', lambda _: pytest.fail('editor opened'))
+    assert _run('worker_instructions', '--edit') == 0
+    assert config.setting('worker_instructions').read() == 'two lines\nof guidance'
+
+
+def test_cli_editor_return_is_validated_before_saving(monkeypatch):
+    """A successful editor process does not make an invalid model name valid."""
+    interactive(monkeypatch, ['y'])
+    monkeypatch.setattr('collab.setting_edit.edit_text', lambda _: 'invalid model')
+    before = config.setting('worker_codex_model').read()
+    assert _run('worker_codex_model', '--edit') == 2
+    assert config.setting('worker_codex_model').read() == before
+
+
+def test_cli_editor_does_not_overwrite_another_terminals_value(monkeypatch):
+    """Opening a long-running editor does not reserve a setting for its caller."""
+    interactive(monkeypatch, ['y'])
+    def changed(_):
+        config.setting('worker_instructions').write('someone else')
+        return 'my draft'
+    monkeypatch.setattr('collab.setting_edit.edit_text', changed)
+    assert _run('worker_instructions', '--edit') == 2
+    assert config.setting('worker_instructions').read() == 'someone else'
+
+
+def test_cli_editor_saves_multiline_content_and_preserves_other_settings(monkeypatch):
+    """The returned UTF-8 draft passes through the normal writer."""
+    interactive(monkeypatch, [''])
+    def edited(_):
+        config.setting('worker_timeout').write(90)
+        return '機能\nsecond line\n'
+    monkeypatch.setattr('collab.setting_edit.edit_text', edited)
+    assert _run('worker_instructions', '--edit') == 0
+    assert config.setting('worker_instructions').read() == '機能\nsecond line\n'
+    assert config.setting('worker_timeout').read() == 90
+
+
+@pytest.mark.parametrize('argv', [('--edit',), ('--unset',),
+    ('theme', '--edit', '--unset'), ('theme', 'classic', '--edit'),
+    ('theme', '--edit', '--json'), ('--tui', '--edit')])
+def test_incompatible_edit_actions_are_refused(argv):
+    """No action should be silently discarded in favour of another."""
+    assert _run(*argv) == 2
+
+
+def test_cli_edit_requires_a_terminal(monkeypatch):
+    monkeypatch.setattr('sys.stdin.isatty', lambda: False)
+    assert _run('worker_instructions', '--edit') == 2
+
+
+def test_setting_information_and_help_list_the_available_actions(capsys):
+    """A person inspecting a setting can discover editing and default restoration."""
+    assert _run('worker_instructions') == 0
+    output = capsys.readouterr().out
+    for text in ('--unset', '--edit', '--tui', 'external editor', 'vim, nvim, nano'):
+        assert text in output
+    with pytest.raises(SystemExit) as result:
+        _run('--help')
+    assert result.value.code == 0
+    output = capsys.readouterr().out
+    for text in ('--unset', '--edit', '--tui', 'VISUAL', 'EDITOR', 'vim, nvim, nano', 'r resets'):
+        assert text in output
+    entries = dict(next(entries for title, entries in cli.COMMAND_GROUPS if title == 'Yourself and this install'))
+    assert 'config <key> --unset' in entries
+    assert 'config <key> --edit' in entries
+    assert 'config editor <command>' in entries
+
+
+def test_a_model_saved_by_an_editor_accepts_its_final_line_ending(monkeypatch):
+    """vim/nano add a newline to ordinary files; that must not invalidate a model."""
+    interactive(monkeypatch, ['y'])
+    monkeypatch.setattr('collab.setting_edit.edit_text', lambda _: 'my-model\n')
+    assert _run('worker_codex_model', '--edit') == 0
+    assert config.setting('worker_codex_model').read() == 'my-model'

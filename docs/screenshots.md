@@ -33,7 +33,8 @@ theme backgrounds and colours survive the ANSI-to-PNG export.
 | `theme-cyberpunk.png` | 120×32 | Expanded Cyberpunk panel |
 | `theme-matrix.png` | 120×32 | Expanded Matrix panel |
 | `theme-matrix-compact.png` | 90×34 | Collapsed Matrix panel and conversation |
-| `settings-panel.png` | 100×34 | Settings filtered to worker controls |
+| `settings-panel.png` | 100×34 | Worker controls with Reset to default visible |
+| `settings-editor.png` | 100×20 | External-editor or inline text choice |
 
 Combined views give the roster 38 percent of the terminal height.
 

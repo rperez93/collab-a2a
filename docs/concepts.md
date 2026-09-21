@@ -747,6 +747,8 @@ the index of them:
 collab config                     # every setting, its value and its default
 collab config theme chat          # set one
 collab config theme --unset       # put it back to its default
+collab config editor nano         # preferred terminal editor
+collab config rules_text --edit   # choose external or inline editing
 ```
 
 `collab config` does not own the settings; it delegates to the same writers the
