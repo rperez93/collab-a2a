@@ -244,6 +244,10 @@ class Conversation:
                 self._delivery_health(store, snapshot["generation"])
                 return
             payload = {
+                # The hub bounds names by characters. A JSON-byte excerpt
+                # changes valid Unicode names and makes us speak as somebody
+                # else; the existing whole-payload byte cap still applies.
+                "self": {"name": self.daemon.profile.name},
                 "scope": cfg["scope"], "summary": snapshot["summary"],
                 "local_guidance": setting("worker_instructions"),
                 "local_rules": setting("rules_text"),
@@ -254,7 +258,7 @@ class Conversation:
                 "pending": _page([self._source(row) for row in store.pending()], budget=12_000),
                 "participants": _page([{"name": p.get("name", "")}
                                        for p in self.daemon.snapshot.get("participants", [])[:32]], budget=4000),
-                "instructions": (
+                "instructions": (worker_runtime.PEER_IDENTITY +
                     "Own routine collaboration within the delegated scope. Respond when a peer "
                     "needs an answer, ask concise clarifying questions, and carry main-agent "
                     "answers back to peers. Use only supplied facts; do not invent progress or "

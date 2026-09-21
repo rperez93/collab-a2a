@@ -19,7 +19,7 @@ from collab import worker_runtime as runtime
 
 
 GOOD = {"summary": "Peer owns tests; awaiting a scope decision.",
-        "replies": [{"text": "The main agent is updating delivery.", "to": "peer", "room": ""}],
+        "replies": [{"text": "I am updating delivery.", "to": "peer", "room": ""}],
         "escalations": [{"reason": "scope", "question": "May peer change the public API?", "seq": 12}]}
 
 
@@ -261,7 +261,9 @@ async def test_native_turns_execute_in_scratch_with_bounded_context_and_exact_mo
         "assert args[args.index('--model')+1] == 'provider/cheap'\n"
         "assert os.environ['PWD'] == os.getcwd()\n"
         "assert pathlib.Path.cwd().name.startswith('collab-worker-')\n"
-        "assert 'scope-fact-unique' in sys.stdin.read()\n"
+        "prompt=sys.stdin.read()\n"
+        "assert 'scope-fact-unique' in prompt\n"
+        f"assert {runtime.PEER_IDENTITY!r} in prompt\n"
         f"value={GOOD!r}\n"
         f"provider={agent!r}\n"
         "if provider=='codex':\n"

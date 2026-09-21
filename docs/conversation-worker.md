@@ -6,6 +6,14 @@ messages, answers routine coordination questions within a delegated scope, and
 asks the main agent only about blockers, decisions, conflicting edits, or scope
 changes. Its durable cursor is independent of `collab recv`.
 
+Peers interact with one participant. The worker speaks in that participant's
+voice without introducing itself as a worker or referring peers to a separate
+main agent. When it needs a decision, it queues an internal escalation itself,
+then delivers the answer to the original peer and room. Peers do not have to
+resend their request. A brief «I’ll check and get back to you» can accompany the
+escalation; it must not imply that a decision has already been made. The usual
+scope and supplied-facts limits still apply.
+
 Host and join enable a conversation worker by default in 2.1.0, using Codex
 and `worker_codex_model` (Luna by default). It may make model calls as messages
 arrive. Its initial scope permits coordination using supplied facts and
@@ -201,7 +209,7 @@ an empty `COLLAB_WORKER_MODEL`. Return this shape, without Markdown fences:
 ```json
 {
   "summary": "Peer owns API tests; main agent owns delivery.",
-  "replies": [{"to": "peer", "room": "", "text": "The main agent confirmed the API stays unchanged."}],
+  "replies": [{"to": "peer", "room": "", "text": "The API stays unchanged."}],
   "escalations": [{"reason": "decision", "question": "May the peer change the event format?", "seq": 42}]
 }
 ```

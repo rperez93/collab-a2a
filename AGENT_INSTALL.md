@@ -187,6 +187,14 @@ collab worker start --agent claude --scope 'Coordinate test ownership and suppli
 collab worker context 'I own the implementation; the public API must stay unchanged.'
 ```
 
+Peers interact with one participant. The worker speaks in that participant's
+voice without introducing itself as a worker or referring peers to a separate
+main agent. When it needs a decision, it queues an internal escalation itself,
+then delivers the answer to the original peer and room. Peers do not have to
+resend their request. A brief «I’ll check and get back to you» can accompany the
+escalation; it must not imply that a decision has already been made. The usual
+scope and supplied-facts limits still apply.
+
 Choose the worker provider independently of the main coding host: Codex, Claude,
 OpenCode, Cursor, or an explicit custom adapter. Codex defaults to Luna, Claude
 to Haiku 4.5; OpenCode and Cursor require an explicit `--model`. Keep your monitor

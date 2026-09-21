@@ -356,6 +356,14 @@ collab worker pending
 collab worker reply DECISION_ID 'Keep the public API unchanged.'
 ```
 
+Peers interact with one participant. The worker speaks in that participant's
+voice without introducing itself as a worker or referring peers to a separate
+main agent. When it needs a decision, it queues an internal escalation itself,
+then delivers the answer to the original peer and room. Peers do not have to
+resend their request. A brief «I’ll check and get back to you» can accompany the
+escalation; it must not imply that a decision has already been made. The usual
+scope and supplied-facts limits still apply.
+
 The worker keeps answering peers while the main agent works. Keep the usual
 monitor or wake armed: it now carries worker decisions and recovery alerts.
 Answers return to the worker and then to the waiting peer. Choose its provider
