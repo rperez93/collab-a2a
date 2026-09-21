@@ -349,3 +349,19 @@ def test_worker_wake_prompt_is_a_decision_notice_not_a_standing_reminder(tmp_pat
     assert waker.turn_prompt(None, text) == text
     path = waker.write_prompt(None, text)
     assert path.name == "worker-notice.txt" and path.read_text() == text
+
+
+@pytest.mark.parametrize('agent', ['codex', 'claude'])
+async def test_idle_health_keeps_a_missing_default_model_visible_until_corrected(conversation, agent):
+    """The first idle tick must not hide a configuration error from onboarding."""
+    from collab import runtime_settings
+    runtime_settings.set_value('worker_agent', agent)
+    runtime_settings.set_value('worker_' + agent + '_model', '')
+    store = worker.Store(conversation.root)
+    store.ensure_default()
+    await conversation.turn()
+    assert 'requires a model' in store.status()['error']
+    assert store.status().get('attempts', 0) == 0
+    runtime_settings.set_value('worker_' + agent + '_model', worker.DEFAULT_MODELS[agent])
+    await conversation.turn()
+    assert store.status()['error'] == ''

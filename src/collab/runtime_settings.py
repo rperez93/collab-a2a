@@ -44,6 +44,11 @@ def _model(value):
         raise ValueError("expected a model identifier or empty")
     return value
 
+def _worker_agent(value):
+    if value not in ("codex", "claude"):
+        raise ValueError("expected codex or claude; use worker start for other providers")
+    return value
+
 def _prices(value):
     data = json.loads(value) if isinstance(value, str) else value
     if not isinstance(data, dict) or len(data) > 100:
@@ -65,6 +70,8 @@ SPECS = (
  ('stats_prices', {}, _prices, 'exact model prices in USD per million tokens; estimates only'),
  ('attention_settle', 20, _integer(0, 3600), 'seconds to collect a burst before an inbox notice'),
  ('attention_gap', 90, _integer(1, 86400), 'minimum seconds between inbox notices'),
+ ('worker_auto_start', True, _bool, 'enable a worker on session setup unless explicitly turned off'),
+ ('worker_agent', 'codex', _worker_agent, 'provider for automatic worker setup; codex or claude'),
  ('worker_turn_gap', 5, _integer(1, 3600), 'minimum seconds between conversation worker turns'),
  ('worker_timeout', 60, _integer(1, 600), 'deadline in seconds for a conversation worker call'),
  ('worker_max_attempts', 60, _integer(1, 10000), 'maximum model calls in each worker budget window'),
@@ -76,7 +83,7 @@ SPECS = (
  ('worker_notice_repeat', 300, _integer(15, 86400), 'seconds before repeating an unresolved worker notice'),
  ('worker_notice_gap', 15, _integer(1, 3600), 'minimum seconds between changed worker notices'),
  ('worker_codex_model', 'gpt-5.6-luna', _model, 'default Codex conversation model; next default-model turn'),
- ('worker_claude_model', 'haiku', _model, 'default Claude conversation model; next default-model turn'),
+ ('worker_claude_model', 'claude-haiku-4-5', _model, 'default Claude conversation model; next default-model turn'),
  ('worker_opencode_model', '', _model, 'default OpenCode conversation model; empty requires explicit model'),
  ('worker_cursor_model', '', _model, 'default Cursor conversation model; empty requires explicit model'),
  ('rules_text', '', _text, 'local replacement briefing; empty uses shipped rules, next rules read'),

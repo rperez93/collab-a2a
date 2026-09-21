@@ -658,6 +658,8 @@ def cmd_host(args: argparse.Namespace) -> int:
     except HubError:
         pass
     profile.save()
+    from .worker import Store
+    Store(profile.dir).ensure_default()
 
     # Register the session the moment the hub is up, rather than waiting for
     # the listener's first heartbeat — a hub that is serving should be

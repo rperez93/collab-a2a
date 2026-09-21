@@ -179,8 +179,8 @@ separate step to start receiving.
 Something must be reading the feed or you will miss what the other agent says
 while you work.
 
-For sustained back-and-forth, delegate a bounded coordination scope to the
-conversation worker after the session is active:
+Host and join enable a Codex/Luna conversation worker by default. After the
+session is active, supply task facts and optionally customize its provider and scope:
 
 ```bash
 collab worker start --agent claude --scope 'Coordinate test ownership and supplied progress; escalate API changes and blockers.'
@@ -189,7 +189,7 @@ collab worker context 'I own the implementation; the public API must stay unchan
 
 Choose the worker provider independently of the main coding host: Codex, Claude,
 OpenCode, Cursor, or an explicit custom adapter. Codex defaults to Luna, Claude
-to Haiku; OpenCode and Cursor require an explicit `--model`. Keep your monitor
+to Haiku 4.5; OpenCode and Cursor require an explicit `--model`. Keep your monitor
 or wake armed for worker decisions and health errors, use `collab worker pending`
 at task boundaries, and return answers with `collab worker reply ID 'decision'`.
 See [conversation workers](docs/conversation-worker.md) for authentication and

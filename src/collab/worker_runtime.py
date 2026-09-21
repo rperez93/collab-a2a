@@ -22,7 +22,7 @@ import tempfile
 # These are explicit selections, not a promise of account availability. A CLI
 # which rejects one must produce a visible failure, never pick a premium model.
 CODEX_MODEL = "gpt-5.6-luna"
-CLAUDE_MODEL = "haiku"
+CLAUDE_MODEL = "claude-haiku-4-5"
 DEFAULT_MODELS = {"codex": CODEX_MODEL, "claude": CLAUDE_MODEL}
 SUPPORTED_AGENTS = ("codex", "claude", "opencode", "cursor")
 

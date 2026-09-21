@@ -346,7 +346,8 @@ told to arm a monitor it does not have arms nothing and stops looking.
 `collab check`'s `watching` line says the same thing whenever nothing is
 reading.
 
-For sustained collaboration, delegate routine conversation to an active worker:
+Host and join enable a Codex/Luna conversation worker by default. Customize
+its provider and scope and supply current task facts:
 
 ```bash
 collab worker start --agent claude --scope 'Coordinate ownership and share my supplied progress; escalate blockers, decisions and conflicting edits.'
@@ -359,11 +360,13 @@ The worker keeps answering peers while the main agent works. Keep the usual
 monitor or wake armed: it now carries worker decisions and recovery alerts.
 Answers return to the worker and then to the waiting peer. Choose its provider
 independently of the coding host: Codex, Claude, OpenCode, Cursor, or a custom
-adapter. The defaults are Luna for Codex and Haiku for Claude; OpenCode and
+adapter. The defaults are Luna for Codex and Haiku 4.5 for Claude; OpenCode and
 Cursor require explicit models. Model failures never switch to a premium model.
 See [conversation workers](docs/conversation-worker.md) for setup, authentication,
-scope, limits, and the return path. A worker is explicitly enabled after joining,
-with authority grounded in the user's task.
+scope, limits, and the return path. Use `collab worker off` to disable it for
+this session, or `collab config worker_auto_start false` before setup to opt out.
+`collab config worker_agent claude` selects Claude/Haiku 4.5 for unconfigured sessions.
+Explicit off and provider choices survive reconnects.
 
 Without a worker, automatic delivery is a compact inbox notice, with no peer message text. One
 outstanding notice stays latched until the announced batch is read with

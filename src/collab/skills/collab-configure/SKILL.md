@@ -104,6 +104,8 @@ the project. A session belongs to a repository; a theme does not.
 | `stats_prices` | exact model prices in USD per million tokens; estimates only; default `{}` | the user wants to tune this behavior; read current value first |
 | `attention_settle` | seconds to collect a burst before an inbox notice; default `20` | the user wants to tune this behavior; read current value first |
 | `attention_gap` | minimum seconds between inbox notices; default `90` | the user wants to tune this behavior; read current value first |
+| `worker_auto_start` | enable a worker on session setup unless explicitly turned off; default `True` | the user wants to tune this behavior; read current value first |
+| `worker_agent` | provider for automatic worker setup; codex or claude; default `codex` | the user wants to tune this behavior; read current value first |
 | `worker_turn_gap` | minimum seconds between conversation worker turns; default `5` | the user wants to tune this behavior; read current value first |
 | `worker_timeout` | deadline in seconds for a conversation worker call; default `60` | the user wants to tune this behavior; read current value first |
 | `worker_max_attempts` | maximum model calls in each worker budget window; default `60` | the user wants to tune this behavior; read current value first |
@@ -115,7 +117,7 @@ the project. A session belongs to a repository; a theme does not.
 | `worker_notice_repeat` | seconds before repeating an unresolved worker notice; default `300` | the user wants to tune this behavior; read current value first |
 | `worker_notice_gap` | minimum seconds between changed worker notices; default `15` | the user wants to tune this behavior; read current value first |
 | `worker_codex_model` | default Codex conversation model; next default-model turn; default `gpt-5.6-luna` | the user wants to tune this behavior; read current value first |
-| `worker_claude_model` | default Claude conversation model; next default-model turn; default `haiku` | the user wants to tune this behavior; read current value first |
+| `worker_claude_model` | default Claude conversation model; next default-model turn; default `claude-haiku-4-5` | the user wants to tune this behavior; read current value first |
 | `worker_opencode_model` | default OpenCode conversation model; empty requires explicit model; default `` | the user wants to tune this behavior; read current value first |
 | `worker_cursor_model` | default Cursor conversation model; empty requires explicit model; default `` | the user wants to tune this behavior; read current value first |
 | `rules_text` | local replacement briefing; empty uses shipped rules; read again on the next rules command | change only when the user wants custom local collaboration guidance |

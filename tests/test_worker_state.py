@@ -139,7 +139,7 @@ def test_health_updates_neither_consume_messages_nor_claim_success(tmp_path):
     assert not store.status()["running"]
 
 
-@pytest.mark.parametrize("agent,model", [("codex", "gpt-5.6-luna"), ("claude", "haiku")])
+@pytest.mark.parametrize("agent,model", [("codex", "gpt-5.6-luna"), ("claude", "claude-haiku-4-5")])
 def test_native_providers_have_explicit_cheap_defaults(tmp_path, agent, model):
     store = worker.Store(tmp_path)
     store.configure({"agent": agent, "scope": "Only coordinate ownership"})
