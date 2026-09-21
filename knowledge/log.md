@@ -80,3 +80,7 @@ polling is cancellable and bounded. The pin remains unchanged.
 * **Update (later than the pin, v2.0.2)**: Extended existing usage figures with
   exact-thread Codex telemetry and solo-participant stats. No pin or verified
   stamp was moved.
+
+* **Update (later than the pin, v2.0.3)**: Extended the existing CLI surface
+  with temporary-file text editing, the preferred editor setting and the
+  visible TUI reset control. The bundle pin is unchanged.

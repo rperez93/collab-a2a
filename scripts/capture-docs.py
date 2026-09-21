@@ -96,6 +96,7 @@ def capture_all():
         ('theme-matrix', 'details', 120, 32, 'matrix', ['Enter'], 'Collab · Matrix'),
         ('theme-matrix-compact', 'both', 90, 34, 'matrix', [], 'Collab · compact Matrix panel'),
         ('settings-panel', 'settings', 100, 34, 'classic', [], 'Collab · worker settings'),
+        ('settings-editor', 'settings', 100, 20, 'classic', ['Enter'], 'Collab · choose a text editor'),
     ]
     with tempfile.TemporaryDirectory(prefix='collab-doc-capture-') as folder:
         home = Path(folder)
@@ -123,7 +124,7 @@ def capture_all():
                         raise RuntimeError(f'{name}: viewer did not draw')
                     time.sleep(.1)
                 if mode == 'settings':
-                    call('send-keys','-l','/worker')
+                    call('send-keys','-l','/worker_instructions' if name == 'settings-editor' else '/worker')
                     call('send-keys','Enter')
                 if keys:
                     call('send-keys',*keys)

@@ -740,7 +740,7 @@ options:
 ## config
 
 ```text
-usage: collab config [-h] [--unset] [--json] [--tui] [key] [value]
+usage: collab config [-h] [--unset] [--edit] [--json] [--tui] [key] [value]
 
 positional arguments:
   key         the setting to show or change
@@ -749,8 +749,26 @@ positional arguments:
 options:
   -h, --help  show this help message and exit
   --unset     put a setting back to its default
+  --edit      edit a setting interactively; offer an external editor for text
   --json
   --tui       interactive keyboard/mouse settings editor
+
+Actions:
+  collab config                         list settings, values and defaults
+  collab config KEY                     show one setting and its actions
+  collab config KEY VALUE               set directly
+  collab config KEY --unset             restore the default
+  collab config KEY --edit              edit interactively (terminal required)
+  collab config --tui                   browse/edit; r resets to default
+  collab config editor nano             choose vim, nvim, nano, or a command
+  collab config editor 'nvim -f'         editor arguments are supported
+  collab config editor --unset          use VISUAL, then EDITOR, then vi
+
+Text editing asks whether to use an external terminal editor or inline input.
+Save and quit the external editor to return the temporary file's UTF-8 content.
+The CLI validates and saves; the TUI keeps a draft until Enter/Save.
+TUI controls: arrows/j/k select, / searches, Enter edits, r resets, ? helps,
+Esc cancels a draft, q quits. Editor commands run without a shell.
 ```
 
 ## color

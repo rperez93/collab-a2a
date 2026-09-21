@@ -106,5 +106,6 @@ def set_value(name, value):
 def settings():
     from .config import Setting
     return tuple(Setting(name, about + ' (hot reload)', default, parse,
-                         lambda n=name: get(n), lambda value, n=name: set_value(n, value))
+                         lambda n=name: get(n), lambda value, n=name: set_value(n, value),
+                         multiline=parse is _text)
                  for name, default, parse, about in SPECS)

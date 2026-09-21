@@ -8,29 +8,12 @@ from __future__ import annotations
 
 import copy
 import curses
-import json
 import sys
 from typing import Any, Callable
 
 from .. import config
 from ..columns import clip, width as columns
-
-
-# Rules and worker instructions accept up to 8,000 characters. The editor has
-# headroom for their JSON/list neighbours, while refusing an unbounded paste.
-MAX_DRAFT = 32_000
-
-
-def shown(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, list):
-        return ",".join(str(part) for part in value)
-    if isinstance(value, dict):
-        return json.dumps(value, ensure_ascii=False, sort_keys=True)
-    return str(value)
+from ..setting_edit import MAX_DRAFT, edit_text, editor_draft, shown
 
 
 def _safe(text: Any) -> str:
@@ -81,7 +64,7 @@ class SettingsEditor:
         self._stamp = stamp
         for item in self.entries:
             self.values[item.name] = copy.deepcopy(item.read())
-        if self.mode in ("edit", "reset") and self.values.get(self.selected) != self.baseline:
+        if self.mode in ("edit", "reset", "choose", "external") and self.values.get(self.selected) != self.baseline:
             self.notice = "Changed elsewhere. Cancel and reopen before saving."
 
     def move(self, step: int) -> None:
@@ -114,6 +97,26 @@ class SettingsEditor:
         self.cursor = len(self.draft)
         self.mode = mode
         self.notice = "Draft only – Enter saves; Esc cancels."
+
+    def request_edit(self) -> None:
+        self.begin()
+        if self.item and (isinstance(self.baseline, str) or self.item.parse is str):
+            self.mode = "choose"
+            self.notice = "Choose an external terminal editor or inline editing."
+
+    def external_edit(self) -> None:
+        """Return an editor's content to the draft; Enter still commits it."""
+        try:
+            draft = editor_draft(self.item, edit_text(self.draft))
+        except (ValueError, OSError) as exc:
+            self.notice = str(exc)
+        except KeyboardInterrupt:
+            self.notice = "External edit cancelled; draft unchanged."
+        else:
+            self.draft, self.cursor = draft, len(draft)
+            self.notice = "Editor closed – Enter saves; Esc discards."
+        self.mode = "edit"
+        self.refresh(force=True)
 
     def save(self, *, reset: bool = False) -> bool:
         item = self.item
@@ -148,7 +151,12 @@ class SettingsEditor:
         if action == "quit":
             return False
         if action == "edit":
-            self.begin()
+            self.request_edit()
+        elif action == "external":
+            self.mode = "external"
+        elif action == "inline":
+            self.mode = "edit"
+            self.notice = "Draft only – Enter saves; Esc cancels."
         elif action == "reset":
             self.begin("reset")
         elif action == "save":
@@ -177,6 +185,14 @@ class SettingsEditor:
                 self.help_offset = max(0, self.help_offset - 1)
             if escape or enter or key in ("?", "q"):
                 self.mode = "browse"
+            return True
+        if self.mode == "choose":
+            if enter or key in ("y", "Y"):
+                self.action("external")
+            elif key in ("n", "N"):
+                self.action("inline")
+            elif escape:
+                self.action("cancel")
             return True
         if self.mode == "reset":
             if enter:
@@ -237,7 +253,7 @@ class SettingsEditor:
         elif key in (curses.KEY_END, "G"):
             self.move(len(self.filtered))
         elif enter or key == "e":
-            self.begin()
+            self.request_edit()
         elif key == "r":
             self.begin("reset")
         elif key == "/":
@@ -295,10 +311,11 @@ class SettingsEditor:
         def buttons(items, y=1):
             x = 0
             for label, action in items:
-                if width < 60:
+                if width < 76:
                     label = {"search": "/", "edit": "e", "reset": "r", "help": "?", "quit": "q",
                              "save": "Confirm" if self.mode == "reset" else "Save",
-                             "cancel": "Cancel", "toggle": "Toggle"}.get(action, label)
+                             "cancel": "Cancel", "toggle": "Toggle",
+                             "external": "Yes", "inline": "No"}.get(action, label)
                 text = f"[{label}]"
                 if x + len(text) >= width:
                     break
@@ -317,6 +334,9 @@ class SettingsEditor:
             help_text = (
                 "Up/Down or j/k: select; wheel: move three settings.",
                 "Enter or Edit: draft the selected value.",
+                "Text asks whether to use an external terminal editor (y/n).",
+                "Set editor to vim, nvim, nano or a command with arguments.",
+                "Empty editor uses VISUAL, EDITOR, then vi.",
                 "/ or Search: filter names and descriptions.",
                 "r or Reset: confirm returning to the default.",
                 "In an edit: Enter saves; Esc/Cancel discards.",
@@ -331,6 +351,14 @@ class SettingsEditor:
             self.help_offset = min(self.help_offset, max(len(help_lines) - height + 6, 0))
             for i, line in enumerate(help_lines[self.help_offset:self.help_offset + height - 6], 3):
                 put(i, line)
+        elif self.mode == "choose":
+            buttons([("Yes Enter", "external"), ("No n", "inline"), ("Cancel Esc", "cancel")])
+            put(3, self.selected, curses.A_BOLD)
+            for row, line in enumerate(edit_lines(
+                    "Edit in an external terminal editor?\n"
+                    "Yes opens a temporary file; No edits here.\n"
+                    "Choose vim, nvim or nano using the editor setting.", 0, width - 2)[0][:max(height - 7, 1)], 4):
+                put(row, line)
         elif self.mode in ("edit", "reset"):
             buttons([("Save Enter" if self.mode == "edit" else "Confirm Enter", "save"),
                      ("Cancel Esc", "cancel")]
@@ -354,7 +382,7 @@ class SettingsEditor:
                     pass
         else:
             buttons([("Search /", "search"), ("Edit Enter", "edit"),
-                     ("Reset r", "reset"), ("Help ?", "help"), ("Quit q", "quit")])
+                     ("Reset to default r", "reset"), ("Help ?", "help"), ("Quit q", "quit")])
             put(2, f"{'Search' if self.mode == 'search' else 'Filter'}: {self.query}  ({len(self.filtered)} settings)")
             self.page = max(height - 9, 1)
             self._settle()
@@ -370,7 +398,7 @@ class SettingsEditor:
                 about = edit_lines(self.item.about, 0, width - 2)[0]
                 for i, line in enumerate(about[:2], height - 5):
                     put(i, line)
-                put(height - 3, "Default: " + (shown(self.item.default) or "(empty)"))
+                put(height - 3, "r: Reset to default: " + (shown(self.item.default) or "(empty)"))
             if self.mode == "search":
                 try:
                     caret = (2, min(columns("Search: " + self.query), width - 2))
@@ -379,7 +407,8 @@ class SettingsEditor:
                     pass
         put(height - 2, self.notice)
         put(height - 1, "Enter save · Esc cancel · Ctrl-N newline" if self.mode == "edit"
-            else "↑↓ select · / search · Enter edit · ? help · q quit")
+            else "y/Enter external · n inline · Esc cancel" if self.mode == "choose"
+            else "↑↓ select · / search · Enter edit · r reset · q quit")
         if self.mode not in ("edit", "search"):
             try:
                 curses.curs_set(0)
@@ -440,6 +469,19 @@ def run(*, on_change: Callable[[str], Any] | None = None) -> int:
                 continue
             if not editor.handle(key):
                 return
+            if editor.mode == "external":
+                # Hand the real terminal back to vim/nano, then restore curses
+                # even when launching or reading the editor fails. Keeping raw
+                # mode active makes a working editor look unresponsive.
+                curses.def_prog_mode()
+                curses.endwin()
+                try:
+                    editor.external_edit()
+                finally:
+                    curses.reset_prog_mode()
+                    win.keypad(True)
+                    win.timeout(250)
+                    win.clearok(True)
 
     from . import tui
     tui._THEME_POLLING[0] = True

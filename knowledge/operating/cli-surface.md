@@ -232,3 +232,9 @@ full transcript consumers; compact notices remain the default.
 Later than the pin: 2.0.1 adds `worker send --to NAME` for durable explicit
 messages and `worker stats` for separate native/canonical worker telemetry and
 local source polling. Inference backoff does not hold up queued delivery.
+
+Later than the pin: 2.0.3 adds `collab config KEY --edit`, which asks whether to
+edit text in a temporary file with a terminal editor. The `editor` setting
+selects the command; empty follows VISUAL, EDITOR, then vi. The TUI offers the
+same choice and keeps returned content as a draft until Save. Its existing
+`r` action is labelled «Reset to default»; the CLI retains `--unset`.

@@ -3,6 +3,10 @@
 `collab config`, `collab config KEY VALUE`, `collab config KEY --unset` and
 `collab config --json` continue to use one validated settings registry. `collab config --tui` opens the
 keyboard/mouse settings screen, which uses the same registry and saves the same file.
+`collab config KEY --edit` offers an external terminal editor for text or inline
+input. Set `editor` to `vim`, `nvim` or `nano`; empty follows `$VISUAL`, `$EDITOR`,
+then `vi`. In the TUI, `r` / **Reset to default** previews and restores a default.
+See the [editing guide](settings-panel.md) for saving and cancelling drafts.
 
 Changes to participant fields, freshness thresholds, prices, worker timing,
 delivery budgets and local worker guidance take effect at the next relevant

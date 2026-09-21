@@ -1840,6 +1840,9 @@ class Setting:
     parse: Callable[[str], Any]
     read: Callable[[], Any]
     write: Callable[[Any], Any]
+    #: Prose and shell scripts retain their terminal newline. Single-line
+    #: values discard the one line ending that vim/nano add on file save.
+    multiline: bool = False
 
 
 def _as_bool(text: str) -> bool:
@@ -1974,6 +1977,18 @@ def _one_of(values: tuple[str, ...]) -> Callable[[str], str]:
     return parse
 
 
+def _write_editor(value: str) -> str:
+    import shlex
+
+    value = value.strip()
+    if value and not shlex.split(value):
+        raise ValueError("expected an editor executable and optional arguments")
+    cfg = load_config()
+    cfg["editor"] = value
+    save_config(cfg)
+    return value
+
+
 def _write_theme(value: str) -> str:
     # set_theme answers None rather than raising: it is the caller that warns,
     # because the caller is the one that knows how to say «you have these».
@@ -2099,6 +2114,11 @@ def settings() -> tuple[Setting, ...]:
                 None, str,
                 lambda: load_config().get("color"),
                 _write_color),
+        Setting("editor", "terminal editor for text settings (for example vim, nvim or nano); "
+                          "empty uses VISUAL, EDITOR, then vi",
+                "", str,
+                lambda: str(load_config().get("editor") or ""),
+                _write_editor),
         Setting("theme", "how the conversation is laid out in `collab watch`",
                 DEFAULT_THEME, str,
                 theme, _write_theme),
@@ -2132,7 +2152,7 @@ def settings() -> tuple[Setting, ...]:
                                  "an agent whose host tool cannot report it",
                 "", str,
                 lambda: stats_source()[0],
-                lambda v: set_stats_source(command=v)),
+                lambda v: set_stats_source(command=v), multiline=True),
         Setting("stats_interval", "how often to run it, in seconds",
                 DEFAULT_STATS_INTERVAL, _as_int,
                 lambda: stats_source()[1],
@@ -2152,12 +2172,12 @@ def settings() -> tuple[Setting, ...]:
                 " shipped one",
                 "", str,
                 lambda: str(load_config().get("remind_host") or ""),
-                lambda v: save_reminder(host=v)),
+                lambda v: save_reminder(host=v), multiline=True),
         Setting("remind_guest",
                 "what it says when you are a guest; empty for the shipped one",
                 "", str,
                 lambda: str(load_config().get("remind_guest") or ""),
-                lambda v: save_reminder(guest=v)),
+                lambda v: save_reminder(guest=v), multiline=True),
         # WITH THE REMINDER, which is one of the three things it changes: past
         # this, the reminder gains a sentence about a status that has stopped
         # being true, and the daemon decays the statement itself. A reader
@@ -2295,7 +2315,7 @@ def settings() -> tuple[Setting, ...]:
                                         "its first line of output is a segment",
                 "", str,
                 lambda: watch_status_settings()["command"],
-                lambda v: save_watch_status(command=v)),
+                lambda v: save_watch_status(command=v), multiline=True),
         Setting("watch_status_interval", "how often to run it, in seconds",
                 DEFAULT_WATCH_STATUS_INTERVAL, _as_int,
                 lambda: watch_status_settings()["interval"],
