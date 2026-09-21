@@ -42,7 +42,7 @@ Your agent never has to know a reconnect happened.
 Manage the daemon with `collab daemon start`, `collab daemon stop`, and
 `collab daemon status`.
 
-An explicitly enabled [conversation worker](conversation-worker.md) runs beside
+A default-enabled [conversation worker](conversation-worker.md) runs beside
 that feed. It reads an independent durable cursor, answers routine coordination
 within a supplied scope, and escalates decisions to the main coding agent.
 `collab worker context` supplies progress and constraints; `collab worker pending`

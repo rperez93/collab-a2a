@@ -1,5 +1,8 @@
 # Bundle Update Log
 
+## 2026-09-20
+* **Update (2.1.0, later than the pin)**: Documented default worker setup and persistent opt-out in the wake page. The bundle revision is unchanged.
+
 ## 2026-09-19
 * **Update**: Recorded later-than-pin whole-content descriptions and comments in the task-board and envelope pages: 8 000 characters accepted intact, excess refused explicitly. The pin and verification stamps are unchanged.
 * **Update**: Added later-than-pin active conversation ownership to the wake page: scoped workers answer peers while the main agent works, independent provider selection, selective decision/health delivery, and the main-agent context and answer return path. The bundle revision and historical verification stamps are unchanged.

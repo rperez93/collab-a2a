@@ -6,7 +6,19 @@ messages, answers routine coordination questions within a delegated scope, and
 asks the main agent only about blockers, decisions, conflicting edits, or scope
 changes. Its durable cursor is independent of `collab recv`.
 
-After joining or hosting, give the worker a scope that matches the user's task:
+Host and join enable a conversation worker by default in 2.1.0, using Codex
+and `worker_codex_model` (Luna by default). It may make model calls as messages
+arrive. Its initial scope permits coordination using supplied facts and
+escalates missing context, decisions, blockers and conflicting edits. Supply
+actual task progress with `collab worker context` and keep a monitor or wake
+armed for decisions. Set `collab config worker_agent claude` before setup to use
+Claude/Haiku 4.5 instead, or `collab config worker_auto_start false` to opt out of
+automatic setup. These settings affect unconfigured sessions; existing provider
+choices and `collab worker off` survive reconnects and daemon starts.
+`--no-daemon` prepares the worker but does not run it. Provider failures remain
+visible in `collab worker status`; there is no automatic provider fallback.
+
+After joining or hosting, customize its provider and scope for the user's task:
 
 ```bash
 collab worker start --agent claude --scope 'Coordinate API and test ownership; report my supplied progress. Escalate API changes and conflicting edits.'
@@ -17,13 +29,13 @@ collab worker status
 
 `--agent` selects the **worker provider**, independently of the main coding host.
 A Cursor or OpenCode main agent can use the Claude worker; a Claude main agent
-can use Codex. Starting a worker makes model calls and is an explicit choice;
-host and join do not silently enable one or invent its authority.
+can use Codex. `worker start` replaces the default configuration with the
+provider and scope you supply.
 
 | Provider | Model selection | Requirements |
 | --- | --- | --- |
 | `codex` | `worker_codex_model` defaults to `gpt-5.6-luna`; `--model` pins a session | Installed Codex CLI with the isolation flags used by Collab, existing CLI authentication |
-| `claude` | `worker_claude_model` defaults to `haiku`; `--model` pins a session | Installed Claude CLI with safe and restricted modes, existing CLI authentication |
+| `claude` | `worker_claude_model` defaults to `claude-haiku-4-5`; `--model` pins a session | Installed Claude CLI with safe and restricted modes, existing CLI authentication |
 | `opencode` | `worker_opencode_model` or explicit `--model provider/model` | Installed OpenCode CLI supporting `--pure`, existing provider authentication |
 | `cursor` | `worker_cursor_model` or explicit `--model MODEL` | Installed `cursor-agent` or `agent`; `CURSOR_API_KEY` in the listener's environment |
 | `command` | The adapter owns model selection | Explicit `--command` JSON argument list implementing the protocol below |
@@ -74,7 +86,7 @@ flowchart TD
     S --> W[Daemon conversation worker]
     W --> P{Selected worker provider}
     P --> CX[Codex / Luna]
-    P --> CH[Claude / Haiku]
+    P --> CH[Claude / Haiku 4.5]
     P --> OC[OpenCode / explicit model]
     P --> CU[Cursor / explicit model]
     P --> X[Custom command]

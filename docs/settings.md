@@ -32,6 +32,18 @@ are implementation invariants. They are not user-tunable permission bypasses.
 Worker attempt history retains at most 10,000 calls over 24 hours; this hard
 ceiling remains even with a more permissive configurable rolling budget.
 
+Host and join enable a conversation worker by default in 2.1.0, using Codex
+and `worker_codex_model` (Luna by default). It may make model calls as messages
+arrive. Its initial scope permits coordination using supplied facts and
+escalates missing context, decisions, blockers and conflicting edits. Supply
+actual task progress with `collab worker context` and keep a monitor or wake
+armed for decisions. Set `collab config worker_agent claude` before setup to use
+Claude/Haiku 4.5 instead, or `collab config worker_auto_start false` to opt out of
+automatic setup. These settings affect unconfigured sessions; existing provider
+choices and `collab worker off` survive reconnects and daemon starts.
+`--no-daemon` prepares the worker but does not run it. Provider failures remain
+visible in `collab worker status`; there is no automatic provider fallback.
+
 ## Operational settings
 
 | Setting | Default | Behavior |
@@ -42,6 +54,8 @@ ceiling remains even with a more permissive configurable rolling budget.
 | `stats_prices` | `{}` | exact model prices in USD per million tokens; estimates only |
 | `attention_settle` | `20` | seconds to collect a burst before an inbox notice |
 | `attention_gap` | `90` | minimum seconds between inbox notices |
+| `worker_auto_start` | `True` | enable a worker on session setup unless explicitly turned off |
+| `worker_agent` | `codex` | provider for automatic worker setup; codex or claude |
 | `worker_turn_gap` | `5` | minimum seconds between conversation worker turns |
 | `worker_timeout` | `60` | deadline in seconds for a conversation worker call |
 | `worker_max_attempts` | `60` | maximum model calls in each worker budget window |
@@ -53,7 +67,7 @@ ceiling remains even with a more permissive configurable rolling budget.
 | `worker_notice_repeat` | `300` | seconds before repeating an unresolved worker notice |
 | `worker_notice_gap` | `15` | minimum seconds between changed worker notices |
 | `worker_codex_model` | `gpt-5.6-luna` | default Codex conversation model; next default-model turn |
-| `worker_claude_model` | `haiku` | default Claude conversation model; next default-model turn |
+| `worker_claude_model` | `claude-haiku-4-5` | default Claude conversation model; next default-model turn |
 | `worker_opencode_model` | `` | default OpenCode conversation model; empty requires explicit model |
 | `worker_cursor_model` | `` | default Cursor conversation model; empty requires explicit model |
 | `worker_instructions` | `` | additional local conversation guidance, read on each worker turn |

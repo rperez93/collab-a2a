@@ -107,6 +107,8 @@ def wait_until_live(profile: SessionProfile, timeout: float = DAEMON_READY_TIMEO
 def ensure_daemon(profile: SessionProfile, *, wait: bool = True,
                   follow: bool = True) -> dict[str, Any]:
     """Start the daemon unless one is already running — re-running join is safe."""
+    from ..worker import Store
+    Store(profile.dir).ensure_default()
     if is_running(profile) is None:
         spawn_daemon(profile, follow=follow)
     return wait_until_live(profile) if wait else read_status(profile)
@@ -144,6 +146,8 @@ def join_session(
         participant_id=result.get("id", ""),
     )
     profile.save()
+    from ..worker import Store
+    Store(profile.dir).ensure_default()
 
     status = ensure_daemon(profile, follow=follow) if start_daemon else {}
     return profile, result.get("snapshot", {}), status

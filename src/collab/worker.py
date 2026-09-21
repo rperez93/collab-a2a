@@ -18,7 +18,14 @@ from typing import Any
 
 MAX_TEXT = 16000
 MAX_PENDING = 1000
-DEFAULT_MODELS = {"codex": "gpt-5.6-luna", "claude": "haiku"}
+DEFAULT_MODELS = {"codex": "gpt-5.6-luna", "claude": "claude-haiku-4-5"}
+# Automatic delegation has no private task context. Permit coordination only;
+# promises about code, scope, and progress must come from the main agent.
+DEFAULT_SCOPE = (
+    "Coordinate conversation and ownership using only supplied facts. "
+    "Escalate blockers, decisions, conflicting edits, scope changes and missing "
+    "task context to the main agent. Never invent progress or promise code changes."
+)
 SUPPORTED_AGENTS = ("codex", "claude", "opencode", "cursor", "command")
 
 
@@ -32,7 +39,7 @@ def _text(value: Any, label: str, *, empty: bool = False) -> str:
     return value
 
 
-def _config(config: dict[str, Any]) -> dict[str, Any]:
+def _config(config: dict[str, Any], *, allow_empty_model: bool = False) -> dict[str, Any]:
     agent = config.get("agent")
     if agent not in SUPPORTED_AGENTS:
         raise ValueError("worker agent must be codex, claude, opencode, cursor or command")
@@ -52,7 +59,7 @@ def _config(config: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("--command requires --agent command")
         from .runtime_settings import get
         result["model_default"] = bool(config.get("model_default", not bool(config.get("model"))))
-        result["model"] = _text(config.get("model") or get(f"worker_{agent}_model"), "model (required when no default is configured)")
+        result["model"] = _text(config.get("model") or get(f"worker_{agent}_model"), "model (required when no default is configured)", empty=allow_empty_model)
     return result
 
 
@@ -112,6 +119,32 @@ class Store:
                          running=False, error="", retry_at=0)
             self._save(db, state)
         return config
+
+    def ensure_default(self) -> None:
+        """Initialize once, without undoing an explicit off or racing start.
+
+        Read-only status can create the database before onboarding, so file
+        existence is not a choice. A changed generation records even an off
+        issued before the first configuration and must survive reconnects.
+        """
+        from .runtime_settings import get
+        if not get("worker_auto_start"):
+            return
+        with self._db() as db:
+            state = self._state(db)
+            if state["config"] is not None or state["generation"]:
+                return
+            # Empty model settings are valid (other providers require a local
+            # choice). Automatic setup must not turn that into a failed join:
+            # retain the choice and expose an error without choosing a fallback.
+            # The runtime rejects empty models before spawning any provider and
+            # reads the corrected default on the next turn.
+            config = _config({"agent": get("worker_agent"), "scope": DEFAULT_SCOPE},
+                             allow_empty_model=True)
+            error = ("Worker requires a model; set worker_" + config["agent"] + "_model"
+                     if not config["model"] else "")
+            state.update(config=config, generation=1, error=error)
+            self._save(db, state)
 
     def off(self) -> None:
         with self._db() as db:

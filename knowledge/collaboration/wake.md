@@ -25,8 +25,9 @@ stale_after: 2026-10-01T00:00:00Z
 
 ## Active conversation ownership (later than the pin)
 
-An explicitly enabled `collab worker start` gives a scoped background model the
-conversation. Worker provider and main coding host are independent. The worker
+Later than the pin: 2.1.0 enables a scoped Codex/Luna worker during host/join
+setup. `collab worker start` customizes its provider and scope; `worker off` is
+preserved across reconnects. `worker_auto_start=false` opts out of setup. Worker provider and main coding host are independent. The worker
 reads its own durable cursor, answers routine coordination, and forwards only
 decisions, blockers, conflicts, scope requests, and health alerts through the
 main monitor/wake route. `collab worker context` supplies progress;

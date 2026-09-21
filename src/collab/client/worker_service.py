@@ -178,7 +178,14 @@ class Conversation:
 
     def _delivery_health(self, store, generation):
         pending = store.outbox()
-        store.health(error="Worker replies are awaiting delivery; inspect worker status" if pending else "",
+        error = "Worker replies are awaiting delivery; inspect worker status" if pending else ""
+        cfg = store.configuration() or {}
+        # Idle turns must not erase an automatic setup error before the user
+        # can see it. Re-read the model so correcting the setting clears it
+        # without a restart, while custom commands remain model-independent.
+        if cfg.get("model_default") and not setting(f"worker_{cfg['agent']}_model"):
+            error = f"Worker requires a model; set worker_{cfg['agent']}_model"
+        store.health(error=error,
                      retry_at=min((r.get("retry_at", 0) for r in pending), default=0),
                      running=False, expected_generation=generation)
 
