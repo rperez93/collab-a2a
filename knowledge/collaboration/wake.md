@@ -34,6 +34,8 @@ main monitor/wake route. `collab worker context` supplies progress;
 `collab worker pending` and `collab worker reply` carry decisions back to the
 worker and then to the waiting peer. Compact notices remain the fallback when
 there is no active conversation owner; the main agent must read and respond.
+Later than the pin: 2.1.1 instructs the worker to speak as the same participant
+and route decisions internally, never asking peers to resend to the main agent.
 See the current [worker guide](../../docs/conversation-worker.md) for native
 providers, cheap defaults, explicit model selection, and runtime limitations.
 

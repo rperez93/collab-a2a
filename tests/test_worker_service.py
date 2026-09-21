@@ -365,3 +365,50 @@ async def test_idle_health_keeps_a_missing_default_model_visible_until_corrected
     runtime_settings.set_value('worker_' + agent + '_model', worker.DEFAULT_MODELS[agent])
     await conversation.turn()
     assert store.status()['error'] == ''
+
+
+@pytest.mark.parametrize('participant_name', ['alice', 'a' * 64, 'á' * 40])
+async def test_a_decision_is_routed_internally_and_answered_without_the_peer_resending(conversation, tmp_path, participant_name):
+    """A custom adapter gets the shared identity and keeps the original return route."""
+    from collab import worker_runtime
+    conversation.daemon.profile.name = participant_name
+    script = tmp_path / 'decision-provider.py'
+    script.write_text("import json,sys\n" +
+        "p=json.load(sys.stdin)\n" +
+        f"assert p['self']['name']=={participant_name!r}\n" +
+        f"assert {worker_runtime.PEER_IDENTITY!r} in p['instructions']\n" +
+        "r={'summary':'Decision awaiting an answer','replies':[],'escalations':[]}\n" +
+        "if p['main_answers']:\n" +
+        " a=p['main_answers'][0]; source=a['source']\n" +
+        " assert source['seq']==1 and source['sender']=='bob' and source['room']=='api'\n" +
+        " r['replies']=[{'to':source['sender'],'room':source['room'],'text':a['text']}]\n" +
+        "elif p['events']:\n" +
+        " e=p['events'][0]\n" +
+        " r['escalations']=[{'seq':e['seq'],'reason':'decision','question':'May the public API change?'}]\n" +
+        " r['replies']=[{'to':e['sender'],'room':e['room'],'text':'I will check and get back to you.'}]\n" +
+        "json.dump(r,sys.stdout)\n")
+    store = worker.Store(conversation.root)
+    store.configure({'agent':'command', 'scope':'Coordinate API ownership',
+                     'command':[sys.executable, str(script)]})
+    conversation.daemon.inbox.record(Envelope(seq=1, kind='chat', sender='bob',
+        sender_id='p_b', room='api', text='May I change the public API?'))
+    sent = []
+    async def transport(request):
+        sent.append((request.headers.get('authorization'), json.loads(request.content)))
+        return httpx.Response(200, json={'seq':99})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        conversation.daemon._http = client
+        await conversation.turn()
+        assert store.snapshot()['cursor'] == 1
+        assert len(store.pending()) == 1
+        assert worker_notices.claim(conversation.root)
+        assert sent[0][1]['text'] == 'I will check and get back to you.'
+        store.answer(store.pending()[0]['id'], 'Keep the public API unchanged.')
+        # No new peer message: the persisted decision carries the return route
+        # through a listener restart, even after its initial turn was consumed.
+        await Conversation(conversation.daemon).turn()
+        assert len(sent) == 2
+        assert sent[1][1]['text'] == 'Keep the public API unchanged.'
+        assert all(body['to']=='bob' and body['room']=='api' for _, body in sent)
+        assert sent[0][0] == sent[1][0] == 'Bearer test'
+        assert not store.pending() and not store.snapshot()['answers']
