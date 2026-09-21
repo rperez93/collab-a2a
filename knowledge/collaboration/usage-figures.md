@@ -297,3 +297,12 @@ a bounded tail of identity-checked telemetry records at its returned path. It
 publishes actual model, cumulative tokens and current context; quota keeps its
 own observation clock. No directory scan or model guess from quota buckets is
 needed. A solo participant keeps its own stats card.
+
+## Later than the pin – 2.1.2
+
+Claude Code and Codex now set up participant-local telemetry automatically on
+host/join/daemon startup. Explicit sources and opt-outs win. Worker envelope
+usage remains separate. Independent refresh tasks prevent slow usage commands
+from blocking activity, roster and chat; the default roster refresh is three
+seconds, and a fetch older than 30 seconds is unknown even with a live feed.
+This observation does not move the bundle pin or its verified stamps.

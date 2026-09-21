@@ -109,6 +109,8 @@ def ensure_daemon(profile: SessionProfile, *, wait: bool = True,
     """Start the daemon unless one is already running — re-running join is safe."""
     from ..worker import Store
     Store(profile.dir).ensure_default()
+    from ..telemetry_setup import ensure
+    ensure(profile)
     if is_running(profile) is None:
         spawn_daemon(profile, follow=follow)
     return wait_until_live(profile) if wait else read_status(profile)
@@ -148,6 +150,8 @@ def join_session(
     profile.save()
     from ..worker import Store
     Store(profile.dir).ensure_default()
+    from ..telemetry_setup import ensure
+    ensure(profile)
 
     status = ensure_daemon(profile, follow=follow) if start_daemon else {}
     return profile, result.get("snapshot", {}), status

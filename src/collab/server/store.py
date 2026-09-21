@@ -19,15 +19,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sqlite3
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
 from ..protocol import Envelope
+
+class TaskClaimConflict(ValueError):
+    """A competing claim or completion won before this write acquired the lock."""
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -748,9 +754,9 @@ class Store:
         if person is not None and meta:
             # Merged, not replaced: what they say on the way back in is newer,
             # and what they said before and did not repeat is still true.
-            merged = dict(person.meta)
-            merged.update({k: v for k, v in meta.items() if v not in ("", None)})
-            self.update_meta(participant_id, merged)
+            with self.edit_meta(participant_id) as merged:
+                if merged is not None:
+                    merged.update({k: v for k, v in meta.items() if v not in ("", None)})
             person = self.participant_by_id(participant_id)
         return person
 
@@ -818,6 +824,27 @@ class Store:
                 "UPDATE participants SET last_seen=? WHERE id=?",
                 (time.time(), participant_id),
             )
+            self._db.commit()
+
+    @contextmanager
+    def edit_meta(self, participant_id: str):
+        """Hold the metadata read/modify/write together across HTTP threads.
+
+        Independent activity and usage publication used to read the same old
+        JSON and each replace the whole row, silently erasing the other's
+        successful update. The store lock must cover the entire mutation.
+        Callers only edit the yielded dict; they must not re-enter the store.
+        """
+        with self._lock:
+            row = self._db.execute('SELECT meta FROM participants WHERE id=?',
+                                   (participant_id,)).fetchone()
+            if row is None:
+                yield None
+                return
+            meta = json.loads(row['meta'])
+            yield meta
+            self._db.execute('UPDATE participants SET meta=? WHERE id=?',
+                             (json.dumps(meta), participant_id))
             self._db.commit()
 
     def update_meta(self, participant_id: str, meta: dict[str, Any]) -> None:
@@ -970,7 +997,8 @@ class Store:
 
     def upsert_task(self, task_id: str, *, title: str, state: str, owner: str | None,
                     room: str | None, created_by: str, detail: str | None = None,
-                    join_open_batch: bool = False,
+                    join_open_batch: bool = False, claim_owner: str | None = None,
+                    expected_updated_at: float | None = None,
                     project: str | None = None) -> dict[str, Any]:
         """Create or update one task.
 
@@ -998,6 +1026,23 @@ class Store:
             existing = self._db.execute(
                 "SELECT * FROM tasks WHERE id=?", (task_id,)
             ).fetchone()
+            # Every API mutation carries the revision it inspected. A stale
+            # move/update can otherwise erase the owner assigned by a winning
+            # claim, even when competing claims themselves are atomic.
+            if expected_updated_at is not None and (
+                    existing is None or existing["updated_at"] != expected_updated_at):
+                raise TaskClaimConflict("Task changed; refresh the board before retrying")
+            # Claim validation belongs inside the write lock. Two idle agents
+            # can inspect the same unowned task before either request arrives.
+            if claim_owner is not None and (
+                    existing is None
+                    or existing["state"] in {"TASK_STATE_COMPLETED", "TASK_STATE_CANCELED"}
+                    or (existing["owner"] and existing["owner"] != claim_owner)):
+                raise TaskClaimConflict("Task changed or is already claimed; refresh the board")
+            # This timestamp also serves as the mutation revision. Preserve a
+            # distinct value under a frozen/coarse or backwards wall clock.
+            if existing is not None and now <= existing["updated_at"]:
+                now = math.nextafter(existing["updated_at"], math.inf)
             if existing is None:
                 batch = None
                 if join_open_batch:

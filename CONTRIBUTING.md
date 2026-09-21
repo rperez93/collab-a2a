@@ -435,3 +435,22 @@ keep the workload and raw samples with any performance claim. Provider model
 processes and billed calls are outside that benchmark. Build the wheel and
 verify packaged rules/skills before tagging a release. v2 handshake tests cover
 both old-host and old-guest refusal before admission.
+
+### Refresh and decoration checks (2.1.2)
+
+Use `Store.edit_meta` for participant metadata read/modify/write operations;
+locking only the read and write separately loses concurrent activity/usage.
+Keep daemon refresh operations independent and bounded to one task per route,
+and refuse new tasks once shutdown begins.
+
+Decoration image I/O happens only in `Background.prepare`, before palette and
+text layout. Asset changes bump the shared theme generation; resizing reuses a
+fixed source palette. Test real curses reloads, not only rendered strings.
+`benchmarks/panel_refresh.py` measures isolated idle/busy terminal CPU and RAM;
+`benchmarks/backgrounds.py` measures decode/cache budgets. The opt-in
+`benchmarks/native_workers.py --allow-provider-calls` makes real billed provider
+calls and requires explicit authorization; ordinary tests stay synthetic.
+
+Batch pickup changes must preserve the configurable idle delay, fresh activity
+and capacity gates, shared notice leases, and atomic competing task claims.
+Run `tests/test_task_pickup.py` with the task and notice suites.

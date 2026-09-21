@@ -131,6 +131,9 @@ TYPES.update(roster_spacing=("int", (0, 2)), roster_indent=("int", (0, 4)),
 for _key in ("frame", "header", "text"):
     TYPES[_key] = ("colour", None)
 
+KEYS['panel_background'] = 'participant panel effect: none or matrix; local settings can override'
+TYPES['panel_background'] = ('choice', ('none', 'matrix'))
+
 MAX_THEME_BYTES = 256 * 1024
 MAX_THEME_FILES = 128
 
@@ -218,26 +221,11 @@ def validate(key: str, value: Any, where: str = "") -> tuple[Any, str | None]:
     return str(value), None
 
 
-#: Lines of a message shown before «show more». EIGHT, measured rather than
-#: guessed, because a fold that hides most messages is worse than none. The
-#: demo script is sixty-seven chat messages of the lengths agents actually
-#: write, rendered through `conversation_rows`:
-#:
-#:   * at 80, 100 and 120 columns, in the log layout and in bubbles, a fold of
-#:     six and a fold of eight fold the same two messages — the file dumps of
-#:     twelve and thirteen lines. Nothing ordinary is touched by either.
-#:   * in the panes the viewer is opened in most — `collab watch --tmux`, 35 %
-#:     of the terminal, so 34 to 41 columns — the log layout has an eight- to
-#:     fifteen-column body and a two-sentence message is six or seven lines.
-#:     There a fold of four took 40 to 46 of the 67 behind a button, six took
-#:     21 to 27, and eight took 9 to 12. A third of the conversation folded
-#:     is not a fold, it is a conversation you cannot read.
-#:
-#: Eight lines is also still short: a twelve-line dump loses a third of itself
-#: to the button, and anything longer folds as it should. One number for the
-#: built-in, the default and the template, so a theme file that says nothing
-#: about folding behaves like the one that ships.
-FOLD = 8
+#: Four visible wrapped lines before «show more», per the user's preferred
+#: compact conversation view. This deliberately folds more narrow-pane text;
+#: the complete message stays available through the existing expand control.
+#: One constant keeps built-ins, theme templates and the renderer in agreement.
+FOLD = 4
 
 #: Classic preserves the original look. Cyberpunk and Matrix below are optional
 #: starting points; a same-named local Markdown file can override any built-in.
@@ -260,7 +248,7 @@ BUILTIN: dict[str, dict[str, Any]] = {
 #: What a key nobody declares is worth. Without this, a theme saying only
 #: `frame: $GOOD` would end up with no width and no frame characters.
 DEFAULTS: dict[str, Any] = {
-    "layout": "bubbles", "fold": FOLD,
+    "layout": "bubbles", "fold": FOLD, "panel_background": "none",
     "bubble_share": 0.90, "bubble_max_share": 0.40, "bubble_min": 28,
     "narrow_at": 56, "frame": "$SPEAKER", "header": "$SPEAKER",
     "text": "$TEXT", "own_side": "right", "group_by_author": True,
@@ -287,6 +275,7 @@ BUILTIN.update({
         "tones": True, "chars": "┌┐└┘─│", "scrollbar_chars": "│█░",
     },
     "matrix": {
+        "panel_background": "matrix",
         **BUILTIN["classic"], "background": "#020905", "foreground": "#b6f5c4",
         "system": "#91bda0", "status_fg": "#020905", "status_bg": "#63de8a",
         "accent": "#79ffa0", "online": "#79ffa0", "offline": "#b7a77c",
@@ -518,6 +507,8 @@ def template(name: str, base: dict[str, Any]) -> str:
     def render(v: Any) -> str:
         if isinstance(v, bool):
             return "true" if v else "false"
+        if isinstance(v, str) and v.lower() in ('none','null','true','false','yes','no','on','off','~'):
+            return '"' + v + '"'
         return str(v)
 
     settings = "\n".join(

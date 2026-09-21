@@ -100,10 +100,21 @@ the project. A session belongs to a repository; a theme does not.
 | `statusline_segments` | what the agent's own status line carries, in order | they want something off their prompt's collab segment, or want it shorter |
 | `watch_participant_fields` | participant details to show, in order; default `['model', 'context', 'quota', 'cost', 'subagents', 'worker', 'location']` | the user wants to tune this behavior; read current value first |
 | `watch_participant_details` | expand participant details initially; default `False` | the user wants to tune this behavior; read current value first |
+| `watch_background` | participant background: theme, none, matrix or image; default `theme` | the user wants to tune this behavior; read current value first |
+| `watch_background_image` | absolute local PNG/JPEG background path; default `''` | the user wants to tune this behavior; read current value first |
+| `watch_background_dim` | background dim percentage; 100 hides it; default `85` | the user wants to tune this behavior; read current value first |
+| `watch_background_fps` | Matrix frames per second; capped by the viewer refresh; default `2` | the user wants to tune this behavior; read current value first |
+| `watch_reduced_motion` | freeze decorative animation on its first frame; default `False` | the user wants to tune this behavior; read current value first |
+| `stats_auto_setup` | set up participant telemetry automatically on host, join and daemon start; default `True` | the user wants to tune this behavior; read current value first |
+| `participant_refresh_interval` | seconds between independent participant refreshes; default `3` | the user wants to tune this behavior; read current value first |
+| `participant_stale_after` | age in seconds after which roster connectivity is unknown; default `30` | the user wants to tune this behavior; read current value first |
 | `stats_stale_after` | usage observation age in seconds before showing stale; default `1800` | the user wants to tune this behavior; read current value first |
 | `stats_prices` | exact model prices in USD per million tokens; estimates only; default `{}` | the user wants to tune this behavior; read current value first |
 | `attention_settle` | seconds to collect a burst before an inbox notice; default `20` | the user wants to tune this behavior; read current value first |
 | `attention_gap` | minimum seconds between inbox notices; default `90` | the user wants to tune this behavior; read current value first |
+| `task_auto_pickup` | notify the coding agent about suitable unclaimed batch work; default `true` | the user wants to tune this behavior; read current value first |
+| `task_pickup_idle_delay` | continuous idle seconds before a batch pickup notification; default `300` | the user wants to tune this behavior; read current value first |
+| `task_pickup_repeat` | seconds before repeating an unchanged batch pickup notification; default `300` | the user wants to tune this behavior; read current value first |
 | `worker_auto_start` | enable a worker on session setup unless explicitly turned off; default `True` | the user wants to tune this behavior; read current value first |
 | `worker_agent` | provider for automatic worker setup; codex or claude; default `codex` | the user wants to tune this behavior; read current value first |
 | `worker_turn_gap` | minimum seconds between conversation worker turns; default `5` | the user wants to tune this behavior; read current value first |

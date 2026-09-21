@@ -28,7 +28,7 @@ VISUALES = {
     "background", "foreground", "system", "status_fg", "status_bg", "accent",
     "online", "offline", "good", "bad", "warn", "info", "button", "divider",
     "scrollbar_track", "scrollbar_thumb", "selection_fg", "selection_bg", "roster",
-    "divider_char", "scrollbar_chars", "roster_spacing", "roster_indent", "roster_columns",
+    "divider_char", "scrollbar_chars", "roster_spacing", "roster_indent", "roster_columns", "panel_background",
 }
 
 HOSTIL = """---

@@ -95,15 +95,27 @@ def capture_all():
         ('theme-cyberpunk', 'details', 120, 32, 'cyberpunk', ['Enter'], 'Collab · Cyberpunk'),
         ('theme-matrix', 'details', 120, 32, 'matrix', ['Enter'], 'Collab · Matrix'),
         ('theme-matrix-compact', 'both', 90, 34, 'matrix', [], 'Collab · compact Matrix panel'),
+        ('theme-image', 'details', 120, 32, 'classic', ['Enter'], 'Collab · dimmed PNG background'),
         ('settings-panel', 'settings', 100, 34, 'classic', [], 'Collab · worker settings'),
         ('settings-editor', 'settings', 100, 20, 'classic', ['Enter'], 'Collab · choose a text editor'),
     ]
     with tempfile.TemporaryDirectory(prefix='collab-doc-capture-') as folder:
         home = Path(folder)
+        # A deterministic local fixture, not a downloaded wallpaper or user image.
+        from PIL import Image, ImageDraw
+        wallpaper = Image.new('RGB', (640,320), '#152642')
+        brush = ImageDraw.Draw(wallpaper)
+        brush.ellipse((400,30,540,170), fill='#e4b76d')
+        brush.polygon([(0,270),(200,60),(410,320)], fill='#427a91')
+        brush.polygon([(210,320),(460,130),(640,290),(640,320)], fill='#8b647a')
+        wallpaper.save(home/'sample.png')
         for name, mode, cols, rows, theme, keys, title in shots:
             config = home / (name + '.json')
             config.write_text(json.dumps({'theme':theme, 'watch_roster_size':38,  # percent of window height
                 'watch_participant_details':False,
+                'watch_background':'image' if name == 'theme-image' else 'theme',
+                'watch_background_image':str(home/'sample.png'),
+                'watch_background_dim':65 if theme == 'matrix' or name == 'theme-image' else 85,
                 'watch_participant_fields':['model','context','quota','cost','subagents','worker']}))
             env = {**os.environ, 'COLLAB_CONFIG':str(config), 'COLLAB_HOME':str(home/'state'),
                    'COLLAB_STATE_DIR':str(home/'state'), 'PYTHONPATH':str(ROOT/'src'),

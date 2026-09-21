@@ -118,3 +118,26 @@ The footer shows keys for the focused pane. Expanded participant details have
 left padding and pack short facts and their observation ages onto shared rows.
 
 [How these screenshots are captured](screenshots.md).
+
+## Freshness and responsive updates (2.1.2)
+
+The roster refreshes every `participant_refresh_interval` seconds (default 3),
+independently of main/worker stats collection. Activity and presence events also
+request a refresh. Fetching the roster never holds up chat delivery. The viewer
+uses the last successful fetch timestamp; after `participant_stale_after`
+seconds (default 30), it shows connectivity as unknown rather than leaving an
+old online badge looking current. A successful fetch restores current status.
+Working/idle describes reported activity, while online/offline describes the
+connection. Missing activity remains unknown.
+
+For reproducible CPU/RAM checks of the combined sidebar, separate roster and
+chat, run `PYTHONPATH="$PWD/src" python benchmarks/panel_refresh.py --seconds 20`
+from the checkout. It uses isolated real curses terminals with idle and busy
+synthetic input; it does not read or disturb a live session. Run the same script
+against a previous version's absolute `PYTHONPATH` for a comparable baseline.
+
+Matrix animation and local PNG/JPEG backgrounds are confined to the participant
+area. Set dimming or reduced motion in the settings panel; see the
+[theme guide](theme-engine.md#participant-backgrounds-212). Chat messages show
+four wrapped lines before «show more» by default; existing expansion controls
+retain the complete text.

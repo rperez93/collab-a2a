@@ -516,3 +516,27 @@ Runtime health/counters originate in Collab; explicit local observations cannot
 replace them. `usage_model` labels original or mixed observed usage independently
 of the model configured for the next call. Unknown fields remain optional; the
 stable 2.x compatibility boundary is unchanged in 2.0.1.
+
+## 2.1.2 refresh and appearance additions
+
+Automatic telemetry is participant-local for Claude Code and Codex and respects
+explicit source opt-outs. Main collection, worker collection, publication and
+roster/activity refresh run independently with bounded outstanding work. Hub
+metadata updates are atomic across concurrent publication threads. A live feed
+does not make a roster current after its last successful fetch exceeds the
+configured freshness limit.
+
+Optional participant backgrounds support native Matrix characters and bounded
+local PNG/JPEG mosaics, with configurable dimming and reduced motion. No browser
+or arbitrary SVG execution is involved. Message folding defaults to four lines.
+
+
+When idle after finishing work, proactively inspect the current batch and claim
+suitable unowned work within the accepted goal. Inspect free-text dependencies
+and ownership before claiming; on a claim conflict, refresh and choose again.
+While working, use native teammates only when authorized and fresh measured
+capacity permits it. Unknown capacity is not spare capacity. Default pickup
+notices arrive after five continuous idle minutes through the monitor or wake
+route; `collab config task_pickup_idle_delay 300` changes that delay and
+`collab config task_auto_pickup false` disables automatic notices. Keep activity
+accurate; silence alone does not mean idle.

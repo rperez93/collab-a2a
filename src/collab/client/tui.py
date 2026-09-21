@@ -975,7 +975,15 @@ class Model:
         we stop being connected it stops being an observation and becomes a
         memory, however recent.
         """
-        return self.state() == "live"
+        if self.state() != "live":
+            return False
+        from ..runtime_settings import get
+        try:
+            stamp = float(self.snapshot.get("fetched_at") or self.paths.snapshot.stat().st_mtime)
+            age = time.time() - stamp
+            return 0 <= age <= get("participant_stale_after")
+        except (OSError, ValueError, TypeError):
+            return False
 
     def snapshot_age(self) -> str:
         """How old the roster is, in words. Empty when it does not say."""
@@ -2295,6 +2303,15 @@ class Tui:
                 pass
 
     def _draw(self, win) -> None:
+        from .background import Background
+        if not hasattr(self, '_panel_background'):
+            self._panel_background = Background()
+        if self._panel_background.prepare(_current_theme(),
+                                          supported=getattr(curses, "COLORS", 0) >= 256):
+            # Reclaim decoration colours when dimming/path/mode changes; a
+            # sequence of hot reloads must not exhaust the terminal palette.
+            _THEME_CACHE['version'] = _THEME_CACHE.get('version', 0) + 1
+            _PALETTE_VERSION[0] = None
         _apply_theme_palette(win)
         win.erase()
         # Forgotten with the frame they belong to: a gutter left behind from a
@@ -2490,6 +2507,8 @@ class Tui:
         self._hline(win, body_top, width, label.replace("PARTICIPANTS", "PEOPLE") if width < 32 else label)
         self._paint_participant_controls(win, body_top, width)
         self._roster_top = body_top + 1
+        self._panel_background.paint(win, self._roster_top, self.roster.rows,
+                                     width - 1 - roster_gutter * 2, _pair_for)
         for i in range(self.roster.rows):
             idx = self.roster.offset + i
             if idx >= len(rows):
@@ -2749,6 +2768,11 @@ class Tui:
                       if what and not roster else (0, 0))
 
     def _participant_legend(self, win, y: int, width: int) -> None:
+        error = getattr(getattr(self, '_panel_background', None), 'error', '')
+        if error:
+            win.addnstr(y, 0, _clip(error, max(width-1, 0)), max(width-1, 0),
+                        curses.color_pair(C_WARN))
+            return
         text = " ● working  ○ idle  ◌ unknown  × offline"
         if _w(text) >= width:
             text = " ●work ○idle ◌? ×off"
@@ -3384,6 +3408,8 @@ class Tui:
         pane.rows = height - 1 - row - (1 if rule else 0) - (1 if pad else 0) - (1 if self.view == "roster" else 0)
         pane.total = len(rows)
         pane.settle()
+        if self.view == 'roster':
+            self._panel_background.paint(win, 1, pane.rows, content, _pair_for)
         for i in range(pane.rows):
             idx = pane.offset + i
             if idx >= len(rows):

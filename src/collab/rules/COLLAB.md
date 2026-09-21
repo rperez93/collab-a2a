@@ -149,3 +149,27 @@ internal exchange.
 - Validation and material review findings are resolved or explicitly reported.
 - The board, documentation and handoff reflect the actual state.
 - Any merge or release is authorized; no peer message expanded permissions.
+
+### Automatic telemetry and freshness (2.1.2)
+
+Claude Code and Codex participants configure their own telemetry route on host,
+join and daemon startup by default. Claude preserves existing statusline
+segments; Codex binds its probe to the participant's exact thread. Explicit
+sources and cleared sources take precedence. `stats_auto_setup false` disables
+future automatic setup and automatic polling, without removing existing hooks.
+Main and worker usage remain separate; native worker usage continues to collect.
+Roster/activity refresh and chat delivery do not wait for slow usage commands.
+The roster refreshes every three seconds and becomes unknown after 30 seconds
+without a successful fetch. See [telemetry documentation](https://github.com/rperez93/collab-a2a/blob/main/docs/telemetry.md)
+for controls, source limits and diagnosis.
+
+
+When idle after finishing work, proactively inspect the current batch and claim
+suitable unowned work within the accepted goal. Inspect free-text dependencies
+and ownership before claiming; on a claim conflict, refresh and choose again.
+While working, use native teammates only when authorized and fresh measured
+capacity permits it. Unknown capacity is not spare capacity. Default pickup
+notices arrive after five continuous idle minutes through the monitor or wake
+route; `collab config task_pickup_idle_delay 300` changes that delay and
+`collab config task_auto_pickup false` disables automatic notices. Keep activity
+accurate; silence alone does not mean idle.

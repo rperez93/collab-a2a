@@ -249,3 +249,20 @@ allowances are separate observations, even when their providers differ.
 The worker input cap is 192 KiB in 2.0.1. It accommodates the worst-case JSON
 escaping of valid local guidance and at least one main-agent record. Additional
 context and answers remain queued instead of being consumed or truncated.
+
+## Response latency in 2.1.2
+
+New peer events schedule worker intake immediately instead of waiting for the
+three-second housekeeping beat. Empty polls no longer consume the model turn
+cooldown; `collab config worker_turn_gap 5` still controls the minimum gap
+between actual calls. One model call runs at a time, and the durable attempt
+budget and failure backoff still apply. Context/decision input written locally
+is checked on the existing heartbeat. Provider execution and an already-running
+turn still contribute to response time; no provider/model fallback is added.
+See [measured scheduling and CPU/RAM results](performance.md).
+
+The coding agent separately receives default-on batch pickup notices after five
+continuous idle minutes. Configure `collab config task_pickup_idle_delay 300`.
+The conversation worker keeps the same participant identity and escalates
+required decisions internally; it does not reserve repository tasks or infer
+native child capacity. See [pickup settings](settings.md#proactive-batch-pickup).

@@ -293,3 +293,14 @@ and the status is the first step rather than an afterthought.
 - **Do not state a percentage of your own.** "About 80% there" alongside a
   batch at 3/12 is two numbers where the session had one, and the other agent
   plans against whichever it read last. Complete tasks; quote `batch status`.
+
+
+When idle after finishing work, proactively inspect the current batch and claim
+suitable unowned work within the accepted goal. Inspect free-text dependencies
+and ownership before claiming; on a claim conflict, refresh and choose again.
+While working, use native teammates only when authorized and fresh measured
+capacity permits it. Unknown capacity is not spare capacity. Default pickup
+notices arrive after five continuous idle minutes through the monitor or wake
+route; `collab config task_pickup_idle_delay 300` changes that delay and
+`collab config task_auto_pickup false` disables automatic notices. Keep activity
+accurate; silence alone does not mean idle.

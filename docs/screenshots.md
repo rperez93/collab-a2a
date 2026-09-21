@@ -33,10 +33,14 @@ theme backgrounds and colours survive the ANSI-to-PNG export.
 | `theme-cyberpunk.png` | 120×32 | Expanded Cyberpunk panel |
 | `theme-matrix.png` | 120×32 | Expanded Matrix panel |
 | `theme-matrix-compact.png` | 90×34 | Collapsed Matrix panel and conversation |
+| `theme-image.png` | 120×32 | Dimmed synthetic PNG behind participant details |
 | `settings-panel.png` | 100×34 | Worker controls with Reset to default visible |
 | `settings-editor.png` | 100×20 | External-editor or inline text choice |
 
-Combined views give the roster 38 percent of the terminal height.
+Combined views give the roster 38 percent of the terminal height. Matrix and
+image captures use 65 percent background dimming (the default is 85). The image
+fixture is generated locally by the capture script. Chat uses the four-line
+«show more» default.
 
 Review the generated images for wrapping, clipping, correct glyphs and readable
 colours before committing them. The script changes screenshots only; it does

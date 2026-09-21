@@ -100,3 +100,9 @@ Explicit context consumed by a turn is retained separately from model summaries:
 the latest eight whole records within 16 KiB. Newer facts supersede older ones;
 restate still-needed facts when that bounded history fills. Retained facts alone
 do not trigger model turns.
+
+Worker response scheduling in 2.1.2 starts on incoming peer events. Idle polls
+no longer impose a model cooldown; `collab config worker_turn_gap 5` governs
+actual model calls, while existing attempt budgets and retries remain in force.
+Provider call duration still contributes to reply time. See
+the conversation-worker guide for the delivery model.

@@ -101,9 +101,9 @@ def beating_guest(live_server, session, tmp_path, isolated_config):
     _wait(lambda: (profile.dir / "status.json").exists(), what="the first heartbeat")
     yield {"daemon": daemon, "profile": profile, "base": base,
            "bob": {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {joined['token']}"}}
-    daemon._stop.set()
-    if "task" in holder:
-        loop.call_soon_threadsafe(holder["task"].cancel)
+    # Let the heartbeat cancel and reap its own refresh tasks before closing
+    # the shared HTTP client; cancelling the owner tears through HTTP cleanup.
+    loop.call_soon_threadsafe(daemon._stop.set)
     thread.join(timeout=10)
     daemon.inbox.close()
     loop.close()

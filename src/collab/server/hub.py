@@ -162,16 +162,39 @@ class Hub:
         return ok
 
     def merge_hello(self, participant_id: str, hello: dict[str, Any]) -> None:
-        person = self.store.participant_by_id(participant_id)
-        if person is None:
-            return
-        # Bounded here too, not only at /join: a KIND_HELLO envelope can be sent
-        # straight over A2A with any body a participant likes, and it lands in
-        # the roster the same way. See collab.protocol.bounded_meta.
-        hello = bounded_meta(hello)
-        meta = dict(person.meta)
-        meta.update({k: v for k, v in hello.items() if v not in ("", None)})
-        self.store.update_meta(participant_id, meta)
+        with self.store.edit_meta(participant_id) as meta:
+            if meta is None:
+                return
+            # Bounded here too, not only at /join: a KIND_HELLO envelope can be sent
+            # straight over A2A with any body a participant likes, and it lands in
+            # the roster the same way. See collab.protocol.bounded_meta.
+            hello = bounded_meta(hello)
+            meta.update({k: v for k, v in hello.items() if v not in ("", None)})
+
+
+    def update_identity(self, participant_id: str, body: dict) -> bool:
+        """Explicit clears and identity changes share the atomic metadata edit.
+
+        This follows stats on the same endpoint, but activity can arrive from
+        another thread in between. Replacing a stale whole row here would undo
+        the protection in merge_stats. An unchanged value emits no new event.
+        """
+        changed = False
+        with self.store.edit_meta(participant_id) as meta:
+            if meta is None:
+                return False
+            for key in ('machine', 'machine_id', 'user', 'color'):
+                if key not in body:
+                    continue
+                value = str(body[key] or '')
+                if value == str(meta.get(key) or ''):
+                    continue
+                if value:
+                    meta[key] = value
+                else:
+                    meta.pop(key, None)
+                changed = True
+        return changed
 
     def set_activity(self, participant_id: str, reported: dict[str, Any]) -> dict[str, Any]:
         """Record what this agent says it is doing. Replaced, not merged.
@@ -184,15 +207,14 @@ class Hub:
         """
         from ..activity import sanitise
 
-        person = self.store.participant_by_id(participant_id)
-        if person is None:
-            return {}
-        meta = dict(person.meta)
-        clean = sanitise(reported, previous=meta.get("activity"))
-        if not clean:
-            return {}
-        meta["activity"] = clean
-        self.store.update_meta(participant_id, meta)
+        with self.store.edit_meta(participant_id) as meta:
+            if meta is None:
+                return {}
+            clean = sanitise(reported, previous=meta.get("activity"))
+            if not clean:
+                return {}
+            meta["activity"] = clean
+
         return clean
 
     def merge_stats(self, participant_id: str, stats: dict[str, Any]) -> None:
@@ -212,103 +234,102 @@ class Hub:
         """
         from ..stats import QUOTA_FIELDS, sanitise
 
-        person = self.store.participant_by_id(participant_id)
-        if person is None:
-            return
-        meta = dict(person.meta)
-        merged = dict(meta.get("stats") or {})
-        # Usage goes onto every participant's roster, so it is capped in size
-        # and shape on the way in rather than trusted.
-        from ..telemetry import stamp_observations
-        incoming = stamp_observations(sanitise(stats))
+        with self.store.edit_meta(participant_id) as meta:
+            if meta is None:
+                return
+            merged = dict(meta.get("stats") or {})
+            # Usage goes onto every participant's roster, so it is capped in size
+            # and shape on the way in rather than trusted.
+            from ..telemetry import stamp_observations
+            incoming = stamp_observations(sanitise(stats))
 
-        # A `quotas` MAP IS THE WHOLE STATEMENT ABOUT THE QUOTA, AND ONLY A
-        # MAP IS. This rule has been wrong twice, in opposite directions, and
-        # both are worth remembering:
-        #
-        # First the windows merged one at a time, so that an agent reporting
-        # only its five-hour window did not erase the weekly one it had
-        # reported a minute earlier. An agent that could no longer see a
-        # window — its tool stopped exposing it, its status line lost the
-        # block — then went on showing the old figure to everybody, and work
-        # was split on a quota nobody had reported for an hour.
-        #
-        # Then, for one afternoon, a report was the whole truth: every stored
-        # quota field went before the report was folded in, and a report with
-        # no quota cleared it. That closed the first trap and opened a worse
-        # one, because most tools report cost every turn and never see quota
-        # at all — each of those reports would have wiped the quota the agent
-        # had reported by hand, for ever, with nothing the agent could do.
-        #
-        # So: a report that CARRIES `quotas` — the key is present after
-        # sanitising, which drops anything under it that is not a map — has
-        # every stored quota field dropped before it is folded in, and what
-        # remains is exactly its own windows, flat figures and reset. An
-        # empty map clears. A report that does not carry `quotas` is not
-        # about the quota and leaves every quota field where it was; flat
-        # quota fields it happens to carry are set like any other figure.
-        # Losing sight of a quota is therefore said on purpose — `collab
-        # stats --clear-quota` posts `{"quotas": {}}` — and the routes that
-        # hand over a whole picture of the agent carry `quotas: {}` when they
-        # see none; see `stats.whole_picture`.
-        #
-        # `collab color` posts `stats: {}` beside its colour, and a daemon
-        # with no stats file posts `stats: {}` beside its machine: neither
-        # carries `quotas`, so neither can touch it.
-        if "quotas" in incoming:
-            if incoming["quotas"]:
-                incoming.setdefault("quota_observed_at", incoming.get("observed_at") or time.time())
-            else:
-                incoming.pop("quota_observed_at", None)
-            for key in QUOTA_FIELDS:
-                merged.pop(key, None)
+            # A `quotas` MAP IS THE WHOLE STATEMENT ABOUT THE QUOTA, AND ONLY A
+            # MAP IS. This rule has been wrong twice, in opposite directions, and
+            # both are worth remembering:
+            #
+            # First the windows merged one at a time, so that an agent reporting
+            # only its five-hour window did not erase the weekly one it had
+            # reported a minute earlier. An agent that could no longer see a
+            # window — its tool stopped exposing it, its status line lost the
+            # block — then went on showing the old figure to everybody, and work
+            # was split on a quota nobody had reported for an hour.
+            #
+            # Then, for one afternoon, a report was the whole truth: every stored
+            # quota field went before the report was folded in, and a report with
+            # no quota cleared it. That closed the first trap and opened a worse
+            # one, because most tools report cost every turn and never see quota
+            # at all — each of those reports would have wiped the quota the agent
+            # had reported by hand, for ever, with nothing the agent could do.
+            #
+            # So: a report that CARRIES `quotas` — the key is present after
+            # sanitising, which drops anything under it that is not a map — has
+            # every stored quota field dropped before it is folded in, and what
+            # remains is exactly its own windows, flat figures and reset. An
+            # empty map clears. A report that does not carry `quotas` is not
+            # about the quota and leaves every quota field where it was; flat
+            # quota fields it happens to carry are set like any other figure.
+            # Losing sight of a quota is therefore said on purpose — `collab
+            # stats --clear-quota` posts `{"quotas": {}}` — and the routes that
+            # hand over a whole picture of the agent carry `quotas: {}` when they
+            # see none; see `stats.whole_picture`.
+            #
+            # `collab color` posts `stats: {}` beside its colour, and a daemon
+            # with no stats file posts `stats: {}` beside its machine: neither
+            # carries `quotas`, so neither can touch it.
+            if "quotas" in incoming:
+                if incoming["quotas"]:
+                    incoming.setdefault("quota_observed_at", incoming.get("observed_at") or time.time())
+                else:
+                    incoming.pop("quota_observed_at", None)
+                for key in QUOTA_FIELDS:
+                    merged.pop(key, None)
 
-        merged.update(incoming)
-        # AN EXPLICIT NULL TAKES A FIELD OFF THE ROSTER, and nothing else does.
-        # Everything that is not quota merges, so a figure once reported stood
-        # for the life of the session however wrong it had become: an agent
-        # that reused another's state directory published that agent's `model`
-        # — «Opus 5» beside a Codex participant — and had no way to say
-        # otherwise, because a report that omits a field says nothing about it
-        # and there was no value meaning «none». Null is that value. It is the
-        # merging half of the rule the quota already has in `--clear-quota`:
-        # losing sight of a figure is said on purpose, never guessed at from
-        # silence.
-        for key, value in incoming.items():
-            if value is None:
-                merged.pop(key, None)
-        # AN EMPTY MAP IS A STATEMENT ON THE WAY IN, NOT A FIGURE ON THE WAY
-        # OUT. It has done its work above; stored, it would be published to
-        # every roster as a quota-shaped field saying nothing, and `collab
-        # stats --json` would print `"quotas": {}` beside agents that never
-        # reported one at all. Cleared means nothing quota-shaped remains.
-        if merged.get("quotas") == {}:
-            del merged["quotas"]
-        # WHEN THIS WAS TRUE, on the one clock every participant shares. A
-        # quota reading is a fact about a moment, and the roster printed the
-        # number with nothing about the moment — so 91 % of a five-hour window
-        # reported three hours ago read exactly like one reported just now,
-        # and the two call for opposite decisions about who takes the next
-        # task. Stamped AFTER the merge so a participant's own `reported_at`,
-        # a remote party's choice of value, is overwritten rather than trusted.
-        #
-        # AND ONLY WHEN SOMETHING WAS REPORTED. A body that sanitises to
-        # nothing — all nested junk — is not a report; stamping it grew a stats
-        # dict of one key for a participant who told us nothing usable, which
-        # flipped the «nobody has shared any usage yet» banner and, half an
-        # hour on, put a bare «31m ago — old» on the roster: «this agent's data
-        # is stale», where the truth is «this agent never said anything».
-        # `{"quotas": {}}` sanitises to itself and is not nothing, so a report
-        # that clears the quota moves the stamp too: the stamp is when the
-        # agent last spoke, and «no quota» was what it said then.
-        if incoming:
-            merged["reported_at"] = time.time()
-        if merged:
-            meta["stats"] = merged
-        for key in ("machine", "machine_id", "user"):
-            if stats.get(key):
-                meta[key] = stats[key]
-        self.store.update_meta(participant_id, meta)
+            merged.update(incoming)
+            # AN EXPLICIT NULL TAKES A FIELD OFF THE ROSTER, and nothing else does.
+            # Everything that is not quota merges, so a figure once reported stood
+            # for the life of the session however wrong it had become: an agent
+            # that reused another's state directory published that agent's `model`
+            # — «Opus 5» beside a Codex participant — and had no way to say
+            # otherwise, because a report that omits a field says nothing about it
+            # and there was no value meaning «none». Null is that value. It is the
+            # merging half of the rule the quota already has in `--clear-quota`:
+            # losing sight of a figure is said on purpose, never guessed at from
+            # silence.
+            for key, value in incoming.items():
+                if value is None:
+                    merged.pop(key, None)
+            # AN EMPTY MAP IS A STATEMENT ON THE WAY IN, NOT A FIGURE ON THE WAY
+            # OUT. It has done its work above; stored, it would be published to
+            # every roster as a quota-shaped field saying nothing, and `collab
+            # stats --json` would print `"quotas": {}` beside agents that never
+            # reported one at all. Cleared means nothing quota-shaped remains.
+            if merged.get("quotas") == {}:
+                del merged["quotas"]
+            # WHEN THIS WAS TRUE, on the one clock every participant shares. A
+            # quota reading is a fact about a moment, and the roster printed the
+            # number with nothing about the moment — so 91 % of a five-hour window
+            # reported three hours ago read exactly like one reported just now,
+            # and the two call for opposite decisions about who takes the next
+            # task. Stamped AFTER the merge so a participant's own `reported_at`,
+            # a remote party's choice of value, is overwritten rather than trusted.
+            #
+            # AND ONLY WHEN SOMETHING WAS REPORTED. A body that sanitises to
+            # nothing — all nested junk — is not a report; stamping it grew a stats
+            # dict of one key for a participant who told us nothing usable, which
+            # flipped the «nobody has shared any usage yet» banner and, half an
+            # hour on, put a bare «31m ago — old» on the roster: «this agent's data
+            # is stale», where the truth is «this agent never said anything».
+            # `{"quotas": {}}` sanitises to itself and is not nothing, so a report
+            # that clears the quota moves the stamp too: the stamp is when the
+            # agent last spoke, and «no quota» was what it said then.
+            if incoming:
+                merged["reported_at"] = time.time()
+            if merged:
+                meta["stats"] = merged
+            for key in ("machine", "machine_id", "user"):
+                if stats.get(key):
+                    meta[key] = stats[key]
+
 
     # --- batches --------------------------------------------------------------
 

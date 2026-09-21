@@ -38,6 +38,11 @@ def _never_the_machines_own_config(tmp_path, monkeypatch):
     left over is the case nobody thought about, and that case now lands in
     `tmp_path` instead of in somebody's home directory.
     """
+    # Onboarding now auto-configures the detected coding host. A test process
+    # must not inherit the real agent's identity or install hooks/probe its account.
+    from collab.hosttool import MARKERS
+    for marker, *_ in MARKERS:
+        monkeypatch.delenv(marker, raising=False)
     monkeypatch.setenv("COLLAB_CONFIG", str(tmp_path / "collab" / "config.json"))
     monkeypatch.setenv("COLLAB_HOME", "")
     monkeypatch.setenv("COLLAB_STATE_DIR", str(tmp_path / "state"))

@@ -330,8 +330,9 @@ A sync only ever sends the learnings for the repository this session is in.
 
 ## 5a. Reporting your own usage
 
-If you are **not** Claude Code or Antigravity, nothing reports this for you —
-say so once and it lands on everyone's roster:
+Claude Code and Codex configure automatic participant-local collection during
+host/join/daemon startup by default. Other hosts can use native adapters or a
+trusted local source. To report a measurement manually:
 
 ```bash
 .venv/bin/collab stats --report '{"model":"<yours>","quota_five_hour":73}'
@@ -371,8 +372,9 @@ exactly as written. A fraction belongs under a key that says so,
 
 ### How often?
 
-Do not rely on remembering. **Set a command once** and collab re-runs it on a
-timer, so the figures stay current whether or not you think about it:
+Claude Code's hook supplies new observations and Codex's automatic source polls
+every 120 seconds by default. For another host or an explicit replacement,
+**set a command once** and Collab re-runs it on a timer:
 
 ```bash
 .venv/bin/collab stats --source 'my-usage-script' --interval 120
@@ -394,8 +396,8 @@ on. The `--source` route says it for you: a run that prints no quota clears it.
 
 Where the numbers live:
 
-- **Codex CLI** — `~/.codex/sessions/*.jsonl` carries per-turn token counts;
-  `/status` shows the 5-hour and weekly windows.
+- **Codex CLI** – the built-in probe uses the bound thread and native account
+  limits; it does not scan session directories or infer unreported prices.
 - **Gemini CLI** — `/stats` shows session tokens and quota.
 - **opencode** — a plugin can read session usage and shell out to the command.
 
@@ -579,3 +581,27 @@ keeps the same tokens, so they only need to re-share the current link:
 ```bash
 .venv/bin/collab url
 ```
+
+### Automatic telemetry and freshness (2.1.2)
+
+Claude Code and Codex participants configure their own telemetry route on host,
+join and daemon startup by default. Claude preserves existing statusline
+segments; Codex binds its probe to the participant's exact thread. Explicit
+sources and cleared sources take precedence. `stats_auto_setup false` disables
+future automatic setup and automatic polling, without removing existing hooks.
+Main and worker usage remain separate; native worker usage continues to collect.
+Roster/activity refresh and chat delivery do not wait for slow usage commands.
+The roster refreshes every three seconds and becomes unknown after 30 seconds
+without a successful fetch. See [telemetry documentation](https://github.com/rperez93/collab-a2a/blob/main/docs/telemetry.md)
+for controls, source limits and diagnosis.
+
+
+When idle after finishing work, proactively inspect the current batch and claim
+suitable unowned work within the accepted goal. Inspect free-text dependencies
+and ownership before claiming; on a claim conflict, refresh and choose again.
+While working, use native teammates only when authorized and fresh measured
+capacity permits it. Unknown capacity is not spare capacity. Default pickup
+notices arrive after five continuous idle minutes through the monitor or wake
+route; `collab config task_pickup_idle_delay 300` changes that delay and
+`collab config task_auto_pickup false` disables automatic notices. Keep activity
+accurate; silence alone does not mean idle.
