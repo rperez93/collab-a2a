@@ -238,3 +238,16 @@ edit text in a temporary file with a terminal editor. The `editor` setting
 selects the command; empty follows VISUAL, EDITOR, then vi. The TUI offers the
 same choice and keeps returned content as a draft until Save. Its existing
 `r` action is labelled «Reset to default»; the CLI retains `--unset`.
+
+### Later than the pin – 2.1.2 appearance controls
+
+`watch_background` selects theme, none, matrix or image. Local PNG/JPEG images,
+dimming, capped frame rate and reduced motion are hot-reloaded settings. Matrix
+uses terminal characters; images use a cached cell mosaic. The default chat
+fold is now four wrapped lines, with existing explicit overrides preserved.
+
+Later than the pin – 2.1.2 adds default-on proactive batch pickup.
+`collab config task_pickup_idle_delay 300` sets the continuous idle delay
+(default five minutes); `task_auto_pickup` and `task_pickup_repeat` control
+enablement and repeated notices. Agents inspect dependencies and claim work;
+the daemon never reserves it. See the current settings guide for delivery gates.

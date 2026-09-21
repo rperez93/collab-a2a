@@ -412,3 +412,28 @@ async def test_a_decision_is_routed_internally_and_answered_without_the_peer_res
         assert all(body['to']=='bob' and body['room']=='api' for _, body in sent)
         assert sent[0][0] == sent[1][0] == 'Bearer test'
         assert not store.pending() and not store.snapshot()['answers']
+
+
+async def test_an_empty_poll_does_not_delay_the_next_peer_question(conversation, tmp_path, monkeypatch):
+    """Idle polling formerly imposed five seconds before any model was called."""
+    import time
+    service = conversation
+    configure(service, tmp_path)
+    calls = []
+    async def run(*args, **kwargs):
+        calls.append(time.monotonic())
+        return {'summary': '', 'replies': [], 'escalations': []}
+    monkeypatch.setattr('collab.worker_runtime.run_turn', run)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200))) as client:
+        service.daemon._http = client
+        await service.tick()
+        await service.task
+        assert service.next_at == 0
+        arrived = time.monotonic()
+        incoming(service, 1, 'Question')
+        await service.tick()
+        await service.task
+        assert len(calls) == 1 and calls[0] - arrived < .5
+        incoming(service, 2, 'Another question')
+        await service.tick()
+        assert len(calls) == 1, 'real model calls still obey their configured gap'

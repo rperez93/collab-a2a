@@ -1,0 +1,700 @@
+{
+  "baseline_211": {
+    "version": "2.1.1",
+    "panels": [
+      {
+        "view": "both",
+        "busy": false,
+        "wall_seconds": 20.0,
+        "cpu_seconds": 0.18,
+        "one_core_percent": 0.9,
+        "rss_initial_kib": 36344,
+        "rss_final_kib": 35936,
+        "rss_peak_kib": 36344,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.0
+      },
+      {
+        "view": "roster",
+        "busy": false,
+        "wall_seconds": 20.0,
+        "cpu_seconds": 0.17,
+        "one_core_percent": 0.85,
+        "rss_initial_kib": 29644,
+        "rss_final_kib": 30272,
+        "rss_peak_kib": 30272,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.0
+      },
+      {
+        "view": "chat",
+        "busy": false,
+        "wall_seconds": 20.001,
+        "cpu_seconds": 0.06,
+        "one_core_percent": 0.3,
+        "rss_initial_kib": 29700,
+        "rss_final_kib": 29712,
+        "rss_peak_kib": 29712,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.0
+      },
+      {
+        "view": "both",
+        "busy": true,
+        "wall_seconds": 20.0,
+        "cpu_seconds": 1.46,
+        "one_core_percent": 7.3,
+        "rss_initial_kib": 29912,
+        "rss_final_kib": 30668,
+        "rss_peak_kib": 30668,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.0
+      },
+      {
+        "view": "roster",
+        "busy": true,
+        "wall_seconds": 20.0,
+        "cpu_seconds": 0.19,
+        "one_core_percent": 0.95,
+        "rss_initial_kib": 29564,
+        "rss_final_kib": 30264,
+        "rss_peak_kib": 30264,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.01
+      },
+      {
+        "view": "chat",
+        "busy": true,
+        "wall_seconds": 20.0,
+        "cpu_seconds": 1.33,
+        "one_core_percent": 6.65,
+        "rss_initial_kib": 29824,
+        "rss_final_kib": 30512,
+        "rss_peak_kib": 30512,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.0
+      }
+    ],
+    "limits": "Linux /proc, real 120x40 curses, 2s warmup, one-core CPU. Both includes sidebar. Synthetic bounded history; busy input 5 messages/s and changing stats. Excludes network, daemon and providers; no live session."
+  },
+  "release_212": {
+    "version": "2.1.2",
+    "background": "none",
+    "panels": [
+      {
+        "view": "both",
+        "busy": false,
+        "wall_seconds": 20.0,
+        "cpu_seconds": 0.18,
+        "one_core_percent": 0.9,
+        "rss_initial_kib": 30416,
+        "rss_final_kib": 30996,
+        "rss_peak_kib": 30996,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.0
+      },
+      {
+        "view": "roster",
+        "busy": false,
+        "wall_seconds": 20.0,
+        "cpu_seconds": 0.16,
+        "one_core_percent": 0.8,
+        "rss_initial_kib": 29568,
+        "rss_final_kib": 30192,
+        "rss_peak_kib": 30192,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.0
+      },
+      {
+        "view": "chat",
+        "busy": false,
+        "wall_seconds": 20.0,
+        "cpu_seconds": 0.06,
+        "one_core_percent": 0.3,
+        "rss_initial_kib": 29888,
+        "rss_final_kib": 30432,
+        "rss_peak_kib": 30432,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.0
+      },
+      {
+        "view": "both",
+        "busy": true,
+        "wall_seconds": 20.0,
+        "cpu_seconds": 1.22,
+        "one_core_percent": 6.1,
+        "rss_initial_kib": 29784,
+        "rss_final_kib": 30572,
+        "rss_peak_kib": 30572,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.01
+      },
+      {
+        "view": "roster",
+        "busy": true,
+        "wall_seconds": 20.0,
+        "cpu_seconds": 0.18,
+        "one_core_percent": 0.9,
+        "rss_initial_kib": 29680,
+        "rss_final_kib": 30396,
+        "rss_peak_kib": 30396,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.0
+      },
+      {
+        "view": "chat",
+        "busy": true,
+        "wall_seconds": 20.001,
+        "cpu_seconds": 1.41,
+        "one_core_percent": 7.05,
+        "rss_initial_kib": 30008,
+        "rss_final_kib": 30692,
+        "rss_peak_kib": 30692,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.0
+      }
+    ],
+    "limits": "Linux /proc, real 120x40 curses, 2s warmup, one-core CPU. Both includes sidebar. Synthetic bounded history; busy input 5 messages/s and changing stats. Excludes network, daemon and providers; no live session."
+  },
+  "matrix": {
+    "version": "2.1.2",
+    "background": "matrix",
+    "panels": [
+      {
+        "view": "both",
+        "busy": false,
+        "wall_seconds": 20.0,
+        "cpu_seconds": 0.18,
+        "one_core_percent": 0.9,
+        "rss_initial_kib": 29964,
+        "rss_final_kib": 30560,
+        "rss_peak_kib": 30560,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.01
+      },
+      {
+        "view": "roster",
+        "busy": false,
+        "wall_seconds": 20.0,
+        "cpu_seconds": 0.18,
+        "one_core_percent": 0.9,
+        "rss_initial_kib": 30052,
+        "rss_final_kib": 30684,
+        "rss_peak_kib": 30684,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.02
+      },
+      {
+        "view": "both",
+        "busy": true,
+        "wall_seconds": 20.0,
+        "cpu_seconds": 1.81,
+        "one_core_percent": 9.05,
+        "rss_initial_kib": 30136,
+        "rss_final_kib": 30900,
+        "rss_peak_kib": 30900,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.01
+      },
+      {
+        "view": "roster",
+        "busy": true,
+        "wall_seconds": 20.0,
+        "cpu_seconds": 0.2,
+        "one_core_percent": 1.0,
+        "rss_initial_kib": 29984,
+        "rss_final_kib": 30708,
+        "rss_peak_kib": 30708,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.02
+      }
+    ],
+    "limits": "Linux /proc, real 120x40 curses, 2s warmup, one-core CPU. Both includes sidebar. Synthetic bounded history; busy input 5 messages/s and changing stats. Excludes network, daemon and providers; no live session."
+  },
+  "matrix_without_animation": {
+    "version": "2.1.2",
+    "background": "none",
+    "theme": "matrix",
+    "panels": [
+      {
+        "view": "both",
+        "busy": false,
+        "wall_seconds": 10.0,
+        "cpu_seconds": 0.08,
+        "one_core_percent": 0.8,
+        "rss_initial_kib": 29976,
+        "rss_final_kib": 30548,
+        "rss_peak_kib": 30548,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.0
+      },
+      {
+        "view": "roster",
+        "busy": false,
+        "wall_seconds": 10.0,
+        "cpu_seconds": 0.09,
+        "one_core_percent": 0.9,
+        "rss_initial_kib": 29948,
+        "rss_final_kib": 30020,
+        "rss_peak_kib": 30020,
+        "fd_initial": 7,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.0
+      },
+      {
+        "view": "both",
+        "busy": true,
+        "wall_seconds": 10.0,
+        "cpu_seconds": 1.03,
+        "one_core_percent": 10.3,
+        "rss_initial_kib": 30056,
+        "rss_final_kib": 30780,
+        "rss_peak_kib": 30780,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.01
+      },
+      {
+        "view": "roster",
+        "busy": true,
+        "wall_seconds": 10.001,
+        "cpu_seconds": 0.11,
+        "one_core_percent": 1.1,
+        "rss_initial_kib": 29812,
+        "rss_final_kib": 30440,
+        "rss_peak_kib": 30440,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.0
+      }
+    ],
+    "limits": "Linux /proc, real 120x40 curses, 2s warmup, one-core CPU. Both includes sidebar. Synthetic bounded history; busy input 5 messages/s and changing stats. Excludes network, daemon and providers; no live session."
+  },
+  "image": {
+    "version": "2.1.2",
+    "background": "image",
+    "panels": [
+      {
+        "view": "both",
+        "busy": false,
+        "wall_seconds": 20.0,
+        "cpu_seconds": 0.18,
+        "one_core_percent": 0.9,
+        "rss_initial_kib": 35912,
+        "rss_final_kib": 35968,
+        "rss_peak_kib": 35968,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.0
+      },
+      {
+        "view": "roster",
+        "busy": false,
+        "wall_seconds": 20.0,
+        "cpu_seconds": 0.22,
+        "one_core_percent": 1.1,
+        "rss_initial_kib": 36244,
+        "rss_final_kib": 36252,
+        "rss_peak_kib": 36252,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.0
+      },
+      {
+        "view": "both",
+        "busy": true,
+        "wall_seconds": 20.0,
+        "cpu_seconds": 1.56,
+        "one_core_percent": 7.8,
+        "rss_initial_kib": 35932,
+        "rss_final_kib": 37976,
+        "rss_peak_kib": 37976,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.0
+      },
+      {
+        "view": "roster",
+        "busy": true,
+        "wall_seconds": 20.0,
+        "cpu_seconds": 0.29,
+        "one_core_percent": 1.45,
+        "rss_initial_kib": 36404,
+        "rss_final_kib": 36420,
+        "rss_peak_kib": 36420,
+        "fd_initial": 3,
+        "fd_final": 3,
+        "tmux_cpu_seconds": 0.0
+      }
+    ],
+    "limits": "Linux /proc, real 120x40 curses, 2s warmup, one-core CPU. Both includes sidebar. Synthetic bounded history; busy input 5 messages/s and changing stats. Excludes network, daemon and providers; no live session."
+  },
+  "background_budgets": {
+    "decode_1080p": {
+      "wall_seconds": 0.015096888004336506,
+      "cpu_seconds": 0.015105633000000007,
+      "rss_before_kib": 30016,
+      "rss_after_kib": 40220,
+      "peak_rss_kib": 40156
+    },
+    "frames": [
+      {
+        "mode": "matrix",
+        "frames": 2000,
+        "wall_seconds": 6.2075010370026575,
+        "cpu_seconds": 6.207111155,
+        "retained_bytes": 23804,
+        "peak_traced_bytes": 53600,
+        "rss_kib": 40316
+      },
+      {
+        "mode": "image",
+        "frames": 2000,
+        "wall_seconds": 0.01344736099417787,
+        "cpu_seconds": 0.013439286999999744,
+        "retained_bytes": 56,
+        "peak_traced_bytes": 344,
+        "rss_kib": 40612
+      }
+    ],
+    "fifo_rejection": {
+      "wall_seconds": 1.92320003407076e-05,
+      "cpu_seconds": 1.9253000000496456e-05
+    },
+    "limits": "Synthetic generation precedes decode baseline; peak RSS includes fixture creation. Frame CPU includes tracemalloc, excludes curses; real-terminal measurements are separate."
+  },
+  "runtime": {
+    "version": "2.1.2",
+    "python": "3.13.12",
+    "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "timestamp_utc": "2026-09-21T05:03:49Z",
+    "soak": {
+      "workload": {
+        "warmup_rounds": 2,
+        "measured_rounds": 3,
+        "events_per_round": 2000,
+        "fast_subscribers": 4,
+        "slow_subscribers": 1,
+        "message_characters": 256,
+        "worker_metrics_and_expanded_formatting_every": 20
+      },
+      "wall_seconds_including_warmup": 56.9098,
+      "cpu_seconds_including_warmup": 16.2759,
+      "proc_rss_peak_kib": 34908,
+      "sampled_rss_peak_kib": 34900,
+      "slow_disconnects": 1,
+      "samples": [
+        {
+          "round": 1,
+          "phase": "warmup",
+          "events_total": 2000,
+          "wall_seconds": 9.781,
+          "cpu_seconds": 2.6643,
+          "rss_kib": 32596,
+          "python_live_bytes": 190198,
+          "python_peak_bytes": 599018,
+          "open_fds": 13,
+          "slow_queue": 1,
+          "persistent_bytes": 10952781
+        },
+        {
+          "round": 2,
+          "phase": "warmup",
+          "events_total": 4000,
+          "wall_seconds": 13.2995,
+          "cpu_seconds": 3.594,
+          "rss_kib": 34640,
+          "python_live_bytes": 185554,
+          "python_peak_bytes": 599018,
+          "open_fds": 13,
+          "slow_queue": 1,
+          "persistent_bytes": 13760589
+        },
+        {
+          "round": 3,
+          "phase": "measured",
+          "events_total": 6000,
+          "wall_seconds": 11.3387,
+          "cpu_seconds": 3.2542,
+          "rss_kib": 34892,
+          "python_live_bytes": 182191,
+          "python_peak_bytes": 599018,
+          "open_fds": 13,
+          "slow_queue": 1,
+          "persistent_bytes": 16486525
+        },
+        {
+          "round": 4,
+          "phase": "measured",
+          "events_total": 8000,
+          "wall_seconds": 11.2627,
+          "cpu_seconds": 3.34,
+          "rss_kib": 34900,
+          "python_live_bytes": 177367,
+          "python_peak_bytes": 599018,
+          "open_fds": 13,
+          "slow_queue": 1,
+          "persistent_bytes": 19183741
+        },
+        {
+          "round": 5,
+          "phase": "measured",
+          "events_total": 10000,
+          "wall_seconds": 11.213,
+          "cpu_seconds": 3.4087,
+          "rss_kib": 34900,
+          "python_live_bytes": 172693,
+          "python_peak_bytes": 599018,
+          "open_fds": 13,
+          "slow_queue": 1,
+          "persistent_bytes": 21692542
+        }
+      ],
+      "largest_retained_growth_after_warmup": [
+        {
+          "location": "/home/perez/Pycharm/collab/.claude/worktrees/automatic-telemetry/src/collab/client/inbox.py:178",
+          "bytes": -3584,
+          "count": -31
+        },
+        {
+          "location": "/home/perez/Pycharm/collab/.claude/worktrees/automatic-telemetry/src/collab/server/store.py:569",
+          "bytes": -3168,
+          "count": -30
+        },
+        {
+          "location": "/home/perez/Pycharm/collab/.claude/worktrees/automatic-telemetry/src/collab/server/store.py:559",
+          "bytes": -2400,
+          "count": -30
+        },
+        {
+          "location": "/home/perez/Pycharm/collab/.claude/worktrees/automatic-telemetry/src/collab/server/store.py:576",
+          "bytes": -2400,
+          "count": -30
+        },
+        {
+          "location": "/home/perez/Pycharm/collab/.claude/worktrees/automatic-telemetry/src/collab/client/inbox.py:166",
+          "bytes": -2264,
+          "count": -28
+        },
+        {
+          "location": "/home/perez/Pycharm/collab/.claude/worktrees/automatic-telemetry/src/collab/client/inbox.py:172",
+          "bytes": -2040,
+          "count": -30
+        },
+        {
+          "location": "/home/perez/Pycharm/collab/.claude/worktrees/automatic-telemetry/benchmarks/runtime.py:87",
+          "bytes": 1392,
+          "count": 6
+        },
+        {
+          "location": "/home/linuxbrew/.linuxbrew/opt/python@3.13/lib/python3.13/tracemalloc.py:558",
+          "bytes": 560,
+          "count": 10
+        }
+      ],
+      "limits": "In-process durable writes and fanout with tracemalloc enabled. RSS includes interpreter and SQLite; persistent logs intentionally grow. Excludes HTTP/TLS and provider CLI memory."
+    },
+    "probes": {
+      "source-flood": {
+        "wall_seconds": 0.0283,
+        "controller_cpu_seconds": 0.0077,
+        "controller_rss_peak_kib": 24916,
+        "controller_rss_peak_growth_kib": 1472,
+        "controller_rss_before_kib": 23456,
+        "controller_rss_after_kib": 23656,
+        "python_live_bytes": 472,
+        "python_peak_bytes": 1248335,
+        "fd_before": 4,
+        "fd_after": 4,
+        "outcome": {
+          "error_type": "SubprocessError"
+        },
+        "limits": "Fresh Python process; fake local child; .5s deadline. CPU/RSS are the Python controller, excluding fake child and any real provider CLI."
+      },
+      "source-silent": {
+        "wall_seconds": 0.505,
+        "controller_cpu_seconds": 0.0041,
+        "controller_rss_peak_kib": 23408,
+        "controller_rss_peak_growth_kib": 96,
+        "controller_rss_before_kib": 23324,
+        "controller_rss_after_kib": 23408,
+        "python_live_bytes": 592,
+        "python_peak_bytes": 60399,
+        "fd_before": 4,
+        "fd_after": 4,
+        "outcome": {
+          "error_type": "TimeoutExpired"
+        },
+        "limits": "Fresh Python process; fake local child; .5s deadline. CPU/RSS are the Python controller, excluding fake child and any real provider CLI."
+      },
+      "worker-flood": {
+        "wall_seconds": 0.0239,
+        "controller_cpu_seconds": 0.0094,
+        "controller_rss_peak_kib": 23964,
+        "controller_rss_peak_growth_kib": 552,
+        "controller_rss_before_kib": 23424,
+        "controller_rss_after_kib": 23964,
+        "python_live_bytes": 3743,
+        "python_peak_bytes": 573955,
+        "fd_before": 4,
+        "fd_after": 4,
+        "outcome": {
+          "error_type": "WorkerRuntimeError"
+        },
+        "limits": "Fresh Python process; fake local child; .5s deadline. CPU/RSS are the Python controller, excluding fake child and any real provider CLI."
+      },
+      "worker-silent": {
+        "wall_seconds": 0.5131,
+        "controller_cpu_seconds": 0.0159,
+        "controller_rss_peak_kib": 23560,
+        "controller_rss_peak_growth_kib": 148,
+        "controller_rss_before_kib": 23424,
+        "controller_rss_after_kib": 23560,
+        "python_live_bytes": 3696,
+        "python_peak_bytes": 302922,
+        "fd_before": 4,
+        "fd_after": 4,
+        "outcome": {
+          "error_type": "WorkerRuntimeError"
+        },
+        "limits": "Fresh Python process; fake local child; .5s deadline. CPU/RSS are the Python controller, excluding fake child and any real provider CLI."
+      },
+      "quota-flood": {
+        "wall_seconds": 0.0218,
+        "controller_cpu_seconds": 0.0053,
+        "controller_rss_peak_kib": 23688,
+        "controller_rss_peak_growth_kib": 380,
+        "controller_rss_before_kib": 23320,
+        "controller_rss_after_kib": 23688,
+        "python_live_bytes": 1215,
+        "python_peak_bytes": 414360,
+        "fd_before": 4,
+        "fd_after": 4,
+        "outcome": {
+          "report": {},
+          "reason": "codex answered nothing"
+        },
+        "limits": "Fresh Python process; fake local child; .5s deadline. CPU/RSS are the Python controller, excluding fake child and any real provider CLI."
+      },
+      "quota-silent": {
+        "wall_seconds": 0.5065,
+        "controller_cpu_seconds": 0.0055,
+        "controller_rss_peak_kib": 23708,
+        "controller_rss_peak_growth_kib": 244,
+        "controller_rss_before_kib": 23476,
+        "controller_rss_after_kib": 23708,
+        "python_live_bytes": 1199,
+        "python_peak_bytes": 87132,
+        "fd_before": 4,
+        "fd_after": 4,
+        "outcome": {
+          "report": {},
+          "reason": "codex did not answer in time"
+        },
+        "limits": "Fresh Python process; fake local child; .5s deadline. CPU/RSS are the Python controller, excluding fake child and any real provider CLI."
+      }
+    }
+  },
+  "date": "2026-09-21",
+  "native_worker_verification": [
+    {
+      "agent": "claude",
+      "model": "claude-haiku-4-5",
+      "ok": true,
+      "usage": {
+        "tokens_in": 10,
+        "tokens_out": 279,
+        "tokens_cached": 0,
+        "tokens_cache_write": 5593,
+        "cost_usd": 0.012591,
+        "cost_kind": "estimated",
+        "model": "claude-haiku-4-5"
+      },
+      "valid_result": true,
+      "published_separately": true,
+      "wall_seconds": 5.197
+    },
+    {
+      "agent": "codex",
+      "model": "gpt-5.6-luna",
+      "ok": true,
+      "usage": {
+        "tokens_in": 6510,
+        "tokens_out": 24,
+        "tokens_cached": 4864,
+        "model": "gpt-5.6-luna"
+      },
+      "valid_result": true,
+      "published_separately": true,
+      "wall_seconds": 5.943
+    }
+  ],
+  "worker_scheduling": {
+    "211": {
+      "heartbeat_only": true,
+      "reply_seconds": 6.026154305000091,
+      "cpu_seconds": 0.01645376600000001,
+      "peak_rss_kib": 36448
+    },
+    "212": {
+      "heartbeat_only": false,
+      "reply_seconds": 0.025980379010434262,
+      "cpu_seconds": 0.01676076500000001,
+      "peak_rss_kib": 36236
+    }
+  },
+  "task_pickup": [
+    {
+      "case": "normal snapshot",
+      "iterations": 1000,
+      "wall_seconds": 0.21517983899684623,
+      "cpu_seconds": 0.21491159599999998,
+      "peak_rss_kib": 21916
+    },
+    {
+      "case": "locked ledger",
+      "iterations": 100,
+      "wall_seconds": 0.02705771999899298,
+      "cpu_seconds": 0.026953452000000017,
+      "peak_rss_kib": 22864
+    },
+    {
+      "case": "oversized record",
+      "iterations": 100,
+      "wall_seconds": 0.020979025997803546,
+      "cpu_seconds": 0.02085954699999998,
+      "peak_rss_kib": 25936
+    },
+    {
+      "case": "deep JSON",
+      "iterations": 100,
+      "wall_seconds": 0.021192322004935704,
+      "cpu_seconds": 0.021192670999999996,
+      "peak_rss_kib": 25936
+    },
+    {
+      "case": "silent FIFO",
+      "iterations": 100,
+      "wall_seconds": 0.008640475003630854,
+      "cpu_seconds": 0.008641137000000021,
+      "peak_rss_kib": 25936
+    }
+  ]
+}

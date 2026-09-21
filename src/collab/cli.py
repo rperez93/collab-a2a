@@ -660,6 +660,8 @@ def cmd_host(args: argparse.Namespace) -> int:
     profile.save()
     from .worker import Store
     Store(profile.dir).ensure_default()
+    from .telemetry_setup import ensure
+    ensure(profile)
 
     # Register the session the moment the hub is up, rather than waiting for
     # the listener's first heartbeat — a hub that is serving should be
@@ -1621,7 +1623,7 @@ def _learnings_pointer(cwd: Path | None = None) -> str:
 
 def cmd_listen(args: argparse.Namespace) -> int:
     """Stream events as lines.  This is what a Monitor watches."""
-    from . import attention, worker_notices
+    from . import attention, worker_notices, task_pickup
 
     profile = _require_profile(args)
     inbox = Inbox(profile.dir)
@@ -1681,6 +1683,7 @@ def cmd_listen(args: argparse.Namespace) -> int:
     notice_checked = float("-inf")
     backlog_checked = float("-inf")
     worker_checked = float("-inf")
+    pickup_checked = float("-inf")
     worker_enabled = False
 
     # Say that somebody is reading, for as long as they are. A monitor that
@@ -1711,6 +1714,18 @@ def cmd_listen(args: argparse.Namespace) -> int:
                             worker_notices.release(root, claim["token"])
                             raise
                         worker_notices.commit(root, claim["token"])
+            if now - pickup_checked >= 1.0:
+                pickup_checked = now
+                pickup = task_pickup.claim(root)
+                if pickup:
+                    try:
+                        print(json.dumps({"kind": "task_pickup", "local": True,
+                                          "text": pickup["text"]})
+                              if args.json else pickup["text"], flush=True)
+                    except (OSError, BrokenPipeError):
+                        task_pickup.release(root, pickup["token"])
+                        raise
+                    task_pickup.commit(root, pickup["token"])
             # Recover unread backlog on startup and after each consumed page.
             # Filtering happens in SQL before LIMIT, so presence/own echoes
             # cannot hide a relevant request forever behind the first page.
@@ -2699,9 +2714,16 @@ def cmd_stats(args: argparse.Namespace) -> int:
     print()
     print(dim(f"  you are {'sharing' if share_stats_enabled() else 'NOT sharing'} yours "
               "(collab stats --share on|off)"))
-    command, interval = stats_source()
+    from .telemetry_setup import source as telemetry_source, state as telemetry_state
+    command, interval, _env = telemetry_source(profile)
+    from .runtime_settings import get as setting
+    from .config import load_config
     if command:
         print(dim(f"  yours refresh every {interval}s from: {command}"))
+    elif (telemetry_state(profile).get('hook_installed')
+          and share_stats_enabled() and setting('stats_auto_setup')
+          and 'stats_command' not in load_config()):
+        print(dim("  yours refresh from the Claude statusline hook; check `collab check` if stale"))
     else:
         print(dim("  yours are not refreshed automatically — set a command with "
                   "`collab stats --source`, or report with `--report`"))
@@ -3433,6 +3455,14 @@ def _checks(profile: SessionProfile) -> list[dict[str, Any]]:
             f"{exe} status says whether the hub is still answering; if it is,"
             f" {exe} daemon stop && {exe} daemon start")
 
+    refresh = status.get("participant_refresh") or {}
+    if state == "live" and isinstance(refresh, dict):
+        from .runtime_settings import get as runtime_setting
+        stamp = _moment(refresh.get("fetched_at"))
+        if refresh.get("error") or (stamp and time.time() - stamp > runtime_setting("participant_stale_after")):
+            add("participants", CHECK_WARN, "participant refresh is stale or failing; online state is unknown",
+                f"{exe} status --json shows participant_refresh; the listener retries automatically")
+
     # 1c. Is anything the agent recorded still waiting to be published?
     #
     #     The whole point of spooling a learning is that the agent does not
@@ -3750,7 +3780,8 @@ def _stats_health(profile: SessionProfile) -> tuple[str, str, str] | None:
     block = status.get("stats") if isinstance(status.get("stats"), dict) else {}
     age = _stats_age(profile)
     written_at = now - age if age is not None else 0.0
-    source, interval = stats_source()
+    from .telemetry_setup import source as telemetry_source
+    source, interval, _env = telemetry_source(profile)
 
     # Figures the status line received and could give to nobody, more recent
     # than anything this agent owns: the number the room sees stopped here.
@@ -3765,6 +3796,18 @@ def _stats_health(profile: SessionProfile) -> tuple[str, str, str] | None:
                 f" {exe} stats --report '<json>'")
 
     error = block.get("source_error") if isinstance(block.get("source_error"), dict) else None
+    setup = block.get("setup") if isinstance(block.get("setup"), dict) else {}
+    from .runtime_settings import get
+    from .config import load_config
+    automatic_setup = (share_stats_enabled() and get('stats_auto_setup')
+                       and 'stats_command' not in load_config())
+    automatic_hook = automatic_setup and setup.get('hook_installed')
+    if automatic_setup and setup.get("error"):
+        return (CHECK_WARN, "automatic telemetry setup failed: " + str(setup["error"]),
+                f"{exe} daemon start retries setup; inspect statusline configuration")
+    if age is None and not source and automatic_hook:
+        return (CHECK_WARN, "Claude telemetry hook is installed but has not reported for this participant",
+                "ensure this Claude session reloads its statusline and has its own Collab identity")
     if age is None and not source and not error:
         return None                             # never set up: not a fault
     if not share_stats_enabled():

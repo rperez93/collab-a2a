@@ -85,40 +85,24 @@ def test_something_in_it_is_long_enough_to_fold(monkeypatch, layout, fold):
 
 
 @pytest.mark.parametrize('historical', [False, True])
-def test_the_theme_that_ships_folds_the_long_messages_and_only_those(monkeypatch, historical):
-    """The shipped experience, said out loud rather than discovered.
-
-    `classic` folds now, and the number it folds at was chosen against this
-    script — see `themes.FOLD` for the figures. At eighty columns only the two
-    file dumps fold. On the panes the viewer is actually opened in — `collab
-    watch --tmux`, 35 % of the terminal, 27 to 41 columns — the log layout's
-    body is a handful of columns and ordinary messages run to seven lines, so
-    the share folded there is the number that decides: a fold of four took
-    two-thirds of the messages at 40 columns, six took 40 %, eight takes 18 %.
-    This pins both halves: there IS a «show more» on the demo, and it is on a
-    minority of what was said, at the ordinary width and at the narrow ones.
-    """
-    resolved = dict(themes.DEFAULTS) | themes.BUILTIN["classic"]
-    monkeypatch.setattr(tui, "_current_theme", lambda: resolved)
-    monkeypatch.setattr(tui, "fold_override", lambda: None)
-    # The date adds seven header columns after midnight. Exercise both
-    # widths deterministically rather than depend on the test runner's clock.
+def test_long_demo_messages_use_the_four_line_default(monkeypatch, historical):
+    """Compact chat hides after four wrapped lines, and expands without loss."""
+    resolved = dict(themes.DEFAULTS) | themes.BUILTIN['classic']
+    monkeypatch.setattr(tui, '_current_theme', lambda: resolved)
+    monkeypatch.setattr(tui, 'fold_override', lambda: None)
     monkeypatch.setattr(tui, '_stamp', lambda ts: '19 sep 23:40' if historical else '23:40')
-
-    said = [e for e in demo.events() if e.kind == KIND_CHAT]
-    for width, at_most in ((80, 0.10), (27, 0.20), (41, 0.20)):
+    for width in (27, 41, 80):
         rows = conversation_rows(demo.events(), width, demo.YOU)
         folded = {r.seq for r in rows if r.button}
-        assert folded, f"nothing folds at {width}: the fold is off"
-        share = len(folded) / len(said)
-        assert share <= at_most, \
-            f"{len(folded)} of {len(said)} messages fold at {width} — that hides the conversation"
+        assert folded
+        expanded = conversation_rows(demo.events(), width, demo.YOU, expanded=folded)
+        assert len(expanded) > len(rows)
 
 
 def test_the_default_fold_is_the_built_in_theme_s(monkeypatch):
     """One number: a theme file that says nothing about folding, the shipped
     theme, and `collab theme --new`'s template all agree."""
-    assert themes.DEFAULTS["fold"] == themes.BUILTIN["classic"]["fold"] == themes.FOLD == 8
+    assert themes.DEFAULTS["fold"] == themes.BUILTIN["classic"]["fold"] == themes.FOLD == 4
 
 
 @pytest.mark.parametrize("hour,minute", [(0, 1), (0, 30), (7, 0), (13, 45),

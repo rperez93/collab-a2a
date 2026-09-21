@@ -1039,7 +1039,8 @@ def set_stats_source(command: str | None = None,
         if command:
             cfg["stats_command"] = command
         else:
-            cfg.pop("stats_command", None)
+            # Clearing is a persistent opt-out from automatic source setup.
+            cfg["stats_command"] = ""
     if interval:
         cfg["stats_interval"] = int(interval)
     save_config(cfg)

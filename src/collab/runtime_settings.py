@@ -49,6 +49,22 @@ def _worker_agent(value):
         raise ValueError("expected codex or claude; use worker start for other providers")
     return value
 
+def _background(value):
+    if value not in ('theme', 'none', 'matrix', 'image'):
+        raise ValueError('expected theme, none, matrix or image')
+    return value
+
+def _image_path(value):
+    from pathlib import Path
+    if value == '':
+        return ''
+    if not isinstance(value, str) or len(value) > 4096 or '\x00' in value:
+        raise ValueError('expected a local PNG/JPEG path')
+    path = Path(value).expanduser()
+    if not path.is_absolute() or path.suffix.lower() not in ('.png', '.jpg', '.jpeg'):
+        raise ValueError('expected an absolute local PNG/JPEG path')
+    return str(path)
+
 def _prices(value):
     data = json.loads(value) if isinstance(value, str) else value
     if not isinstance(data, dict) or len(data) > 100:
@@ -66,10 +82,21 @@ def _prices(value):
 SPECS = (
  ('watch_participant_fields', list(FIELDS), _fields, 'participant details to show, in order'),
  ('watch_participant_details', False, _bool, 'expand participant details initially'),
+ ('watch_background', 'theme', _background, 'participant background: theme, none, matrix or image'),
+ ('watch_background_image', '', _image_path, 'absolute local PNG/JPEG background path'),
+ ('watch_background_dim', 85, _integer(0, 100), 'background dim percentage; 100 hides it'),
+ ('watch_background_fps', 2, _integer(1, 4), 'Matrix frames per second; capped by the viewer refresh'),
+ ('watch_reduced_motion', False, _bool, 'freeze decorative animation on its first frame'),
+ ('stats_auto_setup', True, _bool, 'set up participant telemetry automatically on host, join and daemon start'),
+ ('participant_refresh_interval', 3, _integer(1, 300), 'seconds between independent participant refreshes'),
+ ('participant_stale_after', 30, _integer(5, 3600), 'age in seconds after which roster connectivity is unknown'),
  ('stats_stale_after', 1800, _integer(10, 86400), 'usage observation age in seconds before showing stale'),
  ('stats_prices', {}, _prices, 'exact model prices in USD per million tokens; estimates only'),
  ('attention_settle', 20, _integer(0, 3600), 'seconds to collect a burst before an inbox notice'),
  ('attention_gap', 90, _integer(1, 86400), 'minimum seconds between inbox notices'),
+ ('task_auto_pickup', True, _bool, 'notify the coding agent about suitable unclaimed batch work'),
+ ('task_pickup_idle_delay', 300, _integer(0, 86400), 'continuous idle seconds before a batch pickup notification'),
+ ('task_pickup_repeat', 300, _integer(15, 86400), 'seconds before repeating an unchanged batch pickup notification'),
  ('worker_auto_start', True, _bool, 'enable a worker on session setup unless explicitly turned off'),
  ('worker_agent', 'codex', _worker_agent, 'provider for automatic worker setup; codex or claude'),
  ('worker_turn_gap', 5, _integer(1, 3600), 'minimum seconds between conversation worker turns'),

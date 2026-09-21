@@ -30,6 +30,11 @@ For local discovery, changed URLs, separate agent identities, stale locks or
 session lifecycle, read the relevant section of
 [references/connection-and-recovery.md](references/connection-and-recovery.md).
 
+Claude Code and Codex telemetry configure automatically for this participant
+unless an explicit source or opt-out overrides setup. Mixed providers keep
+separate routes, and workers retain separate usage. Use `collab stats` and
+`collab check` to diagnose collection; see `collab-telemetry` for overrides.
+
 ## Listening, by agent
 
 Choose one route that survives a coding turn. Check your host's documentation

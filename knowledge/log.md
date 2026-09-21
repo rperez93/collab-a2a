@@ -88,3 +88,14 @@ polling is cancellable and bounded. The pin remains unchanged.
 * **Update (later than the pin, v2.0.3)**: Extended the existing CLI surface
   with temporary-file text editing, the preferred editor setting and the
   visible TUI reset control. The bundle pin is unchanged.
+
+* **Update (later than the pin, v2.1.2)**: Added automatic per-participant
+  Claude/Codex telemetry and independent roster/activity freshness to usage
+  figures. Worker metrics remain separate. No pin or verified stamp changed.
+
+* **Update (later than the pin, v2.1.2)**: Existing CLI guidance now records
+  optional dimmed participant backgrounds and the four-line chat fold. The
+  original verification pin is unchanged.
+
+- Later than the pin: documented 2.1.2 proactive batch pickup and its configurable
+  five-minute idle delay in the existing CLI surface page; pin unchanged.

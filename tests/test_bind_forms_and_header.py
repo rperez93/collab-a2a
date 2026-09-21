@@ -85,7 +85,7 @@ def _model(tmp_path, *, state):
         {"name": "alice", "connected": True, "is_host": True},
         {"name": "bob", "connected": True},
         {"name": "edith", "connected": False},
-    ], "fetched_at": time.time() - 300}
+    ], "fetched_at": time.time() if state == "live" else time.time() - 300}
     model._state = state
     return model
 

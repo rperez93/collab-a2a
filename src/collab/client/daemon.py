@@ -30,7 +30,7 @@ from ..batch import DELTA_SHOWN_FOR
 from ..config import (SessionProfile, follow_agent_enabled, repo_for_home,
                       share_stats_enabled, stats_source)
 from ..compatibility import request_headers, check_host
-from ..protocol import (EXT_PREFIX, KIND_CHAT, KIND_HELLO, KIND_PRESENCE,
+from ..protocol import (EXT_PREFIX, KIND_CHAT, KIND_HELLO, KIND_PRESENCE, KIND_ACTIVITY,
                         KIND_PROJECT, KIND_SYSTEM, KIND_TASK, Envelope,
                         now_iso, scrub)
 from ..stats import STATS_FILE, read_stats, write_stats
@@ -122,7 +122,7 @@ PROPOSAL_COOLDOWN = 300.0
 #: those boards kept the tasks inside a project that no longer existed until
 #: some unrelated event forced a refresh.
 REFRESHES_THE_SNAPSHOT = frozenset({
-    KIND_HELLO, KIND_PRESENCE, KIND_SYSTEM, KIND_TASK, KIND_PROJECT,
+    KIND_HELLO, KIND_PRESENCE, KIND_SYSTEM, KIND_TASK, KIND_PROJECT, KIND_ACTIVITY,
 })
 
 
@@ -519,6 +519,8 @@ class Daemon:
             # «shorter» and «gone» are not the same news.
             "context_compacted_at": self._acted_at["compact"] or None,
             "context_new_at": self._acted_at["new"] or None,
+            "participant_refresh": {"fetched_at": self.snapshot.get("fetched_at"),
+                                    "error": getattr(self, "_snapshot_error", "")},
             "heartbeat": time.time(),
             "connected_since": self.connected_since,
             "failures": self.failures,
@@ -585,7 +587,8 @@ class Daemon:
         that stops moving has to stop with a visible reason, and this is where
         the reason is written down.
         """
-        command, _interval = stats_source()
+        from ..telemetry_setup import source, state
+        command, _interval, _env = source(self.profile)
         mtime = self._stats_file_mtime()
         return {
             "route": "command" if command else ("file" if mtime else None),
@@ -594,6 +597,7 @@ class Daemon:
             "source_error": self._stats_source_error,
             "post_error": self._stats_post_error,
             "sharing": share_stats_enabled(),
+            "setup": state(self.profile),
         }
 
     def _owner_figures(self) -> dict[str, Any]:
@@ -869,24 +873,28 @@ class Daemon:
         prints no quota is a quota that has gone: the file carries
         `quotas: {}` for it and the hub clears. See `stats.whole_picture`.
         """
-        command, interval = stats_source()
+        from ..telemetry_setup import source
+        command, interval, source_env = source(self.profile)
         if not command or not share_stats_enabled():
             return
-        if (time.time() - self._stats_ran_at) < interval:
+        if (time.time() - getattr(self, "_stats_ran_at", 0)) < interval:
             return
         self._stats_ran_at = time.time()
 
         from ..stats import normalise, whole_picture
 
-        def run() -> tuple[int, str, str]:
-            try:
-                from ..source_command import run as run_source
-                done = run_source(command, timeout=20)
-                return done.returncode, done.stdout, done.stderr
-            except (OSError, subprocess.SubprocessError) as exc:
-                return -1, "", f"{type(exc).__name__}: {exc}"
-
-        code, output, errors = await asyncio.to_thread(run)
+        try:
+            from ..source_command import run_async
+            done = await run_async(command, timeout=20, env=source_env)
+            code, output, errors = done.returncode, done.stdout, done.stderr
+        except (OSError, subprocess.SubprocessError) as exc:
+            code, output, errors = -1, "", f"{type(exc).__name__}: {exc}"
+        # A source changed or sharing was disabled while a slow command ran.
+        # Its stale result must not be published under the new configuration.
+        current_command, current_interval, current_env = source(self.profile)
+        if (not share_stats_enabled() or (current_command, current_interval) != (command, interval)
+                or current_env.get("CODEX_THREAD_ID") != source_env.get("CODEX_THREAD_ID")):
+            return
         figures = normalise(output) if code == 0 and output else {}
         if not figures:
             # WRITTEN DOWN, NOT SWALLOWED. A command that exits 1 — a quota
@@ -959,6 +967,15 @@ class Daemon:
             self._stats_post_error = f"{type(exc).__name__}: {exc}"[:200]
 
     async def _report_activity(self, client: httpx.AsyncClient) -> None:
+        # A wake can publish idle while a heartbeat is still posting working.
+        # Serialize these routes and read local state after acquiring the lock,
+        # so the older HTTP request cannot finish last and restore old activity.
+        if not hasattr(self, '_activity_publish_lock'):
+            self._activity_publish_lock = asyncio.Lock()
+        async with self._activity_publish_lock:
+            await self._send_current_activity(client)
+
+    async def _send_current_activity(self, client: httpx.AsyncClient) -> None:
         """Re-assert what this agent is doing, after a drop or a hub restart.
 
         The command that said it posted it once and wrote it down; a hub that
@@ -1628,6 +1645,30 @@ class Daemon:
         finally:
             worker_notices.release(self.profile.dir, notice["token"])
 
+    async def _maybe_task_pickup(self) -> None:
+        from .. import task_pickup
+
+        cfg = self.waker.config()
+        now = time.time()
+        if (not cfg.enabled or now - self.waker.last_attempt < 15
+                or (self.waker.failed_at and now - self.waker.failed_at < self.waker.retry_pause)):
+            return
+        notice = task_pickup.claim(self.profile.dir, lease=cfg.timeout + 30)
+        if notice:
+            self._waking_batch = None
+            self._waking = asyncio.create_task(self._deliver_task_pickup(notice))
+
+    async def _deliver_task_pickup(self, notice) -> None:
+        from .. import task_pickup
+
+        before = self.waker.last_delivery
+        try:
+            await self._wake(None, notice["text"])
+            if self.waker.last_delivery > before:
+                task_pickup.commit(self.profile.dir, notice["token"])
+        finally:
+            task_pickup.release(self.profile.dir, notice["token"])
+
     async def _maybe_wake(self) -> None:
         """Start a turn in an agent that cannot start one for itself.
 
@@ -1643,10 +1684,13 @@ class Daemon:
 
         if worker_notices.enabled(self.profile.dir):
             await self._maybe_worker_notice()
+            if self._waking is None:
+                await self._maybe_task_pickup()
             return
         due, why = self.waker.due()
         self._wake_note = why
         if not due:
+            await self._maybe_task_pickup()
             return
         batch = self.waker.take()
         # THE MESSAGES ARE CUT FIRST, ALWAYS. The standing reminder rides along
@@ -1658,6 +1702,7 @@ class Daemon:
             reminder = self._reminder_text()
             self.waker.reminded("wake")
         if batch is None and not reminder:
+            await self._maybe_task_pickup()
             return
         # Held alongside the task, so shutdown can defer the batch this turn is
         # actually working on rather than whatever `take()` would cut next.
@@ -1703,9 +1748,9 @@ class Daemon:
             if batch is not None:
                 with contextlib.suppress(Exception):
                     self._stats_ran_at = 0.0
-                    await self._refresh_stats_from_command()
+                    self._schedule_refresh("stats-source", self._refresh_stats_from_command)
                     if self._http is not None:
-                        await self._report_stats(self._http)
+                        self._schedule_refresh("stats-publish", lambda: self._report_stats(self._http))
             # Set however the turn ended, including a crash: every poll up to
             # this instant may have been the woken turn reading its own batch.
             self.waker.turn_finished(time.time())
@@ -1762,13 +1807,10 @@ class Daemon:
         if self._http is None:
             return                          # the heartbeat carries it up later
         try:
-            await self._http.post(
-                f"{self.profile.url}{EXT_PREFIX}/activity",
-                headers=request_headers(self.profile.token),
-                json=said, timeout=10.0)
-            self._last_activity = said
-            self._activity_sent_at = time.time()
-        except (httpx.HTTPError, AttributeError, TypeError) as exc:
+            # Share success handling with heartbeat reassertion: a 5xx is not
+            # an acknowledgement and must not suppress retries for five minutes.
+            await self._report_activity(self._http)
+        except (AttributeError, TypeError) as exc:
             logger.debug("could not publish the woken turn's activity (%r)", exc)
 
     async def _wake_once(self, batch: wake.Batch | None,
@@ -1786,7 +1828,8 @@ class Daemon:
         await self._compact_before_the_turn()
         config = self.waker.config()
         worker_notice = batch is None and reminder.startswith("Collab worker: ")
-        carrying = batch.name if batch is not None else ("a worker decision notice" if worker_notice else "the standing reminder")
+        task_notice = batch is None and reminder.startswith("Collab batch: ")
+        carrying = batch.name if batch is not None else ("a worker decision notice" if worker_notice else "a batch pickup notice" if task_notice else "the standing reminder")
         logger.info("waking the agent with %s", carrying)
         # Both are given, because the two ways of delivering want different
         # things: a fresh run reads the prompt off stdin, while a keystroke into
@@ -1799,7 +1842,7 @@ class Daemon:
         env = {**os.environ,
                "COLLAB_WAKE_PROMPT": str(self.waker.write_prompt(batch, reminder)),
                "COLLAB_WAKE_BATCH": str(batch.path) if batch is not None else "",
-               "COLLAB_WAKE_KIND": "messages" if batch is not None else ("worker" if worker_notice else "reminder"),
+               "COLLAB_WAKE_KIND": "messages" if batch is not None else ("worker" if worker_notice else "task" if task_notice else "reminder"),
                "COLLAB_SESSION": self.profile.session_id}
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -2351,6 +2394,77 @@ class Daemon:
         except (OSError, ValueError, asyncio.TimeoutError) as exc:
             logger.debug("notify command failed (%r)", exc)
 
+    def _schedule_refresh(self, name, operation, *, interval=0, signature=None):
+        """One task per route; a slow provider must not age every roster.
+
+        Main usage commands can take 20 seconds, plus network publication and
+        learning work. Awaiting them in sequence postponed the three-second
+        status heartbeat and nine-second roster fetch. Tasks remain bounded
+        to these named routes and are cancelled and reaped at shutdown.
+        """
+        # Wake completion runs during teardown too. It must not resurrect a
+        # source after the heartbeat has drained its owned refresh tasks.
+        if getattr(self, '_stop', None) is not None and self._stop.is_set():
+            return
+        if not hasattr(self, "_refresh_tasks"):
+            self._refresh_tasks, self._refresh_due = {}, {}
+        task = self._refresh_tasks.get(name)
+        if signature is not None:
+            signatures = getattr(self, "_refresh_signatures", {})
+            if signatures.get(name) != signature:
+                if task is not None and not task.done():
+                    task.cancel()
+                self._stats_ran_at = 0.0
+                signatures[name] = signature
+                self._refresh_signatures = signatures
+        if task is not None and not task.done():
+            return
+        if time.monotonic() < self._refresh_due.get(name, 0):
+            return
+        self._refresh_due[name] = time.monotonic() + interval
+        async def guarded():
+            try:
+                await operation()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception("%s refresh failed; retrying", name)
+                _log_crash(name, exc)
+        self._refresh_tasks[name] = asyncio.create_task(guarded())
+
+    async def _housekeeping_once(self):
+        # The monitor first: it is the route that costs the agent
+        # nothing, and asking it here is what keeps the two routes
+        # to one clock. Whichever takes the reminder resets the
+        # interval, so the other finds nothing due.
+        self._remind_the_monitor()
+        # BEFORE THE WAKE, because the wake may start a turn and a
+        # boundary is a moment: an edge seen on this beat is the
+        # one the turn is about to cross. The wake does its own
+        # compaction on the way in — see `_compact_before_the_turn`
+        # — and this is what notices the edge for everything else.
+        self._watch_for_a_boundary()
+        await self._maybe_wake()
+        # AFTER THE WAKE, because a turn that was about to start is
+        # more urgent than a window that is nearly full, and
+        # compacting first would hand the woken turn a summary in
+        # place of the conversation it was about to answer.
+        await self._maybe_type_at_the_agent()
+        # The room's business, after this agent's own. A proposal
+        # settles when everybody has answered, and everybody
+        # answering is not a thing this beat can hurry.
+        await self._settle_any_proposal()
+        # BEFORE the learnings work below and after the wake: the
+        # figures have to be watched on every beat for the two
+        # staleness measures to mean anything, and the decay is a
+        # publish, which belongs with the rest of the housekeeping.
+        self._watch_the_figures()
+        await self._maybe_decay_activity()
+        # LAST of the three, and outside nothing: a learning is the
+        # least urgent thing here and the most likely to touch a
+        # slow disk.
+        await self._do_the_learning_work()
+
     async def _heartbeat_loop(self) -> None:
         """The housekeeping: announce, hold the lock, wake, refresh, write status.
 
@@ -2369,93 +2483,65 @@ class Daemon:
         daemon's whole housekeeping with it. A logged, skipped iteration is a
         far better failure than a silent shutdown of everything else.
         """
-        last_refresh = 0.0
-        while not self._stop.is_set():
-            try:
-                self._announce_locally()
-                self._refresh_lock()
-                # BEFORE THE WAKE AND EVERYTHING UNDER IT. A daemon whose agent
-                # has gone should not start that agent a turn on its way out,
-                # and the wake is the first thing below here that could.
-                self._follow_the_agent()
-                # GUARDED SEPARATELY, so that a wake which fails every time
-                # cannot keep the status write below it from ever running. An
-                # outer guard alone kept the task alive and still left
-                # status.json stale for as long as the fault lasted.
+        try:
+            while not self._stop.is_set():
                 try:
-                    await self._tick_conversation()
-                except Exception:
-                    logger.exception("conversation worker scheduling failed")
-                try:
-                    # The monitor first: it is the route that costs the agent
-                    # nothing, and asking it here is what keeps the two routes
-                    # to one clock. Whichever takes the reminder resets the
-                    # interval, so the other finds nothing due.
-                    self._remind_the_monitor()
-                    # BEFORE THE WAKE, because the wake may start a turn and a
-                    # boundary is a moment: an edge seen on this beat is the
-                    # one the turn is about to cross. The wake does its own
-                    # compaction on the way in — see `_compact_before_the_turn`
-                    # — and this is what notices the edge for everything else.
-                    self._watch_for_a_boundary()
-                    await self._maybe_wake()
-                    # AFTER THE WAKE, because a turn that was about to start is
-                    # more urgent than a window that is nearly full, and
-                    # compacting first would hand the woken turn a summary in
-                    # place of the conversation it was about to answer.
-                    await self._maybe_type_at_the_agent()
-                    # The room's business, after this agent's own. A proposal
-                    # settles when everybody has answered, and everybody
-                    # answering is not a thing this beat can hurry.
-                    await self._settle_any_proposal()
-                    # BEFORE the learnings work below and after the wake: the
-                    # figures have to be watched on every beat for the two
-                    # staleness measures to mean anything, and the decay is a
-                    # publish, which belongs with the rest of the housekeeping.
-                    self._watch_the_figures()
-                    await self._maybe_decay_activity()
-                    # LAST of the three, and outside nothing: a learning is the
-                    # least urgent thing here and the most likely to touch a
-                    # slow disk.
-                    await self._do_the_learning_work()
+                    self._announce_locally()
+                    self._refresh_lock()
+                    # BEFORE THE WAKE AND EVERYTHING UNDER IT. A daemon whose agent
+                    # has gone should not start that agent a turn on its way out,
+                    # and the wake is the first thing below here that could.
+                    self._follow_the_agent()
+                    self._schedule_refresh("conversation", self._tick_conversation)
+                    self._schedule_refresh("housekeeping", self._housekeeping_once)
+                    if self.state == "live" and self._http is not None:
+                        from ..runtime_settings import get
+                        self._schedule_refresh("participants", lambda: self._refresh_snapshot(self._http),
+                                               interval=get("participant_refresh_interval"))
+                        self._schedule_refresh("activity", lambda: self._report_activity(self._http))
+                        self._schedule_refresh("worker-stats", self._refresh_worker_stats_from_command)
+                        from ..telemetry_setup import source
+                        command, interval, _env = source(self.profile)
+                        self._schedule_refresh("stats-source", self._refresh_stats_from_command,
+                                               signature=(command, interval, share_stats_enabled(), _env.get("CODEX_THREAD_ID")))
+                        self._schedule_refresh("stats-publish", lambda: self._report_stats(self._http))
+                    self.write_status()
+                    # LAST, and rate-limited inside `sample_memory`. A leak is
+                    # visible only over hours, so what this is for is the shape of
+                    # a line rather than any one reading; and it is a file write,
+                    # so it goes behind everything the heartbeat actually owes.
+                    diagnostics.sample_memory()
+                    diagnostics.sweep()
                 except asyncio.CancelledError:
-                    raise
-                except Exception as exc:    # noqa: BLE001
-                    logger.exception("the wake failed; the rest carries on")
-                    _log_crash("wake", exc)
-                if (time.time() - last_refresh) > SNAPSHOT_REFRESH \
-                        and self.state == "live":
-                    if self._http is not None:
-                        await self._refresh_snapshot(self._http)
-                        await self._report_activity(self._http)
-                    last_refresh = time.time()
-                # EVERY BEAT, NOT EVERY SNAPSHOT. The usage figures rode the
-                # nine-second refresh above, so a file the status line had
-                # just written waited up to nine seconds — measured at 7.6
-                # and 8.6 — to reach the hub, and a polled command ran late
-                # by the same phase. Both gate themselves: the command by its
-                # interval, the report by whether anything changed. Reading a
-                # small file every three seconds is the whole cost.
-                if self.state == "live" and self._http is not None:
-                    await self._refresh_worker_stats_from_command()
-                    await self._refresh_stats_from_command()
-                    await self._report_stats(self._http)
-                self.write_status()
-                # LAST, and rate-limited inside `sample_memory`. A leak is
-                # visible only over hours, so what this is for is the shape of
-                # a line rather than any one reading; and it is a file write,
-                # so it goes behind everything the heartbeat actually owes.
-                diagnostics.sample_memory()
-                diagnostics.sweep()
-            except asyncio.CancelledError:
-                raise                       # shutdown, not a fault
-            except Exception as exc:        # noqa: BLE001
-                logger.exception("heartbeat iteration failed; carrying on")
-                _log_crash("heartbeat", exc)
-            with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(self._stop.wait(), timeout=STATUS_HEARTBEAT)
+                    raise                       # shutdown, not a fault
+                except Exception as exc:        # noqa: BLE001
+                    logger.exception("heartbeat iteration failed; carrying on")
+                    _log_crash("heartbeat", exc)
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(self._stop.wait(), timeout=STATUS_HEARTBEAT)
+
+        finally:
+            tasks = list(getattr(self, "_refresh_tasks", {}).values())
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _request_snapshot(self, client):
+        # Activity/presence events should refresh promptly without stalling the
+        # SSE reader for a 10-second HTTP timeout before it can read chat.
+        if hasattr(self, "_refresh_due"):
+            self._refresh_due["participants"] = 0
+        self._schedule_refresh("participants", lambda: self._refresh_snapshot(client))
 
     async def _refresh_snapshot(self, client: httpx.AsyncClient) -> None:
+        # The initial handshake also fetches directly. Serialize it with the
+        # scheduled refresh so neither can overwrite the other's snapshot.tmp.
+        if not hasattr(self, "_snapshot_lock"):
+            self._snapshot_lock = asyncio.Lock()
+        async with self._snapshot_lock:
+            await self._fetch_snapshot(client)
+
+    async def _fetch_snapshot(self, client: httpx.AsyncClient) -> None:
         try:
             r = await client.get(
                 f"{self.profile.url}{EXT_PREFIX}/participants",
@@ -2463,6 +2549,7 @@ class Daemon:
                 timeout=10.0,
             )
             if r.status_code == 200:
+                self._snapshot_error = ""
                 self.snapshot = r.json()
                 self._adopt_identity()
                 # The viewer reads this instead of the network, so it keeps
@@ -2481,8 +2568,10 @@ class Daemon:
                     tmp.replace(self.paths.root / "snapshot.json")
                 except OSError:
                     pass
-        except httpx.HTTPError:
-            pass
+            else:
+                self._snapshot_error = f"hub answered {r.status_code}"
+        except (httpx.HTTPError, ValueError) as exc:
+            self._snapshot_error = type(exc).__name__
 
     def _adopt_identity(self) -> None:
         """Take our current name and id from the hub.
@@ -2884,7 +2973,7 @@ class Daemon:
                     self.write_status()
                     raise RuntimeError("the hub closed our feed")
                 if event.event == "ready":
-                    await self._refresh_snapshot(client)
+                    self._request_snapshot(client)
                     self.write_status()
                     continue
                 if event.event != "collab":
@@ -2895,13 +2984,19 @@ class Daemon:
                     logger.warning("skipping unparseable event")
                     continue
                 if self.inbox.record(env):
+                    # A recorded peer message is enough to schedule intake now;
+                    # waiting for the three-second heartbeat adds visible lag.
+                    # The named scheduler coalesces bursts; Conversation retains
+                    # its model gap, one-call limit and durable budget/backoff.
+                    if env.kind in ("chat", "task", "project", "request", "response"):
+                        self._schedule_refresh("conversation", self._tick_conversation)
                     self._note_any_learning(env)
                     self._note_task_boundary(env)
                     self._note_fresh_session(env)
                     self.waker.note(env, own_name=self.profile.name)
                     await self.bridge.broadcast(env)
                     if env.kind in REFRESHES_THE_SNAPSHOT:
-                        await self._refresh_snapshot(client)
+                        self._request_snapshot(client)
                     self.write_status()
 
 

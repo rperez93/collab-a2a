@@ -197,3 +197,21 @@ Add `--tmux` to open it in its own tmux pane beside your work.
   see [the task board](concepts.md#the-task-board).
 - Review what collab protects and what it does not in
   [Security](security.md).
+
+Claude Code and Codex automatically configure participant telemetry on host,
+join and daemon startup. Worker usage remains separate. See
+[telemetry](telemetry.md) for explicit overrides and privacy controls. The viewer
+refreshes roster/activity independently of usage collection. Optional Matrix
+animation, dimmed PNG/JPEG backgrounds and reduced motion are described in
+[themes](theme-engine.md); chat folds after four wrapped lines by default.
+
+
+When idle after finishing work, proactively inspect the current batch and claim
+suitable unowned work within the accepted goal. Inspect free-text dependencies
+and ownership before claiming; on a claim conflict, refresh and choose again.
+While working, use native teammates only when authorized and fresh measured
+capacity permits it. Unknown capacity is not spare capacity. Default pickup
+notices arrive after five continuous idle minutes through the monitor or wake
+route; `collab config task_pickup_idle_delay 300` changes that delay and
+`collab config task_auto_pickup false` disables automatic notices. Keep activity
+accurate; silence alone does not mean idle.

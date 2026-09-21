@@ -483,3 +483,28 @@ checkout the install points at, not necessarily the one you are working in.
   ```bash
   PYTHONPATH=$PWD/src python3 -m pytest -q
   ```
+
+## Chat works but participant status or usage is stale (2.1.2)
+
+Run `collab check` and inspect `collab status --json`. Participant fetch failures
+are separate from source errors. Roster refresh now runs independently of main
+and worker collection, every three seconds by default; activity/presence events
+also request a fetch. A roster older than 30 seconds is unknown even with a live
+chat connection. Working/idle reflects reported activity, not merely connection
+health. A source that exposes no metric cannot supply it automatically.
+
+Host/join/daemon startup sets up Claude Code and Codex telemetry by default.
+Claude must invoke its statusline hook before the first observation appears.
+Explicit `stats_command`, including an empty string, takes precedence. Unset it
+to restore automatic routing. `stats_auto_setup false` disables auto setup and
+polling; `share_stats off` stops main and worker publication. An existing daemon
+keeps its loaded code until restarted after an upgrade. A hub must also run the
+new version to receive the atomic metadata-update fix.
+
+## A participant background is missing
+
+The effect requires a 256-colour terminal. Check `watch_background`,
+`watch_background_dim` (100 hides it), and the local PNG/JPEG path. Images must
+be regular files of at most 8 MiB and four million pixels. Matrix in reduced
+motion is intentionally static. Decoration errors appear in the participant
+legend; foreground text and chat remain usable.

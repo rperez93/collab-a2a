@@ -67,3 +67,9 @@ collab config worker_instructions --unset
 `--edit` requires a terminal. Text asks whether to open the external editor;
 other settings ask for a new value inline. A successful CLI edit validates and
 saves on return. `--unset` directly restores the default without an editor.
+
+Participant decoration is controlled by `watch_background`,
+`watch_background_image`, `watch_background_dim`, `watch_background_fps` and
+`watch_reduced_motion`. These settings reload live. `none` disables effects;
+`theme` follows the selected theme. Image paths are absolute local PNG/JPEG
+files. See [themes](theme-engine.md) for image size and rendering limits.

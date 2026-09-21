@@ -376,6 +376,7 @@ def model():
             observation rather than a memory. Both of those have branches the
             demo exists to show."""
             self.snapshot = snapshot()
+            self.snapshot["fetched_at"] = time.time()
             self.status = status()
             self._state = "live"
 

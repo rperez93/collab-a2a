@@ -233,3 +233,100 @@ cannot keep waking the viewer.
 ```sh
 env PYTHONPATH="$PWD/src" python benchmarks/theme_engine.py
 ```
+
+## 2.1.2 – independent refresh and participant backgrounds
+
+Measured on 2026-09-21 against 2.1.1 using the same synthetic harness in real
+120×40 curses terminals. Each sample has two seconds of warmup and 20 seconds
+of measurement; the matching Matrix-without-animation control uses 10 seconds.
+CPU percentages are a fraction of one core. Busy means five synthetic chat
+messages per second with changing participant stats. RAM is peak sampled RSS.
+[Complete raw results](performance-v212.json) include every scenario and limit.
+
+| View | 2.1.1 CPU idle / busy | 2.1.2 CPU idle / busy | 2.1.2 peak RAM |
+| --- | --- | --- | --- |
+| Combined sidebar + chat | 0.90% / 7.30% | 0.90% / 6.10% | 30.3 MiB |
+| Separate roster | 0.85% / 0.95% | 0.80% / 0.90% | 29.7 MiB |
+| Separate chat | 0.30% / 6.65% | 0.30% / 7.05% | 30.0 MiB |
+
+These short samples are descriptive, not a statistically significant speedup
+claim. Busy chat varied by 0.40 percentage points of one core from the previous
+release; all baseline/default views stayed below 7.1 percent. File descriptor
+counts stayed at three in every pane. RSS includes interpreter and allocator
+warmup, so small changes do not by themselves demonstrate retained growth.
+
+| Background / view | CPU idle / busy | Peak RAM |
+| --- | --- | --- |
+| Matrix without animation, both | 0.80% / 10.30% | 30.1 MiB |
+| Matrix without animation, roster | 0.90% / 1.10% | 29.7 MiB |
+| Matrix at 2 fps, both | 0.90% / 9.05% | 30.2 MiB |
+| Matrix at 2 fps, roster | 0.90% / 1.00% | 30.0 MiB |
+| PNG mosaic, both | 0.90% / 7.80% | 37.1 MiB |
+| PNG mosaic, roster | 1.10% / 1.45% | 35.6 MiB |
+
+The image fixture is a synthetic 1920×1080 PNG. Provider processes, network/TLS,
+daemon I/O and the user's live session are excluded from terminal measurements.
+Matrix has its own theme colours and text formatting; use the matching control
+to distinguish its theme cost from the falling letters. These are local Linux
+measurements, not promises for every terminal, machine or image.
+
+A separate 1080p decode took 0.015 seconds of controller CPU. Two thousand
+already-cached image frames took 0.013 seconds total, retaining 56 traced bytes.
+Two thousand changing Matrix frames took 6.21 seconds with allocation tracing
+enabled, retaining about 24 KiB (one current frame). This is a forced-frame stress
+loop, not the 2-fps terminal rate. A FIFO image was rejected in 0.02 ms without
+waiting for a writer. The real-curses regression replaces one image 40 times and
+checks bounded palette allocation and matching chat/roster cache generations.
+
+Silent and flooding main-source, worker and quota probes consumed at most
+0.016 seconds of controller CPU per case, with 23–25 MiB peak RSS and no file
+descriptor growth. Silent probes enforce a 0.5-second test deadline; flooding
+probes hit their output limit. These controller measurements exclude child CPU.
+A 10,000-message durable-write/fanout soak, including warmup, is in the raw file;
+its persistent history intentionally grows. No live session was used.
+
+Real-provider validation also passed with Claude Haiku 4.5 and GPT-5.6 Luna.
+Native token usage was stored and separately published as worker usage through
+a synthetic HTTP transport. Claude also exposed estimated cost, context and
+allowances; Codex's result exposed tokens. Missing metrics were left unknown.
+No main-agent usage was manufactured from worker figures. Native model calls
+were explicitly authorized; ordinary test runs do not make them.
+
+Reproduce synthetic checks with an absolute source path:
+
+```sh
+env PYTHONPATH="$PWD/src" python benchmarks/panel_refresh.py --seconds 20
+env PYTHONPATH="$PWD/src" python benchmarks/panel_refresh.py --background matrix --views both roster
+env PYTHONPATH="$PWD/src" python benchmarks/panel_refresh.py --background none --theme matrix --views both roster
+env PYTHONPATH="$PWD/src" python benchmarks/panel_refresh.py --background image --views both roster
+env PYTHONPATH="$PWD/src" python benchmarks/backgrounds.py
+env PYTHONPATH="$PWD/src" python benchmarks/runtime.py --rounds 3 --events 2000 --probes
+```
+
+The opt-in native check is `benchmarks/native_workers.py --allow-provider-calls`;
+it makes real billed calls and requires explicit authorization.
+
+### Worker scheduling
+
+A deterministic synthetic provider isolates local scheduling from provider
+latency. A question arriving immediately after an empty poll took **6.026 s**
+in 2.1.1's three-second heartbeat path and **0.026 s** with 2.1.2's event-triggered
+intake. Controller CPU was **0.0165 / 0.0168 s**, peak RSS **35.6 / 35.4 MiB**.
+This is one controlled regression scenario, not a provider speedup or latency
+percentile. Real Haiku/Luna calls above still include provider execution time.
+
+Reproduce with `benchmarks/worker_latency.py` using the revision's absolute
+`PYTHONPATH`; add `--heartbeat-only` for 2.1.1. The benchmark uses isolated state,
+a deterministic provider stub and HTTP MockTransport; it makes no billed calls.
+Incoming SSE intake and unchanged actual-call cooldown are also regression-tested.
+
+### Pickup polling under malformed or contended input
+
+`benchmarks/task_pickup.py` uses isolated synthetic local files. A thousand
+normal snapshot checks consumed **0.215 s CPU** (about 0.215 ms/check). One
+hundred checks each took **0.027 s CPU** with the notice database locked,
+**0.021 s** with an oversized record, **0.021 s** with deeply nested JSON, and
+**0.009 s** with a silent FIFO. Process peak RSS rose from **21.4 to 25.3 MiB**,
+including oversized fixture creation. SQLite contention skips the poll; it does
+not block the event loop for a busy timeout. Successful delivery bookkeeping is
+retried on later polls without releasing its live lease.

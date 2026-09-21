@@ -11,13 +11,40 @@ Documentation screenshots use synthetic main and worker measurements.
 
 ## Sources and integration
 
+Host, join and daemon startup configure telemetry by default for the detected
+Claude Code or Codex participant (`stats_auto_setup true`). Claude Code installs
+the shared statusline hook when absent, preserving an existing user segment.
+The hook resolves the calling participant – it never pins the last joiner's
+identity into global settings. Codex binds its automatic probe to that
+participant's exact thread. Mixed Claude/Codex rooms keep separate routes.
+The first Claude observation arrives when its host next invokes the hook;
+Codex probes immediately and then at `stats_interval` (120 seconds by default).
+
+Explicit `stats_command` settings override automatic routing. Clearing with
+`collab stats --source ''` is a persistent opt-out; `collab config --unset
+stats_command` restores automatic routing for a configured participant.
+`collab config stats_auto_setup false` disables automatic sources and future
+hook setup; it does not uninstall a hook already in Claude's settings.
+`share_stats off` stops main and worker publication. Existing explicit adapters
+and manual reports remain available.
+
 No transcript-directory scan or account credential collection is needed.
-Use the native hook/SDK in the agent that owns the session, then publish a
-snapshot with `collab stats --provider PROVIDER --report -`. Select the correct
-Collab identity with `COLLAB_HOME` or its stable agent-session environment.
-These snapshot adapters do not automatically install hooks or start another
-coding agent. Existing `--report` canonical JSON, `--source`, Claude statusline
-integration, and Codex `--agent codex` quota probing remain available.
+Native reports can still be supplied with `collab stats --provider PROVIDER
+--report -`. Select the correct Collab identity with `COLLAB_HOME` or its stable
+agent-session environment. These payload adapters do not start coding agents.
+Automatic collection only reports what the host exposes; absent metrics remain
+unknown. Inspect `collab stats`, `collab status --json` and `collab check` for
+source errors and stale participant refreshes.
+
+Roster refresh, activity publication, main collection, worker collection and
+stats publication run independently with one outstanding operation per route.
+A slow usage command no longer delays the daemon heartbeat or conversation.
+Participant refresh defaults to three seconds; presence and activity events
+request an immediate refresh without making the chat stream wait for HTTP.
+A roster older than `participant_stale_after` (30 seconds) becomes unknown even
+if the chat connection is still live. Working/idle is the last reported
+activity, distinct from online/offline connectivity. No reported activity means
+unknown, not idle.
 
 | Agent | Supported source | What remains unknown |
 |---|---|---|

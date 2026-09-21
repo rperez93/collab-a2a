@@ -24,9 +24,9 @@ def enabled(root: Path) -> bool:
 
 
 @contextmanager
-def _db(root):
-    path = Path(root) / "worker-notices.db"
-    db = sqlite3.connect(path, timeout=10, isolation_level=None)
+def _db(root, filename="worker-notices.db", *, timeout=10):
+    path = Path(root) / filename
+    db = sqlite3.connect(path, timeout=timeout, isolation_level=None)
     try:
         path.chmod(0o600)
         db.execute("BEGIN IMMEDIATE")

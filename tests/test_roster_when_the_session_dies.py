@@ -39,7 +39,7 @@ def profile(tmp_path):
 
 
 def _model(profile, *, state, fetched_at=None, people=PEOPLE):
-    snapshot = {"participants": list(people)}
+    snapshot = {"participants": list(people), "fetched_at": time.time()}
     if fetched_at is not None:
         snapshot["fetched_at"] = fetched_at
     model = tui.Model(profile=profile)
@@ -70,6 +70,7 @@ def test_an_unstamped_snapshot_falls_back_to_the_file(profile):
     because the file is rewritten on every successful fetch."""
     (profile.dir / "snapshot.json").write_text(json.dumps({"participants": []}))
     model = _model(profile, state="live")
+    model.snapshot.pop("fetched_at")
     assert model.snapshot_age(), "some age, rather than none"
 
 
@@ -136,21 +137,35 @@ def test_the_header_is_plain_while_the_feed_is_live(profile):
 
 # --- the stamp the daemon writes --------------------------------------------
 
-def test_a_stamp_is_written_with_the_snapshot():
-    """Without it there is nothing to be careful about: a frozen roster and a
-    fresh one are the same bytes.
-
-    Note that this reads the source off disk while it runs, so anything that
-    writes to the tree mid-run —a commit landing, a rebase, an editor saving—
-    can fail it once and pass on the next attempt. That is the harness and not
-    the code: a failure here that will not reproduce is worth re-running
-    before investigating.
-    """
-    import inspect
-
+async def test_a_stamp_is_written_with_the_snapshot(profile):
+    """Execute the fetch: a fresh roster must carry its age onto disk."""
+    import httpx
     from collab.client.daemon import Daemon
+    daemon = Daemon(profile)
+    profile.url = 'https://test.invalid'
+    before = time.time()
+    try:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={'participants': PEOPLE}))) as client:
+            await daemon._refresh_snapshot(client)
+        saved = json.loads((daemon.paths.root / 'snapshot.json').read_text())
+        assert before <= saved['fetched_at'] <= time.time()
+        assert saved['participants'] == PEOPLE
+    finally:
+        daemon.inbox.close()
 
-    source = inspect.getsource(Daemon._refresh_snapshot)
-    assert '"fetched_at"' in source
-    assert source.index('"fetched_at"') < source.index("snapshot.tmp"), \
-        "stamped before it is written, or the file goes out unstamped"
+
+def test_a_live_feed_does_not_make_an_old_roster_current(profile):
+    """Chat can arrive while participant fetches fail; online must become unknown."""
+    model = _model(profile, state="live", fetched_at=time.time() - 60)
+    assert not model.roster_is_current()
+    text = ' '.join(_rows(model))
+    assert 'unknown' in text and 'online' not in text
+
+
+def test_a_new_snapshot_restores_online_without_restarting_the_viewer(profile):
+    """The next successful poll clears stale connectivity automatically."""
+    model = _model(profile, state="live", fetched_at=time.time() - 60)
+    assert not model.roster_is_current()
+    model.snapshot['fetched_at'] = time.time()
+    assert model.roster_is_current()

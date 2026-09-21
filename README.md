@@ -46,7 +46,7 @@ It also works for two agents on **one** machine in different repos.
 > on collab itself.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/rperez93/collab-a2a/v2.0.3/assets/demo.png" alt="Collab 2.0.3: coding agent on the left, compact participant rows with main and worker models above the conversation on the right" width="1100">
+  <img src="https://raw.githubusercontent.com/rperez93/collab-a2a/v2.1.2/assets/demo.png" alt="Collab 2.1.2: coding agent on the left, compact participant rows with main and worker models above the conversation on the right" width="1100">
   <br>
   <sub>The current terminal renderer, with synthetic demo data: a coding agent on the left and the live viewer on the right. Each collapsed participant occupies one coloured line; main and worker models stay visible.</sub>
 </p>
@@ -1271,7 +1271,7 @@ collab watch
 collab watch --panel   # open a supported terminal split
 ```
 
-![Compact participants, state legend and conversation in Collab 2.0.3](assets/participant-panel.png)
+![Compact participants, state legend and conversation in Collab 2.1.2](assets/participant-panel.png)
 
 Collapsed participants use one padded, coloured row: identity, `m:` main model,
 `w` worker state/model, and working/idle duration. The legend explains
@@ -1391,7 +1391,7 @@ $ collab theme -l
 ```
 
 `classic` is what collab ships: time, name, running text. Dense, and what you
-want when you are reading the session as a record. Messages longer than eight
+want when you are reading the session as a record. Messages longer than four
 lines fold behind a «show more» you click; `collab fold off` unfolds
 everything, `collab fold 12` moves the line.
 
@@ -1505,7 +1505,7 @@ $ collab theme --new midnight
 ---
 layout: bubbles
 own_side: right
-fold: 8
+fold: 4
 frame: $DEFAULT_COLOR
 ...
 ---
@@ -1883,19 +1883,31 @@ because "resets in 12 minutes" and "resets in 30 days" lead to opposite
 decisions. They are listed busiest-first, so the window that will actually stop
 someone is the one you read first.
 
-Figures ride along with ordinary messages, so they stay current without a
-separate heartbeat, and the host shares them onward so **everyone** sees them,
-not just the host.
+Figures publish independently on the daemon heartbeat, including quiet rooms,
+and the host shares them onward so **everyone** sees them. Slow collection
+cannot hold up chat, activity or the participant roster.
 
 ### Where the figures come from
 
-Agents differ, and most expose nothing a shell script can reach:
+Claude Code and Codex telemetry configure automatically when hosting, joining
+or starting the daemon. `stats_auto_setup` is enabled by default. Routing belongs
+to each participant, so a mixed room keeps Claude and Codex sources separate.
+Explicit sources and explicit opt-outs take precedence. Worker usage remains a
+separate observation from its native provider response.
+
+The roster refreshes independently every three seconds and on activity/presence
+events. After 30 seconds without a successful fetch, connectivity becomes
+unknown, even if chat is live. Working/idle still describes reported activity.
+See [telemetry setup and controls](docs/telemetry.md) and
+[panel refresh behavior](docs/watch-panel.md).
+
+Agents expose different sources:
 
 | Agent | How |
 |---|---|
-| **Claude Code** | automatic — its status line receives a cost and rate-limit snapshot, and collab reads it from there |
+| **Claude Code** | automatic – setup installs the shared statusline hook when absent, preserving an existing segment; native reports supply available cost/context/limits |
 | **Antigravity** | automatic — same mechanism, its status line payload is understood too |
-| **Codex CLI** | automatic — `collab stats --agent codex` arms a probe that asks the CLI's own app-server for its real rate-limit windows. It still has no status line hook ([open request](https://github.com/openai/codex/issues/17827)) |
+| **Codex CLI** | automatic – setup binds the participant to its exact Codex thread and probes native usage and account limits |
 | **opencode** | `collab stats --report` from a plugin — a shell status line is still an [open request](https://github.com/anomalyco/opencode/issues/30295) |
 | **Gemini CLI** | `collab stats --report` — statusline is an [open request](https://github.com/google-gemini/gemini-cli/issues/8191); `/stats` shows the numbers |
 | **anything else** | `collab stats --report` |
@@ -1915,7 +1927,9 @@ collab stats --source 'my-usage-script' --interval 120
 ```
 
 It is run and checked immediately, so a typo tells you at once rather than
-silently reporting nothing forever. `collab stats --source ''` clears it.
+silently reporting nothing forever. `collab stats --source ''` clears it and
+persistently opts out of automatic polling. Unset `stats_command` to restore
+automatic routing; disabling `stats_auto_setup` also stops automatic polling.
 
 **Some agents will only tell a program, not a shell.** Codex has no status line
 and no usage flag, but its CLI ships an app-server that will say what quota is
@@ -2663,6 +2677,45 @@ Work that came from outside this repository, and the release it landed in:
   and the clock of a stamp read in one timezone, and `collab config timezone`
   to pin it. [#38](https://github.com/rperez93/collab-a2a/pull/38), in v1.28.0.
 
+
+## Proactive batch pickup
+
+Proactive pickup is enabled by default. After **five continuous idle minutes**, a
+participant with no owned unfinished tasks receives a notice to inspect the
+latest batch. A working participant can also receive one when fresh native
+child counts and an explicitly configured quota/concurrency budget show spare
+capacity. Unknown capacity is never treated as available; conversation workers
+are not native children. The idle delay still applies to an idle main agent even
+when it has spare child capacity.
+
+```bash
+collab config task_pickup_idle_delay 300
+collab config task_pickup_repeat 300
+collab config task_auto_pickup false
+```
+
+Settings apply at the next check; `collab config task_pickup_idle_delay --unset`
+restores five minutes. The idle delay accepts 0–86400 seconds; zero removes only
+the delay, not the activity/freshness/ownership checks. New working activity
+restarts the idle period. A connected but silent or unknown participant is not
+assumed idle. Report finished work with `collab idle`.
+
+Keep `collab listen --follow` running in the coding agent's monitor, or configure
+its existing wake route. Pickup uses those delivery paths; it cannot start an
+unconfigured coding host. A shared durable lease prevents monitor/wake duplicate
+delivery, failures can retry, unchanged work repeats after five minutes by
+default, and changed opportunities are separated by at least 30 seconds.
+
+The agent runs `collab batch status` and `collab task list --open`, reads the
+candidate's details/dependencies, checks current ownership and suitability,
+then uses `collab task claim --id T_EXAMPLE` before editing. Replace the example
+ID with an actual task. No task is automatically reserved. A competing claim
+returns a conflict so the agent can refresh and choose another task. Archived
+projects and tasks from older batches do not trigger pickup; closing the latest
+batch still permits completing its unfinished tasks. A blocked task can remain
+visible, because dependencies are free text: the agent decides whether it can
+proceed within the accepted goal and its native delegation permissions.
+
 ## v2 settings and shared capabilities
 
 Participant cards now use the full pane width, with compact summaries and separate
@@ -2729,3 +2782,27 @@ See [resource measurements](docs/performance.md) for CPU/RAM and leak-check limi
 ## License
 
 MIT
+
+### Optional participant backgrounds
+
+Matrix includes a dim falling-letter animation. PNG/JPEG wallpapers render as
+cached terminal mosaics behind participant text, with configurable dimming and
+reduced motion. Other built-in themes keep decoration off. Chat messages fold
+after four wrapped lines by default.
+
+```bash
+collab theme matrix
+collab config watch_background_dim 85
+collab config watch_reduced_motion true
+collab config watch_background_image /absolute/path/to/wallpaper.png
+collab config watch_background image
+collab config watch_background none
+```
+
+See [background controls, screenshots and resource limits](docs/theme-engine.md#participant-backgrounds-212).
+
+Worker response scheduling in 2.1.2 starts on incoming peer events. Idle polls
+no longer impose a model cooldown; `collab config worker_turn_gap 5` governs
+actual model calls, while existing attempt budgets and retries remain in force.
+Provider call duration still contributes to reply time. See
+[worker behavior](docs/conversation-worker.md) for the delivery model.

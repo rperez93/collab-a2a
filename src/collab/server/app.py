@@ -60,7 +60,7 @@ from .card import build_agent_card
 from .events import event_stream
 from .executor import CollabAgentExecutor
 from .hub import Hub
-from .store import ArchivedProject, Store, UnknownProject
+from .store import ArchivedProject, Store, UnknownProject, TaskClaimConflict
 
 #: How often to confirm the tunnel is still forwarding.
 TUNNEL_CHECK_SECONDS = 15.0
@@ -456,35 +456,10 @@ def create_app(
         # is a `quotas` map, which replaces the quota it describes, empty or
         # not. See `Hub.merge_stats`.
         await asyncio.to_thread(hub.merge_stats, user.id, dict(body.get("stats") or {}))
+        changed = await asyncio.to_thread(hub.update_identity, user.id, body)
         person = store.participant_by_id(user.id)
         if person is not None:
-            meta = dict(person.meta)
-            changed = False
-            # `color` travels here because it is the same kind of thing as
-            # the machine: something you declare about yourself that others see
-            # in their roster. Without it, a chosen colour would stay on the
-            # machine that chose it, which is the opposite of the point.
-            # PRESENT vs TRUTHY. `if body.get(key)` cannot tell "I am not
-            # reporting this" from "clear it": an empty string fell into the
-            # first, so `collab color` with no value said [ok] and everyone kept
-            # seeing the old colour, with nothing to explain why.
-            for key in ("machine", "machine_id", "user", "color"):
-                if key not in body:
-                    continue
-                value = str(body[key] or "")
-                if value == str(meta.get(key) or ""):
-                    # SAME AS BEFORE IS NOT A CHANGE. The daemon reports stats
-                    # on its heartbeat, so treating every report as a change
-                    # would publish an event six times a minute per participant
-                    # and refresh every roster in the room for nothing.
-                    continue
-                if value:
-                    meta[key] = value
-                else:
-                    meta.pop(key, None)
-                changed = True
             if changed:
-                await asyncio.to_thread(store.update_meta, user.id, meta)
                 # PUSHED, not waited for. Every other viewer re-reads the roster
                 # when a presence event arrives, and without this the only thing
                 # that moved it was the 9-second poll: you change your colour,
@@ -669,8 +644,12 @@ def create_app(
                 detail=(_content(str(body["detail"]), "detail")
                         if "detail" in body else None),
                 join_open_batch=joins_a_batch,
+                claim_owner=user.name if action == "claim" else None,
+                expected_updated_at=existing["updated_at"] if action != "propose" else None,
                 project=(project or None) if action == "propose" else project,
             )
+        except TaskClaimConflict as conflict:
+            raise HTTPException(status_code=409, detail=str(conflict))
         except UnknownProject as gone:
             raise HTTPException(
                 status_code=404,
