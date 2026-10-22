@@ -202,6 +202,14 @@ To share it with someone else, either:
        tailscale funnel {port}
 """
 
+NGROK_FAILED_HELP = """\
+ngrok is installed but did not start, so this session is reachable on this
+machine only. The usual cause is a missing authtoken — a free account needs it
+once:
+  ngrok config add-authtoken <token>     https://dashboard.ngrok.com/get-started/your-authtoken
+then re-run `collab host`. ngrok's own output is in {log}
+"""
+
 
 class TunnelSupervisor:
     """Keeps a tunnel up for the life of the hub.

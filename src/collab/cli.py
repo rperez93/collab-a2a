@@ -551,7 +551,8 @@ def cmd_host(args: argparse.Namespace) -> int:
     from .server.session import (HubConfig, create_session,
                                  hosted_sessions, join_line,
                                  resume_session, session_summary)
-    from .server.tunnel import NO_NGROK_HELP, free_port, local_ip, ngrok_version
+    from .server.tunnel import (NGROK_FAILED_HELP, NO_NGROK_HELP, free_port,
+                                local_ip, ngrok_path, ngrok_version)
 
     _warn_outside_venv()
     _preflight_update(args)
@@ -642,7 +643,11 @@ def cmd_host(args: argparse.Namespace) -> int:
         warn("tunnel disabled (--no-tunnel)")
     else:
         warn("no public tunnel")
-        print(NO_NGROK_HELP.format(port=cfg.port))
+        # «not found» sent people to install a binary they already had.
+        if ngrok_path():
+            print(NGROK_FAILED_HELP.format(log=cfg.dir / "ngrok.log"))
+        else:
+            print(NO_NGROK_HELP.format(port=cfg.port))
 
     # The host is participant #0: it joins its own session and comes up
     # listening, so it is live before anyone else connects.
@@ -4551,6 +4556,10 @@ def cmd_status(args: argparse.Namespace) -> int:
             print(json.dumps({"active": False, "home": str(collab_home())}))
         else:
             print(f"no active session in {collab_home()}")
+            # A path is not an answer to «what is going on here». Say what
+            # this machine has running, and the command that gets you into it.
+            print()
+            cmd_discover(argparse.Namespace(all=False, json=False))
         return 0
     status = read_status(profile)
     pid = is_running(profile)
