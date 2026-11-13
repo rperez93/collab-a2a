@@ -30,12 +30,19 @@ def ensure(profile) -> None:
     from .worker_telemetry import _write
     if not get('stats_auto_setup') or not share_stats_enabled():
         return
+    from .quota_sources import unknown_reason
     previous = state(profile)
     provider = detect()
     # A plain-terminal reconnect has no authority to replace an established
     # host, but an explicitly identified new thread must replace its predecessor.
-    if provider not in ('codex', 'claude-code'):
+    if not provider:
         return
+    # AN IDENTIFIED TOOL WITH NO ROUTE STILL REPLACES THE OLD ONE. Returning
+    # here for anything but Codex and Claude left a participant that rejoined
+    # under Gemini CLI with its earlier Codex route: `source` kept arming
+    # `--probe codex` with the old thread id, and the Codex account's windows
+    # were published under a Gemini participant. Recording the tool and why
+    # its quota is unknown is what takes that route away.
     thread = (os.environ.get('CODEX_THREAD_ID') or os.environ.get('CODEX_SESSION_ID') or '') if provider == 'codex' else ''
     explicit = 'stats_command' in load_config()
     if (previous.get('provider') == provider and previous.get('thread_id', '') == thread
@@ -43,6 +50,14 @@ def ensure(profile) -> None:
         return
     value = {'provider': provider, 'thread_id': thread, 'explicit': explicit,
              'at': time.time(), 'error': ''}
+    # ITS OWN KEY, NOT `error`. `collab check` reports a non-empty `error` as
+    # «automatic telemetry setup failed», which this is not — setup did exactly
+    # what it should — and an `error` would also defeat the unchanged-state
+    # return above, rewriting this file on every join and daemon start.
+    if (why := unknown_reason(provider)):
+        value['quota_unknown'] = why
+        _write(profile.dir / 'telemetry-setup.json', value)
+        return
     try:
         if provider == 'codex':
             value['thread_id'] = os.environ.get('CODEX_THREAD_ID') or os.environ.get('CODEX_SESSION_ID') or ''

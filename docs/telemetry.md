@@ -19,6 +19,10 @@ identity into global settings. Codex binds its automatic probe to that
 participant's exact thread. Mixed Claude/Codex rooms keep separate routes.
 The first Claude observation arrives when its host next invokes the hook;
 Codex probes immediately and then at `stats_interval` (120 seconds by default).
+Every other agent collab detects (Gemini CLI, opencode, Cursor, Copilot CLI,
+goose, Amp) is recorded with its quota unknown and the reason, which
+`collab stats` and `collab check` show; an earlier Codex or Claude route is
+not carried over, and nothing is published in place of the missing figure.
 
 Explicit `stats_command` settings override automatic routing. Clearing with
 `collab stats --source ''` is a persistent opt-out; `collab config --unset
@@ -50,12 +54,13 @@ if the chat connection is still live. Working/idle is the last reported
 activity, distinct from online/offline connectivity. No reported activity means
 unknown, not idle.
 
-| Agent | Supported source | What remains unknown |
-|---|---|---|
-| Codex | App-server `thread/tokenUsage/updated` payload; account limits via existing `collab stats --agent codex`; complete filtered `thread/list` children supplied by a local adapter | Another app-server cannot prove the active status of children in the original server; no guessed price |
-| Claude Code | Main statusline JSON for cost/context/limits; explicit subagent-statusline task snapshot for visible agent-task counts | Visible tasks are not a lifetime count; statusline context counters are not session token spend |
-| OpenCode | Local server/SDK session messages plus children and status snapshots | Pagination without completeness flags cannot establish session totals; context/quotas need an explicit source |
-| Cursor | SDK `getUsage()` aggregate usage and settled `cost.chargedCents` | CLI result text is not an SDK usage report; configured subagents do not establish running counts; unsupported context/quotas stay unknown |
+| Agent | Quota detected automatically | Supported source (adapter or report) | What remains unknown |
+|---|---|---|---|
+| Codex | yes – app-server probe, verified against codex-cli 0.169.0 | App-server `thread/tokenUsage/updated` payload; account limits via existing `collab stats --agent codex`; complete filtered `thread/list` children supplied by a local adapter | Another app-server cannot prove the active status of children in the original server; no guessed price |
+| Claude Code | yes – statusline hook | Main statusline JSON for cost/context/limits; explicit subagent-statusline task snapshot for visible agent-task counts | Visible tasks are not a lifetime count; statusline context counters are not session token spend |
+| OpenCode | no – not verified; quota unknown | Local server/SDK session messages plus children and status snapshots | Pagination without completeness flags cannot establish session totals; context/quotas need an explicit source |
+| Cursor | no – not verified; quota unknown | SDK `getUsage()` aggregate usage and settled `cost.chargedCents` | CLI result text is not an SDK usage report; configured subagents do not establish running counts; unsupported context/quotas stay unknown |
+| Gemini CLI | no – gemini-cli 0.32.1 fetches its quota with its own credentials and keeps it in process memory; no file, subcommand or shell variable exposes it | `collab stats --report` | Quota, cost and context; its shell exports only `GEMINI_CLI=1`, so a command cannot name its session |
 
 For Codex the optional adapter wrapper is `{ "params": <notification params>,
 "children": [...], "children_complete": true }`. Only use a complete,

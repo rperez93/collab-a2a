@@ -519,6 +519,8 @@ health. A source that exposes no metric cannot supply it automatically.
 
 Host/join/daemon startup sets up Claude Code and Codex telemetry by default.
 Claude must invoke its statusline hook before the first observation appears.
+For any other detected agent, «your quota is unknown — …» in `collab check` is
+the expected answer, not a fault: collab has no local source it can read.
 Explicit `stats_command`, including an empty string, takes precedence. Unset it
 to restore automatic routing. `stats_auto_setup false` disables auto setup and
 polling; `share_stats off` stops main and worker publication. An existing daemon
