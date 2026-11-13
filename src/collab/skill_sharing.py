@@ -134,7 +134,7 @@ def register_routes(app, store, require_user) -> None:
         """
         require_user(request)
         people = await asyncio.to_thread(store.participants)
-        return {'participants': [{'name': p.name, 'skills': p.meta.get('skills', [])}
+        return {'participants': [{'id': p.id, 'name': p.name, 'skills': p.meta.get('skills', [])}
                                  for p in people],
                 'untrusted': True}
 
