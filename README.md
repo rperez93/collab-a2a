@@ -286,9 +286,10 @@ collab host --domain your-name.ngrok-free.app
 collab config ngrok_domain your-name.ngrok-free.app   # or once, for every session
 ```
 
-The order is `--domain`, then the `ngrok_domain` setting, then the domain the
-session used last time — so correcting the setting takes effect at the next
-`collab host`. One domain serves one session at a time. If ngrok refuses to
+The order is `--domain`; then a domain you gave this session with `--domain`
+before, which it keeps; then the `ngrok_domain` setting, which also moves
+sessions that only ever had the default — so correcting the setting takes
+effect at the next `collab host`. One domain serves one session at a time. If ngrok refuses to
 start — for example because that endpoint is already online in another ngrok
 process (`ERR_NGROK_334`) — `collab host` prints ngrok's own reason and the
 remedy, and the session stays usable on this machine.
@@ -2345,7 +2346,7 @@ collab config --json              # the same table, for an agent to read
 | `timezone` | the zone dates and times are read in; an IANA name, or `auto` for the computer's own | — | `auto` |
 | `share_stats` | share your usage with the session | `collab stats --share on\|off` | `on` |
 | `rules` | print collab's rules of conduct at `host` and `join`; the pointer to the repo's own `COLLAB.md` always prints | — | `on` |
-| `ngrok_domain` | reserved ngrok domain `collab host` uses when `--domain` is not given, ahead of the domain a resumed session used before | `collab host --domain` | empty |
+| `ngrok_domain` | reserved ngrok domain `collab host` uses when `--domain` is not given; a session you gave its own `--domain` keeps it | `collab host --domain` | empty |
 | `watch_layout` | `split`, `tmux`, `chat` or `roster` | `collab watch --layout <l> --save` | `split` |
 | `watch_roster_size` | how much room the roster gets, in percent | `collab watch --roster-size <n> --save` | `30` |
 | `watch_roster_position` | `top`, `bottom`, `left` or `right` | `collab watch --roster-position <p> --save` | `top` |

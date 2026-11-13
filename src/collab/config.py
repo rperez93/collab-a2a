@@ -2044,16 +2044,40 @@ def set_ngrok_domain(value: str) -> str:
     return host
 
 
-def host_domain(flag: str, pinned: str, default: str) -> str:
-    """Which ngrok domain a `collab host` uses: `--domain`, else the configured
-    default, else the one the session was pinned to last time.
+def ngrok_domain_ignored() -> str:
+    """A stored `ngrok_domain` that is not a domain, so `collab host` can say
+    it is being ignored rather than quietly start on a random address."""
+    raw = load_config().get("ngrok_domain")
+    if raw in (None, ""):
+        return ""
+    return "" if _bare_host(raw) else str(raw)
 
-    THE DEFAULT BEFORE THE PIN. The other order meant a wrong or outdated
-    domain, once pinned, survived every correction of the setting — and the
-    334 advice («set `ngrok_domain`») became a no-op. Nothing is lost by
-    moving: every resume rotates the invite, so no link survives it anyway.
+
+def host_domain(flag: str, pinned: str, pinned_from: str,
+                default: str) -> tuple[str, str]:
+    """The ngrok domain a `collab host` uses, and where it came from.
+
+    `--domain` first. Then a pin the user CHOSE for this session — an earlier
+    `--domain`, or any pin older than this field («» reads as chosen, because
+    before `ngrok_domain` existed a flag was the only way to pin). Then the
+    configured default. Then a pin that only ever came from the default.
+
+    BOTH HALVES MATTER. Pin-before-default kept a wrong default through every
+    correction of the setting; default-before-pin moved a session the user
+    had deliberately put on its own domain (the ERR_NGROK_334 remedy) back
+    onto the shared one at its next plain `collab host` — measured: shared,
+    own, shared. The answer depends on who chose the pin.
+
+    Returns `(domain, source)`, source one of "flag", "default", "".
     """
-    return flag or default or pinned
+    flag = _bare_host(flag) if flag else ""
+    if flag:
+        return flag, "flag"
+    if pinned and pinned_from != "default":
+        return pinned, "flag"
+    if default:
+        return default, "default"
+    return pinned, pinned_from if pinned else ""
 
 
 def _write_theme(value: str) -> str:

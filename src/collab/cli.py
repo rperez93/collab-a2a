@@ -580,6 +580,14 @@ def tunnel_report(cfg: Any, *, installed: bool) -> list[str]:
         lines.append(f"       {dim('ngrok output: ' + str(log))}")
         lines.append(TUNNEL_YOURSELF_HELP.format(port=cfg.port))
         return lines
+    if error and not error.startswith("ngrok exited"):
+        # Our own words, not ngrok's: it ran and gave no URL in time — a
+        # network or reachability fault. NOT the authtoken paragraph: a
+        # missing authtoken exits at once with ERR_NGROK_4018 and never gets
+        # this far.
+        return [warn_text(f"no public tunnel — {error}"),
+                f"       {dim('ngrok output: ' + str(log))}",
+                TUNNEL_YOURSELF_HELP.format(port=cfg.port)]
     head = "no public tunnel" + (f" — {error}" if error else "")
     return [warn_text(head), NGROK_FAILED_HELP.format(log=log)]
 
@@ -588,7 +596,7 @@ def cmd_host(args: argparse.Namespace) -> int:
     from .server.session import (HubConfig, create_session,
                                  hosted_sessions, join_line,
                                  resume_session, session_summary)
-    from .config import host_domain, ngrok_domain
+    from .config import host_domain, ngrok_domain, ngrok_domain_ignored
     from .server.tunnel import free_port, local_ip, ngrok_path, ngrok_version
 
     _warn_outside_venv()
@@ -611,12 +619,21 @@ def cmd_host(args: argparse.Namespace) -> int:
     if wanted:
         previous = [c for c in previous if c.session_id == wanted] or previous
 
+    if args.domain and not host_domain(args.domain, "", "", "")[0]:
+        fail(f"--domain {args.domain!r} is not a domain ngrok can serve")
+        return 2
+    if ignored := ngrok_domain_ignored():
+        warn(f"ignoring the ngrok_domain setting {ignored!r}: not a domain "
+             "ngrok can serve — `collab config ngrok_domain <domain>` fixes it")
+
     if previous and not args.fresh:
-        domain = host_domain(args.domain, previous[0].domain, ngrok_domain())
+        domain, source = host_domain(args.domain, previous[0].domain,
+                                     previous[0].domain_from, ngrok_domain())
         cfg = resume_session(previous[0], port, bind=args.bind, domain=domain)
+        cfg.domain_from = source
         if args.title:
             cfg.title = args.title
-            cfg.save()
+        cfg.save()
         counts = session_summary(cfg)
         title = f" · {cfg.title}" if cfg.title else ""
         ok(f"resumed {c(cfg.session_id, '36')}{title}")
@@ -627,9 +644,11 @@ def cmd_host(args: argparse.Namespace) -> int:
         print(f"       {dim('new invite — any link shared before no longer works')}")
         print(f"       {dim('start clean instead with: collab host --fresh')}")
     else:
-        cfg = create_session(name, port, bind=args.bind,
-                             domain=host_domain(args.domain, "", ngrok_domain()),
+        domain, source = host_domain(args.domain, "", "", ngrok_domain())
+        cfg = create_session(name, port, bind=args.bind, domain=domain,
                              title=args.title or args.focus or "")
+        cfg.domain_from = source
+        cfg.save()
         if previous:
             note = ("started a new session; the previous one is kept and can be "
                     "brought back with `collab host --resume`")

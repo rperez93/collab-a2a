@@ -66,7 +66,8 @@ def test_a_log_with_no_recognisable_cause_yields_no_invented_one(tmp_path):
 def test_the_endpoint_in_use_refusal_names_the_reserved_domain_remedy():
     remedy = t.remedy_for("ERR_NGROK_334: The endpoint 'x' is already online")
     assert "--domain" in remedy
-    assert "ngrok_domain" in remedy, "the remedy must name the setting that fixes it for good"
+    assert "collab kill" in remedy, "resuming over a running hub starts a second one"
+    assert "keeps that domain" in remedy, "the fix must say it lasts"
 
 
 def test_a_real_ngrok_that_exits_hands_its_reason_to_the_supervisor(tmp_path, monkeypatch):
@@ -251,14 +252,77 @@ def test_the_default_domain_reaches_ngrok_on_create_and_a_corrected_one_on_resum
     assert _domains(hosting) == ["first.ngrok.app", "fixed.ngrok.app"]
 
 
-@pytest.mark.parametrize("flag, pinned, default, used", [
-    ("flag.ngrok.app", "pin.ngrok.app", "dflt.ngrok.app", "flag.ngrok.app"),
-    ("", "pin.ngrok.app", "dflt.ngrok.app", "dflt.ngrok.app"),
-    ("", "pin.ngrok.app", "", "pin.ngrok.app"),
-    ("", "", "", ""),
+def test_a_domain_chosen_for_one_session_survives_the_next_plain_host(hosting, monkeypatch):
+    """The ERR_NGROK_334 remedy puts a session on its own domain. With a
+    default set, the next plain `collab host` used to move it back onto the
+    shared one — measured: shared, own, shared — colliding again."""
+    _fake_ngrok_on_path(hosting, monkeypatch, "echo 'ERROR:  ERR_NGROK_334'\nexit 1\n")
+    config.set_ngrok_domain("shared.ngrok.app")
+
+    _host(hosting, "--fresh", "--domain", "own.ngrok.app")
+    _host(hosting)
+
+    assert _domains(hosting) == ["own.ngrok.app", "own.ngrok.app"]
+
+
+@pytest.mark.parametrize("flag, pinned, pinned_from, default, used", [
+    ("flag.ngrok.app", "pin.ngrok.app", "flag", "dflt.ngrok.app", ("flag.ngrok.app", "flag")),
+    ("https://Flag.ngrok.app/", "", "", "", ("flag.ngrok.app", "flag")),
+    ("", "pin.ngrok.app", "flag", "dflt.ngrok.app", ("pin.ngrok.app", "flag")),
+    ("", "pin.ngrok.app", "", "dflt.ngrok.app", ("pin.ngrok.app", "flag")),
+    ("", "pin.ngrok.app", "default", "dflt.ngrok.app", ("dflt.ngrok.app", "default")),
+    ("", "pin.ngrok.app", "default", "", ("pin.ngrok.app", "default")),
+    ("", "", "", "dflt.ngrok.app", ("dflt.ngrok.app", "default")),
+    ("", "", "", "", ("", "")),
 ])
-def test_the_flag_beats_the_default_which_beats_the_pin(flag, pinned, default, used):
-    assert config.host_domain(flag, pinned, default) == used
+def test_a_chosen_pin_beats_the_default_and_a_defaulted_pin_follows_it(
+        flag, pinned, pinned_from, default, used):
+    """A pin from before `domain_from` existed reads as chosen: a flag was
+    the only way to pin then."""
+    assert config.host_domain(flag, pinned, pinned_from, default) == used
+
+
+def test_a_bad_domain_flag_is_refused_before_any_hub_starts(hosting, monkeypatch, capsys):
+    from collab.cli import main
+    assert main(["host", "--no-daemon", "--no-update-check", "--domain", "not a domain"]) == 2
+    said = capsys.readouterr()
+    assert "not a domain ngrok can serve" in said.out + said.err
+
+
+def test_an_invalid_stored_default_is_named_not_silently_dropped(hosting, monkeypatch):
+    import json
+    path = config.global_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"ngrok_domain": "https://bad domain/"}))
+    config._CACHE.clear()
+    assert config.ngrok_domain_ignored() == "https://bad domain/"
+    config.set_ngrok_domain("ok.ngrok.app")
+    assert config.ngrok_domain_ignored() == ""
+
+
+def test_the_reason_is_read_from_the_end_of_a_long_run(tmp_path):
+    """A head-capped read returned an early, superseded failure from a 92 KB log."""
+    log = tmp_path / "ngrok.log"
+    log.write_text("ERROR:  failed to start tunnel: early. x\nERROR:  ERR_NGROK_1\n"
+                   + "t=1 lvl=info msg=noise\n" * 4000
+                   + "ERROR:  failed to start tunnel: final. x\nERROR:  ERR_NGROK_2\n")
+    assert t.failure_from_log(str(log), 0) == "ERR_NGROK_2: final"
+
+
+def test_a_tunnel_that_never_came_up_is_not_called_an_authtoken_problem(tmp_path):
+    """A missing authtoken exits at once with ERR_NGROK_4018; a 25 s silence
+    is a network fault, and the authtoken paragraph would send people to fix
+    the one thing that is fine."""
+    from collab.cli import tunnel_report
+    from collab.server.session import HubConfig
+
+    cfg = HubConfig(session_id="s_x", host_name="h", port=9000, bind="127.0.0.1",
+                    invite="i", host_token="tok", home=str(tmp_path),
+                    tunnel_error="ngrok gave no public URL within 25 s")
+    out = "\n".join(tunnel_report(cfg, installed=True))
+    assert "within 25 s" in out
+    assert "add-authtoken" not in out
+    assert "ngrok.log" in out
 
 
 def test_a_hand_edited_default_that_is_not_a_domain_never_reaches_ngrok(hosting, monkeypatch):
