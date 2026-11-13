@@ -2073,11 +2073,22 @@ def host_domain(flag: str, pinned: str, pinned_from: str,
     flag = _bare_host(flag) if flag else ""
     if flag:
         return flag, "flag"
-    if pinned and pinned_from != "default":
+    # «» IS CHOSEN ONLY WHEN IT DIFFERS FROM THE DEFAULT. A 2.1.2 whole-object
+    # save (its `url --rotate`, its resume) drops `domain_from`, and a pin that
+    # came from the default would then read as chosen and stick through every
+    # correction — finding 3 again. A legacy pin equal to the default is the
+    # default either way.
+    chosen = pinned_from == "flag" or (pinned_from == "" and pinned != default)
+    if pinned and chosen:
         return pinned, "flag"
     if default:
         return default, "default"
-    return pinned, pinned_from if pinned else ""
+    # A pin that only ever came from the default FOLLOWS it — including when
+    # the default is cleared, which is what someone does once that domain is
+    # gone; holding on to it kept asking ngrok for a domain nobody owns.
+    if pinned and pinned_from == "default":
+        return "", ""
+    return pinned, "flag" if pinned else ""
 
 
 def _write_theme(value: str) -> str:

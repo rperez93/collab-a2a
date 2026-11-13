@@ -288,8 +288,8 @@ collab config ngrok_domain your-name.ngrok-free.app   # or once, for every sessi
 
 The order is `--domain`; then a domain you gave this session with `--domain`
 before, which it keeps; then the `ngrok_domain` setting, which also moves
-sessions that only ever had the default — so correcting the setting takes
-effect at the next `collab host`. One domain serves one session at a time. If ngrok refuses to
+sessions that only ever had the default — so correcting or clearing the
+setting takes effect at the next `collab host`. One domain serves one session at a time. If ngrok refuses to
 start — for example because that endpoint is already online in another ngrok
 process (`ERR_NGROK_334`) — `collab host` prints ngrok's own reason and the
 remedy, and the session stays usable on this machine.
