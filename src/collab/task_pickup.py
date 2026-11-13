@@ -38,6 +38,55 @@ def _fresh(value, now, age):
     return type(value) in (int, float) and 0 <= now - value <= age
 
 
+# Match the board's open-task definition. Unknown states still count as work;
+# only explicit terminal outcomes release an owner's pickup eligibility.
+_TERMINAL = frozenset({'TASK_STATE_COMPLETED', 'TASK_STATE_CANCELED',
+                       'TASK_STATE_FAILED', 'TASK_STATE_REJECTED'})
+
+
+def _board(snapshot):
+    batch = snapshot.get('batch') or {}
+    me = snapshot.get('you')
+    tasks = snapshot.get('tasks', [])
+    if (not batch.get('id') or not me or len(tasks) > 4096
+            or len(snapshot.get('participants', [])) > 1024):
+        return None
+    archived = {p['id'] for p in snapshot.get('projects', [])
+                if p.get('archived_at') is not None}
+    candidates = sorted(t['id'] for t in tasks if t.get('batch') == batch['id']
+                        and t.get('state') == 'TASK_STATE_SUBMITTED'
+                        and not t.get('owner') and t.get('project') not in archived)
+    own_work = any(t.get('owner') == me and t.get('state') not in _TERMINAL
+                   for t in tasks)
+    return batch['id'], candidates, own_work
+
+
+def join_offer(snapshot):
+    """An immediate foreground offer, never an assumption of idle capacity.
+
+    Called with the authenticated join response/current snapshot, not a quiet
+    socket or cached status. No peer title/detail becomes an instruction.
+    """
+    from .runtime_settings import get
+    if not get('task_auto_pickup'):
+        return None
+    try:
+        board = _board(snapshot)
+        if board is None:
+            return None
+        _, candidates, own_work = board
+        if not candidates or own_work:
+            return None
+        return (f'Batch work available: {len(candidates)} unclaimed task(s). '
+                'If ready for work within the accepted goal, run `collab task list --open`, '
+                'inspect dependencies and ownership, then claim a suitable task now; '
+                'do not wait for the lead. Split large tasks into bounded deliverables. '
+                'Recheck ownership on a claim conflict. This offer does not reserve work '
+                'or imply spare capacity.')
+    except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        return None
+
+
 def opportunity(root, now):
     from .runtime_settings import get
     from .capacity import estimate_capacity
@@ -51,22 +100,14 @@ def opportunity(root, now):
                 or not _fresh(status.get('heartbeat'), now, age)
                 or not _fresh(snapshot.get('fetched_at'), now, age)):
             return None
-        batch = snapshot.get('batch') or {}
-        me = snapshot.get('you')
-        if not batch.get('id') or not me:
+        board = _board(snapshot)
+        if board is None:
             return None
-        tasks = snapshot.get('tasks', [])
-        if len(tasks) > 4096 or len(snapshot.get('participants', [])) > 1024:
-            return None
-        archived = {p['id'] for p in snapshot.get('projects', []) if p.get('archived_at') is not None}
-        candidates = sorted(t['id'] for t in tasks if t.get('batch') == batch['id']
-                            and t.get('state') == 'TASK_STATE_SUBMITTED'
-                            and not t.get('owner') and t.get('project') not in archived)
+        batch_id, candidates, own_work = board
         if not candidates:
             return None
         activity = status.get('activity') or {}
         state = activity.get('state')
-        own_work = any(t.get('owner') == me for t in tasks)
         idle = (state == 'idle' and not own_work
                 and _fresh(activity.get('since'), now, 365 * 86400)
                 and now - activity['since'] >= get('task_pickup_idle_delay'))
@@ -85,7 +126,7 @@ def opportunity(root, now):
         reason = 'idle' if idle else 'capacity' if spare and state == 'working' else None
         if reason is None:
             return None
-        fingerprint = hashlib.sha256(json.dumps([batch['id'], candidates, reason]).encode()).hexdigest()
+        fingerprint = hashlib.sha256(json.dumps([batch_id, candidates, reason]).encode()).hexdigest()
         return fingerprint, len(candidates)
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
         return None

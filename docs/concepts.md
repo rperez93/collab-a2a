@@ -986,3 +986,15 @@ reading a publication does not install or execute it. Capacity estimates combine
 fresh applicable account allowances with declared child budgets and native slots;
 missing data produces unknown. The [settings editor](settings-panel.md) and CLI
 share validation and storage, with operational changes reloaded at the next use.
+
+## Work offered at join and after completion
+
+Joining a batch prints an immediate offer when unclaimed work exists and the
+participant has no unfinished owned tasks. The offer uses the existing snapshot,
+adds no poll, and reserves nothing: inspect task dependencies and claim suitable
+work before editing. Terminal task records are explicitly ignored if present in a cached/alternate
+board payload; fresh hub snapshots already contain open tasks only. Active or
+unknown task states still block idle pickup. Completing your current task prints
+a next-work prompt immediately, without another network request.
+Background notices retain the explicit-idle delay and fresh-capacity checks.
+`task_auto_pickup=false` disables both offers and background notices.

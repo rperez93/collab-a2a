@@ -2723,7 +2723,13 @@ Work that came from outside this repository, and the release it landed in:
 
 ## Proactive batch pickup
 
-Proactive pickup is enabled by default. After **five continuous idle minutes**, a
+Proactive pickup is enabled by default. Joining a batch offers unclaimed work
+immediately when you own no unfinished task. Completing your current task also
+prompts you to inspect and claim suitable next work without waiting for the lead.
+These foreground prompts reserve nothing and add no network requests. Inspect
+dependencies before claiming, and split large tasks into bounded deliverables.
+
+After **five continuous idle minutes**, a
 participant with no owned unfinished tasks receives a notice to inspect the
 latest batch. A working participant can also receive one when fresh native
 child counts and an explicitly configured quota/concurrency budget show spare
