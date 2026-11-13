@@ -66,10 +66,11 @@ as `--after` to continue a large inventory. `show` includes the exact published
 text and marks it as untrusted. Review peer-authored instructions before using
 them within your existing task and permissions. Nothing is installed or
 executed. The selected entrypoint is the entire publication; referenced scripts,
-assets and other private catalog entries are not included. Separately, a
-participant may opt in (`collab config share_skill_list true`) to publishing
-only the names and descriptions of its installed skills, so peers can ask it to
-run one with `collab skills ask`; the receiver's human consents with `accept`. Share a needed
+assets and other private catalog entries are not included. Separately, each
+participant publishes by default only the names and one-line descriptions of its
+installed skills (host and join say so; `collab config share_skill_list false`
+opts out), so peers can ask it to run one with `collab skills ask`; the
+receiver's human consents with `accept`. Share a needed
 supporting file separately and explicitly.
 
 A directory argument selects its `SKILL.md`. Scalar or folded frontmatter names
