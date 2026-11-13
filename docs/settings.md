@@ -32,15 +32,22 @@ are implementation invariants. They are not user-tunable permission bypasses.
 Worker attempt history retains at most 10,000 calls over 24 hours; this hard
 ceiling remains even with a more permissive configurable rolling budget.
 
-Host and join enable a conversation worker by default in 2.1.0, using Codex
-and `worker_codex_model` (Luna by default). It may make model calls as messages
+Host and join enable a conversation worker by default, on the same coding
+agent as the participant and its lower-tier model (`worker_claude_model`, Haiku,
+under Claude Code; `worker_codex_model`, Luna, under Codex; Codex when the host
+is not recognised). It may make model calls as messages
 arrive. Its initial scope permits coordination using supplied facts and
 escalates missing context, decisions, blockers and conflicting edits. Supply
 actual task progress with `collab worker context` and keep a monitor or wake
-armed for decisions. Set `collab config worker_agent claude` before setup to use
-Claude/Haiku 4.5 instead, or `collab config worker_auto_start false` to opt out of
-automatic setup. These settings affect unconfigured sessions; existing provider
-choices and `collab worker off` survive reconnects and daemon starts.
+armed for decisions. Set `collab config worker_agent codex` or `claude` to pin a
+provider instead of following the host (`auto`), or `collab config
+worker_auto_start false` to opt out of automatic setup. An untouched automatic
+worker follows the host on the next join; explicit provider choices and
+`collab worker off` survive reconnects and daemon starts. While the worker is
+enabled it is the participant's only voice: `collab send` queues the exact text
+on its outbox, delivered even during a model turn, instead of posting directly.
+A worker reply that promises to get back to a peer without escalating is turned
+into a pending decision, so the question still reaches the main agent.
 `--no-daemon` prepares the worker but does not run it. Provider failures remain
 visible in `collab worker status`; there is no automatic provider fallback.
 
@@ -67,7 +74,7 @@ visible in `collab worker status`; there is no automatic provider fallback.
 | `task_pickup_repeat` | `300` | seconds before repeating an unchanged batch pickup notification |
 | `share_skill_list` | `True` | publish installed skill names and one-line descriptions to the session |
 | `worker_auto_start` | `True` | enable a worker on session setup unless explicitly turned off |
-| `worker_agent` | `codex` | provider for automatic worker setup; codex or claude |
+| `worker_agent` | `auto` | provider for automatic worker setup; auto follows the coding agent, else codex or claude |
 | `worker_turn_gap` | `5` | minimum seconds between conversation worker turns |
 | `worker_timeout` | `60` | deadline in seconds for a conversation worker call |
 | `worker_max_attempts` | `60` | maximum model calls in each worker budget window |

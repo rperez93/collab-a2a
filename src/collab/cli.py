@@ -1342,6 +1342,35 @@ def cmd_send(args: argparse.Namespace) -> int:
     if reason := message_refusal(text):
         fail(reason)
         return 1
+    # While a worker is enabled it is this participant's only voice in the
+    # session: a direct post would race its replies and say things it does not
+    # know. Queue the exact text on its durable outbox instead of refusing.
+    from .worker import Store
+    store = Store(profile.dir)
+    if store.enabled():
+        if args.to:
+            # A direct post failed at once on an unknown name; a queued one
+            # would retry forever. Ask the hub first; offline still queues.
+            try:
+                with _client(profile) as client:
+                    names = {p.get("name") for p in client.participants().get("participants", [])}
+                if names and args.to not in names:
+                    fail(f"no participant named {args.to!r} in this session")
+                    return 1
+            except HubError:
+                pass
+        try:
+            record_id = store.send(text, to=args.to or "",
+                                   room="" if args.to else (args.room or profile.room or ""),
+                                   thread=args.thread or "")
+        except ValueError as exc:
+            fail(str(exc))
+            return 1
+        onboard.ensure_daemon(profile)
+        target = f"@{args.to}" if args.to else f"#{args.room or profile.room}"
+        ok(f"queued for {target} through your worker: {record_id}")
+        print(dim("  your worker is enabled, so it delivers what you send; `collab worker status` shows delivery"))
+        return 0
     env = Envelope(
         kind=KIND_CHAT, text=text, sender=profile.name,
         room=None if args.to else (args.room or profile.room),

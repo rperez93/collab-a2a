@@ -118,7 +118,7 @@ the project. A session belongs to a repository; a theme does not.
 | `task_pickup_repeat` | seconds before repeating an unchanged batch pickup notification; default `300` | the user wants to tune this behavior; read current value first |
 | `share_skill_list` | publish installed skill names and one-line descriptions to the session; default `True` | the user wants to tune this behavior; read current value first |
 | `worker_auto_start` | enable a worker on session setup unless explicitly turned off; default `True` | the user wants to tune this behavior; read current value first |
-| `worker_agent` | provider for automatic worker setup; codex or claude; default `codex` | the user wants to tune this behavior; read current value first |
+| `worker_agent` | provider for automatic worker setup; auto follows the coding agent, else codex or claude; default `auto` | the user wants to tune this behavior; read current value first |
 | `worker_turn_gap` | minimum seconds between conversation worker turns; default `5` | the user wants to tune this behavior; read current value first |
 | `worker_timeout` | deadline in seconds for a conversation worker call; default `60` | the user wants to tune this behavior; read current value first |
 | `worker_max_attempts` | maximum model calls in each worker budget window; default `60` | the user wants to tune this behavior; read current value first |

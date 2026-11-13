@@ -27,6 +27,31 @@ DEFAULT_SCOPE = (
     "task context to the main agent. Never invent progress or promise code changes."
 )
 SUPPORTED_AGENTS = ("codex", "claude", "opencode", "cursor", "command")
+# The coding agent running collab (hosttool.detect) and the worker provider of
+# the same family. Tools without a worker provider fall back to codex.
+HOST_PROVIDERS = {"claude-code": "claude", "codex": "codex", "opencode": "opencode",
+                  "cursor": "cursor"}
+
+
+def host_provider(env: dict[str, str] | None = None) -> str:
+    """The host's own worker provider, or '' when unknown or not runnable.
+
+    A provider with no default model (OpenCode, Cursor until configured) would
+    give a worker that cannot run; a working fallback beats a matching one.
+    """
+    from .hosttool import detect
+    from .runtime_settings import get
+    provider = HOST_PROVIDERS.get(detect(env), "")
+    return provider if provider and get(f"worker_{provider}_model") else ""
+
+
+def default_agent(env: dict[str, str] | None = None) -> str:
+    """The provider automatic setup uses: the host's own family when known."""
+    from .runtime_settings import get
+    chosen = get("worker_agent")
+    if chosen != "auto":
+        return chosen
+    return host_provider(env) or "codex"
 
 
 def _text(value: Any, label: str, *, empty: bool = False) -> str:
@@ -116,7 +141,7 @@ class Store:
         with self._db() as db:
             state = self._state(db)
             state.update(config=config, generation=state["generation"] + 1,
-                         running=False, error="", retry_at=0)
+                         running=False, error="", retry_at=0, auto=False)
             self._save(db, state)
         return config
 
@@ -132,18 +157,38 @@ class Store:
             return
         with self._db() as db:
             state = self._state(db)
+            agent = default_agent()
             if state["config"] is not None or state["generation"]:
+                # A config automatic setup chose, still untouched, follows the
+                # coding agent: a Claude main must not keep a Codex worker
+                # because its first setup ran from a plain shell or before the
+                # default changed. Unknown hosts, hosts whose provider has no
+                # model, and explicit choices stay as they are.
+                config = state["config"] or {}
+                # States written before the flag existed: generation 1 with
+                # the untouched default scope and model is automatic setup.
+                auto = state.get("auto", state["generation"] == 1
+                                 and config.get("scope") == DEFAULT_SCOPE
+                                 and config.get("model_default"))
+                if (auto and config.get("enabled") and host_provider()
+                        and get("worker_agent") == "auto" and config.get("agent") != agent):
+                    config = _config({"agent": agent, "scope": config["scope"]},
+                                     allow_empty_model=True)
+                    state.update(config=config, generation=state["generation"] + 1,
+                                 error="" if config["model"] else
+                                 "Worker requires a model; set worker_" + agent + "_model")
+                    self._save(db, state)
                 return
             # Empty model settings are valid (other providers require a local
             # choice). Automatic setup must not turn that into a failed join:
             # retain the choice and expose an error without choosing a fallback.
             # The runtime rejects empty models before spawning any provider and
             # reads the corrected default on the next turn.
-            config = _config({"agent": get("worker_agent"), "scope": DEFAULT_SCOPE},
+            config = _config({"agent": agent, "scope": DEFAULT_SCOPE},
                              allow_empty_model=True)
             error = ("Worker requires a model; set worker_" + config["agent"] + "_model"
                      if not config["model"] else "")
-            state.update(config=config, generation=1, error=error)
+            state.update(config=config, generation=1, error=error, auto=True)
             self._save(db, state)
 
     def off(self) -> None:
@@ -182,7 +227,7 @@ class Store:
         with self._db() as db:
             return self._add(db, "context", {"text": text})
 
-    def send(self, text: str, *, to: str, room: str = "") -> str:
+    def send(self, text: str, *, to: str, room: str = "", thread: str = "") -> str:
         """Queue the main agent's exact message without asking a model to repeat it.
 
         Context supplies facts and can legitimately produce no reply. Treating
@@ -191,16 +236,30 @@ class Store:
         the hub validates the address, and failed delivery remains visible.
         """
         text = _text(text, "message")
-        to = _text(to, "recipient")
+        # An empty recipient is a room message: the main agent's own `send`
+        # is routed here while its worker is enabled.
+        to = _text(to, "recipient", empty=True)
         room = _text(room, "room", empty=True)
+        thread = _text(thread, "thread", empty=True)
         if len(text) > 8000:
             raise ValueError("message exceeds 8000 characters")
-        if len(to) > 200 or len(room) > 200 or any("\0" in value for value in (text, to, room)):
+        if not to.strip() and not room.strip():
+            raise ValueError("a queued message needs a recipient or a room")
+        if (len(to) > 200 or len(room) > 200 or len(thread) > 200
+                or any("\0" in value for value in (text, to, room, thread))):
             raise ValueError("invalid message routing or NUL in message")
         with self._db() as db:
             if not (self._state(db)["config"] or {}).get("enabled"):
                 raise ValueError("start the worker before queueing a message")
-            return self._add(db, "outbox", {"text": text, "to": to, "room": room})
+            data = {"text": text, "to": to, "room": room}
+            if thread:
+                data["thread"] = thread
+            return self._add(db, "outbox", data)
+
+    def enabled(self) -> bool:
+        if not self.path.exists():
+            return False
+        return bool((self.configuration() or {}).get("enabled"))
 
     def pending(self) -> list[dict[str, Any]]:
         with self._db() as db:

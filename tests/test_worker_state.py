@@ -315,3 +315,34 @@ def test_invalid_retry_times_never_wedge_an_outbox_record(tmp_path, retry_at):
     with pytest.raises(ValueError, match="retry time"):
         store.defer(old["id"], retry_at=retry_at, error="offline")
     assert store.outbox()[0] == old
+
+
+def test_main_send_while_worker_enabled_is_queued_not_posted(tmp_path, monkeypatch, capsys):
+    """R3: the main agent has one voice while its worker is on: the outbox."""
+    import argparse
+    from collab import cli
+    from collab.config import SessionProfile
+    from collab.client import onboard
+    profile = SessionProfile(session_id='test', url='http://hub.invalid', name='alice',
+                             host_name='bob', token='t', home=str(tmp_path), room='general')
+    monkeypatch.setattr(cli, '_require_own_profile', lambda args: profile)
+    monkeypatch.setattr(onboard, 'ensure_daemon', lambda p, **kw: None)
+    class Hub:
+        def __enter__(self): return self
+        def __exit__(self, *exc): return False
+        def participants(self): return {'participants': [{'name': 'alice'}, {'name': 'bob'}]}
+        def send(self, env): raise AssertionError('posted directly')
+    monkeypatch.setattr(cli, '_client', lambda p: Hub())
+    store = worker.Store(profile.dir)
+    store.configure({'agent': 'claude', 'scope': 'Coordinate'})
+    args = argparse.Namespace(text=['ship', 'it'], to=None, room=None, thread='t1')
+    assert cli.cmd_send(args) == 0
+    args = argparse.Namespace(text=['for', 'you'], to='bob', room=None, thread=None)
+    assert cli.cmd_send(args) == 0
+    args = argparse.Namespace(text=['typo'], to='bobb', room=None, thread=None)
+    assert cli.cmd_send(args) == 1, 'an unknown recipient fails now, not in a retry loop'
+    args = argparse.Namespace(text=['in', 'ops'], to=None, room='ops', thread=None)
+    assert cli.cmd_send(args) == 0
+    queued = [(r['text'], r['to'], r['room'], r.get('thread')) for r in store.outbox()]
+    assert queued == [('ship it', '', 'general', 't1'), ('for you', 'bob', '', None),
+                      ('in ops', '', 'ops', None)]
