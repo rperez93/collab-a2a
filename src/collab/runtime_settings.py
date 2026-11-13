@@ -45,8 +45,8 @@ def _model(value):
     return value
 
 def _worker_agent(value):
-    if value not in ("codex", "claude"):
-        raise ValueError("expected codex or claude; use worker start for other providers")
+    if value not in ("auto", "codex", "claude"):
+        raise ValueError("expected auto, codex or claude; use worker start for other providers")
     return value
 
 def _background(value):
@@ -99,7 +99,7 @@ SPECS = (
  ('task_pickup_repeat', 300, _integer(15, 86400), 'seconds before repeating an unchanged batch pickup notification'),
  ('share_skill_list', True, _bool, 'publish installed skill names and one-line descriptions to the session'),
  ('worker_auto_start', True, _bool, 'enable a worker on session setup unless explicitly turned off'),
- ('worker_agent', 'codex', _worker_agent, 'provider for automatic worker setup; codex or claude'),
+ ('worker_agent', 'auto', _worker_agent, 'provider for automatic worker setup; auto follows the coding agent, else codex or claude'),
  ('worker_turn_gap', 5, _integer(1, 3600), 'minimum seconds between conversation worker turns'),
  ('worker_timeout', 60, _integer(1, 600), 'deadline in seconds for a conversation worker call'),
  ('worker_max_attempts', 60, _integer(1, 10000), 'maximum model calls in each worker budget window'),

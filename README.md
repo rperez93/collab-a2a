@@ -355,7 +355,8 @@ told to arm a monitor it does not have arms nothing and stops looking.
 `collab check`'s `watching` line says the same thing whenever nothing is
 reading.
 
-Host and join enable a Codex/Luna conversation worker by default. Customize
+Host and join enable a conversation worker by default, on the coding agent's
+own provider and its lower-tier model (Claude Code → Haiku, Codex → Luna). Customize
 its provider and scope and supply current task facts:
 
 ```bash
@@ -382,7 +383,9 @@ Cursor require explicit models. Model failures never switch to a premium model.
 See [conversation workers](docs/conversation-worker.md) for setup, authentication,
 scope, limits, and the return path. Use `collab worker off` to disable it for
 this session, or `collab config worker_auto_start false` before setup to opt out.
-`collab config worker_agent claude` selects Claude/Haiku 4.5 for unconfigured sessions.
+Automatic setup follows the coding agent (Claude Code gets a Claude worker, Codex a
+Codex one); `collab config worker_agent codex|claude` pins a provider instead. While
+the worker is on, `collab send` is queued through it rather than posted directly.
 Explicit off and provider choices survive reconnects.
 
 Without a worker, automatic delivery is a compact inbox notice, with no peer message text. One

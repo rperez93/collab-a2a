@@ -117,3 +117,70 @@ def test_an_empty_default_model_reports_an_error_without_blocking_the_listener(t
     assert status['config']['model_default']
     with pytest.raises(ValueError, match='must be non-empty'):
         worker.Store(tmp_path / 'explicit').configure({'agent': agent, 'scope': 'Coordinate'})
+
+
+def test_automatic_setup_follows_the_coding_agent_running_collab(tmp_path, monkeypatch):
+    """A Claude main gets a Claude worker; a Codex main a Codex one (R3)."""
+    monkeypatch.setenv('CLAUDECODE', '1')
+    store = worker.Store(tmp_path / 'claude')
+    store.ensure_default()
+    assert store.configuration()['agent'] == 'claude'
+    monkeypatch.delenv('CLAUDECODE')
+    monkeypatch.setenv('CODEX_THREAD_ID', 'thread-1')
+    store = worker.Store(tmp_path / 'codex')
+    store.ensure_default()
+    assert store.configuration()['agent'] == 'codex'
+
+
+def test_an_untouched_automatic_worker_realigns_but_an_explicit_one_stays(tmp_path, monkeypatch):
+    """Setup from a plain shell picked codex; the Claude main fixes it on rejoin."""
+    auto = worker.Store(tmp_path / 'auto')
+    auto.ensure_default()  # no host marker: falls back to codex
+    assert auto.configuration()['agent'] == 'codex'
+    explicit = worker.Store(tmp_path / 'explicit')
+    explicit.configure({'agent': 'codex', 'scope': 'Only coordinate tests'})
+    monkeypatch.setenv('CLAUDECODE', '1')
+    auto.ensure_default()
+    explicit.ensure_default()
+    assert auto.configuration()['agent'] == 'claude'
+    assert auto.configuration()['scope'] == worker.DEFAULT_SCOPE
+    assert explicit.configuration()['agent'] == 'codex'
+
+
+def test_an_explicit_worker_agent_setting_beats_detection(tmp_path, monkeypatch):
+    from collab import runtime_settings
+    runtime_settings.set_value('worker_agent', 'codex')
+    monkeypatch.setenv('CLAUDECODE', '1')
+    store = worker.Store(tmp_path)
+    store.ensure_default()
+    assert store.configuration()['agent'] == 'codex'
+
+
+def test_hosts_without_a_runnable_provider_keep_a_working_worker(tmp_path, monkeypatch):
+    """OpenCode has no default model; an unmapped host has no provider at all."""
+    monkeypatch.setenv('OPENCODE_CLIENT', '1')
+    store = worker.Store(tmp_path / 'opencode')
+    store.ensure_default()
+    assert store.configuration()['agent'] == 'codex' and store.configuration()['model']
+    monkeypatch.delenv('OPENCODE_CLIENT')
+    claude = worker.Store(tmp_path / 'claude')
+    monkeypatch.setenv('CLAUDECODE', '1')
+    claude.ensure_default()
+    monkeypatch.delenv('CLAUDECODE')
+    monkeypatch.setenv('GEMINI_CLI', '1')
+    generation = claude.snapshot()['generation']
+    claude.ensure_default()
+    assert claude.configuration()['agent'] == 'claude'
+    assert claude.snapshot()['generation'] == generation, 'no flapping, no cancelled turn'
+
+
+def test_a_legacy_automatic_state_without_the_flag_realigns(tmp_path, monkeypatch):
+    store = worker.Store(tmp_path)
+    store.ensure_default()
+    with store._db() as db:  # as written before the flag existed
+        state = store._state(db)
+        state.pop('auto')
+        store._save(db, state)
+    monkeypatch.setenv('CLAUDECODE', '1')
+    store.ensure_default()
+    assert store.configuration()['agent'] == 'claude'

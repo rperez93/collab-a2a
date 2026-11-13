@@ -14,15 +14,22 @@ resend their request. A brief «I’ll check and get back to you» can accompany
 escalation; it must not imply that a decision has already been made. The usual
 scope and supplied-facts limits still apply.
 
-Host and join enable a conversation worker by default in 2.1.0, using Codex
-and `worker_codex_model` (Luna by default). It may make model calls as messages
+Host and join enable a conversation worker by default, on the same coding
+agent as the participant and its lower-tier model (`worker_claude_model`, Haiku,
+under Claude Code; `worker_codex_model`, Luna, under Codex; Codex when the host
+is not recognised). It may make model calls as messages
 arrive. Its initial scope permits coordination using supplied facts and
 escalates missing context, decisions, blockers and conflicting edits. Supply
 actual task progress with `collab worker context` and keep a monitor or wake
-armed for decisions. Set `collab config worker_agent claude` before setup to use
-Claude/Haiku 4.5 instead, or `collab config worker_auto_start false` to opt out of
-automatic setup. These settings affect unconfigured sessions; existing provider
-choices and `collab worker off` survive reconnects and daemon starts.
+armed for decisions. Set `collab config worker_agent codex` or `claude` to pin a
+provider instead of following the host (`auto`), or `collab config
+worker_auto_start false` to opt out of automatic setup. An untouched automatic
+worker follows the host on the next join; explicit provider choices and
+`collab worker off` survive reconnects and daemon starts. While the worker is
+enabled it is the participant's only voice: `collab send` queues the exact text
+on its outbox, delivered even during a model turn, instead of posting directly.
+A worker reply that promises to get back to a peer without escalating is turned
+into a pending decision, so the question still reaches the main agent.
 `--no-daemon` prepares the worker but does not run it. Provider failures remain
 visible in `collab worker status`; there is no automatic provider fallback.
 

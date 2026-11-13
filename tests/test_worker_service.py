@@ -437,3 +437,34 @@ async def test_an_empty_poll_does_not_delay_the_next_peer_question(conversation,
         incoming(service, 2, 'Another question')
         await service.tick()
         assert len(calls) == 1, 'real model calls still obey their configured gap'
+
+
+@pytest.mark.asyncio
+async def test_main_send_is_delivered_while_a_model_turn_is_in_flight(conversation, tmp_path, monkeypatch):
+    """R3: a slow provider turn must not hold the main agent's queued message."""
+    service = conversation
+    configure(service, tmp_path)
+    store = worker.Store(service.root)
+    release = asyncio.Event()
+    async def slow(*args, **kwargs):
+        await release.wait()
+        return {"summary": "", "replies": [], "escalations": []}
+    monkeypatch.setattr("collab.worker_runtime.run_turn", slow)
+    sent = []
+    async def transport(request):
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"seq": 9})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        service.daemon._http = client
+        incoming(service, 1, "Question")
+        await service.tick()  # starts the slow turn
+        await asyncio.sleep(0)
+        assert service.task is not None and not service.task.done()
+        store.send("main handoff", to="", room="general", thread="t1")
+        await service.tick()
+        await asyncio.wait_for(service.delivery, 2)
+        assert [(m["text"], m["room"], m["thread"]) for m in sent] == [("main handoff", "general", "t1")]
+        assert not store.outbox()
+        release.set()
+        await asyncio.wait_for(service.task, 2)
+        assert len(sent) == 1, "the finished turn must not post the record again"

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import json
 import time
 
@@ -23,6 +24,8 @@ TURN_GAP = 5.0
 PAGE_SIZE = 24
 MAX_EVENTS_BYTES = 64_000
 
+
+logger = logging.getLogger(__name__)
 
 def _excerpt(text, budget):
     """Bound a displayed field by its JSON cost, including escaped controls."""
@@ -82,11 +85,20 @@ class Conversation:
         self.next_at = 0.0
         self.generation = None
         self.policy = None
+        # The main agent's queued sends must not wait behind a model turn,
+        # and two flushes must never post the same outbox record twice.
+        self.delivery: asyncio.Task | None = None
+        self.flushing = asyncio.Lock()
 
     def configured(self) -> bool:
         return (self.root / "worker.db").exists()
 
     async def stop(self) -> None:
+        if self.delivery is not None:
+            self.delivery.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self.delivery
+            self.delivery = None
         if self.task is not None:
             self.task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -113,6 +125,17 @@ class Conversation:
                 return
         if self.task is not None:
             if not self.task.done():
+                if self.delivery is not None and self.delivery.done():
+                    # _flush defers its own failures; anything else is logged
+                    # here rather than left as an unretrieved task exception.
+                    with contextlib.suppress(asyncio.CancelledError):
+                        if self.delivery.exception() is not None:
+                            logger.warning("worker delivery failed: %s",
+                                           type(self.delivery.exception()).__name__)
+                    self.delivery = None
+                if (self.delivery is None and self.daemon._http is not None
+                        and any(row.get("retry_at", 0) <= time.time() for row in store.outbox())):
+                    self.delivery = asyncio.create_task(self._flush(store, generation))
                 return
             # turn() records failures; retrieving the result prevents a silent
             # task exception if the database itself became unavailable.
@@ -146,6 +169,10 @@ class Conversation:
             self._delivery_health(store, generation)
 
     async def _flush(self, store, generation) -> None:
+        async with self.flushing:
+            await self._flush_locked(store, generation)
+
+    async def _flush_locked(self, store, generation) -> None:
         attempts = 0
         for message in store.outbox():
             if message.get("retry_at", 0) > time.time():
@@ -167,6 +194,7 @@ class Conversation:
                         json={"kind": "chat", "text": message["text"],
                               "to": message.get("to") or None,
                               "room": message.get("room") or None,
+                              "thread": message.get("thread") or None,
                               "body": {"collab_worker_delivery": message["id"]}}, timeout=timeout) as response:
                         response.raise_for_status()
                 # wait_for retains the total deadline on supported Python 3.10.
@@ -340,11 +368,13 @@ class Conversation:
                 rooms.add("general")
                 if reply["room"] and reply["room"] not in rooms:
                     raise ValueError("worker proposed an unknown room")
+            escalations = result["escalations"] + worker_runtime.unrouted_deferrals(
+                result, selected, store.pending())
             committed = store.commit_turn(
                 expected_cursor=snapshot["cursor"], cursor=cursor,
                 summary=result["summary"], replies=result["replies"],
-                escalations=result["escalations"] + skill_requests(
-                    [e for e in events if e.seq <= cursor], result["escalations"],
+                escalations=escalations + skill_requests(
+                    [e for e in events if e.seq <= cursor], escalations,
                     self.daemon.profile.name, self.daemon.profile.participant_id),
                 context_ids=[row["id"] for row in contexts],
                 answer_ids=[row["id"] for row in answers],

@@ -304,3 +304,31 @@ def test_claude_stream_diagnostics_do_not_discard_valid_actions():
     assert runtime._decode('claude', b'Warning: optional config missing\n' + result, None) == GOOD
     with pytest.raises(runtime.WorkerRuntimeError):
         runtime._decode('claude', result + b'\n{"type":"result","type":"result"}', None)
+
+
+def test_a_deferring_reply_without_an_escalation_is_routed_to_the_main_agent():
+    """Observed live: 'hold tight, I'll get back to you' with nothing filed."""
+    from collab.worker_runtime import unrouted_deferrals
+    selected = [{"seq": 7, "sender": "cortana", "text": "Which task should I claim?"}]
+    result = {"replies": [{"text": "Hold tight, I'll get back to you.", "to": "cortana", "room": ""}],
+              "escalations": []}
+    added = unrouted_deferrals(result, selected, pending=[])
+    assert [(e["reason"], e["seq"]) for e in added] == [("decision", 7)]
+    assert "Which task should I claim?" in added[0]["question"]
+    assert unrouted_deferrals(result, selected, pending=[{"seq": 7}]) == []
+    routed = {**result, "escalations": [{"reason": "decision", "seq": 7, "question": "q"}]}
+    assert unrouted_deferrals(routed, selected, pending=[]) == []
+    plain = {"replies": [{"text": "R3 is claimed by cortana.", "to": "cortana", "room": ""}],
+             "escalations": []}
+    assert unrouted_deferrals(plain, selected, pending=[]) == []
+
+
+def test_deferral_repair_covers_curly_apostrophes_and_each_peer_separately():
+    from collab.worker_runtime import unrouted_deferrals
+    selected = [{"seq": 3, "sender": "ana", "room": "", "text": "Merge now?"},
+                {"seq": 4, "sender": "bo", "room": "", "text": "Which port?"}]
+    result = {"replies": [{"text": "I\u2019ll check and confirm.", "to": "bo", "room": ""},
+                          {"text": "Asked my human.", "to": "ana", "room": ""}],
+              "escalations": [{"reason": "decision", "seq": 3, "question": "Merge?"}]}
+    added = unrouted_deferrals(result, selected, pending=[])
+    assert [e["seq"] for e in added] == [4], "ana's escalation must not hide bo's promise"

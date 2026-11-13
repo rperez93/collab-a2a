@@ -149,6 +149,44 @@ def validate_result(value: object) -> dict:
     return value
 
 
+# A reply that defers to the main agent ("hold tight", "I'll get back to you")
+# is a promise only an escalation keeps. Models were observed making it with no
+# escalation, so the question never reached the main agent: loss by omission.
+DEFERRAL = re.compile(
+    r"\b(hold tight|get back to you|circle back|let me (check|confirm|ask|find out)"
+    r"|i(?:['’]|\s+wi)ll (check|confirm|ask|find out|let you know)"
+    r"|(check|confirm) with (my|the) (human|main|user|lead)|as soon as i (have|hear|get)"
+    r"|te (aviso|confirmo|respondo)|d[ée]jame (revisar|confirmar|preguntar))\b",
+    re.IGNORECASE)
+
+
+def unrouted_deferrals(result: dict, selected: list[dict], pending: list[dict]) -> list[dict]:
+    """Escalations for deferring replies the model did not route itself.
+
+    A peer the turn escalated about, or one already waiting on a pending
+    decision, has had its question routed; only the silent promise is repaired.
+    """
+    by_seq = {e["seq"]: e for e in selected}
+    # Routed already: an escalation this turn about this peer, or a pending one.
+    waiting = {row.get("seq") for row in pending} | {e["seq"] for e in result["escalations"]}
+    routed_to = {by_seq[s]["sender"] for s in waiting if s in by_seq}
+    added = []
+    for reply in result["replies"]:
+        if not DEFERRAL.search(reply["text"]) or reply["to"] in routed_to:
+            continue
+        source = ([e for e in selected if e["sender"] == reply["to"]]
+                  or [e for e in selected if e.get("room", "") == reply["room"]])
+        seq = source[-1]["seq"] if source else 0
+        if seq in waiting or any(a["seq"] == seq for a in added):
+            continue
+        asked = source[-1]["text"][:1000] if source else ""
+        added.append({"reason": "decision", "seq": seq, "question": (
+            f"Your worker told {reply['to'] or 'the room'} it would get back to them "
+            f"without routing the question to you. Their message: {asked!r}. "
+            "What should it answer?")})
+    return added
+
+
 def _json(data: bytes | str) -> object:
     def unique(pairs):
         result = {}
