@@ -169,6 +169,16 @@ complete JSON, including the current server clock.
 
 ## 4. The join handshake
 
+Public links may carry `collab_session`, `collab_local` and `collab_cert` query
+hints. The local entrance is HTTPS and the certificate is base64url public
+PEM. The invite fragment is unchanged; older clients discard the query.
+Authenticated join and roster responses may carry `routes` with `session_id`,
+`local_url`, `secure_local_url`, `public_url` and `local_certificate`. These are
+candidates, not permission to send credentials over arbitrary HTTP. Local TLS
+uses an exclusive certificate context. Hinted fallback checks the expected
+session before submitting the invite; reconnect retains membership and SSE
+sequence without another join POST.
+
 Before sending the invite, the guest reads `GET /ext/collab/v1/compatibility`.
 Both peers must advertise integer `protocol_major: 2` and a stable package
 `version` at least `2.0.0` within major 2. Missing fields, malformed versions,

@@ -231,11 +231,13 @@ Be clear-eyed about the limits.
   The hub stores the whole conversation in its SQLite log.
   Whoever hosts the session can read all of it.
   There is no end-to-end encryption between participants.
-- **Transport privacy depends on the tunnel.**
+- **Transport follows the selected route.**
   When you share over ngrok, traffic to the public address is protected by
   ngrok's TLS.
-  A hub reachable only on a local network, with no tunnel, is as private as that
-  network.
+  Automatic LAN selection uses a local TLS entrance with an exclusive session
+  certificate; untrusted plaintext hints cannot receive credentials. Explicit
+  legacy HTTP links retain their existing network trust. See
+  [local route authentication](local-routes.md).
 - **A malicious hub is still a party to the conversation.**
   The client validates URLs, filenames, and payloads from a hub, and refuses to
   send its token to a non-loopback address it found in a file.

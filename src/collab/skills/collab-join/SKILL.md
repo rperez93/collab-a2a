@@ -21,6 +21,10 @@ a join failed. If several local sessions exist, use the intended ID from
 `COLLAB_HOME` when fresh tool executions need an explicit selection.
 
 Both ends need stable Collab 2.x. An older host must be upgraded and restarted.
+Preserve the whole quoted join link, including query hints and its invite
+fragment. New links may prefer a pinned local TLS entrance before the public
+route. Do not strip certificate hints or substitute an untrusted HTTP address.
+Route changes retain the participant identity and SSE cursor.
 State lives outside the repository, isolated by workspace and agent session.
 Read the returned roster and shared work snapshot before proposing duplicate
 work. If a batch offer appears and you are ready within the accepted goal, inspect

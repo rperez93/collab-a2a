@@ -227,6 +227,8 @@ def main() -> int:
         session_id=cfg.session_id,
         host_name=cfg.host_name,
         public_url=cfg.public_url or cfg.local_url,
+        local_url=cfg.local_url,
+        local_tls_config=cfg,
         title=cfg.title,
         supervisor=supervisor,
         on_url_change=on_url,
