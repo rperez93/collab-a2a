@@ -1,7 +1,7 @@
 {
   "date": "2026-11-13",
   "baseline_revision": "5d7ecad",
-  "workload": "100 roster invalidations spaced by 1 ms; actual running s_793f992d hub; isolated temporary daemon files; session hub still on baseline transport",
+  "workload": "100 roster invalidations spaced by 1 ms; selected live session; isolated temporary daemon files; session hub still on baseline transport",
   "bytes_scope": "HTTP response body bytes; excludes headers and TLS framing",
   "samples": [
     {"route": "loopback", "implementation": "baseline", "median_rtt_ms": 4.754, "requests": 42, "response_body_bytes": 686843, "elapsed_s": 0.175722, "cpu_s": 0.096499},

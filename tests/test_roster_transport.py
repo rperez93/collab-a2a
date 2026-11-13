@@ -37,6 +37,73 @@ def test_only_the_server_clock_can_change_without_invalidating_the_tag(client, h
     assert unconditional.json()["server_time"] >= first.json()["server_time"]
 
 
+@pytest.mark.parametrize("closed", [False, True])
+def test_real_open_and_closed_batches_validate_without_hiding_task_or_liveness_changes(
+        client, session, host_headers, closed):
+    """Every batch snapshot recomputes counted_at, even after the batch is closed."""
+    started = client.post(f"{EXT_PREFIX}/batch", headers=host_headers,
+                           json={"action": "start", "name": "actual batch"})
+    assert started.status_code == 200, started.text
+    if closed:
+        result = client.post(f"{EXT_PREFIX}/batch", headers=host_headers,
+                              json={"action": "close"})
+        assert result.status_code == 200, result.text
+    first = client.get(f"{EXT_PREFIX}/participants", headers=host_headers)
+    tag = first.headers["etag"]
+    later = [client.get(f"{EXT_PREFIX}/participants",
+                        headers={**host_headers, "If-None-Match": tag}) for _ in range(2)]
+    assert [first.status_code, *(response.status_code for response in later)] == [200, 304, 304]
+    unconditional = client.get(f"{EXT_PREFIX}/participants", headers=host_headers)
+    assert unconditional.json()["batch"]["counted_at"] > first.json()["batch"]["counted_at"]
+    assert unconditional.headers["etag"] == tag
+    proposed = client.post(f"{EXT_PREFIX}/tasks", headers=host_headers,
+        json={"action": "propose", "title": "new actual work"})
+    assert proposed.status_code == 200, proposed.text
+    changed = client.get(f"{EXT_PREFIX}/participants",
+                          headers={**host_headers, "If-None-Match": tag})
+    assert changed.status_code == 200 and changed.headers["etag"] != tag
+    tag = changed.headers["etag"]
+    session["store"].touch(session["store"].participants()[0].id)
+    touched = client.get(f"{EXT_PREFIX}/participants",
+                          headers={**host_headers, "If-None-Match": tag})
+    assert touched.status_code == 200 and touched.headers["etag"] != tag
+
+
+@pytest.mark.parametrize("batch", [None, {}, {"counted_at": 1.0},
+    {"counted_at": 1.0, "name": "quotes: \\\" ☃", "holding": [{"title": "[{},]"}]}])
+def test_conditional_encoding_preserves_the_entire_wire_payload_and_does_not_mutate_it(batch):
+    """Chunk reuse must preserve clocks, escaped text and empty batch shapes on the wire."""
+    payload = {"server_time": 123.456, "batch": batch,
+               "participants": [{"name": "Élodie", "detail": "line\nnext"}]}
+    before = json.dumps(payload, sort_keys=True)
+    result = transport.roster_response(payload, request(accept_encoding="identity"), conditional=True)
+    assert json.loads(result.body) == payload
+    assert json.dumps(payload, sort_keys=True) == before
+    assert int(result.headers["content-length"]) == len(result.body)
+
+
+@pytest.mark.parametrize("path", [("counted_at",), ("batch", "server_time"),
+    ("batch", "opened_at"), ("batch", "closed_at"), ("batch", "nested", "counted_at"),
+    ("participant", "server_time"), ("participant", "counted_at")])
+def test_only_the_two_exact_observation_clock_locations_are_ignored(path):
+    """A clock-shaped name inside real state must not be filtered recursively."""
+    payload = {"server_time": 1, "counted_at": 2,
+               "batch": {"counted_at": 3, "server_time": 4, "opened_at": 5,
+                         "closed_at": 6, "nested": {"counted_at": 7}},
+               "participant": {"server_time": 8, "counted_at": 9}}
+    first = transport.roster_response(payload, request(), conditional=True)
+    tag = first.headers["etag"]
+    payload["server_time"] += 1
+    payload["batch"]["counted_at"] += 1
+    assert transport.roster_response(payload, request(if_none_match=tag), conditional=True).status_code == 304
+    target = payload
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] += 1
+    changed = transport.roster_response(payload, request(if_none_match=tag), conditional=True)
+    assert changed.status_code == 200 and changed.headers["etag"] != tag
+
+
 @pytest.mark.parametrize("change", ["last_seen", "connectivity", "seq", "task", "identity"])
 def test_every_visible_roster_change_invalidates_the_tag(client, session, host_headers, change):
     """Keep liveness, chat counts and task state current even without a presence event."""
@@ -195,12 +262,14 @@ from collab.server.roster_transport import roster_response
 
 board, changing, variant = sys.argv[1:]
 changing = changing == "changing"
-count = 100 if board == "representative" else 20
+count = 100 if board == "synthetic" else 20
 seed = "Measure requests, bytes, CPU and RSS before shipping."
-detail = seed if board == "representative" else (seed * 160)[:8000]
-task_count = 80 if board == "representative" else 250
+detail = seed if board == "synthetic" else (seed * 160)[:8000]
+task_count = 80 if board == "synthetic" else 250
 payload = {
     "server_time": 123.0, "seq": 1, "you": "alice", "you_id": "p-alice",
+    "batch": {"id": "B_measure", "state": "closed", "total": task_count,
+              "done": 40, "holding": [], "counted_at": 123.0},
     "participants": [
         {"name": f"agent-{i}", "connected": True,
          "focus": "measuring the shared task board",
@@ -217,6 +286,7 @@ tag = ""
 started = time.process_time()
 for index in range(count):
     payload["server_time"] += 1
+    payload["batch"]["counted_at"] += 1
     if changing:
         payload["seq"] += 1
         payload["tasks"][index % task_count]["detail"] = detail[:7997] + str(index)
@@ -258,12 +328,12 @@ def measure_transport(board, state, variant):
     return json.loads(done.stdout)
 
 
-@pytest.mark.parametrize("board", ["representative", "near_2mib"])
+@pytest.mark.parametrize("board", ["synthetic", "near_2mib"])
 @pytest.mark.parametrize("state", ["unchanged", "changing"])
 def test_roster_transport_savings_and_resources_in_fresh_processes(board, state):
     """Measure full-body savings and absolute CPU/RSS even when every board changes.
 
-    Each pair renders 100 representative boards or 20 boards near the 2 MiB
+    Each pair renders 100 synthetic boards or 20 boards near the 2 MiB
     compression ceiling. Changing traffic increments seq and changes a task
     detail every request, forcing hashing, rendering and gzip instead of 304.
     The generous 5 s CPU / 96 MiB absolute RSS limits catch retained payloads

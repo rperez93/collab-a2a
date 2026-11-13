@@ -48,13 +48,59 @@ def _encoding_qualities(value: str) -> dict[str, float]:
     return qualities
 
 
+def _roster_parts(payload: dict[str, Any]) -> tuple[list[bytes], str]:
+    """Encode each value once, sharing its bytes between the body and weak tag.
+
+    Two observation clocks advance even when the room stands still:
+    server_time and batch.counted_at. A started or even CLOSED batch therefore
+    defeated the old validator on every read. Exclude exactly those clocks
+    from the semantic digest, while retaining both in the JSON response.
+
+    Encoding a second whole canonical payload cost another large serialization
+    on the hub event loop. Hash sorted field/value chunks as they are encoded,
+    then reuse those same chunks for the wire body. Only the small batch clock
+    field is spliced back before that object's final brace; no regex searches,
+    recursive clock-name filtering, or second whole-payload buffer is needed.
+    """
+    encoder = json.JSONEncoder(ensure_ascii=False, allow_nan=False,
+                               separators=(",", ":"), sort_keys=True)
+    digest = hashlib.sha256(b"{")
+    parts = [b"{"]
+    semantic_fields = 0
+    for key, value in sorted(payload.items()):
+        prefix = encoder.encode(key).encode("utf-8") + b":"
+        if len(parts) > 1:
+            parts.append(b",")
+        parts.append(prefix)
+        if key == "batch" and isinstance(value, dict) and "counted_at" in value:
+            batch = {name: field for name, field in value.items() if name != "counted_at"}
+            encoded = encoder.encode(batch).encode("utf-8")
+            parts.extend((encoded[:-1], b"," if batch else b"",
+                          b'"counted_at":', encoder.encode(value["counted_at"]).encode("utf-8"),
+                          b"}"))
+        else:
+            encoded = encoder.encode(value).encode("utf-8")
+            parts.append(encoded)
+        if key != "server_time":
+            if semantic_fields:
+                digest.update(b",")
+            digest.update(prefix)
+            digest.update(encoded)
+            semantic_fields += 1
+        # The batch's clockless bytes are not kept beside its wire slice.
+        del encoded
+    parts.append(b"}")
+    digest.update(b"}")
+    return parts, 'W/"' + digest.hexdigest() + '"'
+
+
 def roster_response(payload: dict[str, Any], request: Request, *,
                     conditional: bool = False) -> Response:
     """Send a private roster, with optional validation and negotiated gzip.
 
     There is no shared payload cache. Authentication and viewer filtering have
     already happened in the route, and every request computes its own tag.
-    Excluding only the wall clock permits an unchanged roster to validate,
+    Excluding the two observation clocks permits an unchanged roster to validate,
     while last_seen, feed connectivity, identity, task progress and seq still
     invalidate it. The tag is weak because server_time changes across reads
     and gzip and identity use different bytes for the same state.
@@ -67,14 +113,7 @@ def roster_response(payload: dict[str, Any], request: Request, *,
     if gzip_quality <= 0 and identity_quality <= 0:
         return Response(status_code=406, headers=headers)
     if conditional:
-        state = {key: value for key, value in payload.items() if key != "server_time"}
-        canonical = json.dumps(state, ensure_ascii=False, allow_nan=False,
-                               separators=(",", ":"), sort_keys=True).encode("utf-8")
-        tag = 'W/"' + hashlib.sha256(canonical).hexdigest() + '"'
-        # The response below serializes the complete body too. Retaining this
-        # first UTF-8 buffer raised a 32 MiB board's measured peak allocation
-        # from 64 to 96 MiB even when gzip was size-capped and did no work.
-        del canonical
+        parts, tag = _roster_parts(payload)
         headers["ETag"] = tag
         # If-None-Match uses weak comparison for GET. Each tag is a digest,
         # so commas cannot occur within it and a list is safe to split here.
@@ -82,8 +121,10 @@ def roster_response(payload: dict[str, Any], request: Request, *,
         if any(part.strip() == "*" or part.strip().removeprefix("W/") == tag[2:]
                for part in offered.split(",")):
             return Response(status_code=304, headers=headers)
-
-    response = JSONResponse(payload, headers=headers)
+        response = Response(b"".join(parts), media_type="application/json", headers=headers)
+        del parts
+    else:
+        response = JSONResponse(payload, headers=headers)
     size = len(response.body)
     if MIN_GZIP_BYTES <= size <= MAX_GZIP_BYTES and gzip_quality > 0 \
             and gzip_quality >= qualities.get("identity", 0.0):

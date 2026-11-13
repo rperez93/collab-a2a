@@ -350,14 +350,24 @@ These are single live runs on a changing board; the session hub still used
 the baseline server transport. [Raw live observations](performance-roster.json).
 
 Fresh subprocesses separately measured server responses for changing and
-unchanged boards. For 100 changing representative-board reads, response body
-bytes fell from **1,773,874 to 109,157**, CPU rose from **0.0109 to 0.0280 s**,
-and absolute process peak RSS was **25,508 / 25,884 KiB**. For 20 changing
-2.03 MB reads, bytes fell from **40,626,827 to 347,511**, CPU rose from
-**0.1605 to 0.3231 s**, and peak RSS was **33,380 / 31,540 KiB**.
+unchanged synthetic boards. These intentionally repetitive fixtures establish
+regression bounds, not a typical user's compression ratio. For 100 changing
+synthetic-board reads, response body
+bytes fell from **1,783,574 to 118,348**, CPU rose from **0.0104 to 0.0195 s**,
+and absolute process peak RSS was **25,880 / 26,288 KiB**. For 20 changing
+2.03 MB reads, bytes fell from **40,628,787 to 333,890**, CPU rose from
+**0.1491 to 0.2077 s**, and peak RSS was **33,184 / 31,568 KiB**.
 Validation and compression cost CPU per request; the separate reduction in
 request count supplies the client CPU savings. There is no claimed server
 CPU speedup. [All server measurements](performance-roster-server.json).
+
+ETags exclude exactly the sampling clocks `server_time` and
+`batch.counted_at`; full responses retain both. Open and closed batch
+regressions confirm one 200 followed by 304 responses until real state changes.
+The serializer encodes field values once and reuses those chunks for digest
+and wire bytes. On identical changing 2.03 MB fixtures this reduces CPU from
+the first PR implementation's 0.3130 s to 0.2077 s. Plain JSON without hashing
+or compression remains cheaper; the artifact records all three variants.
 
 Run `tests/test_roster_requests_are_coalesced.py` and
 `tests/test_roster_transport.py` with pytest and an absolute `PYTHONPATH`.
@@ -366,3 +376,11 @@ delivery, plus fresh-process resource checks for both changing and unchanged
 boards. Peak RSS uses Linux `VmHWM` after exec where available; a parent's
 inherited `ru_maxrss` high-water mark cannot establish a child allocation.
 Body-byte counts exclude HTTP headers and TLS framing.
+
+Reproduce the live burst with `benchmarks/roster_burst.py`: run the same script
+with an absolute `PYTHONPATH` pointing to each revision's `src`, select your
+own active participant with `--workspace` or `COLLAB_HOME`, and supply the
+explicit `--url` to compare loopback and tunnel routes. It uses temporary
+daemon files, never joins again and never prints the invite, bearer, session
+id or target URL. Request counts vary with RTT and scheduling; the recorded
+42-to-2 observation is one run rather than an exact reproducibility promise.
