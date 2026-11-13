@@ -313,9 +313,10 @@ def describe(figures: Any, *, now: float | None = None) -> str:
     line = f"{bar(pct)} {pct}% {counts(figures)}"
     if moved := delta_note(figures, now=now):
         line += f" ({moved} tasks)"
-    if is_complete(figures):
-        line += " complete"
     timing = eta_text(figures, now=now)
+    if is_complete(figures) and not timing.startswith("done"):
+        # «complete · done in 30m» said it twice.
+        line += " complete"
     if figures.get("state") == CLOSED and not timing.startswith("closed"):
         # «closed after 48m» already says closed; «· closed · closed after
         # 48m» said it twice.
@@ -468,14 +469,16 @@ def duration(seconds: float, *, up: bool = False) -> str:
     work that is not finished is the same lie as 100% on 99.4%.
     """
     s = max(0.0, seconds)
-    if s >= LONGEST:
+    step = 1 if s < 60 else 60
+    whole = int(-(-s // step) * step) if up else int(s // step * step)
+    # AFTER ROUNDING: checked before it, LONGEST − 0.5 rounded up to
+    # «100d00h» — wider than «99d+» and the very day count this prevents.
+    if whole >= LONGEST:
         # BOUNDED, because the figure can be a remote party's: `eta: 1e308` is
         # a finite float that `_seconds` lets through, and it rendered as a
         # 300-digit day count — on a status line measured in dozens of
         # columns. Nothing a batch is planned around is a hundred days off.
         return "99d+"
-    step = 1 if s < 60 else 60
-    whole = int(-(-s // step) * step) if up else int(s // step * step)
     if whole < 60:
         return f"{whole}s"
     if whole < 3600:
@@ -511,15 +514,22 @@ def reading(figures: Any, *, now: float | None = None) -> dict[str, Any] | None:
     elapsed = _seconds(raw.get("elapsed"))
     eta = _seconds(raw.get("eta"))
     overdue = raw.get("overdue") is True
-    if state == "running" and eta is not None and eta - lag <= 0:
-        # Counted down past zero between two refreshes: the hub's next count
-        # will say overdue, and until it does «ETA ~0s» would be promising a
-        # completion nobody has reported.
-        overdue = True
+    left = None
+    if eta is not None and state == "running":
+        # AN OVERDUE FIGURE IS A FLOOR, AND A FLOOR IS NOT AGED DOWN. While the
+        # task stays overdue the re-taken rate falls and the floor RISES;
+        # counting it down between refreshes drew «ETA overdue» with three
+        # tasks left (review of #106).
+        left = eta if overdue else max(0.0, eta - lag)
+        if not overdue and eta - lag <= 0:
+            # Counted down past zero between two refreshes: the hub's next
+            # count will say overdue, and until it does «ETA ~0s» would be
+            # promising a completion nobody has reported.
+            overdue = True
     out = {"state": state,
            "elapsed": None if elapsed is None else
            elapsed + (lag if state == "running" else 0.0),
-           "eta": None if eta is None or state != "running" else max(0.0, eta - lag),
+           "eta": left,
            "overdue": overdue,
            "per_task": _seconds(raw.get("per_task")),
            "counted": count_of(raw, "counted")}
@@ -543,7 +553,11 @@ def eta_text(figures: Any, *, now: float | None = None) -> str:
         if seen["eta"] is None:
             return ""
         if seen["overdue"] and seen["eta"] < 1:
-            return "ETA overdue"
+            # «overdue» is a statement about THE LAST TASK, and only the
+            # counts can say a task is the last one; with more to go the
+            # next completion is simply due.
+            remaining = count_of(figures, "total") - count_of(figures, "done")
+            return "ETA overdue" if remaining <= 1 else "ETA due"
         return f"ETA {'≥' if seen['overdue'] else '~'}{duration(seen['eta'], up=True)}"
     if seen["state"] == "done" and seen["elapsed"] is not None:
         return f"done in {duration(seen['elapsed'])}"
