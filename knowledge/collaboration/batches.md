@@ -216,6 +216,36 @@ task that could change what it is counted in would move a shared figure for a
 reason no reader performed. Project membership is reassignable BECAUSE it is
 counted by nothing.
 
+# Elapsed time and an ETA — later than the pin
+
+Later than the revision this bundle is pinned to, and carrying no `verified`
+stamp: the batch figures carry a `pace` beside the counts, and every surface
+that draws the bar draws the time with it.[^batch-src]
+
+The model is cc-progress's. Progress is a side effect of the work, never a
+claim: the hub stamps `completed_at` on a task as it enters the completed
+state — not `updated_at`, which is a revision stamp that moves on every write
+and, for every task a deleted project held, all at once — and the rate is read
+off those stamps:
+
+```text
+rate = completions / (last completion − opened)
+next = last completion + 1/rate − now
+ETA  = max(next, 0) + (outstanding − 1) / rate
+```
+
+Once `next` has passed, the task in flight is overdue; the rate is re-taken
+over the whole elapsed time and the ETA is drawn as a floor, «≥». With no
+completion — or one inside the first second — there is no rate and no ETA,
+rather than a guess. A task finished before the stamp existed counts in the
+figure but not in the rate, as cc-progress treats `--done`.
+
+The batch ends in an explicit state with its time frozen: «done in» to the last
+completion, or «closed after» for a batch closed with work outstanding — the
+batch's `fail`. The hub sends DURATIONS, never instants, so no client subtracts
+the hub's clock from its own; a client ages them only by how long ago it
+fetched them, on its own clock, and a stale figure carries no ETA at all.
+
 # Related
 
 - [The task board](/collaboration/task-board.md) — what is being counted.

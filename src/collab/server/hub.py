@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .. import __version__
-from ..batch import DONE_STATE, WITHDRAWN_STATE, percent, tally
+from ..batch import DONE_STATE, WITHDRAWN_STATE, pace, percent, tally
 from ..protocol import (DEFAULT_ROOM, Envelope, KIND_CHAT, KIND_HELLO,
                         MessageRefused, message_refusal,
                         KIND_PRESENCE, bounded_meta)
@@ -354,6 +354,7 @@ class Hub:
         tasks = self.store.batch_tasks(str(batch["id"]))
         figures = tally(str(t["state"]) for t in tasks)
         done_or_gone = {DONE_STATE, WITHDRAWN_STATE}
+        counted_at = time.time()
         return {
             "id": batch["id"],
             "name": batch["name"],
@@ -364,7 +365,16 @@ class Hub:
             **figures,
             "percent": percent(figures["done"], figures["total"]),
             "complete": figures["total"] > 0 and figures["done"] >= figures["total"],
-            "counted_at": time.time(),
+            "counted_at": counted_at,
+            # ELAPSED AND ETA, as durations on this clock — see collab.batch.pace.
+            # Absent for an empty batch for the reason `percent` is None there:
+            # no work is neither finished nor due at any particular time.
+            "pace": pace(
+                opened_at=batch["opened_at"], closed_at=batch["closed_at"],
+                completed=(t.get("completed_at") for t in tasks
+                           if t["state"] == DONE_STATE),
+                outstanding=figures["outstanding"], now=counted_at,
+            ) if figures["total"] > 0 else None,
             # WHO HOLDS WHAT IS LEFT. A percentage says how much remains; this
             # says who it is waiting on, which is the part somebody can act on.
             "holding": [

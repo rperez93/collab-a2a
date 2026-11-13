@@ -457,11 +457,18 @@ def _batch_segment(status: dict[str, Any], *, narrow: bool = False) -> str:
         text = f"{batch_progress.bar(pct)} {pct}% {counts}"
     if moved := batch_progress.delta_note(figures):
         text += f" {moved}"
+    # THE ETA AND THE TIME TAKEN, in the wide form only. The narrow form is
+    # what this line falls back to when it is already over budget, and the
+    # count is the figure that has to survive that — an ETA is derived from
+    # it and is worth nothing without it. See collab.batch.pace.
+    timing = "" if narrow else batch_progress.eta_text(figures)
     if batch_progress.is_complete(figures):
         # A finished batch does not vanish: «done» is the fact somebody was
         # waiting for, and a segment that disappeared on the last completion
         # would look exactly like the session having ended.
-        return _paint(f"{text} done", "live")
+        return _paint(f"{text} {timing or 'done'}", "live")
+    if timing:
+        text += f" {timing}"
     return _paint(text, "label")
 
 

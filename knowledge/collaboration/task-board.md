@@ -41,7 +41,10 @@ A task id is `T_` plus 12 hex characters, or whatever id the client names.
 `detail` and `batch`.[^board-run] Later than the pin it carries `project` as
 well — null for a task in none, which is most of them. The snapshot every
 client renders from carries the projects themselves beside the tasks, so the
-title behind that id does not have to be fetched.
+title behind that id does not have to be fetched. Also later than the pin,
+each entry carries `completed_at` — when the task entered the completed state,
+null for any other state and for tasks finished before the field existed. It
+is what a batch's ETA is measured from; see [batches](/collaboration/batches.md).
 
 The verbs `comment`, `pr`, `pr-remove` and `move` are later than the pin too.
 None of them changes a task's state: `move` files a task under a project and is

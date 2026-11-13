@@ -2393,6 +2393,8 @@ def _describe_batch(figures: dict[str, Any] | None, *, action: str = "status") -
         if batch_progress.is_complete(figures):
             line += "  " + c("complete", "32")
         print(f"  {'progress':<12} {line}")
+    if pct is not None:
+        _describe_pace(figures)
     if withdrawn := int(figures.get("withdrawn") or 0):
         # Said rather than swallowed: a cancelled task leaves the denominator,
         # which moves the bar FORWARDS, and an unexplained jump is as
@@ -2420,6 +2422,42 @@ def _describe_batch(figures: dict[str, Any] | None, *, action: str = "status") -
         print(dim("\n  closed — the tasks and the counts are kept; new tasks "
                   "belong to no batch until you start another"))
     return 0
+
+
+def _describe_pace(figures: dict[str, Any]) -> None:
+    """Elapsed time and the ETA, from the completions the hub recorded.
+
+    Every line here is derived from completion times — see collab.batch.pace —
+    and none is printed when there is nothing to derive it from: a hub older
+    than the field sends no pace, and a batch nobody has finished a task in
+    has no rate. That case is SAID, rather than left as a missing row,
+    because «no ETA» and «ETA not shown» read the same and mean different
+    things.
+    """
+    seen = batch_progress.reading(figures)
+    if seen is None or seen["elapsed"] is None:
+        return
+    took = batch_progress.duration(seen["elapsed"])
+    per_task = (f" · ~{batch_progress.duration(seen['per_task'])} per task over"
+                f" {seen['counted']} timed" if seen["per_task"] else "")
+    if seen["state"] == "done":
+        print(f"  {'took':<12} {took}{dim(per_task)}")
+        return
+    if seen["state"] == "closed":
+        print(f"  {'ran':<12} {took} " + c("— closed with work outstanding", "33"))
+        return
+    print(f"  {'elapsed':<12} {took}")
+    if seen["eta"] is None:
+        print(f"  {'eta':<12} " + dim("— no timed completion yet, so no pace to go on"))
+        return
+    left = seen["eta"]
+    at = (time.strftime(" (around %H:%M)", time.localtime(time.time() + left))
+          if left >= 60 else "")
+    mark = "≥" if seen["overdue"] else "~"
+    note = (" — the task in flight is past its turn, so this is a floor"
+            if seen["overdue"] else "")
+    print(f"  {'eta':<12} {mark}{batch_progress.duration(left, up=True)}{at}"
+          + dim(per_task + note))
 
 
 def _stat_bits(person: dict[str, Any]) -> list[str]:
