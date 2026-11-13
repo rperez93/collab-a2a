@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import logging
 import json
 import time
@@ -117,6 +118,10 @@ class Conversation:
         state = store.snapshot()
         cfg = state["config"]
         generation = state["generation"]
+        if os.environ.get("COLLAB_NO_WORKER") and state.get("auto"):
+            # A worker automatic setup made earlier must not start in a daemon
+            # told to have none; an explicitly started one still runs.
+            cfg = None
         if not cfg or not cfg.get("enabled") or generation != self.generation:
             await self.stop()
             self.generation = generation

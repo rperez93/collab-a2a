@@ -469,3 +469,18 @@ async def test_main_send_is_delivered_while_a_model_turn_is_in_flight(conversati
         release.set()
         await asyncio.wait_for(service.task, 2)
         assert len(sent) == 1, "the finished turn must not post the record again"
+
+
+@pytest.mark.asyncio
+async def test_a_daemon_with_collab_no_worker_never_runs_an_automatic_worker(conversation, monkeypatch):
+    """The env reaches the daemon through spawn; an older automatic config stays idle."""
+    monkeypatch.delenv('COLLAB_NO_WORKER', raising=False)
+    store = worker.Store(conversation.root)
+    store.ensure_default()
+    monkeypatch.setenv('COLLAB_NO_WORKER', '1')
+    calls = []
+    monkeypatch.setattr("collab.worker_runtime.run_turn", lambda *a, **k: calls.append(a))
+    incoming(conversation, 1, "Question")
+    conversation.daemon._http = object()
+    await conversation.tick()
+    assert conversation.task is None and calls == []
