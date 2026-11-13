@@ -532,3 +532,18 @@ The effect requires a 256-colour terminal. Check `watch_background`,
 be regular files of at most 8 MiB and four million pixels. Matrix in reduced
 motion is intentionally static. Decoration errors appear in the participant
 legend; foreground text and chat remain usable.
+
+### A kept session still follows an owner
+
+`--keep` is remembered for that saved session, including listener restarts and
+host resume. It also detaches an already-running follower on its next ownership
+check; it does not need a restart to take effect. The choice is local to this
+participant's session and does not change another participant's lifecycle or the
+global `follow_agent` setting. Stop it explicitly with `collab kill` or
+`collab daemon stop`; a fresh session starts with the normal following policy.
+Combining `--keep` with `--no-daemon` still records the choice for a later start.
+
+Kept children discard an inherited `COLLAB_OWNER`, and existing hub/listener
+followers clear their old owner and grace-period clocks. `collab daemon status`
+reports that the session was kept. Upgrade the running process to a build that
+understands this session flag before relying on it.

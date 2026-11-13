@@ -67,7 +67,10 @@ def spawn_daemon(profile: SessionProfile, *, follow: bool = True) -> int:
     # answer. The daemon is about to be detached into its own session and
     # reparented, so its own ancestry will not contain the agent a moment
     # after it starts; ours does, right now. See `collab.owner`.
-    env = ownership.spawn_env(env) if follow else env
+    if not follow:
+        ownership.keep(profile.dir)
+    env = (ownership.without_owner(env) if ownership.kept(profile.dir)
+           else ownership.spawn_env(env))
     proc = subprocess.Popen(
         [sys.executable, "-m", "collab.daemon_main", profile.session_id],
         stdout=log, stderr=log, stdin=subprocess.DEVNULL,
@@ -107,6 +110,8 @@ def wait_until_live(profile: SessionProfile, timeout: float = DAEMON_READY_TIMEO
 def ensure_daemon(profile: SessionProfile, *, wait: bool = True,
                   follow: bool = True) -> dict[str, Any]:
     """Start the daemon unless one is already running — re-running join is safe."""
+    if not follow:
+        ownership.keep(profile.dir)
     from ..worker import Store
     Store(profile.dir).ensure_default()
     from ..telemetry_setup import ensure
@@ -148,6 +153,8 @@ def join_session(
         participant_id=result.get("id", ""),
     )
     profile.save()
+    if not follow:
+        ownership.keep(profile.dir)
     from ..worker import Store
     Store(profile.dir).ensure_default()
     from ..telemetry_setup import ensure

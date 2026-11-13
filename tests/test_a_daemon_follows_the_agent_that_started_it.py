@@ -347,8 +347,13 @@ def test_keep_starts_a_daemon_that_follows_nobody(tmp_path, me, monkeypatch):
 
     seen.clear()
     onboard.spawn_daemon(profile)
-    assert seen["env"][owner.ENV_OWNER] == me.encode()
+    assert owner.ENV_OWNER not in seen["env"], "restarting must preserve keep"
     assert seen["start_new_session"] is True
+
+    fresh = SessionProfile(session_id="s2", url="http://h/", name="a",
+                           host_name="h", token="t", home=str(tmp_path))
+    onboard.spawn_daemon(fresh)
+    assert seen["env"][owner.ENV_OWNER] == me.encode()
 
 
 def test_the_setting_is_read_every_beat_not_at_construction():
@@ -563,3 +568,51 @@ def test_a_pid_that_ps_did_not_answer_for_is_still_checked(monkeypatch):
                                      else ["sh"]))
     assert owner.started_by_a_daemon([111, 222])
     assert not owner.started_by_a_daemon([111])
+
+
+def test_keep_detaches_a_follower_already_waiting_for_its_owner():
+    clock = Clock()
+    follower = owner.Follower(_dead(), grace=1, now=clock)
+    assert follower.look() == "waiting"
+    clock.tick(2)
+    assert follower.look(_dead(), keep=True) == "unowned"
+    assert not follower.following
+    assert follower.seen_at is None and follower.gone_since is None
+
+
+def test_kept_spawn_strips_an_inherited_owner(tmp_path, me, monkeypatch):
+    from collab.client import onboard
+    from collab.config import SessionProfile
+    profile = SessionProfile(session_id="s", url="http://h", name="a",
+                             host_name="h", token="t", home=str(tmp_path))
+    monkeypatch.setenv(owner.ENV_OWNER, me.encode())
+    seen = {}
+    class Child:
+        pid = 4242
+        def __init__(self, args, **kwargs):
+            seen.update(kwargs)
+    monkeypatch.setattr(onboard.subprocess, "Popen", Child)
+    onboard.spawn_daemon(profile, follow=False)
+    assert owner.ENV_OWNER not in seen['env']
+    assert owner.kept(profile.dir)
+
+
+def test_keeping_an_existing_listener_does_not_need_a_restart(tmp_path, monkeypatch):
+    from collab.client import onboard
+    from collab.config import SessionProfile
+    profile = SessionProfile(session_id="s", url="http://h", name="a",
+                             host_name="h", token="t", home=str(tmp_path))
+    monkeypatch.setattr(onboard, 'is_running', lambda profile: 4242)
+    monkeypatch.setattr(onboard, 'spawn_daemon', lambda *a, **k: pytest.fail('must not restart'))
+    onboard.ensure_daemon(profile, follow=False, wait=False)
+    assert owner.kept(profile.dir)
+
+
+def test_keep_does_not_block_on_a_fifo_marker(tmp_path):
+    import time
+    os.mkfifo(tmp_path / 'keep')
+    started = time.monotonic()
+    with pytest.raises(OSError):
+        owner.keep(tmp_path)
+    assert time.monotonic() - started < .5
+    assert not owner.kept(tmp_path)

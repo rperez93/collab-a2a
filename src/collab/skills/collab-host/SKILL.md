@@ -80,3 +80,8 @@ started; do not kill processes by name. `collab kill` disconnects a guest while
 the host session keeps running; for a host it closes the session for everybody.
 History is kept unless explicitly purged. Confirm the result with `collab check`
 and the command's status, rather than leaving a wake aimed at a closed session.
+
+For an explicitly requested session that outlives its coding agent, use `--keep`.
+It persists for the saved session and detaches an existing follower on its next
+check. `--no-daemon` still records it for later startup. A fresh session follows
+normally; explicit stop commands still stop a kept session.
