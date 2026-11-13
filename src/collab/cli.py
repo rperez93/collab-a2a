@@ -117,8 +117,13 @@ def ok(msg: str) -> None:
     print(f"{c('[ok]', '32')}   {msg}")
 
 
+def warn_text(msg: str) -> str:
+    """`warn`'s line without printing it, for code that returns its lines."""
+    return f"{c('[warn]', '33')} {scrub_block(msg)}"
+
+
 def warn(msg: str) -> None:
-    print(f"{c('[warn]', '33')} {scrub_block(msg)}")
+    print(warn_text(msg))
 
 
 def fail(msg: str) -> None:
@@ -547,14 +552,44 @@ def _wake_clock_lines(told: dict[str, Any]) -> list[str]:
 
 # --- commands -----------------------------------------------------------------
 
+def tunnel_report(cfg: Any, *, installed: bool) -> list[str]:
+    """What `collab host` says when a session came up with no public tunnel.
+
+    A FUNCTION, so the branch is tested by what it prints rather than by a
+    hub. Three cases, and the advice has to match the cause:
+    - ngrok refused with a code we know: its words and that code's remedy;
+    - ngrok refused with a code we do not know: its words, its log, and how to
+      tunnel it yourself — NOT the authtoken paragraph, which a missing
+      authtoken (ERR_NGROK_4018) never reaches any more;
+    - ngrok said nothing we could read, or exited silently: the usual cause
+      (an authtoken) and the log;
+    - no ngrok at all: how to get one.
+    """
+    from .server.tunnel import (NGROK_FAILED_HELP, NO_NGROK_HELP,
+                                TUNNEL_YOURSELF_HELP, has_ngrok_code,
+                                remedy_for)
+
+    error = getattr(cfg, "tunnel_error", "") or ""
+    log = cfg.dir / "ngrok.log"
+    if not installed:
+        return [warn_text("no public tunnel"), NO_NGROK_HELP.format(port=cfg.port)]
+    if has_ngrok_code(error):
+        lines = [warn_text(f"no public tunnel — ngrok refused: {error}")]
+        if remedy := remedy_for(error):
+            lines.append(f"       {remedy}")
+        lines.append(f"       {dim('ngrok output: ' + str(log))}")
+        lines.append(TUNNEL_YOURSELF_HELP.format(port=cfg.port))
+        return lines
+    head = "no public tunnel" + (f" — {error}" if error else "")
+    return [warn_text(head), NGROK_FAILED_HELP.format(log=log)]
+
+
 def cmd_host(args: argparse.Namespace) -> int:
     from .server.session import (HubConfig, create_session,
                                  hosted_sessions, join_line,
                                  resume_session, session_summary)
-    from .config import ngrok_domain
-    from .server.tunnel import (NGROK_FAILED_HELP, NO_NGROK_HELP,
-                                TUNNEL_YOURSELF_HELP, free_port, local_ip,
-                                ngrok_path, ngrok_version, remedy_for)
+    from .config import host_domain, ngrok_domain
+    from .server.tunnel import free_port, local_ip, ngrok_path, ngrok_version
 
     _warn_outside_venv()
     _preflight_update(args)
@@ -577,11 +612,7 @@ def cmd_host(args: argparse.Namespace) -> int:
         previous = [c for c in previous if c.session_id == wanted] or previous
 
     if previous and not args.fresh:
-        # `--domain`, else the domain this session was already pinned to,
-        # else the configured default. The session's own comes before the
-        # default so that changing the default does not move a session whose
-        # link is already in somebody's hands.
-        domain = args.domain or ("" if previous[0].domain else ngrok_domain())
+        domain = host_domain(args.domain, previous[0].domain, ngrok_domain())
         cfg = resume_session(previous[0], port, bind=args.bind, domain=domain)
         if args.title:
             cfg.title = args.title
@@ -597,7 +628,7 @@ def cmd_host(args: argparse.Namespace) -> int:
         print(f"       {dim('start clean instead with: collab host --fresh')}")
     else:
         cfg = create_session(name, port, bind=args.bind,
-                             domain=args.domain or ngrok_domain(),
+                             domain=host_domain(args.domain, "", ngrok_domain()),
                              title=args.title or args.focus or "")
         if previous:
             note = ("started a new session; the previous one is kept and can be "
@@ -649,26 +680,9 @@ def cmd_host(args: argparse.Namespace) -> int:
         ok(f"ngrok tunnel up  {dim(ngrok_version() or '')}")
     elif args.no_tunnel:
         warn("tunnel disabled (--no-tunnel)")
-    elif cfg.tunnel_error and (remedy := remedy_for(cfg.tunnel_error)):
-        # ngrok RAN AND REFUSED for a reason we recognise: its words and the
-        # matching remedy, rather than the «ngrok was not found» this branch
-        # used to print to a machine where ngrok was installed and the
-        # account's one endpoint was merely in use elsewhere (ERR_NGROK_334,
-        # 2026-11-13).
-        warn(f"no public tunnel — ngrok refused: {cfg.tunnel_error}")
-        print(f"       {remedy}")
-        print(f"       {dim('ngrok output: ' + str(cfg.dir / 'ngrok.log'))}")
-        print(TUNNEL_YOURSELF_HELP.format(port=cfg.port))
-    elif ngrok_path():
-        # Installed, did not start, and no remedy we know: ngrok's own reason
-        # when it gave one, then the usual cause and where its output is.
-        # «not found» sent people to install a binary they already had.
-        warn("no public tunnel" + (f" — ngrok: {cfg.tunnel_error}"
-                                   if cfg.tunnel_error else ""))
-        print(NGROK_FAILED_HELP.format(log=cfg.dir / "ngrok.log"))
     else:
-        warn("no public tunnel")
-        print(NO_NGROK_HELP.format(port=cfg.port))
+        for line in tunnel_report(cfg, installed=ngrok_path() is not None):
+            print(line)
 
     # The host is participant #0: it joins its own session and comes up
     # listening, so it is live before anyone else connects.

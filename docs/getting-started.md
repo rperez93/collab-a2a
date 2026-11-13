@@ -127,7 +127,7 @@ domain:
 collab host --domain your-name.ngrok-free.app
 ```
 
-or set it once for every new session: `collab config ngrok_domain your-name.ngrok-free.app`.
+or set it once as the default for every `collab host`: `collab config ngrok_domain your-name.ngrok-free.app`.
 
 ## Join a session
 

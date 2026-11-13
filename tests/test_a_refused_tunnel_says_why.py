@@ -150,3 +150,165 @@ def test_the_setting_is_in_the_registry_beside_rules():
     names = [s.name for s in config.settings()]
     assert "ngrok_domain" in names
     assert names.index("ngrok_domain") == names.index("rules") + 1
+
+
+# ── Through `collab host` itself, with a real hub and a fake ngrok ──────────
+#
+# The tests above pass with both headline features removed: three mutants —
+# the hub never writing `tunnel_error`, and resume or create ignoring the
+# default domain — survived them (adversarial review, 2026-11-13). These drive
+# the real path: `collab host` starts a hub, the hub starts our fake ngrok,
+# the fake records its argv and refuses, and the host prints what hub.json says.
+
+import contextlib
+import io
+
+
+@pytest.fixture
+def hosting(tmp_path, monkeypatch):
+    monkeypatch.setenv("COLLAB_PEERS_DIR", str(tmp_path / "peers"))
+    monkeypatch.setenv("COLLAB_HOME", str(tmp_path / ".collab"))
+    monkeypatch.delenv("COLLAB_NAME", raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(config, "repo_root", lambda cwd=None: tmp_path)
+    config._CACHE.clear()
+    return tmp_path
+
+
+def _fake_ngrok_on_path(root, monkeypatch, body: str) -> None:
+    bin_dir = root / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    exe = bin_dir / "ngrok"
+    exe.write_text(f"#!/bin/sh\necho \"$@\" >> '{root}/argv.txt'\n{body}")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+
+
+def _host(root, *extra) -> str:
+    """One `collab host`, and the hub it started stopped again — every time,
+    so no case ever leaves two hubs on one session."""
+    from collab.cli import main
+    from collab.server.session import HubConfig, hosted_sessions, stop_session
+
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            main(["host", "--no-daemon", "--no-update-check", "--name", "alice", *extra])
+    finally:
+        for cfg in hosted_sessions(root / ".collab"):
+            stop_session(HubConfig.load(cfg.session_id, cfg.home) or cfg)
+    return out.getvalue()
+
+
+def _domains(root) -> list[str]:
+    """The `--domain` each ngrok launch was given, "" for none, in order."""
+    seen = []
+    for line in (root / "argv.txt").read_text().splitlines():
+        if not line.startswith("http "):
+            continue
+        words = line.split()
+        seen.append(words[words.index("--domain") + 1] if "--domain" in words else "")
+    return seen
+
+
+def test_the_host_prints_the_refusal_the_hub_recorded_with_its_remedy(hosting, monkeypatch):
+    _fake_ngrok_on_path(hosting, monkeypatch,
+                        "echo \"ERROR:  failed to start tunnel: The endpoint 'https://a.ngrok-free.app' "
+                        "is already online. Either\"\necho 'ERROR:  ERR_NGROK_334'\nexit 1\n")
+    out = _host(hosting, "--fresh")
+
+    assert "ngrok refused: ERR_NGROK_334: The endpoint 'https://a.ngrok-free.app' is already online" in out
+    assert "collab kill" in out, "the remedy must not resume over a hub that is still running"
+    assert "ngrok was not found" not in out
+    assert "add-authtoken" not in out, "334 is not an authtoken problem"
+
+
+def test_an_unknown_refusal_gets_its_words_not_the_authtoken_paragraph(hosting, monkeypatch):
+    _fake_ngrok_on_path(hosting, monkeypatch,
+                        "echo 'ERROR:  failed to start tunnel: The domain x.ngrok.app is "
+                        "reserved for another account. Then'\necho 'ERROR:  ERR_NGROK_320'\nexit 1\n")
+    out = _host(hosting, "--fresh")
+
+    assert "ERR_NGROK_320: The domain x.ngrok.app is reserved for another account" in out
+    assert "add-authtoken" not in out
+    assert "ngrok.log" in out
+
+
+def test_the_default_domain_reaches_ngrok_on_create_and_a_corrected_one_on_resume(
+        hosting, monkeypatch):
+    """Two hosts, ~10 s each: create uses the default, and resume uses a
+    CORRECTED default over the session's old pin — the order that once kept a
+    wrong domain through every fix of the setting. The rest of the precedence
+    is `host_domain`'s, tested below without a hub."""
+    _fake_ngrok_on_path(hosting, monkeypatch, "echo 'ERROR:  ERR_NGROK_334'\nexit 1\n")
+
+    config.set_ngrok_domain("first.ngrok.app")
+    _host(hosting, "--fresh")
+    config.set_ngrok_domain("fixed.ngrok.app")
+    _host(hosting)
+
+    assert _domains(hosting) == ["first.ngrok.app", "fixed.ngrok.app"]
+
+
+@pytest.mark.parametrize("flag, pinned, default, used", [
+    ("flag.ngrok.app", "pin.ngrok.app", "dflt.ngrok.app", "flag.ngrok.app"),
+    ("", "pin.ngrok.app", "dflt.ngrok.app", "dflt.ngrok.app"),
+    ("", "pin.ngrok.app", "", "pin.ngrok.app"),
+    ("", "", "", ""),
+])
+def test_the_flag_beats_the_default_which_beats_the_pin(flag, pinned, default, used):
+    assert config.host_domain(flag, pinned, default) == used
+
+
+def test_a_hand_edited_default_that_is_not_a_domain_never_reaches_ngrok(hosting, monkeypatch):
+    import json
+
+    _fake_ngrok_on_path(hosting, monkeypatch, "echo 'ERROR:  ERR_NGROK_334'\nexit 1\n")
+    path = config.global_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"ngrok_domain": "https://bad domain/"}))
+    config._CACHE.clear()
+
+    _host(hosting, "--fresh")
+
+    assert _domains(hosting) == [""]
+
+
+def test_the_last_failure_in_a_log_names_its_own_reason(tmp_path):
+    """Code from the last error, sentence from the first, once read as one."""
+    log = tmp_path / "ngrok.log"
+    log.write_text("ERROR:  failed to start tunnel: first reason. More\nERROR:  ERR_NGROK_1\n"
+                   "ERROR:  failed to start tunnel: second reason. More\nERROR:  ERR_NGROK_2\n")
+    assert t.failure_from_log(str(log), 0) == "ERR_NGROK_2: second reason"
+
+
+def test_a_reason_at_the_very_end_of_the_log_is_kept(tmp_path):
+    log = tmp_path / "ngrok.log"
+    log.write_text("ERROR:  ERR_NGROK_9\nERROR:  failed to start tunnel: cut off here")
+    assert t.failure_from_log(str(log), 0) == "ERR_NGROK_9: cut off here"
+
+
+def test_one_enormous_line_is_read_in_bounded_time(tmp_path):
+    """A lazy match with no terminator is quadratic: 200 KB on one line took
+    9.85 s in the review. Lines are capped, and so is the read."""
+    import time as clock
+
+    log = tmp_path / "ngrok.log"
+    log.write_text("failed to start tunnel: " * 20_000)   # ~480 KB, one line
+    started = clock.monotonic()
+    t.failure_from_log(str(log), 0)
+    assert clock.monotonic() - started < 0.5
+
+
+@pytest.mark.parametrize("given, stored", [
+    ("x.ngrok.app:443", "x.ngrok.app"),
+    ("https://x.ngrok.app/?q=1", "x.ngrok.app"),
+])
+def test_a_port_or_query_is_stripped_from_a_pasted_domain(given, stored):
+    assert config.set_ngrok_domain(given) == stored
+
+
+def test_a_bare_ip_address_is_not_a_reservable_domain():
+    with pytest.raises(ValueError):
+        config.set_ngrok_domain("1.2.3.4")

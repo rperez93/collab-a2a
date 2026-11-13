@@ -33,24 +33,39 @@ _LOG_URL_RE = re.compile(r'url=(https://[^\s"]+)')
 #: account's one endpoint was held by another ngrok process (ERR_NGROK_334),
 #: and `collab host` answered with «ngrok was not found» — true of nothing.
 _LOG_ERR_CODE_RE = re.compile(r"ERR_NGROK_\d+")
-#: The sentence ends at a full stop FOLLOWED BY SPACE — the message quotes a
-#: domain, and a bare «.» stopped it at «https://willing-settled-iguana».
-_LOG_ERR_TEXT_RE = re.compile(r"failed to start tunnel: (.+?)(?:\.(?=\s|$)|\\n|\n|\")")
+#: The sentence ends at a full stop FOLLOWED BY SPACE OR THE END — the message
+#: quotes a domain, and a bare «.» stopped it at «https://willing-settled-iguana»
+#: — or at a logfmt escape (`\n`, `\"`) or the closing quote. `[^\n]` keeps the
+#: search on one line; `_ERR_LINE_CAP` keeps that line short, because a lazy
+#: match with no terminator is quadratic: 200 KB on one line took 9.85 s.
+_LOG_ERR_TEXT_RE = re.compile(
+    r'failed to start tunnel: ([^\n]+?)(?:\.(?=\s|$)|\\n|\\"|\n|"|$)')
+_ERR_LINE_CAP = 2048
+#: How much of our run's log is read back for a reason. ngrok writes a few KB
+#: before it gives up; the cap is for a log nobody bounded.
+_ERR_READ_CAP = 64 * 1024
 
 #: What to do about the failures people actually meet. Keyed by ngrok's code;
 #: anything else gets ngrok's own words and the generic «tunnel it yourself».
+#: NO `collab host --resume` WHILE THE HUB IS UP: that starts a second hub on
+#: the same session (measured: two live hub_main pids, one session dir). The
+#: running hub retries the tunnel every TUNNEL_CHECK_SECONDS by itself.
 TUNNEL_REMEDIES = {
     "ERR_NGROK_334": (
-        "this ngrok account's endpoint is already online in another ngrok "
-        "process. Use a reserved domain of your own — `collab host --resume "
-        "--domain <domain>`, or once for every session: `collab config "
-        "ngrok_domain <domain>` — or stop that other process yourself."),
+        "that endpoint is already online in another ngrok process — possibly "
+        "another collab session on the same domain; one domain serves one "
+        "session at a time. Give this one a different reserved domain: "
+        "`collab kill`, then `collab host --resume --domain <domain>` "
+        "(`collab config ngrok_domain <domain>` makes it the default), "
+        "or stop the other process yourself."),
     "ERR_NGROK_4018": (
-        "ngrok has no authtoken: `ngrok config add-authtoken <token>`, then "
-        "re-run `collab host --resume`."),
+        "ngrok has no authtoken: `ngrok config add-authtoken <token>`. The "
+        "running hub retries the tunnel every 15 s, so nothing needs "
+        "restarting — `collab url` prints the public link once it is up."),
     "ERR_NGROK_108": (
         "this ngrok account allows one agent session at a time, and another "
-        "is running. Reuse it (`ngrok http <port>` in that agent) or stop it."),
+        "ngrok agent is running. Stop it, or serve this session's port from "
+        "that agent's own configuration (a tunnel to the port shown below)."),
 }
 
 
@@ -159,23 +174,34 @@ def _url_from_log(path: str | None, offset: int) -> str | None:
 def failure_from_log(path: str | None, offset: int) -> str:
     """ngrok's reason for refusing to start, from our own agent's log.
 
-    Empty when the log says nothing recognisable — a caller then says «no
-    URL» rather than inventing a cause.
+    Only this run's part (from `offset`), at most `_ERR_READ_CAP` of it, and
+    the code and the sentence from the SAME failure — the last one. Taking the
+    first sentence with the last code once paired «first reason» with the
+    second error's code. Empty when the log says nothing recognisable — a
+    caller then says «no reason» rather than inventing one.
     """
     if not path:
         return ""
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
             fh.seek(offset)
-            body = fh.read()
+            body = fh.read(_ERR_READ_CAP)
     except OSError:
         return ""
+    reason = ""
+    for line in body.splitlines():
+        if (m := _LOG_ERR_TEXT_RE.search(line[:_ERR_LINE_CAP])) is not None:
+            reason = m.group(1).strip()
     codes = _LOG_ERR_CODE_RE.findall(body)
-    text = _LOG_ERR_TEXT_RE.search(body)
-    reason = text.group(1).strip() if text else ""
     if codes and reason:
         return f"{codes[-1]}: {reason}"
     return codes[-1] if codes else reason
+
+
+def has_ngrok_code(error: str) -> bool:
+    """Did the reason come from ngrok itself (it carries ERR_NGROK_<n>), as
+    opposed to our own «ngrok exited with status 1»?"""
+    return bool(_LOG_ERR_CODE_RE.search(error or ""))
 
 
 def remedy_for(error: str) -> str:
@@ -284,7 +310,8 @@ ngrok is installed but did not start, so this session is reachable on this
 machine only. The usual cause is a missing authtoken — a free account needs it
 once:
   ngrok config add-authtoken <token>     https://dashboard.ngrok.com/get-started/your-authtoken
-then re-run `collab host`. ngrok's own output is in {log}
+The running hub retries the tunnel every 15 s; `collab url` prints the link
+once it is up. ngrok's own output is in {log}
 """
 
 
