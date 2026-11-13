@@ -297,7 +297,7 @@ The ETA is measured the same way the percentage is: from the board, not from
 anybody's estimate. The hub stamps each task as it completes, and the rate is
 completions over the time from opening the batch to the latest one. Once the
 task in flight is past its turn on that rate, the ETA is shown as a floor, «≥».
-Until a task has completed there is no rate, and no ETA is shown. A batch ends
+Until a task has completed there is no rate, and no ETA is given. A batch ends
 in an explicit state with its time frozen: «done in» to its last completion, or
 «closed after» when it was closed with work outstanding.
 The status line carries a compact form of the same figures, and `collab status`

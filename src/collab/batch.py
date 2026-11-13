@@ -341,12 +341,18 @@ def describe(figures: Any, *, now: float | None = None) -> str:
 # length on every clock, so the only thing a client adds is how long ago it
 # fetched the figure — which it measured itself.
 
-#: Below this, one completion's distance from the start is too short to be a
-#: rate. cc-progress uses the same second: a task proposed already completed
-#: lands within milliseconds of the batch opening, and 1/0.004 s is a rate of
-#: 250 tasks a second that would put «ETA 0s» on a batch of afternoon-long
-#: tasks.
+#: A completion this close to the batch opening is not evidence of a rate. The
+#: case is an agent recording work already finished — propose, complete, at
+#: the start — and five such stamps at 4 ms beside one real one at 600 s gave
+#: 100 s a task where the truth was 600. They are a BASELINE, as cc-progress
+#: treats a jump in the first seconds of a bar: counted in the figure, not in
+#: the rate. The same second is the shortest span a rate is taken over.
 MIN_SPAN = 1.0
+
+#: The longest duration drawn as a number: a hundred days. Past it a figure is
+#: either a batch nobody is working on or a value somebody else's hub chose,
+#: and in neither case are its digits worth the columns they take.
+LONGEST = 100 * 86400.0
 
 
 def _seconds(value: Any) -> float | None:
@@ -363,7 +369,12 @@ def _seconds(value: Any) -> float | None:
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    number = float(value)
+    try:
+        number = float(value)
+    except OverflowError:
+        # A JSON integer has no ceiling and `float(10**400)` raises — the
+        # OverflowError `count_of` was taught to catch, one function away.
+        return None
     if number != number or number in (float("inf"), float("-inf")) or number < 0:
         return None
     return number
@@ -385,6 +396,13 @@ def pace(*, opened_at: Any, completed: Iterable[Any], outstanding: int,
     OVERDUE (next < 0) the rate is re-taken over the whole elapsed time, so the
     task that is taking longer drags the estimate out instead of the estimate
     pretending — and the figure is marked `overdue`, to be read as «at least».
+    It is then a genuine floor: what the tasks AFTER the one in flight will
+    take, at the slower rate. For the last task that floor is nothing, and it
+    is drawn as «ETA overdue» rather than as a number — «≥0s» on a task an
+    hour past its turn read as «any second now».
+
+    Completions inside `MIN_SPAN` of the opening are a baseline and are not
+    counted into the rate; see `MIN_SPAN`.
     This is the tqdm behaviour cc-progress adopted, and for the same reason: a
     batch of unequal tasks otherwise shows a confident ETA that has already
     passed.
@@ -399,19 +417,23 @@ def pace(*, opened_at: Any, completed: Iterable[Any], outstanding: int,
     # Clamped into [opened, now]: a stamp outside it is a clock that stepped,
     # and a completion «before the batch opened» would stretch the span and
     # understate the rate, while one «in the future» would make it negative.
-    stamps = sorted(min(max(t, start), now) for t in
-                    (_seconds(c) for c in completed) if t is not None)
+    every = sorted(min(max(t, start), now) for t in
+                   (_seconds(c) for c in completed) if t is not None)
+    stamps = [t for t in every if t - start >= MIN_SPAN]
     gained = len(stamps)
     last = stamps[-1] if stamps else None
+    # The time things ended is the last completion of ANY kind; only the rate
+    # leaves the baseline out.
+    final = every[-1] if every else None
     closed = _seconds(closed_at)
     out: dict[str, Any] = {"counted": gained, "elapsed": None, "eta": None,
                            "overdue": False, "per_task": None,
-                           "since_last": None if last is None else now - last}
+                           "since_last": None if final is None else now - final}
     if outstanding <= 0:
         # Done. It took until the last completion — not until somebody got
         # round to closing it, and not «until now», which would make a batch
         # finished last week look a week slower every time it is read.
-        end = last if last is not None else closed
+        end = final if final is not None else closed
         out["state"] = "done"
         out["elapsed"] = None if end is None else max(0.0, end - start)
         if gained and out["elapsed"] and out["elapsed"] >= MIN_SPAN:
@@ -446,6 +468,12 @@ def duration(seconds: float, *, up: bool = False) -> str:
     work that is not finished is the same lie as 100% on 99.4%.
     """
     s = max(0.0, seconds)
+    if s >= LONGEST:
+        # BOUNDED, because the figure can be a remote party's: `eta: 1e308` is
+        # a finite float that `_seconds` lets through, and it rendered as a
+        # 300-digit day count — on a status line measured in dozens of
+        # columns. Nothing a batch is planned around is a hundred days off.
+        return "99d+"
     step = 1 if s < 60 else 60
     whole = int(-(-s // step) * step) if up else int(s // step * step)
     if whole < 60:
@@ -482,11 +510,17 @@ def reading(figures: Any, *, now: float | None = None) -> dict[str, Any] | None:
         lag = min(max(0.0, (now or time.time()) - fetched), STALE_AFTER)
     elapsed = _seconds(raw.get("elapsed"))
     eta = _seconds(raw.get("eta"))
+    overdue = raw.get("overdue") is True
+    if state == "running" and eta is not None and eta - lag <= 0:
+        # Counted down past zero between two refreshes: the hub's next count
+        # will say overdue, and until it does «ETA ~0s» would be promising a
+        # completion nobody has reported.
+        overdue = True
     out = {"state": state,
            "elapsed": None if elapsed is None else
            elapsed + (lag if state == "running" else 0.0),
            "eta": None if eta is None or state != "running" else max(0.0, eta - lag),
-           "overdue": raw.get("overdue") is True,
+           "overdue": overdue,
            "per_task": _seconds(raw.get("per_task")),
            "counted": count_of(raw, "counted")}
     since = _seconds(raw.get("since_last"))
@@ -508,6 +542,8 @@ def eta_text(figures: Any, *, now: float | None = None) -> str:
     if seen["state"] == "running":
         if seen["eta"] is None:
             return ""
+        if seen["overdue"] and seen["eta"] < 1:
+            return "ETA overdue"
         return f"ETA {'≥' if seen['overdue'] else '~'}{duration(seen['eta'], up=True)}"
     if seen["state"] == "done" and seen["elapsed"] is not None:
         return f"done in {duration(seen['elapsed'])}"
