@@ -1657,6 +1657,14 @@ collab daemon start --keep
 collab config follow_agent off      # never follow, for any session
 ```
 
+`--keep` is remembered for that saved session, including listener restarts and
+host resume. It also detaches an already-running follower on its next ownership
+check; it does not need a restart to take effect. The choice is local to this
+participant's session and does not change another participant's lifecycle or the
+global `follow_agent` setting. Stop it explicitly with `collab kill` or
+`collab daemon stop`; a fresh session starts with the normal following policy.
+Combining `--keep` with `--no-daemon` still records the choice for a later start.
+
 Two minutes rather than at once, because quitting an agent and starting it again
 is common and should cost nothing: the next `collab host` or `collab join` from
 the new agent re-claims the session, and the daemon picks that up on its next

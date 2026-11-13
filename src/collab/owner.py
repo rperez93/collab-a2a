@@ -365,6 +365,29 @@ def spawn_env(base: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+def keep(session_dir: Path | str) -> None:
+    """Persist an explicit session-lifetime opt-out, even before processes start.
+
+    A marker is independent of the transient agent lock, which may disappear
+    or be rewritten. Reconnecting or restarting a listener must not undo it.
+    """
+    directory = Path(session_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    fd = os.open(directory / "keep", os.O_WRONLY | os.O_CREAT | os.O_NONBLOCK, 0o600)
+    os.close(fd)
+
+
+def kept(session_dir: Path | str) -> bool:
+    return (Path(session_dir) / "keep").is_file()
+
+
+def without_owner(base: dict[str, str]) -> dict[str, str]:
+    """A kept child must not inherit a parent's COLLAB_OWNER either."""
+    env = dict(base)
+    env.pop(ENV_OWNER, None)
+    return env
+
+
 def from_env(env: dict[str, str] | None = None) -> Stamp | None:
     """The owner this process was started with, if it was told."""
     source = os.environ if env is None else env
@@ -423,7 +446,7 @@ class Follower:
             return 0.0
         return max(self.grace - (self.now() - self.gone_since), 0.0)
 
-    def look(self, fresh: Stamp | None = None) -> str:
+    def look(self, fresh: Stamp | None = None, *, keep: bool = False) -> str:
         """One beat's worth of looking. Says what was found.
 
         ``"unowned"``   nothing to follow, and nothing to do about it.
@@ -437,6 +460,12 @@ class Follower:
         starting owner in place rather than clearing it — an agent that has
         released the lock on its way out is exactly the case this is for.
         """
+        if keep:
+            # A live opt-out must also detach followers constructed earlier.
+            self.owner = None
+            self.seen_at = None
+            self.gone_since = None
+            return "unowned"
         # A DEAD ONE DOES NOT DISPLACE A LIVE ONE. `recorded` is written by
         # `host` and `join` and by nothing else, so a repository whose lock
         # still names an agent that has quit hands that dead stamp to the next

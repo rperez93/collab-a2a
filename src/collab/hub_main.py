@@ -131,7 +131,8 @@ class RegistryHeartbeat:
         if not follow_agent_enabled():
             return
         state = self.following.look(
-            ownership.recorded(self.cfg.home, self.cfg.session_id))
+            ownership.recorded(self.cfg.home, self.cfg.session_id),
+            keep=ownership.kept(self.cfg.dir))
         if state in ("unowned", "following"):
             if self._said_missing and state == "following":
                 logger.warning("the host's agent is back; carrying on")

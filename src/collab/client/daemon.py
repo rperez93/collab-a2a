@@ -618,6 +618,8 @@ class Daemon:
         """
         if not follow_agent_enabled():
             return {"following": False, "why": "following is off (config follow_agent)"}
+        if ownership.kept(self.profile.dir):
+            return {"following": False, "why": "session was kept (--keep)"}
         if not self._following.following:
             return {"following": False,
                     "why": "no agent could be named, so this runs until stopped"}
@@ -799,7 +801,8 @@ class Daemon:
         if not follow_agent_enabled():
             return
         state = self._following.look(
-            ownership.recorded(self.profile.home, self.profile.session_id))
+            ownership.recorded(self.profile.home, self.profile.session_id),
+            keep=ownership.kept(self.profile.dir))
         if state in ("unowned", "following"):
             if self._said_missing and state == "following":
                 logger.info("the agent is back; carrying on")

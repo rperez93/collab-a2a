@@ -663,8 +663,10 @@ def cmd_host(args: argparse.Namespace) -> int:
     # that can still see it. `--keep` records nobody, which is the same state a
     # hub started by hand from a terminal is in: it follows nothing and runs
     # until it is stopped.
-    if not _keeping(args):
-        env = owner.spawn_env(env)
+    if _keeping(args):
+        owner.keep(cfg.dir)
+    env = (owner.without_owner(env) if owner.kept(cfg.dir)
+           else owner.spawn_env(env))
 
     log = DaemonPaths(cfg.dir).root / "hub.log"
     with open_log(log) as fh:
@@ -930,7 +932,7 @@ def _take_lock(profile: SessionProfile, *, role: str, hub_pid: int = 0) -> None:
     # moment — the hub answered a health check a few lines above, the listener
     # was just found holding its lock — and a start time can only be read off a
     # live process. A stamp minted later would be an empty one.
-    who = _who_owns_this(profile, listener)
+    who = "" if owner.kept(profile.dir) else _who_owns_this(profile, listener)
     home = Path(profile.home)
     lockfile.acquire(lockfile.Lock(
         name=profile.name, session_id=profile.session_id, role=role,

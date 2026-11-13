@@ -53,3 +53,10 @@ deletes, or automatically adopts their credentials: a directory name or a stale
 process ancestry cannot establish ownership for a new agent session. To continue
 one, explicitly select its path with `COLLAB_HOME`. Selecting the same explicit
 home for two agents intentionally bypasses isolation and should be avoided.
+
+## Session lifecycle
+
+An explicit `--keep` writes a small `sessions/<id>/keep` marker in the selected
+participant namespace. It survives listener restarts and saved-session resume;
+fresh sessions have no marker. It carries no credentials and is read on each
+ownership check, so a running process drops its old owner and stop timer.
