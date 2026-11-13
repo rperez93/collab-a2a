@@ -6692,7 +6692,7 @@ def cmd_logs(args: argparse.Namespace) -> int:
             print("  " + line)
     print()
 
-    for name in ("daemon.log", "hub.log"):
+    for name in ("daemon.log", "hub.log", "worker.log"):
         path = root / name
         tail = _tail(path, lines)
         if tail is None:
@@ -6707,7 +6707,7 @@ def cmd_logs(args: argparse.Namespace) -> int:
         # for the UTC day, so a follow started in the evening was watching a
         # file that stopped being written at midnight and went silent for the
         # rest of the night without saying so.
-        _follow([root / "daemon.log", root / "hub.log"],
+        _follow([root / "daemon.log", root / "hub.log", root / "worker.log"],
                 rolling=lambda: diag.path_for(root))
     return 0
 
@@ -6831,6 +6831,16 @@ def _follow(paths: list[Path], *, rolling=None) -> None:
                     if first_pass:
                         fh.seek(0, os.SEEK_END)
                     handles[path] = fh
+                # TRIMMED UNDER US: the logs are capped in place by copy and
+                # truncate (collab.logcap), so a file shorter than where this
+                # follow had read to is one that was rotated, and everything in
+                # it now is new. Without this the follow sat past the end and
+                # printed nothing for the rest of the session.
+                try:
+                    if os.fstat(fh.fileno()).st_size < fh.tell():
+                        fh.seek(0)
+                except OSError:
+                    pass
                 while line := fh.readline():
                     print(f"  {dim(path.name)} {line.rstrip()}")
                     wrote = True

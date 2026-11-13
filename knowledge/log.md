@@ -7,6 +7,9 @@
 * **Update (later than the pin)**: Added elapsed time and a rate-based ETA to [batches](collaboration/batches.md), measured from a new `tasks.completed_at` recorded in [the task board](collaboration/task-board.md). The pin and verification stamps are unchanged.
 * **Update (later than the pin)**: Recorded R8 saved host/guest sessions and explicit resume with original working paths. Historical pin and verification stamps are unchanged.
 
+## 2026-11-13 (logs)
+* **Update (later than the pin)**: Recorded in [the state directory](architecture/state-directory.md) that every session log is capped at 10 MB with its rotated generation while its writer runs, by copy and truncate, and that `worker.log` holds one content-free line per worker model turn. The pin and verification stamps are unchanged.
+
 ## 2026-09-20
 * **Update (2.1.1, later than the pin)**: Recorded shared participant identity and internal decision routing in the wake page; the bundle pin is unchanged.
 * **Update (2.1.0, later than the pin)**: Documented default worker setup and persistent opt-out in the wake page. The bundle revision is unchanged.

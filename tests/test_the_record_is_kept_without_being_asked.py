@@ -101,12 +101,19 @@ def test_the_http_commentary_is_quieted():
 
 
 def test_a_large_log_is_rolled_aside_when_a_process_opens_it(tmp_path):
+    """Rolled by copy and truncate, keeping the TAIL — at most one cap's worth.
+
+    The rolled copy used to be the whole file, which made `.1` as large as
+    the live file had been allowed to grow; bounding it is what lets the two
+    generations together promise a size (see collab.logcap)."""
     path = tmp_path / "daemon.log"
-    path.write_text("x" * 200)
+    path.write_text("".join(f"line {i:03d}\n" for i in range(25)))   # 225 bytes
     with daemon_files.open_log(path, cap=100) as fh:
         fh.write("fresh\n")
     assert path.read_text() == "fresh\n"
-    assert (tmp_path / "daemon.log.1").read_text() == "x" * 200
+    kept = (tmp_path / "daemon.log.1").read_text()
+    assert len(kept) <= 100 and kept.endswith("line 024\n")
+    assert kept.startswith("line "), "it begins at a whole line"
 
 
 def test_a_small_log_is_simply_appended_to(tmp_path):
@@ -123,7 +130,8 @@ def test_only_one_generation_is_kept(tmp_path):
     for round_ in ("first", "second"):
         path.write_text(round_ * 100)
         daemon_files.open_log(path, cap=10).close()
-    assert (tmp_path / "daemon.log.1").read_text() == "second" * 100
+    assert (tmp_path / "daemon.log.1").read_text() == ("second" * 100)[-10:]
+    assert not (tmp_path / "daemon.log.2").exists()
 
 
 def test_a_missing_log_is_created_rather_than_refused(tmp_path):

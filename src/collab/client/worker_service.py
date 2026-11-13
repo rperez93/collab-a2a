@@ -12,7 +12,7 @@ import contextlib
 import json
 import time
 
-from .. import activity, worker, worker_runtime
+from .. import activity, logcap, worker, worker_runtime
 from ..runtime_settings import get as setting
 from ..protocol import EXT_PREFIX
 from ..compatibility import request_headers
@@ -22,6 +22,13 @@ from ..compatibility import request_headers
 TURN_GAP = 5.0
 PAGE_SIZE = 24
 MAX_EVENTS_BYTES = 64_000
+
+
+def _tally(kinds) -> dict:
+    counts: dict = {}
+    for kind in kinds:
+        counts[kind] = counts.get(kind, 0) + 1
+    return counts
 
 
 def _excerpt(text, budget):
@@ -72,6 +79,52 @@ def skill_requests(events, escalations, me: str, me_id: str = "") -> list[dict]:
                 f" (request {str(ask.get('id', ''))[:40]}). Only your human can consent: "
                 "`collab skills accept|decline ID`.")})
     return added
+
+
+#: Usage figures summed into a turn's log line. The rest of what the provider
+#: reports (model names per call, cost kinds) is in `worker.db`, where
+#: `collab stats` reads it; the log carries what a person scanning for «why was
+#: that turn slow or expensive» needs on one line.
+_USAGE_FIELDS = ("tokens_in", "tokens_out", "tokens_cached", "tokens_cache_write",
+                 "cost_usd")
+
+
+def turn_record(*, agent: str, model: str, trigger: dict, contexts: int,
+                answers: int, usage: list, outcome: str, error: str = "",
+                replies: int = 0, escalations: int = 0,
+                seconds: float = 0.0) -> str:
+    """One model turn as one JSON line — and nothing anybody said in it.
+
+    COUNTS AND CLASSES ONLY. The trigger is how many events of each kind the
+    turn was handed, not which, from whom or what they said; replies and
+    escalations are counted, not quoted. The error is the class of failure the
+    worker already shows in `collab worker status` — `WorkerRuntimeError`'s
+    messages are fixed strings written never to carry provider stderr — and
+    goes through the diagnostic record's scrub anyway, which takes out home
+    paths and URLs. The same rules `collab.diagnostics` keeps: no content, no
+    names, no tokens or invites.
+    """
+    from ..diagnostics import _safe
+    from ..telemetry import number
+
+    totals: dict[str, float] = {}
+    for figures in usage:
+        for key in _USAGE_FIELDS:
+            value = number(figures.get(key)) if isinstance(figures, dict) else None
+            if value is not None:
+                totals[key] = totals.get(key, 0) + value
+    line = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "event": "turn", "agent": _safe(agent), "model": _safe(model),
+        "trigger": {str(k)[:20]: int(v) for k, v in sorted(trigger.items())},
+        "contexts": contexts, "answers": answers,
+        "replies": replies, "escalations": escalations,
+        **{k: (round(v, 6) if k == "cost_usd" else int(v)) for k, v in totals.items()},
+        "outcome": outcome, "seconds": round(seconds, 2),
+    }
+    if error:
+        line["error"] = _safe(error)[:200]
+    return json.dumps(line, ensure_ascii=False, sort_keys=False)
 
 
 class Conversation:
@@ -182,6 +235,25 @@ class Conversation:
             if attempts >= setting("worker_delivery_batch"):
                 break
 
+    def _log_turn(self, logged, outcome: str, **fields) -> None:
+        """Append the turn's line to `worker.log`, capped. Never raises.
+
+        `logged` is None before a model was called and after the line was
+        written, so a failure in the delivery that follows a logged turn does
+        not log the same turn twice.
+        """
+        if not logged:
+            return
+        try:
+            line = turn_record(
+                agent=logged["agent"], model=logged["model"],
+                trigger=logged["trigger"], contexts=logged["contexts"],
+                answers=logged["answers"], usage=logged["usage"], outcome=outcome,
+                seconds=time.monotonic() - logged["began"], **fields)
+            logcap.append_line(self.root / "worker.log", line)
+        except Exception:                                    # noqa: BLE001
+            pass                    # a log line is never worth a failed turn
+
     def _source(self, record):
         """A compact summary cannot be trusted to remember a reply address."""
         if "question" in record:
@@ -220,6 +292,7 @@ class Conversation:
         cfg = snapshot["config"]
         if not cfg or not cfg.get("enabled"):
             return
+        logged = None
         try:
             await self._flush(store, snapshot["generation"])
             events = self.daemon.inbox.after(snapshot["cursor"], limit=setting("worker_page_size"))
@@ -321,9 +394,24 @@ class Conversation:
             # Charge the configurable gap only when a model call is reserved.
             self.next_at = time.time() + setting("worker_turn_gap")
             store.health(running=True, expected_generation=snapshot["generation"])
+            model = (setting(f"worker_{cfg['agent']}_model") if cfg.get("model_default")
+                     else cfg.get("model", ""))
+            usage: list = []
+
+            def on_usage(figures: dict) -> None:
+                usage.append(figures)
+                store.record_usage(figures)
+
+            # THE TURN'S LOG LINE is written from here on, whatever happens:
+            # only a turn that reached a model is one, and it is the paid turns
+            # somebody comes to this file to account for.
+            logged = {"agent": str(cfg.get("agent") or ""), "model": str(model or ""),
+                      "trigger": _tally(e["kind"] for e in selected),
+                      "contexts": len(contexts), "answers": len(answers),
+                      "usage": usage, "began": time.monotonic()}
             result = await worker_runtime.run_turn(
-                cfg["agent"], (setting(f"worker_{cfg['agent']}_model") if cfg.get("model_default") else cfg.get("model", "")), payload, self.root / "worker-runtime",
-                command=cfg.get("command") or None, timeout=setting("worker_timeout"), on_usage=store.record_usage)
+                cfg["agent"], model, payload, self.root / "worker-runtime",
+                command=cfg.get("command") or None, timeout=setting("worker_timeout"), on_usage=on_usage)
             known = {p.get("name") for p in self.daemon.snapshot.get("participants", [])}
             known.update(e["sender"] for e in selected)
             known.update(a["source"]["sender"] for a in answers if "source" in a)
@@ -349,16 +437,22 @@ class Conversation:
                 context_ids=[row["id"] for row in contexts],
                 answer_ids=[row["id"] for row in answers],
                 expected_generation=snapshot["generation"], expected_turn=snapshot["turn"])
+            self._log_turn(logged, "ok" if committed else "superseded",
+                           replies=len(result["replies"]),
+                           escalations=len(result["escalations"]))
+            logged = None
             if not committed:
                 return
             await self._flush(store, snapshot["generation"])
             self._delivery_health(store, snapshot["generation"])
         except asyncio.CancelledError:
+            self._log_turn(logged, "cancelled")
             store.health(running=False, expected_generation=snapshot["generation"])
             raise
         except Exception as exc:
             # Exception details can include a bearer URL or provider output;
             # status needs a class of failure, not private subprocess logs.
             detail = str(exc) if isinstance(exc, worker_runtime.WorkerRuntimeError) else type(exc).__name__
+            self._log_turn(logged, "error", error=detail)
             self.next_at = time.time() + setting("worker_retry_delay")
             store.health(error=detail[:300], retry_at=self.next_at, running=False, expected_generation=snapshot["generation"])

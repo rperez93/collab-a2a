@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .. import lockfile
+from .. import lockfile, logcap
 from ..config import SessionProfile
 from . import exclusive
 
@@ -60,11 +60,11 @@ class DaemonPaths:
         return self.root / "snapshot.json"
 
 
-#: How large `daemon.log` or `hub.log` may be before the next process to open
-#: one rolls it aside. Two megabytes is some tens of thousands of lines: far
-#: more than anybody reads, and small enough that two of them per session is
-#: not a thing to notice on a disk.
-LOG_CAP = 2_000_000
+#: How large `daemon.log` or `hub.log` may be before it is rolled aside — at
+#: open, here, and while the process runs, by `collab.logcap.Watcher`. It was
+#: 2 MB enforced at open only, so a daemon that stayed up for a week wrote as
+#: much as it liked. One generation of the 10 MB budget; see collab.logcap.
+LOG_CAP = logcap.GENERATION_CAP
 
 #: The loggers that are not what these files are for. httpx logs one INFO line
 #: per request, and this daemon makes one about every three seconds for as long
@@ -225,25 +225,24 @@ def _write_logs_on_a_thread() -> None:
 def open_log(path: Path, cap: int = LOG_CAP):
     """Open a detached process's log for appending, rolling it aside if it is large.
 
-    ROLLED AT OPEN, which is to say when a process is spawned, and never while
-    one is running. A rotation underneath a live daemon would be renaming a
-    file it holds an open descriptor on: it would go on writing to the renamed
-    file, invisibly, and the fresh one would stay empty until the next restart.
-    Doing it here means the file a running process is writing to is the file it
-    was handed, for as long as it runs, which is the only arrangement that does
-    not need the daemon to know about rotation at all.
+    ALWAYS `"a"`, which is `O_APPEND`, and the running cap depends on it: the
+    file is trimmed in place while processes hold it (see collab.logcap), and
+    only an appending descriptor writes at the new end after a truncate rather
+    than at its old offset behind a hole of zeros.
 
-    One generation is kept. The previous file is what somebody wants when a
-    daemon has just been restarted by the thing they are investigating; two
-    generations back is history nobody has ever asked this project for.
+    Rolled by copy and truncate, not by rename. A rename here used to be safe
+    only because nothing else held the file; a hub restarted by the daemon and
+    a hub started by `collab host` share `hub.log`, and renaming it under the
+    one still running sent that process's writes into `hub.log.1`, invisibly.
+
+    One generation is kept, holding the TAIL of what was rolled: the previous
+    file is what somebody wants when a daemon has just been restarted by the
+    thing they are investigating, and the end of it is the part that explains
+    the restart.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        if path.stat().st_size > cap:
-            path.replace(path.with_suffix(path.suffix + ".1"))
-    except OSError:
-        pass                # unreadable or unrenameable: append to it anyway
-    return path.open("a")
+    logcap.trim(path, cap)      # never raises: a log that cannot be rolled is
+    return path.open("a")       # still appended to
 
 
 def is_running(profile: SessionProfile) -> int | None:

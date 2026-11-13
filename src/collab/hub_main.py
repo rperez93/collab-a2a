@@ -16,8 +16,8 @@ from pathlib import Path
 
 import uvicorn
 
-from . import __version__, diagnostics, owner as ownership, peers
-from .client.daemon_files import setup_logging
+from . import __version__, diagnostics, logcap, owner as ownership, peers
+from .client.daemon_files import DaemonPaths, setup_logging
 from .config import follow_agent_enabled
 from .server.app import create_app
 from .server.session import HubConfig, update_fields
@@ -181,6 +181,12 @@ def main() -> int:
         return 1
 
     cfg.pid = os.getpid()
+    # BOTH of the files this process and its children write to, capped while
+    # they run. `ngrok.log` had no cap at all — ngrok's stdout, appended to for
+    # as long as the tunnel stays up, 224 KB in a live session's first hour —
+    # and `hub.log` was capped only when the next hub was spawned. The same
+    # directory `collab host` and the daemon's restart open `hub.log` in.
+    logcap.watch(DaemonPaths(cfg.dir).root / "hub.log", cfg.dir / "ngrok.log")
     # The SAME directory the daemon writes into, and one file per day shared
     # between them — a fault is nearly always a conversation between the two
     # processes, and two files would have to be interleaved by hand before
