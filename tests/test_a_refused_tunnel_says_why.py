@@ -252,17 +252,19 @@ def test_the_default_domain_reaches_ngrok_on_create_and_a_corrected_one_on_resum
     assert _domains(hosting) == ["first.ngrok.app", "fixed.ngrok.app"]
 
 
-def test_a_domain_chosen_for_one_session_survives_the_next_plain_host(hosting, monkeypatch):
-    """The ERR_NGROK_334 remedy puts a session on its own domain. With a
-    default set, the next plain `collab host` used to move it back onto the
-    shared one — measured: shared, own, shared — colliding again."""
+def test_the_334_remedy_lasts_past_the_next_plain_host(hosting, monkeypatch):
+    """The remedy's own path: a session created FROM the default, then
+    `--resume --domain own`, then a plain `collab host`. Deleting the resume
+    path's provenance once left every test green while this went shared,
+    own, shared — colliding again (review mutant n1c)."""
     _fake_ngrok_on_path(hosting, monkeypatch, "echo 'ERROR:  ERR_NGROK_334'\nexit 1\n")
     config.set_ngrok_domain("shared.ngrok.app")
 
-    _host(hosting, "--fresh", "--domain", "own.ngrok.app")
+    _host(hosting, "--fresh")
+    _host(hosting, "--resume", "--domain", "own.ngrok.app")
     _host(hosting)
 
-    assert _domains(hosting) == ["own.ngrok.app", "own.ngrok.app"]
+    assert _domains(hosting) == ["shared.ngrok.app", "own.ngrok.app", "own.ngrok.app"]
 
 
 @pytest.mark.parametrize("flag, pinned, pinned_from, default, used", [
@@ -270,8 +272,11 @@ def test_a_domain_chosen_for_one_session_survives_the_next_plain_host(hosting, m
     ("https://Flag.ngrok.app/", "", "", "", ("flag.ngrok.app", "flag")),
     ("", "pin.ngrok.app", "flag", "dflt.ngrok.app", ("pin.ngrok.app", "flag")),
     ("", "pin.ngrok.app", "", "dflt.ngrok.app", ("pin.ngrok.app", "flag")),
+    # a legacy pin equal to the default: 2.1.2 dropped `domain_from` on save
+    ("", "dflt.ngrok.app", "", "dflt.ngrok.app", ("dflt.ngrok.app", "default")),
     ("", "pin.ngrok.app", "default", "dflt.ngrok.app", ("dflt.ngrok.app", "default")),
-    ("", "pin.ngrok.app", "default", "", ("pin.ngrok.app", "default")),
+    # a defaulted pin follows a CLEARED default too
+    ("", "pin.ngrok.app", "default", "", ("", "")),
     ("", "", "", "dflt.ngrok.app", ("dflt.ngrok.app", "default")),
     ("", "", "", "", ("", "")),
 ])
@@ -289,13 +294,19 @@ def test_a_bad_domain_flag_is_refused_before_any_hub_starts(hosting, monkeypatch
     assert "not a domain ngrok can serve" in said.out + said.err
 
 
-def test_an_invalid_stored_default_is_named_not_silently_dropped(hosting, monkeypatch):
+def test_an_invalid_stored_default_is_named_by_collab_host(hosting, monkeypatch):
+    """Dropped silently, a hand-edited default meant a random domain with no
+    word why; `collab host` must say it is ignoring the value."""
     import json
+    _fake_ngrok_on_path(hosting, monkeypatch, "echo 'ERROR:  ERR_NGROK_334'\nexit 1\n")
     path = config.global_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"ngrok_domain": "https://bad domain/"}))
     config._CACHE.clear()
-    assert config.ngrok_domain_ignored() == "https://bad domain/"
+
+    out = _host(hosting, "--fresh")
+
+    assert "ignoring the ngrok_domain setting 'https://bad domain/'" in out
     config.set_ngrok_domain("ok.ngrok.app")
     assert config.ngrok_domain_ignored() == ""
 
