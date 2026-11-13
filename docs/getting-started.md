@@ -20,6 +20,9 @@ You need the following:
 - Optional: [ngrok](https://ngrok.com/download), if you want to share a session
   with someone on another network.
   Without it, a session is reachable on your machine and local network only.
+- Optional: OpenSSL, to create the certificate for automatic secure LAN
+  selection. Hosting preserves the public route if local TLS is unavailable.
+  See [local and public routes](local-routes.md).
 
 ### Supported platforms
 

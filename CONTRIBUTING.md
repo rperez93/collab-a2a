@@ -448,6 +448,12 @@ during an in-flight read. Test both periodic/event overlap and silent-peer
 cancellation. Validators belong to the authenticated URL; a 304 renews the
 cached roster age only when that route supplied the validator. Compression is
 limited to finite roster JSON, never middleware that might buffer SSE or files.
+Local route changes need real TLS tests: wrong certificates must fail before
+credentials, a raw relay must see ciphertext, and a pin change must close the
+daemon pool and resume its cursor. Exercise FIFO/oversized certificate paths,
+pre-handshake admission, stream backpressure and cleanup. Test the connected
+coding host types with their own workers at the coordinated integration reload;
+shared Python tests alone do not establish host-specific live acceptance.
 
 Decoration image I/O happens only in `Background.prepare`, before palette and
 text layout. Asset changes bump the shared theme generation; resizing reuses a
