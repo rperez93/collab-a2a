@@ -14,6 +14,7 @@ ${XDG_STATE_HOME:-~/.local/state}/collab/
           profile.json
           routes.json
           worker.db
+          worker.log
 ```
 
 The workspace is the Git checkout root, or the current folder when there is no
@@ -47,6 +48,13 @@ summary, main-agent context and answers, pending decisions, and durable outgoing
 replies. It is separate from the main inbox's read cursor. Model turns use
 private temporary directories outside the repository; durable worker state
 remains with this agent and session.
+
+`worker.log` records one JSON line per model turn: the trigger as counts by
+event kind, the provider and model, tokens and cost where the provider reports
+them, replies and escalations as counts, the outcome (`ok`, `superseded`,
+`cancelled`, `error`), the class of any failure, and the duration. It never
+holds message text, names or provider output. Like `daemon.log`, `hub.log` and
+`ngrok.log`, it is capped at 10 MB including its rotated `worker.log.1`.
 
 ## Existing sessions and explicit homes
 
