@@ -1997,25 +1997,43 @@ _DOMAIN_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+"
                         r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 
 
+def _bare_host(value: Any) -> str:
+    """A pasted URL reduced to the host ngrok's `--domain` wants, or "".
+
+    Scheme, path, query, fragment and port all go: people copy
+    `https://x.ngrok.app/?q=1` or `x.ngrok.app:443` out of a browser. Pure
+    dotted numbers are not a domain ngrok can reserve.
+    """
+    if not isinstance(value, str):
+        return ""
+    host = value.strip().lower()
+    host = re.sub(r"^[a-z][a-z0-9+.-]*://", "", host)
+    host = re.split(r"[/?#]", host, maxsplit=1)[0]
+    host = host.rsplit(":", 1)[0] if re.search(r":\d+$", host) else host
+    if not _DOMAIN_RE.match(host) or re.fullmatch(r"[\d.]+", host):
+        return ""
+    return host
+
+
 def ngrok_domain() -> str:
     """The reserved ngrok domain `collab host` uses when `--domain` is absent.
 
     One key PER PROXY PLATFORM, named for it, rather than one `tunnel_domain`:
     a hostname reserved on ngrok means nothing to cloudflared, and a machine
     may hold one for each. ngrok is the only platform collab drives today.
+
+    VALIDATED ON READ AS WELL. A hand-edited `"https://bad domain/"` was handed
+    to ngrok verbatim as `--domain https://bad domain/`; a value that is not a
+    domain now reads as unset.
     """
-    return str(load_config().get("ngrok_domain") or "").strip()
+    return _bare_host(load_config().get("ngrok_domain"))
 
 
 def set_ngrok_domain(value: str) -> str:
-    """Store the default ngrok domain; empty clears it.
-
-    A pasted URL is reduced to its host — `https://x.ngrok.app/` is what
-    people copy out of a browser, and ngrok wants `x.ngrok.app`.
-    """
-    host = (value or "").strip().lower()
-    host = re.sub(r"^[a-z]+://", "", host).split("/", 1)[0].split("#", 1)[0]
-    if host and not _DOMAIN_RE.match(host):
+    """Store the default ngrok domain; empty clears it."""
+    raw = (value or "").strip()
+    host = _bare_host(raw)
+    if raw and not host:
         raise ValueError(f"not a domain ngrok can serve: {value!r}")
     cfg = load_config()
     if host:
@@ -2024,6 +2042,18 @@ def set_ngrok_domain(value: str) -> str:
         cfg.pop("ngrok_domain", None)
     save_config(cfg)
     return host
+
+
+def host_domain(flag: str, pinned: str, default: str) -> str:
+    """Which ngrok domain a `collab host` uses: `--domain`, else the configured
+    default, else the one the session was pinned to last time.
+
+    THE DEFAULT BEFORE THE PIN. The other order meant a wrong or outdated
+    domain, once pinned, survived every correction of the setting — and the
+    334 advice («set `ngrok_domain`») became a no-op. Nothing is lost by
+    moving: every resume rotates the invite, so no link survives it anyway.
+    """
+    return flag or default or pinned
 
 
 def _write_theme(value: str) -> str:

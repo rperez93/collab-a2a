@@ -286,11 +286,12 @@ collab host --domain your-name.ngrok-free.app
 collab config ngrok_domain your-name.ngrok-free.app   # or once, for every session
 ```
 
-A session already pinned to a domain keeps it when resumed; the setting applies
-to new sessions and to ones that never had one. If ngrok refuses to start —
-for example because the account's one endpoint is already online in another
-ngrok process (`ERR_NGROK_334`) — `collab host` prints ngrok's own reason and
-the remedy, and the session stays usable on this machine.
+The order is `--domain`, then the `ngrok_domain` setting, then the domain the
+session used last time — so correcting the setting takes effect at the next
+`collab host`. One domain serves one session at a time. If ngrok refuses to
+start — for example because that endpoint is already online in another ngrok
+process (`ERR_NGROK_334`) — `collab host` prints ngrok's own reason and the
+remedy, and the session stays usable on this machine.
 
 The link is the only credential for joining, so anyone holding it can get in. If
 it leaks, or you shared it more widely than you meant to, replace it:
@@ -2341,7 +2342,7 @@ collab config --json              # the same table, for an agent to read
 | `timezone` | the zone dates and times are read in; an IANA name, or `auto` for the computer's own | — | `auto` |
 | `share_stats` | share your usage with the session | `collab stats --share on\|off` | `on` |
 | `rules` | print collab's rules of conduct at `host` and `join`; the pointer to the repo's own `COLLAB.md` always prints | — | `on` |
-| `ngrok_domain` | reserved ngrok domain `collab host` uses when `--domain` is not given; a session already pinned keeps its own | `collab host --domain` | empty |
+| `ngrok_domain` | reserved ngrok domain `collab host` uses when `--domain` is not given, ahead of the domain a resumed session used before | `collab host --domain` | empty |
 | `watch_layout` | `split`, `tmux`, `chat` or `roster` | `collab watch --layout <l> --save` | `split` |
 | `watch_roster_size` | how much room the roster gets, in percent | `collab watch --roster-size <n> --save` | `30` |
 | `watch_roster_position` | `top`, `bottom`, `left` or `right` | `collab watch --roster-position <p> --save` | `top` |

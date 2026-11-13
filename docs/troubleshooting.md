@@ -119,12 +119,18 @@ from elsewhere through a tunnel, in the usual way.
 `collab host` prints «no public tunnel — ngrok refused:» followed by ngrok's own
 error code and reason. The session is still reachable on this machine.
 
-- `ERR_NGROK_334` — the account's endpoint is already online in another ngrok
-  process (a free account has one). Pin a reserved domain of your own with
-  `collab host --resume --domain <domain>`, or set it once with
-  `collab config ngrok_domain <domain>`; or stop the other process yourself.
+- `ERR_NGROK_334` — that endpoint is already online in another ngrok process,
+  possibly another collab session on the same domain: one domain serves one
+  session at a time. Give this session a different reserved domain —
+  `collab kill`, then `collab host --resume --domain <domain>`; `collab config
+  ngrok_domain <domain>` makes it the default — or stop the other process
+  yourself. Do not run `collab host --resume` while the hub is still up: that
+  starts a second hub on the same session.
 - `ERR_NGROK_4018` — ngrok has no authtoken: `ngrok config add-authtoken <token>`.
+  The running hub retries the tunnel every 15 s; `collab url` prints the link
+  once it is up. Nothing needs restarting.
 - `ERR_NGROK_108` — another ngrok agent session is running on the same account.
+  Stop it, or serve this session's port from that agent's own configuration.
 
 ## ngrok was not found
 

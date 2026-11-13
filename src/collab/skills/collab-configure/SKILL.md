@@ -69,7 +69,7 @@ the project. A session belongs to a repository; a theme does not.
 | `timezone` | the zone dates and times are read in — an IANA name, or `auto` for the computer's own | the machine's clock is not the zone they read in, or timestamps look shifted |
 | `share_stats` | publish your quota and spend to the session | they say not to share usage |
 | `rules` | print collab's rules of conduct at `host` and `join` | they say the rules are noise — the pointer to the repo's own `COLLAB.md` prints regardless |
-| `ngrok_domain` | the reserved ngrok domain `collab host` uses when `--domain` is not given | they want one stable public link for every session — a session already pinned to a domain keeps its own |
+| `ngrok_domain` | the reserved ngrok domain `collab host` uses when `--domain` is not given | they want one stable public link — it goes ahead of the domain a resumed session used before; one domain serves one session at a time |
 | `stats_command` | a command printing your usage as JSON | this agent's host tool has no status line — for Codex, `collab stats --agent codex` writes it for you |
 | `stats_interval` | how often to run it, in seconds | rarely — 120s is right |
 | `remind_every` | minutes between the standing reminder the daemon puts back in front of this agent; `0` turns it off | they say the reminder is too frequent, or ask for it to stop |
@@ -155,10 +155,10 @@ by the hub, and `collab config` publishes them to the open session on the spot,
 as `collab name` and `collab color` do — the command says `published to the
 session` when it did, and `no active session` when there was none to tell.
 
-Three things are settled at a start, and the right answer is to say so:
+Four things are settled at a start, and the right answer is to say so:
 
 - `rules` is read at `host` and `join`.
-- `ngrok_domain` is read at `host`; a resumed session keeps the domain it was pinned to.
+- `ngrok_domain` is read at `host`, and wins over the domain a resumed session used before.
 - `watch_layout tmux` and `watch_roster_position` open and place a second tmux
   pane, at the next `collab watch`.
 - A layout the user gave on the `collab watch` command line is for that pane,
