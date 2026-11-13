@@ -333,22 +333,33 @@ def reasoned(status: dict[str, Any] | None = None, *, width: int | None = None,
         # so this is worth a nudge rather than silence.
         "update": _paint("↑update", "reconnecting") if _update_available() else "",
     }
-    parts = []
-    for name in wanted:
-        if piece := pieces.get(name, ""):
-            parts.append(piece)
-        if name == "others" and hub:
+    def assemble(pieces: dict[str, str], hub: str) -> str:
+        parts = []
+        for name in wanted:
+            if piece := pieces.get(name, ""):
+                parts.append(piece)
+            if name == "others" and hub:
+                parts.append(hub)
+                hub = ""
+        if hub:
+            # `others` was hidden, so there is no identity to follow. The end
+            # of the line is the next best place for it, and it is still
+            # drawn: a stale hub blanks the message count for everybody, and a
+            # reader who turned off a segment has not asked to stop being told
+            # that.
             parts.append(hub)
-            hub = ""
-    if hub:
-        # `others` was hidden, so there is no identity to follow. The end of
-        # the line is the next best place for it, and it is still drawn: a
-        # stale hub blanks the message count for everybody, and a reader who
-        # turned off a segment has not asked to stop being told that.
-        parts.append(hub)
-    line = "  ".join(parts)
+        return "  ".join(parts)
 
+    line = assemble(pieces, hub)
     limit = width or _terminal_width()
+    if limit and _visible_len(line) > limit and "batch" in wanted:
+        # THE ETA IS SHED FIRST, before the narrow fallback below drops the
+        # label, the version, the host's warning and the bar. Measured at 116
+        # columns: a line that fitted without a pace fell all the way to
+        # «○  alice → ?  offline  44% 4/9» to make room for «ETA ~1h05m» —
+        # eleven columns of a derived figure costing four real ones.
+        line = assemble({**pieces, "batch": _batch_segment(status, timing=False)},
+                        hub)
     if limit and _visible_len(line) > limit:
         # Drop the decorative half before truncating anything informative. The
         # batch keeps its place, in its narrow form: it is the figure both
@@ -407,7 +418,8 @@ def _clip_visible(line: str, limit: int) -> str:
     return "".join(out) + "…" + (RESET if _use_color() else "")
 
 
-def _batch_segment(status: dict[str, Any], *, narrow: bool = False) -> str:
+def _batch_segment(status: dict[str, Any], *, narrow: bool = False,
+                   timing: bool = True) -> str:
     """How much of the shared batch is done — or nothing, when nothing is true.
 
     Four cases render nothing at all, and in three of them the obvious output
@@ -461,14 +473,14 @@ def _batch_segment(status: dict[str, Any], *, narrow: bool = False) -> str:
     # what this line falls back to when it is already over budget, and the
     # count is the figure that has to survive that — an ETA is derived from
     # it and is worth nothing without it. See collab.batch.pace.
-    timing = "" if narrow else batch_progress.eta_text(figures)
+    when = "" if narrow or not timing else batch_progress.eta_text(figures)
     if batch_progress.is_complete(figures):
         # A finished batch does not vanish: «done» is the fact somebody was
         # waiting for, and a segment that disappeared on the last completion
         # would look exactly like the session having ended.
-        return _paint(f"{text} {timing or 'done'}", "live")
-    if timing:
-        text += f" {timing}"
+        return _paint(f"{text} {when or 'done'}", "live")
+    if when:
+        text += f" {when}"
     return _paint(text, "label")
 
 

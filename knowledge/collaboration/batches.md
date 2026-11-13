@@ -219,8 +219,10 @@ counted by nothing.
 # Elapsed time and an ETA — later than the pin
 
 Later than the revision this bundle is pinned to, and carrying no `verified`
-stamp: the batch figures carry a `pace` beside the counts, and every surface
-that draws the bar draws the time with it.[^batch-src]
+stamp: the batch figures carry a `pace` beside the counts. `collab batch
+status` and `collab status` print it; the status line and the watch row append
+the ETA to the wide form of the bar and shed it first when they run out of
+room.[^batch-src]
 
 The model is cc-progress's. Progress is a side effect of the work, never a
 claim: the hub stamps `completed_at` on a task as it enters the completed
@@ -235,14 +237,16 @@ ETA  = max(next, 0) + (outstanding − 1) / rate
 ```
 
 Once `next` has passed, the task in flight is overdue; the rate is re-taken
-over the whole elapsed time and the ETA is drawn as a floor, «≥». With no
-completion — or one inside the first second — there is no rate and no ETA,
-rather than a guess. A task finished before the stamp existed counts in the
-figure but not in the rate, as cc-progress treats `--done`.
+over the whole elapsed time and the ETA is drawn as a floor, «≥» — for the last
+task, as «ETA overdue». With no timed completion there is no rate and no ETA,
+rather than a guess. A task finished before the stamp existed, or within the
+first second of the batch, counts in the figure but not in the rate, as
+cc-progress treats `--done`.
 
 The batch ends in an explicit state with its time frozen: «done in» to the last
 completion, or «closed after» for a batch closed with work outstanding — the
-batch's `fail`. The hub sends DURATIONS, never instants, so no client subtracts
+batch's `fail`, shown by the two commands; a closed batch leaves the status
+line and the watch row, as it always has. The hub sends DURATIONS, never instants, so no client subtracts
 the hub's clock from its own; a client ages them only by how long ago it
 fetched them, on its own clock, and a stale figure carries no ETA at all.
 

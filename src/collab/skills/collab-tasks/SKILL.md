@@ -37,8 +37,8 @@ acceptance checks before `complete`. Use `task fail` for failed work and
 `task cancel` for withdrawn scope. Do not claim percentage progress in prose that
 contradicts `batch status`: the hub counts completed tasks and includes new scope
 in its denominator. Quote its ETA rather than estimating one: it is measured
-from completion times, shows «≥» when the task in flight is overdue, and is
-absent until a task completes. `collab batch close` stops adding new tasks
+from completion times, shows «≥» when the task in flight is overdue, and says
+there is no pace yet until a task completes. `collab batch close` stops adding new tasks
 without deleting history.
 
 Use `collab task update`, `collab task move`, `collab task pr-remove`,

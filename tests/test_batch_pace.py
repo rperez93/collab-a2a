@@ -380,3 +380,87 @@ def test_the_watch_row_never_draws_the_eta_past_its_cell(room):
                                                outstanding=outstanding, now=now)}
         text = batch_segment(figures, now=now, room=room)
         assert width(text) <= max(room, len("batch ██████ 100% 5/5 done")), text
+
+
+def test_an_absurd_duration_does_not_take_over_the_line():
+    """`eta: 1e308` is finite, passes every check a hostile value is put
+    through, and rendered as a 300-digit day count. Past a hundred days the
+    digits say nothing anybody plans around, so they are not drawn."""
+    assert batch_progress.duration(1e308, up=True) == "99d+"
+    assert batch_progress.duration(99 * 86400) == "99d00h"
+    figures = {"pace": {"state": "running", "eta": 1e308, "elapsed": 1e308,
+                        "overdue": False, "per_task": 1e308, "counted": 1}}
+    assert batch_progress.eta_text(figures) == "ETA ~99d+"
+
+
+def test_an_integer_too_large_for_a_float_does_not_blank_the_status_line():
+    """A JSON integer has no ceiling, and `float(10**400)` raises OverflowError
+    — the same escape `count_of` was closed against, reopened one function
+    away. Every renderer has to survive it, through every pace field."""
+    from collab.client.statusbar import compose
+
+    huge = 10 ** 400
+    for field in ("eta", "elapsed", "per_task", "since_last"):
+        figures = {"total": 3, "done": 1, "state": "open", "fetched_at": time.time(),
+                   "pace": {"state": "running", "elapsed": 1.0, "eta": 5.0, field: huge}}
+        assert "1/3" in _batch_segment({"batch": figures})
+        assert "1/3" in batch_segment(figures, room=0)
+        assert "1/3" in batch_progress.describe(figures)
+        compose(batch=figures, segments=["batch"])
+
+
+def test_the_last_task_past_its_turn_reads_overdue_not_zero():
+    """Overdue, the ETA is a floor on the tasks AFTER the one in flight — and
+    for the last task that is nothing. «ETA ≥0s» on a task an hour past its
+    turn read as «any second now»; it says overdue instead."""
+    p = batch_progress.pace(opened_at=1000, completed=[1600, 2200, 2800],
+                            outstanding=1, now=6000)
+    assert p["overdue"] is True and p["eta"] == 0
+    assert batch_progress.eta_text({"pace": p}) == "ETA overdue"
+
+
+def test_an_eta_counted_down_past_zero_is_overdue_until_the_next_count():
+    """Aged by the client between refreshes, a ten-second ETA fetched
+    twenty-five seconds ago is not «ETA ~0s» — nothing has been reported."""
+    now = 1_900_000_000.0
+    figures = {"total": 4, "done": 1, "state": "open", "fetched_at": now - 25,
+               "pace": {"state": "running", "elapsed": 600, "eta": 10,
+                        "overdue": False, "per_task": 600, "counted": 1}}
+    assert batch_progress.eta_text(figures, now=now) == "ETA overdue"
+
+
+def test_work_recorded_at_the_opening_is_a_baseline_not_a_rate():
+    """Five tasks proposed and completed in the batch's first milliseconds,
+    beside one that took 600 s, gave 100 s a task and an ETA a sixth of the
+    truth. Stamps inside the first second count in the figure, not the rate."""
+    p = batch_progress.pace(opened_at=1000, completed=[1000.004] * 5 + [1600.0],
+                            outstanding=5, now=1600)
+    assert p["counted"] == 1 and p["per_task"] == pytest.approx(600)
+
+
+def test_the_status_line_sheds_the_eta_before_the_label_and_the_bar():
+    """At 116 columns a line that fitted without a pace fell to its narrow
+    form — label, version, the host's warning and the bar all gone — to make
+    room for eleven columns of ETA. The ETA is the first thing to go."""
+    now = time.time()
+    base = {"name": "alice", "host": "bob", "state": "live", "heartbeat": now}
+    plain = {"total": 9, "done": 4, "state": "open", "fetched_at": now}
+    paced = {**plain, "pace": {"state": "running", "elapsed": 600, "eta": 3900,
+                               "overdue": False, "per_task": 600, "counted": 4}}
+    without = render({**base, "batch": plain}, width=400)
+    limit = len(re.sub(r"\x1b\[[0-9;]*m", "", without))
+    shed = re.sub(r"\x1b\[[0-9;]*m", "", render({**base, "batch": paced}, width=limit))
+    assert shed == re.sub(r"\x1b\[[0-9;]*m", "", without)
+    roomy = render({**base, "batch": paced}, width=limit + 20)
+    assert "ETA ~1h05m" in roomy
+
+
+def test_a_far_off_eta_names_the_day_and_an_absurd_one_names_no_time():
+    """«around 14:05» for an ETA thirty hours out reads as this afternoon, and
+    `localtime` raised on a remote hub's 1e17."""
+    from collab.cli import _around
+
+    assert _around(1e17) == "" and _around(1e308) == ""
+    assert _around(30) == ""
+    far = _around(30 * 3600)
+    assert far.startswith(" (around ") and len(far.split()) == 3

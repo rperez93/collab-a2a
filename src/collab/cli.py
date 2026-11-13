@@ -2505,13 +2505,32 @@ def _describe_pace(figures: dict[str, Any]) -> None:
         print(f"  {'eta':<12} " + dim("— no timed completion yet, so no pace to go on"))
         return
     left = seen["eta"]
-    at = (time.strftime(" (around %H:%M)", time.localtime(time.time() + left))
-          if left >= 60 else "")
-    mark = "≥" if seen["overdue"] else "~"
-    note = (" — the task in flight is past its turn, so this is a floor"
-            if seen["overdue"] else "")
-    print(f"  {'eta':<12} {mark}{batch_progress.duration(left, up=True)}{at}"
-          + dim(per_task + note))
+    if seen["overdue"] and left < 1:
+        print(f"  {'eta':<12} overdue" + dim(per_task + " — the last task is past"
+                                             " its turn on the pace so far"))
+        return
+    print(f"  {'eta':<12} {'≥' if seen['overdue'] else '~'}"
+          f"{batch_progress.duration(left, up=True)}{_around(left)}"
+          + dim(per_task + (" — the task in flight is past its turn, so this"
+                            " is a floor" if seen["overdue"] else "")))
+
+
+def _around(left: float) -> str:
+    """« (around 14:05)», «(around Thu 14:05)» past today, or '' — never a raise.
+
+    The weekday is there because a 30-hour ETA printed as «around 14:05» reads
+    as this afternoon. And it is guarded because `left` can be a remote hub's
+    choice: `localtime` raised OverflowError at 1e308 and OSError at 1e17.
+    """
+    if left < 60 or left >= batch_progress.LONGEST:
+        return ""
+    try:
+        then = time.localtime(time.time() + left)
+        same_day = time.strftime("%Y%m%d", then) == time.strftime("%Y%m%d")
+        return time.strftime(" (around %H:%M)" if same_day
+                             else " (around %a %H:%M)", then)
+    except (OverflowError, OSError, ValueError):
+        return ""
 
 
 def _stat_bits(person: dict[str, Any]) -> list[str]:
