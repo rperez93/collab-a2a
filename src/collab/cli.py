@@ -2624,19 +2624,30 @@ def _stat_bits(person: dict[str, Any]) -> list[str]:
     return bits
 
 
-def dashboard_rows(snapshot: dict[str, Any], skills: dict[str, Any] | None) -> list[dict[str, Any]]:
+def dashboard_rows(snapshot: dict[str, Any], skills: dict[str, Any] | None, *,
+                   live: bool = True, own_stats: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Everyone's quota and skills from what the daemon already holds (R12).
 
-    Unknown stays unknown: a window nobody reported is absent, never 0%, and a
-    skill list the hub cannot serve or the participant does not share says so.
+    Unknown stays unknown: a window nobody reported is absent, never 0%; a
+    roster that is no longer live shows nobody connected and no quota; a skill
+    list the hub cannot serve or the participant does not share says so.
+    `own_stats` fills this participant's row when it does not share stats.
     """
-    lists = {p.get("name"): p.get("skills") or [] for p in (skills or {}).get("participants", [])}
+    from .stats import quota_summary
+    lists = {p.get("id") or p.get("name"): p.get("skills") or []
+             for p in (skills or {}).get("participants", []) if isinstance(p, dict)}
     rows = []
     for person in snapshot.get("participants") or []:
+        you = (person.get("id") == snapshot.get("you_id") if snapshot.get("you_id")
+               else person.get("name") == snapshot.get("you"))
         stats = person.get("stats") or {}
+        if you and own_stats and not stats.get("quotas") and stats.get("quota_used_pct") is None:
+            stats = {**stats, **own_stats}
+        if not live:
+            stats = {}
         quotas = {name: {"used_pct": w.get("used_pct"), "resets_at": w.get("resets_at")}
                   for name, w in (stats.get("quotas") or {}).items() if isinstance(w, dict)}
-        worker = stats.get("worker") or {}
+        budget = (stats.get("worker") or {}).get("budget_remaining")
         count = person.get("skills_count")
         if skills is None:
             skill_state = "unknown"
@@ -2646,16 +2657,23 @@ def dashboard_rows(snapshot: dict[str, Any], skills: dict[str, Any] | None) -> l
             skill_state = "not shared"
         else:
             skill_state = "shared"
-        rows.append({"name": person.get("name", ""), "you": person.get("name") == snapshot.get("you"),
-                     "connected": bool(person.get("connected")), "quotas": quotas,
-                     "worker_budget": worker.get("budget_remaining"),
-                     "skills": lists.get(person.get("name"), []) if skill_state == "shared" else [],
+        listed = lists.get(person.get("id")) or lists.get(person.get("name")) or []
+        if skill_state == "shared" and not listed:
+            skill_state = "unknown"  # count changed since the lists were read
+        rows.append({"name": person.get("name", ""), "you": you,
+                     "connected": live and bool(person.get("connected")),
+                     "quota": stats.get("quota_used_pct") if not quotas else None,
+                     "quotas": quotas, "quota_summary": quota_summary(stats, with_resets=True),
+                     "worker_budget": budget if isinstance(budget, (int, float)) else None,
+                     "skills": listed if skill_state == "shared" else [],
                      "skills_state": skill_state})
     return rows
 
 
 def cmd_dashboard(args: argparse.Namespace) -> int:
     """Read-only view the daemon keeps current; no hub call from here."""
+    from .stats import read_stats
+    from .runtime_settings import get as runtime_setting
     profile = _require_profile(args)
     paths = DaemonPaths(profile.dir)
     try:
@@ -2667,23 +2685,28 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
         skills = json.loads(paths.skills.read_text())
     except (OSError, ValueError):
         skills = None
-    rows = dashboard_rows(snapshot, skills)
+    age = time.time() - float(snapshot.get("fetched_at") or 0)
+    live = (daemon_state(read_status(profile), running=is_running(profile) is not None) == "live"
+            and 0 <= age <= runtime_setting("participant_stale_after"))
+    own = read_stats(profile) if not share_stats_enabled() else None
+    rows = dashboard_rows(snapshot, skills, live=live, own_stats=own)
     if args.json:
-        print(json.dumps({"fetched_at": snapshot.get("fetched_at"), "participants": rows},
+        print(json.dumps({"fetched_at": snapshot.get("fetched_at"), "stale": not live,
+                          "skills_fetched_at": (skills or {}).get("fetched_at"),
+                          "untrusted": True, "participants": rows},
                          indent=2, ensure_ascii=True))
         return 0
-    age = time.time() - float(snapshot.get("fetched_at") or 0)
-    heading(f"session dashboard  {dim(f'(roster {int(age)}s old)')}")
+    note = f"roster {int(age)}s old" + ("" if live else ", not live: quota unknown")
+    heading(f"session dashboard  {dim(f'({note})')}")
     for row in rows:
         mark = c("●", "32") if row["connected"] else dim("○")
         you = dim(" (you)") if row["you"] else ""
-        windows = "  ".join(f"{name} {w['used_pct']:.0f}%" if isinstance(w["used_pct"], (int, float))
-                            else f"{name} ?" for name, w in sorted(row["quotas"].items())) or dim("quota unknown")
+        quota = row["quota_summary"] or dim("quota unknown")
         budget = ("" if row["worker_budget"] is None
                   else f"  worker {int(row['worker_budget'])} turns left")
-        print(f"  {mark} {c(said(row['name']), '1')}{you}  {windows}{budget}")
+        print(f"  {mark} {c(said(row['name']), '1')}{you}  {quota}{budget}")
         if row["skills"]:
-            names = ", ".join(said(s.get("name", "")) for s in row["skills"][:12])
+            names = ", ".join(said(s.get("name", "")) for s in row["skills"][:12] if isinstance(s, dict))
             more = f" +{len(row['skills']) - 12}" if len(row["skills"]) > 12 else ""
             print(f"      skills: {names}{more}")
         else:

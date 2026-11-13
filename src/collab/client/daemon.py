@@ -2678,33 +2678,31 @@ class Daemon:
         if (signature == getattr(self, "_skills_signature", None)
                 and time.time() - getattr(self, "_skills_at", 0.0) < SKILLS_REFRESH):
             return
-        self._skills_signature, self._skills_at = signature, time.time()
-        self._schedule_refresh("skills", lambda: self._fetch_skills(client))
+        # Committed only by a fetch that wrote the file, so a change seen
+        # while a fetch is in flight, or a failed fetch, is retried next roster.
+        self._schedule_refresh("skills", lambda: self._fetch_skills(client, signature))
 
-    async def _fetch_skills(self, client: httpx.AsyncClient) -> None:
+    async def _fetch_skills(self, client: httpx.AsyncClient, signature=None) -> None:
         try:
             r = await client.get(f"{self.profile.url}{EXT_PREFIX}/participant-skills",
                                  headers=request_headers(self.profile.token), timeout=10.0)
-        except httpx.HTTPError:
-            self._skills_at = 0.0  # retry on the next roster
-            return
-        if r.status_code == 404:
-            data = {"unsupported": True}  # a hub older than skill lists
-        elif r.status_code == 200:
-            try:
-                data = {"participants": r.json().get("participants", [])}
-            except ValueError:
+            if r.status_code == 404:
+                data = {"unsupported": True}  # a hub older than skill lists
+            elif r.status_code == 200:
+                body = r.json()
+                people = body.get("participants") if isinstance(body, dict) else None
+                if not isinstance(people, list):
+                    return
+                data = {"participants": people, "untrusted": True}
+            else:
                 return
-        else:
-            self._skills_at = 0.0
-            return
-        data["fetched_at"] = time.time()
-        try:
+            data["fetched_at"] = time.time()
             tmp = self.paths.root / "skills.tmp"
             tmp.write_text(json.dumps(data))
             tmp.replace(self.paths.skills)
-        except OSError:
-            pass
+        except (httpx.HTTPError, ValueError, OSError):
+            return
+        self._skills_signature, self._skills_at = signature, time.time()
 
     def _adopt_identity(self) -> None:
         """Take our current name and id from the hub.

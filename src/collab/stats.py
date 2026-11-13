@@ -1220,11 +1220,16 @@ def _short_reset(value: str) -> str:
     """A reset time worth reading at a glance."""
     from datetime import datetime, timezone
 
+    candidates = []
+    if value.isdigit():
+        # Epoch seconds: what Claude Code's status line reports for resets.
+        candidates.append(datetime.fromtimestamp(int(value), timezone.utc))
     for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%MZ"):
         try:
-            when = datetime.strptime(value, fmt).replace(tzinfo=timezone.utc)
+            candidates.append(datetime.strptime(value, fmt).replace(tzinfo=timezone.utc))
         except ValueError:
             continue
+    for when in candidates:
         delta = when - datetime.now(timezone.utc)
         minutes = int(delta.total_seconds() // 60)
         if minutes < 0:
