@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import logging
 import time
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,7 @@ from .store import ArchivedProject, Store, UnknownProject, TaskClaimConflict
 
 #: How often to confirm the tunnel is still forwarding.
 TUNNEL_CHECK_SECONDS = 15.0
+logger = logging.getLogger(__name__)
 
 TASK_STATES = {
     "propose": "TASK_STATE_SUBMITTED",
@@ -205,6 +207,8 @@ def create_app(
     session_id: str,
     host_name: str,
     public_url: str,
+    local_url: str | None = None,
+    local_tls_config: Any | None = None,
     title: str = "",
     supervisor: Any | None = None,
     on_url_change: Any | None = None,
@@ -219,6 +223,20 @@ def create_app(
     def live_url() -> str:
         return current["url"]
 
+    stable_local_url = public_url if local_url is None else local_url
+    secure = {"url": "", "certificate": ""}
+
+    def routes() -> dict[str, str]:
+        return {"session_id": session_id, "local_url": stable_local_url,
+                "secure_local_url": secure["url"], "public_url": live_url(),
+                "local_certificate": secure["certificate"]}
+
+    if len(stable_local_url) > 2048 or len(public_url) > 2048:
+        raise ValueError("session route exceeds 2048 characters")
+
+    def session_snapshot(viewer: str, *, history: int = 20) -> dict[str, Any]:
+        return {**hub.snapshot(viewer=viewer, history=history), "routes": routes()}
+
     card = build_agent_card(live_url(), session_id=session_id, host_name=host_name)
 
     app = FastAPI(
@@ -231,6 +249,46 @@ def create_app(
     app.state.live_url = live_url
     app.state.session_id = session_id
     app.state.started_at = time.time()
+    app.state.routes = routes
+
+    if local_tls_config is not None:
+        @app.on_event("startup")
+        async def _start_local_tls() -> None:
+            from urllib.parse import urlsplit
+            from .local_tls import LocalTLS, read_certificate, server_context
+            from .session import update_fields
+            cfg = local_tls_config
+            cfg.secure_port = 0
+            update_fields(cfg.dir, secure_port=0)
+            context = await asyncio.to_thread(server_context, cfg.dir,
+                                               urlsplit(cfg.local_url).hostname)
+            if context is None:
+                return
+            forwarder = LocalTLS(cfg.local_url, cfg.bind, context)
+            try:
+                await forwarder.start()
+            except OSError:
+                logger.warning("local TLS listener unavailable; using the public route")
+                return
+            cfg.secure_port = forwarder.port
+            certificate = read_certificate(cfg.dir)
+            if not certificate or not update_fields(cfg.dir, secure_port=cfg.secure_port):
+                await forwarder.close()
+                cfg.secure_port = 0
+                logger.warning("local TLS discovery could not be saved; using the public route")
+                return
+            secure.update(url=cfg.secure_local_url, certificate=certificate)
+            app.state.local_tls = forwarder
+
+        @app.on_event("shutdown")
+        async def _stop_local_tls() -> None:
+            from .session import update_fields
+            forwarder = getattr(app.state, "local_tls", None)
+            if forwarder is not None:
+                await forwarder.close()
+            secure.update(url="", certificate="")
+            local_tls_config.secure_port = 0
+            update_fields(local_tls_config.dir, secure_port=0)
 
     handler = DefaultRequestHandler(
         agent_executor=CollabAgentExecutor(hub),
@@ -239,7 +297,6 @@ def create_app(
     )
 
     join_limiter = RateLimiter(limit=10, window=60.0)
-
     def resolve_target(name: str | None) -> tuple[str, str]:
         """Turn a DM target into ``(display_name, participant_id)``.
 
@@ -342,7 +399,8 @@ def create_app(
             "id": person.id,
             "session_id": session_id,
             "host": hub.host_name,
-            "snapshot": hub.snapshot(viewer=person.id),
+            "routes": routes(),
+            "snapshot": session_snapshot(person.id),
         }
 
     # --- extension: the live feed ---------------------------------------------
@@ -436,13 +494,13 @@ def create_app(
     @app.get(f"{EXT_PREFIX}/participants", tags=["collab"])
     async def participants(request: Request) -> Response:
         user = _require(request)
-        return roster_response(hub.snapshot(viewer=user.id, history=0), request,
+        return roster_response(session_snapshot(user.id, history=0), request,
                                conditional=True)
 
     @app.get(f"{EXT_PREFIX}/snapshot", tags=["collab"])
     async def snapshot(request: Request) -> Response:
         user = _require(request)
-        return roster_response(hub.snapshot(viewer=user.id), request)
+        return roster_response(session_snapshot(user.id), request)
 
     @app.post(f"{EXT_PREFIX}/stats", tags=["collab"])
     async def report_stats(request: Request) -> dict[str, Any]:

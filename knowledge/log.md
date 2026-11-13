@@ -5,6 +5,9 @@
 
 ## 2026-11-13
 * **Update (later than the pin)**: Added elapsed time and a rate-based ETA to [batches](collaboration/batches.md), measured from a new `tasks.completed_at` recorded in [the task board](collaboration/task-board.md). The pin and verification stamps are unchanged.
+* **Later than the pin**: Recorded local TLS/public route discovery, private
+  registry trust and reconnect provenance in the existing client-daemon page.
+  No pin or verified stamp changed.
 
 ## 2026-09-20
 * **Update (2.1.1, later than the pin)**: Recorded shared participant identity and internal decision routing in the wake page; the bundle pin is unchanged.

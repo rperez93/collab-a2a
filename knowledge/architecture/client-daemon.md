@@ -161,6 +161,12 @@ pay into it.
 
 # When it is not running
 
+Later than the pin: one session can advertise pinned local TLS and a public
+tunnel together. A bounded `routes.json` preserves original URL authority and
+certificates; reconnect retains identity and SSE cursor. Private registry
+checks precede automatic HTTP adoption, and pin changes close the old pool.
+The bundle pin and verification stamps are unchanged.
+
 `collab check` says so, and says what to do. Run against a live session with
 the listener suppressed, it printed:[^check-cmd]
 

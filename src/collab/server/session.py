@@ -6,6 +6,7 @@ import contextlib
 import json
 import os
 import secrets
+import shlex
 from dataclasses import asdict, dataclass
 from typing import Any
 from pathlib import Path
@@ -71,6 +72,9 @@ class HubConfig:
     #: number. The plain fields stay because an older collab reads them.
     pid_stamp: str = ""
     tunnel_stamp: str = ""
+    #: Optional pinned-certificate entrance; HTTP/tunnel routes remain usable
+    #: when local TLS setup is unavailable. Written only by the serving hub.
+    secure_port: int = 0
 
     def __post_init__(self) -> None:
         if not self.home:
@@ -107,6 +111,16 @@ class HubConfig:
         if ":" in host and not host.startswith("["):
             host = f"[{host}]"
         return f"http://{host}:{self.port}"
+
+    @property
+    def secure_local_url(self) -> str:
+        if not self.secure_port:
+            return ""
+        from urllib.parse import urlsplit
+        host = urlsplit(self.local_url).hostname
+        if ":" in host:
+            host = f"[{host}]"
+        return f"https://{host}:{self.secure_port}"
 
     def save(self) -> None:
         """Write it whole, or not at all.
@@ -453,4 +467,21 @@ def _daemon_pid(cfg: HubConfig) -> Stamp:
 def join_line(cfg: HubConfig) -> str:
     """The single line a host hands to someone else."""
     base = cfg.public_url or cfg.local_url
-    return f"collab join {base}#{cfg.invite}"
+    if base == cfg.local_url:
+        # Preserve the exact legacy local-only line, including its fragment.
+        return f"collab join {base}#{cfg.invite}"
+    if base != cfg.local_url:
+        import base64
+        from .local_tls import read_certificate
+        from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+        parsed = urlsplit(base)
+        query = [(key, value) for key, value in parse_qsl(parsed.query)
+                 if key not in {"collab_session", "collab_local", "collab_cert"}]
+        query.append(("collab_session", cfg.session_id))
+        certificate = read_certificate(cfg.dir) if cfg.secure_port else ""
+        if certificate:
+            query.extend([("collab_local", cfg.secure_local_url),
+                ("collab_cert", base64.urlsafe_b64encode(certificate.encode("ascii")).decode("ascii"))])
+        base = urlunsplit((parsed.scheme, parsed.netloc, parsed.path,
+                          urlencode(query), ""))
+    return "collab join " + shlex.quote(f"{base}#{cfg.invite}")

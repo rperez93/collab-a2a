@@ -2623,6 +2623,8 @@ class Daemon:
 
     async def _fetch_snapshot(self, client: httpx.AsyncClient) -> None:
         try:
+            from .. import routes
+            generation = routes.generation(self.profile)
             # Validators belong to one authenticated URL, never to a different
             # route/session after reconnect. An older hub simply omits ETag and
             # continues serving ordinary full responses.
@@ -2635,12 +2637,23 @@ class Daemon:
                                         {"If-None-Match": etag} if etag else None),
                 timeout=10.0,
             )
+            if generation != routes.generation(self.profile):
+                return
             if r.status_code == 200 or (r.status_code == 304 and etag and self.snapshot):
                 self._snapshot_error = ""
                 if r.status_code == 200:
                     self.snapshot = r.json()
                     self._snapshot_target = target
                     self._snapshot_etag = r.headers.get("etag")
+                    metadata = self.snapshot.get("routes")
+                    if metadata is not None:
+                        routes.remember(self.profile, metadata,
+                                        original_url=self.profile.url,
+                                        expected=(generation[0], generation[1]))
+                        if routes.generation(self.profile)[2:] != generation[2:]:
+                            changed = getattr(self, "_route_changed", None)
+                            if changed is not None:
+                                changed.set()
                     self._adopt_identity()
                 # The viewer reads this instead of the network, so it keeps
                 # working while the hub is briefly unreachable.
@@ -2776,7 +2789,8 @@ class Daemon:
         # no sign that it had chosen — and it prunes dead records as a side
         # effect, which is not a thing to do from inside a reconnect loop while
         # everybody else's daemon is reconnecting too.
-        for peer in peers.live_records(self.profile.session_id):
+        from ..routes import private_records
+        for peer in private_records(self.profile.session_id):
             if (peer.role != "host"
                     or peer.machine_id != here or peer.user != user):
                 continue
@@ -2983,48 +2997,71 @@ class Daemon:
 
     async def _connect_forever(self) -> None:
         backoff = BACKOFF_START
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=READ_TIMEOUT)) as client:
-            self._http = None
-            while not self._stop.is_set():
-                try:
+        self._http = None
+        while not self._stop.is_set():
+            try:
+                from .. import routes
+                selected = await routes.select(self.profile)
+                if not selected:
+                    raise RuntimeError("no authenticated session route is reachable")
+                if selected != self.profile.url:
+                    self.profile.url = selected
+                    self.profile.save(make_current=False)
+                # Each reconnect builds a new pool. A certificate change must
+                # never reuse connections authenticated with the previous pin.
+                async with httpx.AsyncClient(
+                        timeout=httpx.Timeout(10.0, read=READ_TIMEOUT),
+                        limits=httpx.Limits(max_connections=8, max_keepalive_connections=2),
+                        **routes.options(self.profile)) as client:
                     # Persisted v1 profiles skip /join entirely. Check the
                     # running host before heartbeat/worker code can use a token.
                     await check_host(client, self.profile.url)
                     self._http = client
+                    self._route_changed = asyncio.Event()
                     await self._refresh_snapshot(client)
-                    await self._stream_once(client)
+                    stream = asyncio.create_task(self._stream_once(client))
+                    changed = asyncio.create_task(self._route_changed.wait())
+                    try:
+                        await asyncio.wait({stream, changed}, return_when=asyncio.FIRST_COMPLETED)
+                        if self._route_changed.is_set():
+                            raise RuntimeError("the local route certificate changed")
+                        await stream
+                    finally:
+                        stream.cancel()
+                        changed.cancel()
+                        await asyncio.gather(stream, changed, return_exceptions=True)
                     self._http = None
                     backoff = BACKOFF_START
-                except asyncio.CancelledError:
-                    self._http = None
-                    raise
-                except Exception as exc:  # any drop is a reconnect, not a crash
-                    self._http = None
-                    self.state = "reconnecting"
-                    self.connected_since = None
-                    self.failures += 1
-                    # REVIVE FIRST, THEN FOLLOW. Reviving writes the new
-                    # address into hub.json; reading it beforehand meant the
-                    # host published the pre-move address on the very cycle
-                    # that moved it, and needed another failed cycle — up to
-                    # BACKOFF_CAP plus jitter — to catch up with itself.
-                    self._revive_hub_if_host()
-                    self._follow_url_change()
-                    self.write_status()
-                    logger.warning("feed dropped (%s); retrying in %.1fs", exc, backoff)
-                    # THE EXCEPTION'S TYPE, NOT ITS TEXT. An httpx error's
-                    # message carries the URL it was talking to, which is the
-                    # host's tunnel address — the one thing a public bug report
-                    # must not contain. `_safe` would strip it; not passing it
-                    # is better than relying on that.
-                    diagnostics.log("feed_dropped", why=type(exc).__name__,
-                                    failures=self.failures,
-                                    retry_in=round(backoff, 1))
-                    # Jitter keeps several agents from stampeding a restarted hub.
-                    delay = backoff * (0.5 + random.random())
-                    with contextlib.suppress(asyncio.TimeoutError):
-                        await asyncio.wait_for(self._stop.wait(), timeout=delay)
-                    backoff = min(backoff * 2, BACKOFF_CAP)
+            except asyncio.CancelledError:
+                self._http = None
+                raise
+            except Exception as exc:  # any drop is a reconnect, not a crash
+                self._http = None
+                self.state = "reconnecting"
+                self.connected_since = None
+                self.failures += 1
+                # REVIVE FIRST, THEN FOLLOW. Reviving writes the new
+                # address into hub.json; reading it beforehand meant the
+                # host published the pre-move address on the very cycle
+                # that moved it, and needed another failed cycle — up to
+                # BACKOFF_CAP plus jitter — to catch up with itself.
+                self._revive_hub_if_host()
+                self._follow_url_change()
+                self.write_status()
+                logger.warning("feed dropped (%s); retrying in %.1fs", exc, backoff)
+                # THE EXCEPTION'S TYPE, NOT ITS TEXT. An httpx error's
+                # message carries the URL it was talking to, which is the
+                # host's tunnel address — the one thing a public bug report
+                # must not contain. `_safe` would strip it; not passing it
+                # is better than relying on that.
+                diagnostics.log("feed_dropped", why=type(exc).__name__,
+                                failures=self.failures,
+                                retry_in=round(backoff, 1))
+                # Jitter keeps several agents from stampeding a restarted hub.
+                delay = backoff * (0.5 + random.random())
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(self._stop.wait(), timeout=delay)
+                backoff = min(backoff * 2, BACKOFF_CAP)
 
     async def _stream_once(self, client: httpx.AsyncClient) -> None:
         resume = self.inbox.last_seq()

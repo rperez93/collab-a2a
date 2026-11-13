@@ -12,6 +12,7 @@ ${XDG_STATE_HOME:-~/.local/state}/collab/
         agent.lock
         sessions/<collab session id>/
           profile.json
+          routes.json
           worker.db
 ```
 
@@ -34,6 +35,12 @@ neither the environment nor the process tree exposes.
 The existing session subdirectory separates hub rooms within that participant's
 state. Detached listeners and viewers receive the exact `COLLAB_HOME`, and
 `workspace.json` preserves the actual working folder for commands and discovery.
+
+`routes.json` records original URL authority, candidates and the local TLS
+certificate, with no bearer or invite. Hosted sessions keep a private
+`local-tls.key` and public `local-tls.crt` beside `hub.json`, both mode 0600.
+Nonregular or oversized records are refused without blocking or replacing them.
+A sidecar preserves compatibility for older readers of `profile.json`.
 
 When enabled, `worker.db` holds that participant's worker configuration, cursor,
 summary, main-agent context and answers, pending decisions, and durable outgoing

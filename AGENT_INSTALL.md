@@ -10,6 +10,10 @@
 Instructions for a coding agent. Run these in order. No prose, no options you
 do not need.
 
+Keep supplied join links whole and shell-quoted. Query hints can carry the
+local TLS certificate while the invite remains in the fragment; stripping
+them loses secure local selection. See [local routes](docs/local-routes.md).
+
 ## 0. Rule
 
 Never `pip install` into the system Python — use `pipx`, `uv tool`, or a
