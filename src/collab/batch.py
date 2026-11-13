@@ -109,12 +109,17 @@ def count_of(figures: Any, key: str) -> int:
 
     Negatives are floored rather than rejected: `done: -5` rendered «-50%
     -5/10» and a nine-character bar into a six-column budget.
+
+    OverflowError is caught with the other two. `done: Infinity` is valid
+    JSON to Python's parser, `int(float("inf"))` raises OverflowError rather
+    than ValueError, and it escaped this guard and blanked the whole segment
+    exactly as the string did before.
     """
     if not isinstance(figures, dict):
         return 0
     try:
         return max(0, int(figures.get(key) or 0))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -310,6 +315,202 @@ def describe(figures: Any, *, now: float | None = None) -> str:
         line += f" ({moved} tasks)"
     if is_complete(figures):
         line += " complete"
-    if figures.get("state") == CLOSED:
+    timing = eta_text(figures, now=now)
+    if figures.get("state") == CLOSED and not timing.startswith("closed"):
+        # «closed after 48m» already says closed; «· closed · closed after
+        # 48m» said it twice.
         line += " · closed"
+    if timing:
+        line += f" · {timing}"
     return line
+
+
+# --- pace: elapsed time and a rate-based ETA ----------------------------------
+#
+# The model is cc-progress's, and so are its refusals. Progress is not claimed,
+# it is a side effect of the work: every completion the hub writes down is a
+# timestamped sample (`tasks.completed_at`), and the rate is read off those
+# samples rather than off anybody's opinion of how fast things are going. A
+# batch ends in an explicit state — done, or closed short — and the time it
+# took is frozen there instead of ticking on for ever.
+#
+# THE HUB DOES THE ARITHMETIC AND SENDS DURATIONS, never instants. The clients
+# that draw the figure are on other machines; subtracting the hub's
+# `completed_at` from a client's clock would be measuring the drift between
+# two clocks and calling it time. A duration taken on one clock is the same
+# length on every clock, so the only thing a client adds is how long ago it
+# fetched the figure — which it measured itself.
+
+#: Below this, one completion's distance from the start is too short to be a
+#: rate. cc-progress uses the same second: a task proposed already completed
+#: lands within milliseconds of the batch opening, and 1/0.004 s is a rate of
+#: 250 tasks a second that would put «ETA 0s» on a batch of afternoon-long
+#: tasks.
+MIN_SPAN = 1.0
+
+
+def _seconds(value: Any) -> float | None:
+    """A non-negative, finite number of seconds, or None.
+
+    These numbers are produced by the HUB and, for a guest, copied verbatim
+    out of somebody else's hub into a status file — so they are a remote
+    party's choice of value, exactly like `count_of`'s. `int(float("inf"))`
+    raises OverflowError, which a `(TypeError, ValueError)` clause does not
+    catch, and the status line's top-level handler turns any escape into a
+    blank collab segment. NaN compares false to everything and would sail
+    through a `< 0` check into the formatter. A bool is an int to Python and
+    `True` seconds is not a duration anybody sent on purpose.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if number != number or number in (float("inf"), float("-inf")) or number < 0:
+        return None
+    return number
+
+
+def pace(*, opened_at: Any, completed: Iterable[Any], outstanding: int,
+         now: float, closed_at: Any = None) -> dict[str, Any] | None:
+    """Elapsed time, the observed rate and the ETA, as durations on one clock.
+
+    `completed` is the completion time of every task in the batch that has
+    one; a task finished before completion times were recorded has none, and
+    — like cc-progress's `--done` — counts in the figure but not in the rate.
+
+        rate  = completions / (last completion − opened)
+        next  = last completion + 1/rate − now
+        ETA   = max(next, 0) + (outstanding − 1) / rate
+
+    `next` is when the task in flight is due, on the rate so far. Once it is
+    OVERDUE (next < 0) the rate is re-taken over the whole elapsed time, so the
+    task that is taking longer drags the estimate out instead of the estimate
+    pretending — and the figure is marked `overdue`, to be read as «at least».
+    This is the tqdm behaviour cc-progress adopted, and for the same reason: a
+    batch of unequal tasks otherwise shows a confident ETA that has already
+    passed.
+
+    The terminal states freeze `elapsed`: a complete batch took until its last
+    completion, a batch closed short took until it was closed. Neither has an
+    ETA, because neither has anything left that is coming.
+    """
+    start = _seconds(opened_at)
+    if start is None or not start:
+        return None
+    # Clamped into [opened, now]: a stamp outside it is a clock that stepped,
+    # and a completion «before the batch opened» would stretch the span and
+    # understate the rate, while one «in the future» would make it negative.
+    stamps = sorted(min(max(t, start), now) for t in
+                    (_seconds(c) for c in completed) if t is not None)
+    gained = len(stamps)
+    last = stamps[-1] if stamps else None
+    closed = _seconds(closed_at)
+    out: dict[str, Any] = {"counted": gained, "elapsed": None, "eta": None,
+                           "overdue": False, "per_task": None,
+                           "since_last": None if last is None else now - last}
+    if outstanding <= 0:
+        # Done. It took until the last completion — not until somebody got
+        # round to closing it, and not «until now», which would make a batch
+        # finished last week look a week slower every time it is read.
+        end = last if last is not None else closed
+        out["state"] = "done"
+        out["elapsed"] = None if end is None else max(0.0, end - start)
+        if gained and out["elapsed"] and out["elapsed"] >= MIN_SPAN:
+            out["per_task"] = out["elapsed"] / gained
+        return out
+    if closed is not None:
+        # The `fail` of a batch: closed with work outstanding. Said as such,
+        # with the time it ran, and with no ETA — nothing more is being counted.
+        out["state"] = "closed"
+        out["elapsed"] = max(0.0, min(closed, now) - start)
+        return out
+    out["state"] = "running"
+    out["elapsed"] = max(0.0, now - start)
+    if last is None or last - start < MIN_SPAN:
+        return out
+    rate = gained / (last - start)
+    upcoming = last + 1 / rate - now
+    if upcoming < 0:
+        out["overdue"] = True
+        rate = gained / max(now - start, MIN_SPAN)
+    out["per_task"] = 1 / rate
+    out["eta"] = max(upcoming, 0.0) + max(outstanding - 1, 0) / rate
+    return out
+
+
+def duration(seconds: float, *, up: bool = False) -> str:
+    """«45s», «12m», «1h05m», «2d03h» — short enough for a status line.
+
+    Minutes, not cc-progress's «12m30s»: a batch is measured in tasks that
+    take minutes to hours, and seconds on a twelve-minute figure are noise
+    that changes on every redraw. `up` rounds UP, for an ETA: «0m» left on
+    work that is not finished is the same lie as 100% on 99.4%.
+    """
+    s = max(0.0, seconds)
+    step = 1 if s < 60 else 60
+    whole = int(-(-s // step) * step) if up else int(s // step * step)
+    if whole < 60:
+        return f"{whole}s"
+    if whole < 3600:
+        return f"{whole // 60}m"
+    if whole < 86400:
+        return f"{whole // 3600}h{whole % 3600 // 60:02d}m"
+    return f"{whole // 86400}d{whole % 86400 // 3600:02d}h"
+
+
+def reading(figures: Any, *, now: float | None = None) -> dict[str, Any] | None:
+    """The hub's pace, aged to `now` on this machine's clock — or None.
+
+    None for figures that carry no pace (a hub older than this field, the
+    demo), and for stale ones: an ETA is a statement about now, and a stale
+    figure is a memory. The age added is the time since THIS client fetched
+    the figure — measured on its own clock, never against the hub's — and is
+    capped at `STALE_AFTER`, past which nothing is drawn anyway.
+    """
+    if not isinstance(figures, dict) or not isinstance(figures.get("pace"), dict):
+        return None
+    raw = figures["pace"]
+    state = raw.get("state")
+    if state not in ("running", "done", "closed"):
+        return None
+    lag = 0.0
+    if "fetched_at" in figures:
+        # The status-file path: the daemon stamped its own fetch time. No
+        # stamp, or a stale one, is a figure nobody can vouch for.
+        if is_stale(figures, now=now):
+            return None
+        fetched = _seconds(figures.get("fetched_at")) or 0.0
+        lag = min(max(0.0, (now or time.time()) - fetched), STALE_AFTER)
+    elapsed = _seconds(raw.get("elapsed"))
+    eta = _seconds(raw.get("eta"))
+    out = {"state": state,
+           "elapsed": None if elapsed is None else
+           elapsed + (lag if state == "running" else 0.0),
+           "eta": None if eta is None or state != "running" else max(0.0, eta - lag),
+           "overdue": raw.get("overdue") is True,
+           "per_task": _seconds(raw.get("per_task")),
+           "counted": count_of(raw, "counted")}
+    since = _seconds(raw.get("since_last"))
+    out["since_last"] = None if since is None else since + lag
+    return out
+
+
+def eta_text(figures: Any, *, now: float | None = None) -> str:
+    """«ETA ~25m», «ETA ≥25m», «done in 1h05m» — or '' when there is none.
+
+    The short form the status line and the watch row append to the bar. ''
+    for a running batch with no completion yet: there is no rate to divide by,
+    and a guessed ETA is a percentage somebody made up, which is the thing
+    this module exists to refuse.
+    """
+    seen = reading(figures, now=now)
+    if seen is None:
+        return ""
+    if seen["state"] == "running":
+        if seen["eta"] is None:
+            return ""
+        return f"ETA {'≥' if seen['overdue'] else '~'}{duration(seen['eta'], up=True)}"
+    if seen["state"] == "done" and seen["elapsed"] is not None:
+        return f"done in {duration(seen['elapsed'])}"
+    if seen["state"] == "closed" and seen["elapsed"] is not None:
+        return f"closed after {duration(seen['elapsed'])}"
+    return ""

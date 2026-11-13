@@ -207,6 +207,21 @@ def batch_segment(figures: Any, *, now: float | None = None,
     if figures.get("state") == batch_progress.CLOSED:
         return ""
     counts = batch_progress.counts(figures)
+    # Wide form only, for the reason the host's status line gives: the narrow
+    # form is the fallback for a row already out of room, and there the count
+    # is what must survive. Measured out of `room` BEFORE the bar takes what
+    # is left, or the bar would grow into columns the ETA then over-runs.
+    timing = "" if narrow else batch_progress.eta_text(figures, now=now)
+    moved = batch_progress.delta_note(figures, now=now)
+    if room and timing and (room - len(f"batch  {pct}% {counts} {timing}"
+                                       f"{f' {moved}' if moved else ''}")
+                            < batch_progress.BAR_WIDTH):
+        # The ETA goes before the bar shrinks below its floor: in a 30-column
+        # cell «done in 30m» pushed the row three columns past the room it was
+        # given. The ETA is derived from the counts and is the cheaper loss.
+        timing = ""
+    complete = batch_progress.is_complete(figures)
+    tail = f" {timing}" if timing else (" done" if complete else "")
     if narrow:
         text = f"{pct}% {counts}"
     else:
@@ -220,14 +235,19 @@ def batch_segment(figures: Any, *, now: float | None = None,
         # column more.
         glyphs = batch_progress.BAR_WIDTH
         if room:
-            spare = room - len(f"batch  {pct}% {counts}")
+            # EVERYTHING after the bar is paid for here, not only the counts.
+            # « done» and «+2» were appended after this sum, so a finished
+            # batch in a 30-column cell drew 35 columns: the bar took the room
+            # the suffix then over-ran.
+            spare = room - len(f"batch  {pct}% {counts}"
+                               f"{f' {moved}' if moved else ''}{tail}")
             glyphs = max(batch_progress.BAR_WIDTH, min(spare, MAX_BAR_WIDTH))
         text = f"batch {batch_progress.bar(pct, glyphs)} {pct}% {counts}"
-    if moved := batch_progress.delta_note(figures, now=now):
+    if moved:
         text += f" {moved}"
-    if batch_progress.is_complete(figures):
-        text += " done"
-    return text
+    if narrow:
+        return text + (" done" if complete else "")
+    return text + tail
 
 
 def stats_segment(figures: Any) -> str:

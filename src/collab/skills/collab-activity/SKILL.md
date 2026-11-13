@@ -148,7 +148,7 @@ counts completed tasks over the tasks in the batch, and everyone reads the one
 figure:
 
 ```bash
-collab batch status      # ████░░ 58%  7/12, and who holds the outstanding five
+collab batch status      # ████░░ 58%  7/12, elapsed, ETA, and who holds the outstanding five
 ```
 
 Nobody reports a percentage, which is the point: an agent that says 90% and is

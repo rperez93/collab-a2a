@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from ..batch import DONE_STATE as COMPLETED_STATE
 from ..protocol import Envelope
 
 class TaskClaimConflict(ValueError):
@@ -403,6 +404,21 @@ class Store:
         # would be inventing an assignment nobody made.
         if tasks and "project" not in tasks:
             self._db.execute("ALTER TABLE tasks ADD COLUMN project TEXT")
+
+        # WHEN A TASK WAS FINISHED, which `updated_at` cannot say. That column
+        # is the task's revision stamp: it moves on every upsert, and releasing
+        # a project moves it for every task the project held, completed ones
+        # included — so a batch ETA drawn from it would see a whole batch
+        # «finish» in the instant somebody deleted a project. The batch's pace
+        # (`collab.batch.pace`) is measured off this column and nothing else.
+        #
+        # LEFT NULL for tasks finished before it existed, the same «invent
+        # nothing» answer as `batch` and `project` above. Those completions
+        # still count towards the batch's done figure; they are simply not
+        # counted into its rate — exactly how cc-progress treats `--done`
+        # work that was finished before the bar was watching.
+        if tasks and "completed_at" not in tasks:
+            self._db.execute("ALTER TABLE tasks ADD COLUMN completed_at REAL")
 
         made = self._columns("projects")
         # A project written before it could be retired has no `archived_at`.
@@ -1043,6 +1059,18 @@ class Store:
             # distinct value under a frozen/coarse or backwards wall clock.
             if existing is not None and now <= existing["updated_at"]:
                 now = math.nextafter(existing["updated_at"], math.inf)
+            # Stamped on the way INTO the completed state, kept while it stays
+            # there, and cleared on the way out. Kept rather than re-stamped:
+            # a later rename or detail edit of a finished task is not a second
+            # completion, and re-stamping would move it to the end of the
+            # batch's history and inflate the rate. Cleared rather than kept:
+            # a task reopened and finished again finished the second time.
+            if state != COMPLETED_STATE:
+                completed_at = None
+            elif existing is not None and existing["state"] == COMPLETED_STATE:
+                completed_at = existing["completed_at"]
+            else:
+                completed_at = now
             if existing is None:
                 batch = None
                 if join_open_batch:
@@ -1053,10 +1081,10 @@ class Store:
                     batch = str(open_now["id"]) if open_now else None
                 self._db.execute(
                     "INSERT INTO tasks (id,title,state,owner,room,created_by,"
-                    "created_at,updated_at,detail,batch,project)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    "created_at,updated_at,detail,batch,project,completed_at)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                     (task_id, title, state, owner, room, created_by, now, now,
-                     detail or "", batch, project),
+                     detail or "", batch, project, completed_at),
                 )
             else:
                 # `batch` is deliberately absent from this list. Which batch a
@@ -1081,12 +1109,12 @@ class Store:
                 # mistake can then never be unfiled.
                 self._db.execute(
                     "UPDATE tasks SET title=?, state=?, owner=?, updated_at=?,"
-                    " detail=?, project=? WHERE id=?",
+                    " detail=?, project=?, completed_at=? WHERE id=?",
                     (title or existing["title"], state, owner, now,
                      existing["detail"] if detail is None else detail,
                      (None if project == "" else
                       project if project is not None else existing["project"]),
-                     task_id),
+                     completed_at, task_id),
                 )
             self._db.commit()
             row = self._db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()

@@ -290,7 +290,16 @@ A self-reported percentage cannot survive the agent that reported it — an agen
 that says 90% and then stalls goes on saying 90%.
 
 Read the batch with `collab batch status`, which prints the bar, the
-percentage, the counts, and who holds each outstanding task.
+percentage, the counts, the elapsed time, the ETA, and who holds each
+outstanding task.
+
+The ETA is measured the same way the percentage is: from the board, not from
+anybody's estimate. The hub stamps each task as it completes, and the rate is
+completions over the time from opening the batch to the latest one. Once the
+task in flight is past its turn on that rate, the ETA is shown as a floor, «≥».
+Until a task has completed there is no rate, and no ETA is shown. A batch ends
+in an explicit state with its time frozen: «done in» to its last completion, or
+«closed after» when it was closed with work outstanding.
 The status line carries a compact form of the same figures, and `collab status`
 shows it beside the connection.
 
