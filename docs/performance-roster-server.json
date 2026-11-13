@@ -1,0 +1,102 @@
+{
+  "recorded_at": "2026-11-13T22:54:34.765075+00:00",
+  "measurement": "Each row runs in a fresh Python subprocess. CPU measures request loop. Absolute peak RSS is Linux /proc/self/status VmHWM after imports, payload setup and request loop; getrusage fallback elsewhere. Body bytes exclude HTTP headers. Changing boards increment seq and change one task detail every request. Representative board has 40 agents and 80 tasks; near-limit board has 40 agents and 250 tasks with details at most 8000 characters.",
+  "results": [
+    {
+      "board": "representative",
+      "state": "unchanged",
+      "variant": "baseline",
+      "requests": 100,
+      "payload_bytes": 17649,
+      "body_bytes": 1764900,
+      "responses_200": 100,
+      "responses_304": 0,
+      "cpu_seconds": 0.010844934,
+      "peak_rss_kib": 25352
+    },
+    {
+      "board": "representative",
+      "state": "unchanged",
+      "variant": "optimized",
+      "requests": 100,
+      "payload_bytes": 17649,
+      "body_bytes": 893,
+      "responses_200": 1,
+      "responses_304": 99,
+      "cpu_seconds": 0.016986831000000008,
+      "peak_rss_kib": 25472
+    },
+    {
+      "board": "representative",
+      "state": "changing",
+      "variant": "baseline",
+      "requests": 100,
+      "payload_bytes": 17649,
+      "body_bytes": 1773874,
+      "responses_200": 100,
+      "responses_304": 0,
+      "cpu_seconds": 0.010900710000000008,
+      "peak_rss_kib": 25508
+    },
+    {
+      "board": "representative",
+      "state": "changing",
+      "variant": "optimized",
+      "requests": 100,
+      "payload_bytes": 17649,
+      "body_bytes": 109157,
+      "responses_200": 100,
+      "responses_304": 0,
+      "cpu_seconds": 0.028035461999999997,
+      "peak_rss_kib": 25884
+    },
+    {
+      "board": "near_2mib",
+      "state": "unchanged",
+      "variant": "baseline",
+      "requests": 20,
+      "payload_bytes": 2031359,
+      "body_bytes": 40627180,
+      "responses_200": 20,
+      "responses_304": 0,
+      "cpu_seconds": 0.154429811,
+      "peak_rss_kib": 31192
+    },
+    {
+      "board": "near_2mib",
+      "state": "unchanged",
+      "variant": "optimized",
+      "requests": 20,
+      "payload_bytes": 2031359,
+      "body_bytes": 17321,
+      "responses_200": 1,
+      "responses_304": 19,
+      "cpu_seconds": 0.181943092,
+      "peak_rss_kib": 29828
+    },
+    {
+      "board": "near_2mib",
+      "state": "changing",
+      "variant": "baseline",
+      "requests": 20,
+      "payload_bytes": 2031359,
+      "body_bytes": 40626827,
+      "responses_200": 20,
+      "responses_304": 0,
+      "cpu_seconds": 0.16051185499999998,
+      "peak_rss_kib": 33380
+    },
+    {
+      "board": "near_2mib",
+      "state": "changing",
+      "variant": "optimized",
+      "requests": 20,
+      "payload_bytes": 2031359,
+      "body_bytes": 347511,
+      "responses_200": 20,
+      "responses_304": 0,
+      "cpu_seconds": 0.323104348,
+      "peak_rss_kib": 31540
+    }
+  ]
+}

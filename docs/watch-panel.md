@@ -123,10 +123,12 @@ left padding and pack short facts and their observation ages onto shared rows.
 
 The roster refreshes every `participant_refresh_interval` seconds (default 3),
 independently of main/worker stats collection. Activity and presence events also
-request a refresh. Fetching the roster never holds up chat delivery. The viewer
+request a refresh within a fixed 100 ms coalescing window. An event arriving
+during a read earns a trailing refresh. Fetching the roster never holds up chat delivery. The viewer
 uses the last successful fetch timestamp; after `participant_stale_after`
 seconds (default 30), it shows connectivity as unknown rather than leaving an
-old online badge looking current. A successful fetch restores current status.
+old online badge looking current. A successful fetch or conditional 304
+revalidation restores current status.
 Working/idle describes reported activity, while online/offline describes the
 connection. Missing activity remains unknown.
 

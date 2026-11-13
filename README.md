@@ -1895,8 +1895,11 @@ to each participant, so a mixed room keeps Claude and Codex sources separate.
 Explicit sources and explicit opt-outs take precedence. Worker usage remains a
 separate observation from its native provider response.
 
-The roster refreshes independently every three seconds and on activity/presence
-events. After 30 seconds without a successful fetch, connectivity becomes
+The roster refreshes independently every three seconds. Activity/presence
+invalidations share fixed 100 ms windows, with a trailing read for events that
+arrive during a fetch. Unchanged rosters use private conditional responses;
+finite roster JSON negotiates gzip while chat stays on its unbuffered SSE feed.
+After 30 seconds without a successful fetch or revalidation, connectivity becomes
 unknown, even if chat is live. Working/idle still describes reported activity.
 See [telemetry setup and controls](docs/telemetry.md) and
 [panel refresh behavior](docs/watch-panel.md).
