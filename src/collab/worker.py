@@ -489,6 +489,29 @@ class Store:
             self._save(db, state)
             return 0.0
 
+    def budget(self, *, limit: int, window: float, now: float | None = None) -> dict[str, float]:
+        """Attempts left in the rolling window and when the oldest one expires."""
+        now = time.time() if now is None else now
+        with self._db() as db:
+            attempts = [t for t in self._state(db).get("model_attempts", []) if t > now - window]
+        return {"remaining": max(0, limit - len(attempts)),
+                "reset_at": (min(attempts) + window) if attempts else now}
+
+
+def pace(budget: dict[str, float], *, limit: int, gap: float, now: float | None = None) -> float:
+    """Seconds until the next model turn may start.
+
+    The plain gap while more than half the budget is left; past that, the time
+    left in the window spread over the attempts left. A busy session then
+    batches more messages into each turn instead of spending the whole budget
+    in minutes and going silent until the window rolls (seen live: 60 turns
+    gone in under an hour with four agents).
+    """
+    now = time.time() if now is None else now
+    if budget["remaining"] * 2 > limit:
+        return gap
+    return max(gap, (budget["reset_at"] - now) / (budget["remaining"] + 1))
+
 
 def configure(root, config):
     return Store(root).configure(config)
@@ -525,9 +548,16 @@ def metrics(root):
     return {**state.get("usage", {}), **state.get("reported_stats", {}), "enabled": state["enabled"], "running": state["running"],
         "agent": cfg.get("agent", ""), "model": model or state.get("reported_stats", {}).get("model", ""), "turns": state["turn"],
         "attempts": state.get("attempts_total", 0), "pending": len(state["pending"]),
+        **_budget_figures(store),
         "errors": int(bool(state["error"])), "source": state.get("reported_stats", {}).get("source") or "collab-worker",
         "observed_at": max(state.get("last_progress", 0), state.get("usage", {}).get("observed_at", 0),
                            (state.get("reported_stats", {}).get("observed_at") or 0))}
+
+
+def _budget_figures(store) -> dict[str, float]:
+    from .runtime_settings import get
+    left = store.budget(limit=get("worker_max_attempts"), window=get("worker_budget_window"))
+    return {"budget_remaining": left["remaining"], "budget_reset_at": left["reset_at"]}
 
 
 def notify_repairs(root, inbox):
