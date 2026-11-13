@@ -1818,7 +1818,9 @@ def _participant_card(person: dict[str, Any], width: int, *, who: str,
         # other. The clock is activity.since, not the latest heartbeat.
         values = [who.split(" (", 1)[0]]
         values.append("m:" + str(stats.get("model") or "?"))
-        worker_model = "off" if worker.get("enabled") is False else str(worker.get("last_model") or worker.get("model") or "?")
+        # The configured model, not usage history: a worker switched from one
+        # provider to another kept showing the old one's last_model (R3).
+        worker_model = "off" if worker.get("enabled") is False else str(worker.get("model") or worker.get("last_model") or "?")
         worker_state = "●" if worker.get("running") is True else "○" if worker.get("running") is False else "◌"
         values.append("w" + worker_state + ":" + worker_model)
         right = _clip(status, max(width // 3, 1))
