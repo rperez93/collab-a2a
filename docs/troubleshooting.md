@@ -122,9 +122,9 @@ error code and reason. The session is still reachable on this machine.
 - `ERR_NGROK_334` — that endpoint is already online in another ngrok process,
   possibly another collab session on the same domain: one domain serves one
   session at a time. Give this session a different reserved domain —
-  `collab kill`, then `collab host --resume --domain <domain>`; `collab config
-  ngrok_domain <domain>` makes it the default — or stop the other process
-  yourself. Do not run `collab host --resume` while the hub is still up: that
+  `collab kill`, then `collab host --resume --domain <domain>`. The session
+  keeps that domain from then on, even with a different `ngrok_domain`
+  default. Or stop the other process yourself. Do not run `collab host --resume` while the hub is still up: that
   starts a second hub on the same session.
 - `ERR_NGROK_4018` — ngrok has no authtoken: `ngrok config add-authtoken <token>`.
   The running hub retries the tunnel every 15 s; `collab url` prints the link

@@ -48,6 +48,10 @@ class HubConfig:
     #: A reserved ngrok domain, if one was given. Without it a restarted
     #: tunnel comes back on a new address and invalidates shared links.
     domain: str = ""
+    #: Who chose `domain`: "flag" (`--domain`), "default" (the `ngrok_domain`
+    #: setting) or "" (a session from before this field — read as chosen).
+    #: Decides whether a later default may move it; see `config.host_domain`.
+    domain_from: str = ""
     #: ngrok's own reason the tunnel did not start, empty while one is up.
     #: Recorded so `collab host` can print the cause and its remedy: without
     #: it the host saw «ngrok was not found» on a machine where ngrok was

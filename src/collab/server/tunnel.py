@@ -55,9 +55,8 @@ TUNNEL_REMEDIES = {
         "that endpoint is already online in another ngrok process — possibly "
         "another collab session on the same domain; one domain serves one "
         "session at a time. Give this one a different reserved domain: "
-        "`collab kill`, then `collab host --resume --domain <domain>` "
-        "(`collab config ngrok_domain <domain>` makes it the default), "
-        "or stop the other process yourself."),
+        "`collab kill`, then `collab host --resume --domain <domain>` — it "
+        "keeps that domain from then on — or stop the other process yourself."),
     "ERR_NGROK_4018": (
         "ngrok has no authtoken: `ngrok config add-authtoken <token>`. The "
         "running hub retries the tunnel every 15 s, so nothing needs "
@@ -183,8 +182,12 @@ def failure_from_log(path: str | None, offset: int) -> str:
     if not path:
         return ""
     try:
+        # THE TAIL of our run, not its head: the reason that matters is the
+        # last one, and a cap that kept the first 64 KB returned an early,
+        # superseded failure from a 92 KB log.
+        size = os.path.getsize(path)
         with open(path, encoding="utf-8", errors="replace") as fh:
-            fh.seek(offset)
+            fh.seek(max(offset, size - _ERR_READ_CAP))
             body = fh.read(_ERR_READ_CAP)
     except OSError:
         return ""
