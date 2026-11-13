@@ -352,8 +352,9 @@ def test_worker_wake_prompt_is_a_decision_notice_not_a_standing_reminder(tmp_pat
 
 
 @pytest.mark.parametrize('agent', ['codex', 'claude'])
-async def test_idle_health_keeps_a_missing_default_model_visible_until_corrected(conversation, agent):
+async def test_idle_health_keeps_a_missing_default_model_visible_until_corrected(conversation, agent, monkeypatch):
     """The first idle tick must not hide a configuration error from onboarding."""
+    monkeypatch.delenv('COLLAB_NO_WORKER', raising=False)  # tests automatic setup
     from collab import runtime_settings
     runtime_settings.set_value('worker_agent', agent)
     runtime_settings.set_value('worker_' + agent + '_model', '')

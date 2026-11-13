@@ -23,7 +23,8 @@ escalates missing context, decisions, blockers and conflicting edits. Supply
 actual task progress with `collab worker context` and keep a monitor or wake
 armed for decisions. Set `collab config worker_agent codex` or `claude` to pin a
 provider instead of following the host (`auto`), or `collab config
-worker_auto_start false` to opt out of automatic setup. An untouched automatic
+worker_auto_start false` to opt out of automatic setup, or set
+`COLLAB_NO_WORKER=1` in the environment of a scratch or test session. An untouched automatic
 worker follows the host on the next join; explicit provider choices and
 `collab worker off` survive reconnects and daemon starts. While the worker is
 enabled it is the participant's only voice: `collab send` queues the exact text

@@ -43,6 +43,9 @@ def _never_the_machines_own_config(tmp_path, monkeypatch):
     from collab.hosttool import MARKERS
     for marker, *_ in MARKERS:
         monkeypatch.delenv(marker, raising=False)
+    # No automatic conversation worker in test sessions: real providers cost
+    # real tokens. Tests of automatic setup remove it explicitly.
+    monkeypatch.setenv("COLLAB_NO_WORKER", "1")
     monkeypatch.setenv("COLLAB_CONFIG", str(tmp_path / "collab" / "config.json"))
     monkeypatch.setenv("COLLAB_HOME", "")
     monkeypatch.setenv("COLLAB_STATE_DIR", str(tmp_path / "state"))
