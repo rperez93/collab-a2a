@@ -51,8 +51,11 @@ def remember_url(cfg: HubConfig, supervisor: TunnelSupervisor | None,
     # ONLY THE FOUR KEYS THIS OWNS. A whole-object save races `collab url
     # --rotate` on a running hub and loses whichever invite was written first;
     # see `session.update_fields`.
+    # tunnel_error TOO: a tunnel that has come back is no longer failing, and
+    # a stale reason left on disk would be printed by the next `collab host`.
     update_fields(cfg.dir, public_url=url, pid=os.getpid(),
-                  tunnel_pid=cfg.tunnel_pid, tunnel_stamp=cfg.tunnel_stamp)
+                  tunnel_pid=cfg.tunnel_pid, tunnel_stamp=cfg.tunnel_stamp,
+                  tunnel_error="")
     if address_changed:
         logger.warning("tunnel came back on a new address: %s", url)
     else:
@@ -202,10 +205,15 @@ def main() -> int:
         # launched it, and stopping it would be taking something that is not
         # ours.
         cfg.record_tunnel(supervisor.own_pid())
+        cfg.tunnel_error = ""
     else:
         cfg.public_url = ""
         cfg.tunnel = "none"
         cfg.record_tunnel(0)
+        # ngrok's reason, for `collab host` to print — it reads this file.
+        cfg.tunnel_error = supervisor.last_error if supervisor is not None else ""
+        if cfg.tunnel_error:
+            logger.warning("tunnel did not start: %s", cfg.tunnel_error)
     # Written before serving so `collab host` can print the real URL.
     cfg.save()
 

@@ -1990,6 +1990,42 @@ def _write_editor(value: str) -> str:
     return value
 
 
+#: A hostname as ngrok takes it for `--domain`: labels of letters, digits and
+#: hyphens, at least one dot. Checked on WRITE because the value is only read
+#: at `collab host`, where a typo would surface as a tunnel that never starts.
+_DOMAIN_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+"
+                        r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def ngrok_domain() -> str:
+    """The reserved ngrok domain `collab host` uses when `--domain` is absent.
+
+    One key PER PROXY PLATFORM, named for it, rather than one `tunnel_domain`:
+    a hostname reserved on ngrok means nothing to cloudflared, and a machine
+    may hold one for each. ngrok is the only platform collab drives today.
+    """
+    return str(load_config().get("ngrok_domain") or "").strip()
+
+
+def set_ngrok_domain(value: str) -> str:
+    """Store the default ngrok domain; empty clears it.
+
+    A pasted URL is reduced to its host — `https://x.ngrok.app/` is what
+    people copy out of a browser, and ngrok wants `x.ngrok.app`.
+    """
+    host = (value or "").strip().lower()
+    host = re.sub(r"^[a-z]+://", "", host).split("/", 1)[0].split("#", 1)[0]
+    if host and not _DOMAIN_RE.match(host):
+        raise ValueError(f"not a domain ngrok can serve: {value!r}")
+    cfg = load_config()
+    if host:
+        cfg["ngrok_domain"] = host
+    else:
+        cfg.pop("ngrok_domain", None)
+    save_config(cfg)
+    return host
+
+
 def _write_theme(value: str) -> str:
     # set_theme answers None rather than raising: it is the caller that warns,
     # because the caller is the one that knows how to say «you have these».
@@ -2149,6 +2185,13 @@ def settings() -> tuple[Setting, ...]:
                 RULES_DEFAULT, _as_bool,
                 rules_enabled,
                 lambda v: set_rules(v)),
+        # BESIDE `rules`, the other setting read at `collab host`. Per platform
+        # by name: see `ngrok_domain`.
+        Setting("ngrok_domain", "reserved ngrok domain `collab host` uses when "
+                                "`--domain` is not given; empty lets ngrok choose",
+                "", str,
+                ngrok_domain,
+                lambda v: set_ngrok_domain(v)),
         Setting("stats_command", "a command printing your usage as JSON, for "
                                  "an agent whose host tool cannot report it",
                 "", str,
