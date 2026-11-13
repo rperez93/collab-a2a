@@ -2624,6 +2624,73 @@ def _stat_bits(person: dict[str, Any]) -> list[str]:
     return bits
 
 
+def dashboard_rows(snapshot: dict[str, Any], skills: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Everyone's quota and skills from what the daemon already holds (R12).
+
+    Unknown stays unknown: a window nobody reported is absent, never 0%, and a
+    skill list the hub cannot serve or the participant does not share says so.
+    """
+    lists = {p.get("name"): p.get("skills") or [] for p in (skills or {}).get("participants", [])}
+    rows = []
+    for person in snapshot.get("participants") or []:
+        stats = person.get("stats") or {}
+        quotas = {name: {"used_pct": w.get("used_pct"), "resets_at": w.get("resets_at")}
+                  for name, w in (stats.get("quotas") or {}).items() if isinstance(w, dict)}
+        worker = stats.get("worker") or {}
+        count = person.get("skills_count")
+        if skills is None:
+            skill_state = "unknown"
+        elif skills.get("unsupported"):
+            skill_state = "hub too old"
+        elif not count:
+            skill_state = "not shared"
+        else:
+            skill_state = "shared"
+        rows.append({"name": person.get("name", ""), "you": person.get("name") == snapshot.get("you"),
+                     "connected": bool(person.get("connected")), "quotas": quotas,
+                     "worker_budget": worker.get("budget_remaining"),
+                     "skills": lists.get(person.get("name"), []) if skill_state == "shared" else [],
+                     "skills_state": skill_state})
+    return rows
+
+
+def cmd_dashboard(args: argparse.Namespace) -> int:
+    """Read-only view the daemon keeps current; no hub call from here."""
+    profile = _require_profile(args)
+    paths = DaemonPaths(profile.dir)
+    try:
+        snapshot = json.loads(paths.snapshot.read_text())
+    except (OSError, ValueError):
+        fail("no roster yet; is the listener running? (`collab check`)")
+        return 1
+    try:
+        skills = json.loads(paths.skills.read_text())
+    except (OSError, ValueError):
+        skills = None
+    rows = dashboard_rows(snapshot, skills)
+    if args.json:
+        print(json.dumps({"fetched_at": snapshot.get("fetched_at"), "participants": rows},
+                         indent=2, ensure_ascii=True))
+        return 0
+    age = time.time() - float(snapshot.get("fetched_at") or 0)
+    heading(f"session dashboard  {dim(f'(roster {int(age)}s old)')}")
+    for row in rows:
+        mark = c("●", "32") if row["connected"] else dim("○")
+        you = dim(" (you)") if row["you"] else ""
+        windows = "  ".join(f"{name} {w['used_pct']:.0f}%" if isinstance(w["used_pct"], (int, float))
+                            else f"{name} ?" for name, w in sorted(row["quotas"].items())) or dim("quota unknown")
+        budget = ("" if row["worker_budget"] is None
+                  else f"  worker {int(row['worker_budget'])} turns left")
+        print(f"  {mark} {c(said(row['name']), '1')}{you}  {windows}{budget}")
+        if row["skills"]:
+            names = ", ".join(said(s.get("name", "")) for s in row["skills"][:12])
+            more = f" +{len(row['skills']) - 12}" if len(row["skills"]) > 12 else ""
+            print(f"      skills: {names}{more}")
+        else:
+            print(dim(f"      skills: {row['skills_state']}"))
+    return 0
+
+
 def cmd_stats(args: argparse.Namespace) -> int:
     """What each agent has reported about its own usage.
 
@@ -7643,6 +7710,11 @@ def build_parser() -> argparse.ArgumentParser:
     ac.add_argument("--json", action="store_true")
     add_session_flag(ac)
     ac.set_defaults(func=cmd_activity)
+
+    dash = sub.add_parser("dashboard", help="everyone's quota and skills, kept current by the daemon")
+    dash.add_argument("--json", action="store_true")
+    add_session_flag(dash)
+    dash.set_defaults(func=cmd_dashboard)
 
     stt = sub.add_parser("stats", help="what each agent reports about its own usage")
     stt.add_argument("--json", action="store_true")

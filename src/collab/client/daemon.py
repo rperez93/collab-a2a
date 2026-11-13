@@ -81,6 +81,8 @@ ACTIVITY_REFRESH = 300.0
 STATS_REASSERT = 60.0
 #: Seconds between rescans of the installed skill directory (R4).
 SKILL_SCAN = 300.0
+#: Seconds before peers' skill lists are re-read with no count change (R12).
+SKILLS_REFRESH = 600.0
 #: How long to leave a failed automatic compaction before probing the pane
 #: again. The heartbeat runs every three seconds and an agent sitting over its
 #: threshold sits there for a long time, so without this a pane in copy mode
@@ -2652,6 +2654,7 @@ class Daemon:
                 # people long after the session ended. The reader can only be
                 # careful about the age if the age is written down.
                 self.snapshot["fetched_at"] = time.time()
+                self._maybe_refresh_skills(client)
                 try:
                     tmp = self.paths.root / "snapshot.tmp"
                     tmp.write_text(json.dumps(self.snapshot))
@@ -2662,6 +2665,46 @@ class Daemon:
                 self._snapshot_error = f"hub answered {r.status_code}"
         except (httpx.HTTPError, ValueError) as exc:
             self._snapshot_error = type(exc).__name__
+
+    def _maybe_refresh_skills(self, client: httpx.AsyncClient) -> None:
+        """Fetch peers' skill lists when a count changed, or every SKILLS_REFRESH.
+
+        The roster carries only counts (R4), so a change there is the cue; the
+        lists themselves are read at most once per change and cached for the
+        dashboard, which then needs no hub call of its own (R12).
+        """
+        signature = tuple(sorted((p.get("id", ""), p.get("skills_count"))
+                                 for p in self.snapshot.get("participants", [])))
+        if (signature == getattr(self, "_skills_signature", None)
+                and time.time() - getattr(self, "_skills_at", 0.0) < SKILLS_REFRESH):
+            return
+        self._skills_signature, self._skills_at = signature, time.time()
+        self._schedule_refresh("skills", lambda: self._fetch_skills(client))
+
+    async def _fetch_skills(self, client: httpx.AsyncClient) -> None:
+        try:
+            r = await client.get(f"{self.profile.url}{EXT_PREFIX}/participant-skills",
+                                 headers=request_headers(self.profile.token), timeout=10.0)
+        except httpx.HTTPError:
+            self._skills_at = 0.0  # retry on the next roster
+            return
+        if r.status_code == 404:
+            data = {"unsupported": True}  # a hub older than skill lists
+        elif r.status_code == 200:
+            try:
+                data = {"participants": r.json().get("participants", [])}
+            except ValueError:
+                return
+        else:
+            self._skills_at = 0.0
+            return
+        data["fetched_at"] = time.time()
+        try:
+            tmp = self.paths.root / "skills.tmp"
+            tmp.write_text(json.dumps(data))
+            tmp.replace(self.paths.skills)
+        except OSError:
+            pass
 
     def _adopt_identity(self) -> None:
         """Take our current name and id from the hub.
