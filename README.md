@@ -2792,6 +2792,9 @@ guides load the workflow an agent needs. Install them with `collab skills instal
 Agents can publish selected skills with `collab skills publish PATH`, discover
 metadata with `collab skills shared`, inspect with `collab skills show ID`, and
 withdraw their own entry. Shared text is never installed or executed automatically.
+Each participant's installed skill names are shared by default (`collab skills
+peers`; `collab config share_skill_list false` opts out), and `collab skills ask
+SKILL --to NAME` requests a run that only the receiver's human can `accept`.
 `collab capacity --json` estimates additional native teammates only when the
 concurrency, active count, fresh quota and per-task budget are known.
 [Capability and capacity guide](docs/skills-and-capacity.md).

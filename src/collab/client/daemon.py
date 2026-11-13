@@ -942,6 +942,7 @@ class Daemon:
         from ..runtime_settings import get as setting
         sharing_skills = setting("share_skill_list")
         if not sharing_skills and not getattr(self, "_skills_withdrawn", False):
+            self._skills_sent_alone = None
             # Once per daemon lifetime, whatever happened while it was down and
             # whether or not stats are shared: off means no list on the hub.
             try:
@@ -952,6 +953,19 @@ class Daemon:
             except httpx.HTTPError:
                 pass
         if not share_stats_enabled():
+            if sharing_skills:
+                # The skill list is its own consent (share_skill_list), not
+                # a usage figure: publish it alone when stats are private.
+                skills = await self._installed_skills()
+                if skills != getattr(self, "_skills_sent_alone", None):
+                    try:
+                        r = await client.post(f"{self.profile.url}{EXT_PREFIX}/stats",
+                                              headers=request_headers(self.profile.token),
+                                              json={"skills": skills}, timeout=10.0)
+                        if r.status_code == 200:
+                            self._skills_sent_alone = skills
+                    except httpx.HTTPError:
+                        pass
             return
         # OURS ONLY. The file is written by whatever the agent runs — a status
         # line, a --report, our own probe — and publishing it unread meant
