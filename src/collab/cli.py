@@ -3941,12 +3941,15 @@ def _stats_health(profile: SessionProfile) -> tuple[str, str, str] | None:
     if age is None and not source and automatic_hook:
         return (CHECK_WARN, "Claude telemetry hook is installed but has not reported for this participant",
                 "ensure this Claude session reloads its statusline and has its own Collab identity")
-    if age is None and not source and not error and (unknown := _quota_unknown(profile)):
+    if (not source and not error and (unknown := _quota_unknown(profile))
+            and not read_stats(profile).get("quotas")):
         # NOT A FAULT AND NOT SILENCE. Nothing is broken — the tool has no
         # source — but returning None here made a Gemini participant's empty
-        # row indistinguishable from one that was never set up at all.
-        return (CHECK_OK, f"your quota is unknown — {unknown}",
-                f"{exe} stats --report '<json>' if you can read it some other way")
+        # row indistinguishable from one that was never set up at all. Keyed on
+        # «no quota held», not «no file»: a participant that switched tools
+        # keeps its other figures in the file, and would otherwise be told its
+        # usage is «current» while its quota is unknown.
+        return (CHECK_OK, f"your quota is unknown — {unknown}", "")
     if age is None and not source and not error:
         return None                             # never set up: not a fault
     if not share_stats_enabled():

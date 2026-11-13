@@ -106,3 +106,7 @@ polling is cancellable and bounded. The pin remains unchanged.
 - **Update (later than the pin)**: Recorded fixed-window roster coalescing,
   conditional private revalidation and finite JSON compression in the existing
   client-daemon architecture page. No pin or verified stamp changed.
+
+- Later than the pin: usage figures record a quota route for every detected tool;
+  tools with no local source, Gemini CLI among them, stay unknown with a reason.
+  Pin unchanged.

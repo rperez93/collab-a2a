@@ -92,7 +92,36 @@ def test_check_says_the_quota_is_unknown_rather_than_nothing_or_a_failure(profil
     assert verdict == cli.CHECK_OK
     assert detail.startswith("your quota is unknown") and "Gemini CLI" in detail
     assert "failed" not in detail
-    assert "--report" in fix
+    assert fix == "", "an OK verdict carries no fix, as every other one does"
+
+
+def test_a_switch_to_gemini_takes_the_codex_windows_off_the_file(profile, monkeypatch):
+    """The daemon posts the stored file: Codex windows left in it stayed on the roster."""
+    from collab import stats
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread-a")
+    setup.ensure(profile)
+    stats.write_stats(profile, {"model": "gpt-x", "cost_usd": 1,
+                                "quotas": {"seven_day": {"used_pct": 40}}})
+    monkeypatch.delenv("CODEX_THREAD_ID")
+    monkeypatch.setenv("GEMINI_CLI", "1")
+    setup.ensure(profile)
+
+    held = stats.read_stats(profile)
+    assert held["quotas"] == {}, "an explicit empty map, so the hub clears too"
+    assert held["model"] == "gpt-x", "only quota is taken back"
+    (profile.dir / "status.json").write_text(json.dumps(
+        {"state": "live", "heartbeat": time.time(), "stats": {"setup": setup.state(profile)}}))
+    verdict, detail, _fix = cli._stats_health(profile)
+    assert verdict == cli.CHECK_OK and detail.startswith("your quota is unknown"), detail
+
+
+def test_a_first_gemini_setup_leaves_a_hand_reported_quota_alone(profile, monkeypatch):
+    """No previous tool means nothing to take back; a person's own report stands."""
+    from collab import stats
+    stats.write_stats(profile, {"quotas": {"daily": {"used_pct": 10}}})
+    monkeypatch.setenv("GEMINI_CLI", "1")
+    setup.ensure(profile)
+    assert stats.read_stats(profile)["quotas"] == {"daily": {"used_pct": 10}}
 
 
 def test_an_explicit_source_outranks_the_unknown(profile, monkeypatch):

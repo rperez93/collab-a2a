@@ -57,6 +57,16 @@ def ensure(profile) -> None:
     if (why := unknown_reason(provider)):
         value['quota_unknown'] = why
         _write(profile.dir / 'telemetry-setup.json', value)
+        # AND THE WINDOWS THE OLD ROUTE LEFT BEHIND GO TOO. Removing the route
+        # stops new Codex figures, but the stored file still held the Codex
+        # account's windows, and the daemon posts that file — so the roster
+        # went on showing them under the Gemini participant. Cleared exactly
+        # as `collab stats --clear-quota` clears: on disk, keeping everything
+        # that is not quota, with an explicit empty map the daemon carries up.
+        # Only on a SWITCH from another tool, and only when no explicit source
+        # owns the figures: a person's own report under the same tool is theirs.
+        if previous.get('provider') not in ('', None, provider) and not explicit:
+            _clear_stored_quota(profile)
         return
     try:
         if provider == 'codex':
@@ -72,6 +82,17 @@ def ensure(profile) -> None:
     except (OSError, ValueError, TypeError) as exc:
         value['error'] = type(exc).__name__
     _write(profile.dir / 'telemetry-setup.json', value)
+
+
+
+def _clear_stored_quota(profile) -> None:
+    """Replace any stored quota with an explicit empty map, keeping the rest."""
+    from . import stats as statmod
+    stored = statmod.read_stats(profile)
+    if not any(stored.get(k) for k in statmod.QUOTA_FIELDS):
+        return              # nothing to take back, so nothing to rewrite
+    kept = {k: v for k, v in stored.items() if k not in statmod.QUOTA_FIELDS}
+    statmod.write_stats(profile, {**kept, 'quotas': {}})
 
 
 def source(profile) -> tuple[str, int, dict]:
