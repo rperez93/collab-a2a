@@ -152,8 +152,12 @@ class Store:
         existence is not a choice. A changed generation records even an off
         issued before the first configuration and must survive reconnects.
         """
+        import os
         from .runtime_settings import get
-        if not get("worker_auto_start"):
+        # Scratch and test sessions: a throwaway hub spent ~287k tokens in
+        # three minutes on a worker nobody asked for. Explicit `worker start`
+        # still works; only automatic setup is skipped.
+        if not get("worker_auto_start") or os.environ.get("COLLAB_NO_WORKER"):
             return
         with self._db() as db:
             state = self._state(db)

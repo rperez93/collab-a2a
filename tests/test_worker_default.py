@@ -8,6 +8,12 @@ from collab.client import onboard
 from collab.config import SessionProfile
 
 
+@pytest.fixture(autouse=True)
+def automatic_workers(monkeypatch):
+    """This file tests automatic setup itself, which conftest turns off."""
+    monkeypatch.delenv('COLLAB_NO_WORKER', raising=False)
+
+
 def test_session_setup_enables_a_worker_before_starting_the_listener(tmp_path, monkeypatch):
     """The listener's first pass must already have a conversation owner."""
     profile = SessionProfile(session_id='test', url='http://localhost', name='alice',
@@ -184,3 +190,13 @@ def test_a_legacy_automatic_state_without_the_flag_realigns(tmp_path, monkeypatc
     monkeypatch.setenv('CLAUDECODE', '1')
     store.ensure_default()
     assert store.configuration()['agent'] == 'claude'
+
+
+def test_collab_no_worker_skips_automatic_setup_only(tmp_path, monkeypatch):
+    """Scratch sessions spent real tokens on a worker nobody asked for."""
+    monkeypatch.setenv('COLLAB_NO_WORKER', '1')
+    store = worker.Store(tmp_path)
+    store.ensure_default()
+    assert store.configuration() is None
+    store.configure({'agent': 'claude', 'scope': 'Coordinate'})
+    assert store.status()['enabled'], 'an explicit start still works'
