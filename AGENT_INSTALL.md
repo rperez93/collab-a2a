@@ -586,8 +586,12 @@ keeps the same tokens, so they only need to re-share the current link:
 
 Claude Code and Codex participants configure their own telemetry route on host,
 join and daemon startup by default. Claude preserves existing statusline
-segments; Codex binds its probe to the participant's exact thread. Explicit
-sources and cleared sources take precedence. `stats_auto_setup false` disables
+segments; Codex binds its probe to the participant's exact thread.
+Every other agent collab detects (Gemini CLI, opencode, Cursor, Copilot CLI,
+goose, Amp) is recorded with its quota unknown and the reason, which
+`collab stats` and `collab check` show; an earlier Codex or Claude route is
+not carried over, and nothing is published in place of the missing figure.
+Explicit sources and cleared sources take precedence. `stats_auto_setup false` disables
 future automatic setup and automatic polling, without removing existing hooks.
 Main and worker usage remain separate; native worker usage continues to collect.
 Roster/activity refresh and chat delivery do not wait for slow usage commands.

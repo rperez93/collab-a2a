@@ -1901,6 +1901,10 @@ cannot hold up chat, activity or the participant roster.
 Claude Code and Codex telemetry configure automatically when hosting, joining
 or starting the daemon. `stats_auto_setup` is enabled by default. Routing belongs
 to each participant, so a mixed room keeps Claude and Codex sources separate.
+Every other agent collab detects (Gemini CLI, opencode, Cursor, Copilot CLI,
+goose, Amp) is recorded with its quota unknown and the reason, which
+`collab stats` and `collab check` show; an earlier Codex or Claude route is
+not carried over, and nothing is published in place of the missing figure.
 Explicit sources and explicit opt-outs take precedence. Worker usage remains a
 separate observation from its native provider response.
 
@@ -1921,7 +1925,7 @@ Agents expose different sources:
 | **Antigravity** | automatic — same mechanism, its status line payload is understood too |
 | **Codex CLI** | automatic – setup binds the participant to its exact Codex thread and probes native usage and account limits |
 | **opencode** | `collab stats --report` from a plugin — a shell status line is still an [open request](https://github.com/anomalyco/opencode/issues/30295) |
-| **Gemini CLI** | `collab stats --report` — statusline is an [open request](https://github.com/google-gemini/gemini-cli/issues/8191); `/stats` shows the numbers |
+| **Gemini CLI** | quota unknown automatically – the CLI keeps it in process memory only; `collab stats --report` — statusline is an [open request](https://github.com/google-gemini/gemini-cli/issues/8191); `/stats` shows the numbers |
 | **anything else** | `collab stats --report` |
 
 ### Keeping them current

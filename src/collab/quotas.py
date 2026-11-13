@@ -26,7 +26,8 @@ the handle stays open until the answer has been read.
 
 # What comes back, measured
 
-Read from `codex-cli 0.153.4` on 2026-09-07. `result.rateLimits` is the
+Read from `codex-cli 0.153.4` on 2026-09-07, and answered unchanged by
+`codex-cli 0.169.0` on 2026-11-13. `result.rateLimits` is the
 account's own limit, and `result.rateLimitsByLimitId` maps a limit id to the
 same shape again — one per model bucket, so a plan with a separate allowance
 for one model has an entry for it beside the account's:
@@ -556,9 +557,16 @@ def probe(agent: str) -> tuple[dict[str, Any], str]:
     """Everything collab can find out about `agent`'s quota, as a stats report."""
     ask = PROBES.get(agent)
     if ask is None:
+        from .quota_sources import ROUTES, unknown_reason
         known = ", ".join(sorted(PROBES)) or "none"
-        return {}, f"collab cannot ask {agent or 'that'} for a quota — it knows: {known}"
+        # THE REASON, WHERE ONE IS KNOWN. «It knows: codex» told somebody
+        # running Gemini CLI to go and look for a probe that cannot exist; the
+        # registry says why it cannot, which is the useful half of the refusal.
+        why = unknown_reason(agent)
+        return {}, (f"collab cannot ask {agent or 'that'} for a quota — it knows: {known}"
+                    + (f"; {why}" if why and agent in ROUTES else ""))
     quotas, why = ask()
     if why:
         return {}, why
     return {"quotas": quotas}, ""
+

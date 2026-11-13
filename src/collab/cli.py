@@ -2706,6 +2706,9 @@ def cmd_stats(args: argparse.Namespace) -> int:
             return 1
         if args.agent not in quotamod.PROBES:
             fail(f"collab cannot ask {args.agent} for a quota")
+            from .quota_sources import ROUTES, unknown_reason
+            if args.agent in ROUTES and (why := unknown_reason(args.agent)):
+                print(dim(f"  {why}"))
             print(dim("  it knows: " + ", ".join(sorted(quotamod.PROBES))))
             print(dim("  anything else reports with `collab stats --source"
                       " '<your command>'`"))
@@ -2846,6 +2849,14 @@ def cmd_stats(args: argparse.Namespace) -> int:
           and share_stats_enabled() and setting('stats_auto_setup')
           and 'stats_command' not in load_config()):
         print(dim("  yours refresh from the Claude statusline hook; check `collab check` if stale"))
+    elif (unknown := _quota_unknown(profile)):
+        # SAID, rather than the generic line below. That line invites a
+        # `--source` as if one existed to be found; for a tool the registry
+        # knows has none, the honest sentence is that the quota is unknown and
+        # why, so nobody reads the empty row as an agent with room to spare.
+        print(dim(f"  your quota is unknown — {unknown}"))
+        print(dim("  report what you know with `collab stats --report`, or set a"
+                  " command with `collab stats --source`"))
     else:
         print(dim("  yours are not refreshed automatically — set a command with "
                   "`collab stats --source`, or report with `--report`"))
@@ -3930,6 +3941,12 @@ def _stats_health(profile: SessionProfile) -> tuple[str, str, str] | None:
     if age is None and not source and automatic_hook:
         return (CHECK_WARN, "Claude telemetry hook is installed but has not reported for this participant",
                 "ensure this Claude session reloads its statusline and has its own Collab identity")
+    if age is None and not source and not error and (unknown := _quota_unknown(profile)):
+        # NOT A FAULT AND NOT SILENCE. Nothing is broken — the tool has no
+        # source — but returning None here made a Gemini participant's empty
+        # row indistinguishable from one that was never set up at all.
+        return (CHECK_OK, f"your quota is unknown — {unknown}",
+                f"{exe} stats --report '<json>' if you can read it some other way")
     if age is None and not source and not error:
         return None                             # never set up: not a fault
     if not share_stats_enabled():
@@ -3987,6 +4004,23 @@ def wake_module_deferred_limit() -> float:
 #: runs every two minutes by default and a status line pushes far more often,
 #: so anything approaching this means the route that produced it has stopped.
 STATS_ARE_HISTORY = 1800.0
+
+
+def _quota_unknown(profile: SessionProfile) -> str:
+    """Why automatic setup left this participant's quota unknown, or "".
+
+    READ FROM THE SETUP FILE, not from `status.json`: the reason belongs to the
+    participant and is true whether or not a listener is running to copy it.
+    Only while automatic routing is in force — an explicit `stats_command`, a
+    cleared one, or sharing off is the person's own answer and outranks this.
+    """
+    from .config import load_config
+    from .runtime_settings import get
+    from .telemetry_setup import state
+    if not (share_stats_enabled() and get('stats_auto_setup')
+            and 'stats_command' not in load_config()):
+        return ""
+    return str(state(profile).get('quota_unknown') or '')[:200]
 
 
 def _stats_age(profile: SessionProfile) -> float | None:

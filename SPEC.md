@@ -530,7 +530,8 @@ stable 2.x compatibility boundary is unchanged in 2.0.1.
 ## 2.1.2 refresh and appearance additions
 
 Automatic telemetry is participant-local for Claude Code and Codex and respects
-explicit source opt-outs. Main collection, worker collection, publication and
+explicit source opt-outs. Other detected agents are recorded with an unknown
+quota and its reason rather than inheriting an earlier route. Main collection, worker collection, publication and
 roster/activity refresh run independently with bounded outstanding work. Hub
 metadata updates are atomic across concurrent publication threads. A live feed
 does not make a roster current after its last successful fetch exceeds the
