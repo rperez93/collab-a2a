@@ -185,6 +185,10 @@ class HubClient:
                                      body=validate_publication(publication), maximum=64 * 1024,
                                      label='skill publication')
 
+    def participant_skills(self) -> dict[str, Any]:
+        return self._bounded_get(f"{EXT_PREFIX}/participant-skills", params={},
+                                 maximum=4 * 1024 * 1024, label='participant skill lists')
+
     def shared_skills(self, *, after: str = '', limit: int = 100) -> dict[str, Any]:
         return self._bounded_get(f"{EXT_PREFIX}/shared-skills",
                                  params={'after': after, 'limit': limit},

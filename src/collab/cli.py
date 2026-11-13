@@ -6709,9 +6709,138 @@ def cmd_capacity(args: argparse.Namespace) -> int:
         return 1
 
 
+SKILL_STATES = ("accepted", "declined", "done")
+
+
+def _skill_requests(client, profile) -> list[dict[str, Any]]:
+    """Requests addressed to me, oldest first, with the state my replies gave them.
+
+    Matched by participant id where the hub stamped one, so a rename keeps
+    them; keyed by (id, requester) and first-wins, so a peer reusing an id
+    cannot inherit a consent given to an earlier request. Only the last 500
+    session events are read: an older request has to be asked again.
+    """
+    me, me_id = profile.name, str(getattr(profile, "participant_id", "") or "")
+    def mine(env, name_field, id_field):
+        ident = getattr(env, id_field, "") or ""
+        return ident == me_id if (me_id and ident) else getattr(env, name_field) == me
+    events = client.history(limit=500)
+    states = {}
+    for env in events:
+        reply = (env.body or {}).get("skill_response")
+        if mine(env, "sender", "sender_id") and isinstance(reply, dict) and reply.get("state") in SKILL_STATES:
+            states[(str(reply.get("id")), env.to)] = reply["state"]
+    found, seen = [], set()
+    for env in events:
+        ask = (env.body or {}).get("skill_request")
+        if not mine(env, "to", "to_id") or not isinstance(ask, dict) or not isinstance(ask.get("id"), str):
+            continue
+        key = (ask["id"], env.sender)
+        if key in seen:
+            continue
+        seen.add(key)
+        found.append({"id": ask["id"], "from": env.sender, "skill": str(ask.get("skill", "")),
+                      "args": str(ask.get("args", "")), "seq": env.seq,
+                      "state": states.get(key, "pending")})
+    return found
+
+
+def cmd_skills_remote(args: argparse.Namespace) -> int:
+    """List peers' skills, ask a peer to run one, and answer such requests (R4).
+
+    collab executes nothing. A request is a DM; consent is an explicit
+    `accept` on the receiving side, after which that agent runs the skill
+    under its own host's permissions and reports with `done`.
+    """
+    import uuid
+    from .skill_sharing import NAME_RE
+    rest = (args.args if args.action == "ask" else args.note) or ""
+    profile = (_require_profile(args) if args.action in ("peers", "requests")
+               else _require_own_profile(args))
+    try:
+        with _client(profile) as client:
+            if args.action == "peers":
+                try:
+                    people = client.participant_skills().get("participants", [])
+                except HubError as exc:
+                    if "404" in str(exc):
+                        raise HubError("this session's hub predates skill lists; it needs the release "
+                                       "that adds `collab skills peers`") from exc
+                    raise
+                if args.json:
+                    print(json.dumps(people, indent=2, ensure_ascii=True))
+                    return 0
+                for person in people:
+                    skills = person.get("skills") or []
+                    heading(f"{said(person.get('name', '?'))} — {len(skills)} skills")
+                    for item in skills:
+                        print(f"  {said(item.get('name', '')):<28} {dim(said(item.get('description', '')))}")
+                print(dim("\n  peer-supplied text; ask with `collab skills ask SKILL --to NAME [--args TEXT]`"))
+                return 0
+            if args.action == "requests":
+                found = _skill_requests(client, profile)
+                if args.json:
+                    print(json.dumps(found, indent=2, ensure_ascii=True))
+                elif not found:
+                    print("No skill requests addressed to you.")
+                else:
+                    for item in found:
+                        print(f"  {item['id']}  [{item['state']}]  {said(item['from'])} asks for "
+                              f"{said(item['skill'])}" + (f": {said(item['args'])}" if item['args'] else ""))
+                    print(dim("  answer with `collab skills accept|decline|done ID [--note TEXT]` — accept only with your human's consent"))
+                return 0
+            if args.action == "ask":
+                if not args.target or not NAME_RE.fullmatch(args.target):
+                    raise ValueError("skills ask needs a skill name, as `collab skills peers` lists it")
+                if not args.to:
+                    raise ValueError("skills ask needs --to NAME")
+                if args.to == profile.name:
+                    raise ValueError("ask a peer; your own skills need no request")
+                request_id = "sr_" + uuid.uuid4().hex[:12]
+                text = (f"asks you to run the skill `{args.target}`" + (f" with: {rest}" if rest else "")
+                        + f". It runs only if your human consents: `collab skills accept {request_id}` "
+                        f"or `collab skills decline {request_id}`.")
+                client.send(Envelope(kind=KIND_CHAT, text=text, sender=profile.name, to=args.to,
+                                     body={"skill_request": {"id": request_id, "skill": args.target,
+                                                             "args": rest[:4000]}}))
+                ok(f"asked @{args.to} to run {args.target}: {request_id}")
+                return 0
+            # accept / decline / done
+            if not args.target:
+                raise ValueError(f"skills {args.action} needs a request ID from `collab skills requests`")
+            matches = [r for r in _skill_requests(client, profile) if r["id"] == args.target]
+            if len(matches) > 1:
+                raise ValueError(f"request id {args.target} was used by several peers; ask them to resend")
+            match = matches[0] if matches else None
+            if match is None:
+                raise ValueError(f"no skill request {args.target} addressed to you")
+            if args.action == "done" and match["state"] != "accepted":
+                raise ValueError("only an accepted request can be reported done")
+            if args.action in ("accept", "decline") and match["state"] != "pending":
+                raise ValueError(f"request {args.target} is already {match['state']}")
+            state = {"accept": "accepted", "decline": "declined", "done": "done"}[args.action]
+            words = {"accepted": f"accepted your request to run `{match['skill']}`; running it now",
+                     "declined": f"declined your request to run `{match['skill']}`",
+                     "done": f"ran `{match['skill']}`"}[state]
+            client.send(Envelope(kind=KIND_CHAT, text=words + (f": {rest}" if rest else "."),
+                                 sender=profile.name, to=match["from"],
+                                 body={"skill_response": {"id": match["id"], "state": state,
+                                                          "text": rest[:4000]}}))
+            ok(f"{state}: {match['id']}")
+            if state == "accepted":
+                print(f"  now run the skill `{match['skill']}`" + (f" with: {match['args']}" if match['args'] else "")
+                      + f", then `collab skills done {match['id']} --note '<result>'`")
+            return 0
+    except (HubError, OSError, ValueError) as exc:
+        fail(str(exc))
+        return 1
+
+
 def cmd_skills(args: argparse.Namespace) -> int:
     from . import skills as sk
 
+    if args.action in ("peers", "ask", "requests", "accept", "decline", "done"):
+        return cmd_skills_remote(args)
     if args.action in ("publish", "shared", "show", "withdraw"):
         from .skill_sharing import read_selected
         profile = _require_own_profile(args) if args.action in ("publish", "withdraw") else _require_profile(args)
@@ -7579,8 +7708,12 @@ Esc cancels a draft, q quits. Editor commands run without a shell.""")
 
     sk = sub.add_parser("skills",
                         help="teach your coding agents to use collab")
-    sk.add_argument("action", choices=["install", "uninstall", "status", "publish", "shared", "show", "withdraw"])
-    sk.add_argument("target", nargs="?", help="selected SKILL.md path or shared publication ID")
+    sk.add_argument("action", choices=["install", "uninstall", "status", "publish", "shared", "show", "withdraw",
+                                       "peers", "ask", "requests", "accept", "decline", "done"])
+    sk.add_argument("target", nargs="?", help="selected SKILL.md path, shared publication ID, skill name (ask) or request ID")
+    sk.add_argument("--to", help="with ask: the participant to ask")
+    sk.add_argument("--args", help="with ask: arguments for the requested skill")
+    sk.add_argument("--note", help="with accept/decline/done: a reason or the result")
     sk.add_argument("--name", help="published skill name override")
     sk.add_argument("--description", help="published skill description override")
     sk.add_argument("--after", default="", help="shared inventory page cursor")

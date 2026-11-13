@@ -97,6 +97,7 @@ SPECS = (
  ('task_auto_pickup', True, _bool, 'notify the coding agent about suitable unclaimed batch work'),
  ('task_pickup_idle_delay', 300, _integer(0, 86400), 'continuous idle seconds before a batch pickup notification'),
  ('task_pickup_repeat', 300, _integer(15, 86400), 'seconds before repeating an unchanged batch pickup notification'),
+ ('share_skill_list', False, _bool, 'opt in to publishing installed skill names and descriptions to the session'),
  ('worker_auto_start', True, _bool, 'enable a worker on session setup unless explicitly turned off'),
  ('worker_agent', 'codex', _worker_agent, 'provider for automatic worker setup; codex or claude'),
  ('worker_turn_gap', 5, _integer(1, 3600), 'minimum seconds between conversation worker turns'),

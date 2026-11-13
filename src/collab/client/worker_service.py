@@ -48,6 +48,32 @@ def _page(records, budget=24_000):
     return selected
 
 
+def skill_requests(events, escalations, me: str, me_id: str = "") -> list[dict]:
+    """Consent to run a skill belongs to the human behind the main agent (R4).
+
+    Every skill_request in the turn becomes a decision, whatever the model
+    proposed, so a worker can never accept one by replying on its own.
+    """
+    routed = {e["seq"] for e in escalations}
+    room = max(0, 32 - len(escalations))  # commit_turn's per-turn cap
+    added = []
+    for event in events:
+        ask = (event.body or {}).get("skill_request") if isinstance(event.body, dict) else None
+        # By participant id when known: a rename must not bypass consent.
+        mine = (event.to_id == me_id) if (me_id and getattr(event, "to_id", "")) else event.to == me
+        if isinstance(ask, dict) and mine and event.seq not in routed:
+            if len(added) >= room:
+                # Over the cap, the last decision names the rest instead.
+                if added:
+                    added[-1]["question"] += " More skill requests are waiting: `collab skills requests`."
+                break
+            added.append({"reason": "scope", "seq": event.seq, "question": (
+                f"{event.sender} asks you to run the skill {str(ask.get('skill', ''))[:64]!r}"
+                f" (request {str(ask.get('id', ''))[:40]}). Only your human can consent: "
+                "`collab skills accept|decline ID`.")})
+    return added
+
+
 class Conversation:
     def __init__(self, daemon):
         self.daemon = daemon
@@ -317,7 +343,9 @@ class Conversation:
             committed = store.commit_turn(
                 expected_cursor=snapshot["cursor"], cursor=cursor,
                 summary=result["summary"], replies=result["replies"],
-                escalations=result["escalations"],
+                escalations=result["escalations"] + skill_requests(
+                    [e for e in events if e.seq <= cursor], result["escalations"],
+                    self.daemon.profile.name, self.daemon.profile.participant_id),
                 context_ids=[row["id"] for row in contexts],
                 answer_ids=[row["id"] for row in answers],
                 expected_generation=snapshot["generation"], expected_turn=snapshot["turn"])

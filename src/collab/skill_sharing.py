@@ -14,6 +14,34 @@ MAX_PER_OWNER = 20
 MAX_OWNER_BYTES = 512 * 1024
 MAX_ROOM_SKILLS = 500
 MAX_REQUEST_BYTES = 512 * 1024
+MAX_LISTED = 200
+MAX_LISTED_DESCRIPTION = 160
+MAX_LIST_BYTES = 16 * 1024
+NAME_RE = re.compile(r'[a-z0-9][a-z0-9._:-]{0,63}')
+
+
+def sanitise_list(value: Any) -> list[dict[str, str]]:
+    """A participant's installed skill names, bounded before anyone stores them.
+
+    Names and short descriptions only: the list says what a peer can be asked
+    to run, never the skill text. Malformed entries are dropped, not repaired.
+    """
+    if not isinstance(value, list):
+        return []
+    result, size = [], 0
+    for item in value[:MAX_LISTED]:
+        if not isinstance(item, dict):
+            continue
+        name, description = item.get('name'), item.get('description', '')
+        if not isinstance(name, str) or not NAME_RE.fullmatch(name):
+            continue
+        description = description if isinstance(description, str) else ''
+        description = ' '.join(description.split())[:MAX_LISTED_DESCRIPTION]
+        size += len(name) + len(description.encode('utf-8'))
+        if size > MAX_LIST_BYTES:
+            break
+        result.append({'name': name, 'description': description})
+    return result
 
 
 def _field(frontmatter: str, name: str) -> str:
@@ -95,6 +123,19 @@ def register_routes(app, store, require_user) -> None:
     """Authenticated session inventory; no route installs or executes content."""
     from fastapi import HTTPException, Request
     from .protocol import EXT_PREFIX
+
+    @app.get(f'{EXT_PREFIX}/participant-skills')
+    async def participant_skills(request: Request):
+        """Every participant's installed skill list, read on demand.
+
+        Kept off the roster on purpose: the roster is re-sent to everyone on
+        every change, and up to 16 KiB per participant there would multiply.
+        """
+        require_user(request)
+        people = await asyncio.to_thread(store.participants)
+        return {'participants': [{'name': p.name, 'skills': p.meta.get('skills', [])}
+                                 for p in people],
+                'untrusted': True}
 
     @app.get(f'{EXT_PREFIX}/shared-skills')
     async def inventory(request: Request, after: str = '', limit: int = 100):

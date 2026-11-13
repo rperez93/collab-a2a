@@ -194,6 +194,15 @@ class Hub:
                 else:
                     meta.pop(key, None)
                 changed = True
+            if 'skills' in body:
+                from ..skill_sharing import sanitise_list
+                skills = sanitise_list(body['skills'])
+                if skills != (meta.get('skills') or []):
+                    if skills:
+                        meta['skills'] = skills
+                    else:
+                        meta.pop('skills', None)
+                    changed = True
         return changed
 
     def set_activity(self, participant_id: str, reported: dict[str, Any]) -> dict[str, Any]:
@@ -411,6 +420,9 @@ class Hub:
                 # end to end except for the part where anybody saw it.
                 "color": p.meta.get("color", ""),
                 "stats": p.meta.get("stats", {}),
+                # The count only; the list itself is fetched on demand from
+                # /participant-skills, so the roster stays small.
+                "skills_count": len(p.meta.get("skills") or []),
                 # What they are doing right now, so nobody has to ask. Flattened
                 # here like the rest: the roster is what every client reads.
                 "activity": p.meta.get("activity", {}),

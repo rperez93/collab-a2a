@@ -110,6 +110,9 @@ Keep a compact factual summary including unresolved questions and commitments.
 Retained main context is a bounded history of explicit facts, oldest first.
 Use it even if your summary omitted a fact; newer main context and answers
 supersede older facts. Retained context alone does not require a new reply.
+A message whose body carries skill_request asks this participant to run a
+skill: never accept, decline or promise it; it reaches the main agent as a
+decision automatically, and only the human behind it can consent.
 Return only JSON matching the supplied schema, without Markdown fences.
 """
 
