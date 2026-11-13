@@ -419,14 +419,54 @@ def test_the_last_task_past_its_turn_reads_overdue_not_zero():
     assert batch_progress.eta_text({"pace": p}) == "ETA overdue"
 
 
-def test_an_eta_counted_down_past_zero_is_overdue_until_the_next_count():
+def test_an_eta_counted_down_past_zero_is_due_until_the_next_count():
     """Aged by the client between refreshes, a ten-second ETA fetched
-    twenty-five seconds ago is not «ETA ~0s» — nothing has been reported."""
+    twenty-five seconds ago is not «ETA ~0s» — nothing has been reported. With
+    three tasks left it is not «overdue» either: that word is for the last."""
     now = 1_900_000_000.0
     figures = {"total": 4, "done": 1, "state": "open", "fetched_at": now - 25,
                "pace": {"state": "running", "elapsed": 600, "eta": 10,
                         "overdue": False, "per_task": 600, "counted": 1}}
+    assert batch_progress.eta_text(figures, now=now) == "ETA due"
+    figures["done"] = 3
     assert batch_progress.eta_text(figures, now=now) == "ETA overdue"
+
+
+def test_an_overdue_floor_is_not_counted_down_between_refreshes():
+    """While a task stays overdue the re-taken rate falls and the floor RISES;
+    aging it down drew «ETA overdue» with three tasks left (review of #106)."""
+    now = 1_900_000_000.0
+    figures = {"total": 103, "done": 100, "state": "open", "fetched_at": now - 5,
+               "pace": {"state": "running", "elapsed": 200, "eta": 4,
+                        "overdue": True, "per_task": 2, "counted": 100}}
+    assert batch_progress.eta_text(figures, now=now) == "ETA ≥4s"
+
+
+def test_a_fast_overdue_rate_with_tasks_left_is_due_not_overdue():
+    """On the hub itself: an overdue rate under a second per task gives an
+    ETA below one second with several tasks still open."""
+    p = batch_progress.pace(opened_at=1000, completed=[1000.5 + i * 0.1 for i in range(50)],
+                            outstanding=3, now=1010)
+    figures = {"total": 53, "done": 50, "pace": p}
+    if p["overdue"] and p["eta"] < 1:
+        assert batch_progress.eta_text(figures) == "ETA due"
+
+
+@pytest.mark.parametrize("seconds", [batch_progress.LONGEST - 0.5, batch_progress.LONGEST - 30])
+def test_the_hundred_day_clamp_holds_after_rounding_up(seconds):
+    """Checked before rounding, these became «100d00h» — seven columns and the
+    three-digit day count the clamp exists to prevent."""
+    assert batch_progress.duration(seconds, up=True) == "99d+"
+
+
+def test_a_finished_batch_says_it_is_complete_once():
+    now = 1_900_000_000.0
+    figures = {"total": 4, "done": 4, "state": "open", "fetched_at": now,
+               "pace": {"state": "done", "elapsed": 1800, "eta": None,
+                        "overdue": False, "per_task": 450, "counted": 4}}
+    line = batch_progress.describe(figures, now=now)
+    assert "done in 30m" in line
+    assert "complete" not in line, line
 
 
 def test_work_recorded_at_the_opening_is_a_baseline_not_a_rate():

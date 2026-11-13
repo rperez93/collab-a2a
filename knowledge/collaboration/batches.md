@@ -237,8 +237,9 @@ ETA  = max(next, 0) + (outstanding − 1) / rate
 ```
 
 Once `next` has passed, the task in flight is overdue; the rate is re-taken
-over the whole elapsed time and the ETA is drawn as a floor, «≥» — for the last
-task, as «ETA overdue». With no timed completion there is no rate and no ETA,
+over the whole elapsed time and the ETA is drawn as a floor, «≥», which is never
+counted down between refreshes — for the last task, as «ETA overdue», and with
+more left but nothing measurable to wait, as «ETA due». With no timed completion there is no rate and no ETA,
 rather than a guess. A task finished before the stamp existed, or within the
 first second of the batch, counts in the figure but not in the rate, as
 cc-progress treats `--done`.

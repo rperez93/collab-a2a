@@ -2452,6 +2452,12 @@ def _describe_pace(figures: dict[str, Any]) -> None:
         return
     left = seen["eta"]
     if seen["overdue"] and left < 1:
+        remaining = (batch_progress.count_of(figures, "total")
+                     - batch_progress.count_of(figures, "done"))
+        if remaining > 1:
+            print(f"  {'eta':<12} due" + dim(per_task + " — the next completion is"
+                                             " due now on the pace so far"))
+            return
         print(f"  {'eta':<12} overdue" + dim(per_task + " — the last task is past"
                                              " its turn on the pace so far"))
         return
