@@ -1,0 +1,18 @@
+{
+  "date": "2026-11-13",
+  "baseline_revision": "5d7ecad",
+  "workload": "100 roster invalidations spaced by 1 ms; actual running s_793f992d hub; isolated temporary daemon files; session hub still on baseline transport",
+  "bytes_scope": "HTTP response body bytes; excludes headers and TLS framing",
+  "samples": [
+    {"route": "loopback", "implementation": "baseline", "median_rtt_ms": 4.754, "requests": 42, "response_body_bytes": 686843, "elapsed_s": 0.175722, "cpu_s": 0.096499},
+    {"route": "loopback", "implementation": "coalescing", "median_rtt_ms": 4.052, "requests": 2, "response_body_bytes": 32701, "elapsed_s": 0.210726, "cpu_s": 0.017559},
+    {"route": "tunnel", "implementation": "baseline", "median_rtt_ms": 216.375, "requests": 1, "response_body_bytes": 16353, "elapsed_s": 0.212763, "cpu_s": 0.008111},
+    {"route": "tunnel", "implementation": "coalescing", "median_rtt_ms": 223.944, "requests": 2, "response_body_bytes": 32707, "elapsed_s": 0.652383, "cpu_s": 0.015581}
+  ],
+  "limitations": [
+    "Single live run per route; the board changes while other participants work.",
+    "Baseline suppresses invalidations during in-flight reads; new implementation preserves a trailing read. The tunnel row measures a correctness tradeoff, not a speedup.",
+    "The current session hub has not enabled branch server transport. Gzip/304 savings are separately tested over real HTTP against isolated branch hubs.",
+    "Live-process ru_maxrss deltas inherit launcher high-water history and are not evidence of memory savings. Resource regression tests use isolated subprocess measurements."
+  ]
+}

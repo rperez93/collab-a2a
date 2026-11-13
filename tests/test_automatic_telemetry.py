@@ -218,8 +218,11 @@ async def test_activity_refresh_does_not_hold_up_the_next_chat_message(profile, 
     monkeypatch.setattr(d, 'aconnect_sse', connect)
     try:
         await asyncio.wait_for(daemon._stream_once(object()), 1)
-        assert entered.is_set()
         await asyncio.wait_for(intake.wait(), .5)
+        # Roster invalidations now share a fixed 100 ms window. Wait until
+        # that independent HTTP operation actually hangs before checking the
+        # inbox, rather than requiring it to start in the SSE reader's turn.
+        await asyncio.wait_for(entered.wait(), .5)
         assert daemon.inbox.all_events()[-1].text == 'delivered without waiting'
     finally:
         release.set()

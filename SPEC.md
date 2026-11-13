@@ -144,8 +144,8 @@ All of these require `Authorization: Bearer <participant token>` except
 | `GET` | `/ext/collab/v1/history` | recent visible history, `?room=&limit=` |
 | `GET` | `/ext/collab/v1/replay` | bounded visible replay, `?after=&through=&limit=`; cursor advances across hidden DMs |
 | `GET`/`POST` | `/ext/collab/v1/rooms` | list / create rooms |
-| `GET` | `/ext/collab/v1/participants` | roster |
-| `GET` | `/ext/collab/v1/snapshot` | roster + tasks + recent messages |
+| `GET` | `/ext/collab/v1/participants` | roster; private ETag validation with `If-None-Match` may return 304 |
+| `GET` | `/ext/collab/v1/snapshot` | roster + tasks + recent messages; negotiated gzip for finite JSON |
 | `POST` | `/ext/collab/v1/rename` | change your display name. `409` if it is taken |
 | `POST` | `/ext/collab/v1/stats` | report your machine and usage |
 | `GET`/`POST` | `/ext/collab/v1/tasks` | the shared task board |
@@ -156,6 +156,15 @@ All of these require `Authorization: Bearer <participant token>` except
 | `DELETE` | `/ext/collab/v1/files/{id}` | withdraw (sender or host) |
 | `POST` | `/ext/collab/v1/revoke` | remove a participant (**host only**) |
 | `GET` | `/ext/collab/v1/health` | liveness; no auth |
+
+Finite `/participants` and `/snapshot` JSON responses negotiate gzip above
+1 KiB and up to 2 MiB; SSE and file streams remain unbuffered. Both responses
+are `Cache-Control: private, no-cache`, varying on authorization and encoding.
+The roster's weak ETag covers all viewer-visible state except `server_time`;
+a matching `If-None-Match` returns 304 after authentication. Clients retain
+their cached roster and renew its fetch age, discarding the validator when
+the authenticated URL or token changes. Unconditional requests still return
+complete JSON, including the current server clock.
 
 ## 4. The join handshake
 

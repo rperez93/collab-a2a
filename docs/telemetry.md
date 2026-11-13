@@ -40,7 +40,11 @@ Roster refresh, activity publication, main collection, worker collection and
 stats publication run independently with one outstanding operation per route.
 A slow usage command no longer delays the daemon heartbeat or conversation.
 Participant refresh defaults to three seconds; presence and activity events
-request an immediate refresh without making the chat stream wait for HTTP.
+share a fixed 100 ms refresh window without making chat wait for HTTP. Events
+arriving during a read trigger one trailing read. A private ETag permits an
+unchanged roster to return an empty 304 response, which renews its fetch age.
+Older hubs without ETags continue returning complete rosters. Finite roster
+responses negotiate gzip; SSE chat and file streams are not buffered for it.
 A roster older than `participant_stale_after` (30 seconds) becomes unknown even
 if the chat connection is still live. Working/idle is the last reported
 activity, distinct from online/offline connectivity. No reported activity means

@@ -330,3 +330,39 @@ hundred checks each took **0.027 s CPU** with the notice database locked,
 including oversized fixture creation. SQLite contention skips the poll; it does
 not block the event loop for a busy timeout. Successful delivery bookkeeping is
 retried on later polls without releasing its live lease.
+
+### Roster transport and burst coalescing
+
+Roster invalidations share fixed 100 ms windows. One pending bit retains
+events arriving during an in-flight read, so a slow request cannot hide a task
+completion. The chat feed continues independently. Finite roster JSON uses
+private ETags and negotiated level-1 gzip between 1 KiB and 2 MiB; there is no
+shared response cache, and SSE/file streams are not compressed or buffered.
+
+In the active session, 100 invalidations spaced by 1 ms over loopback went
+from **42 to 2 requests**, **686,843 to 32,701 response body bytes**, and
+**0.0965 to 0.0176 s client CPU**. Wall time grew from 0.176 to 0.211 s because
+of the coalescing window. The tunnel's measured median RTT was 216–224 ms.
+There the old client made one read and discarded later invalidations; the new
+client completed a trailing read, taking 0.652 s instead of 0.213 s and sending
+two responses. This is a correctness cost, not a remote latency improvement.
+These are single live runs on a changing board; the session hub still used
+the baseline server transport. [Raw live observations](performance-roster.json).
+
+Fresh subprocesses separately measured server responses for changing and
+unchanged boards. For 100 changing representative-board reads, response body
+bytes fell from **1,773,874 to 109,157**, CPU rose from **0.0109 to 0.0280 s**,
+and absolute process peak RSS was **25,508 / 25,884 KiB**. For 20 changing
+2.03 MB reads, bytes fell from **40,626,827 to 347,511**, CPU rose from
+**0.1605 to 0.3231 s**, and peak RSS was **33,380 / 31,540 KiB**.
+Validation and compression cost CPU per request; the separate reduction in
+request count supplies the client CPU savings. There is no claimed server
+CPU speedup. [All server measurements](performance-roster-server.json).
+
+Run `tests/test_roster_requests_are_coalesced.py` and
+`tests/test_roster_transport.py` with pytest and an absolute `PYTHONPATH`.
+The latter exercises raw real-HTTP gzip/304 responses and immediate SSE
+delivery, plus fresh-process resource checks for both changing and unchanged
+boards. Peak RSS uses Linux `VmHWM` after exec where available; a parent's
+inherited `ru_maxrss` high-water mark cannot establish a child allocation.
+Body-byte counts exclude HTTP headers and TLS framing.

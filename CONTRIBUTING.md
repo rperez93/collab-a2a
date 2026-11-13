@@ -443,6 +443,12 @@ locking only the read and write separately loses concurrent activity/usage.
 Keep daemon refresh operations independent and bounded to one task per route,
 and refuse new tasks once shutdown begins.
 
+Roster invalidations share a fixed 100 ms window and retain one pending bit
+during an in-flight read. Test both periodic/event overlap and silent-peer
+cancellation. Validators belong to the authenticated URL; a 304 renews the
+cached roster age only when that route supplied the validator. Compression is
+limited to finite roster JSON, never middleware that might buffer SSE or files.
+
 Decoration image I/O happens only in `Background.prepare`, before palette and
 text layout. Asset changes bump the shared theme generation; resizing reuses a
 fixed source palette. Test real curses reloads, not only rendered strings.

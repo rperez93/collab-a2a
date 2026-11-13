@@ -24,7 +24,7 @@ from a2a.server.routes import (
 from a2a.server.tasks import InMemoryTaskStore
 from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.middleware.authentication import AuthenticationMiddleware
 
 from ..protocol import (
@@ -60,6 +60,7 @@ from .card import build_agent_card
 from .events import event_stream
 from .executor import CollabAgentExecutor
 from .hub import Hub
+from .roster_transport import roster_response
 from .store import ArchivedProject, Store, UnknownProject, TaskClaimConflict
 
 #: How often to confirm the tunnel is still forwarding.
@@ -433,14 +434,15 @@ def create_app(
         return {"rooms": store.rooms()}
 
     @app.get(f"{EXT_PREFIX}/participants", tags=["collab"])
-    async def participants(request: Request) -> dict[str, Any]:
+    async def participants(request: Request) -> Response:
         user = _require(request)
-        return hub.snapshot(viewer=user.id, history=0)
+        return roster_response(hub.snapshot(viewer=user.id, history=0), request,
+                               conditional=True)
 
     @app.get(f"{EXT_PREFIX}/snapshot", tags=["collab"])
-    async def snapshot(request: Request) -> dict[str, Any]:
+    async def snapshot(request: Request) -> Response:
         user = _require(request)
-        return hub.snapshot(viewer=user.id)
+        return roster_response(hub.snapshot(viewer=user.id), request)
 
     @app.post(f"{EXT_PREFIX}/stats", tags=["collab"])
     async def report_stats(request: Request) -> dict[str, Any]:

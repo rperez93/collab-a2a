@@ -489,7 +489,10 @@ checkout the install points at, not necessarily the one you are working in.
 Run `collab check` and inspect `collab status --json`. Participant fetch failures
 are separate from source errors. Roster refresh now runs independently of main
 and worker collection, every three seconds by default; activity/presence events
-also request a fetch. A roster older than 30 seconds is unknown even with a live
+also request a fetch through a fixed 100 ms coalescing window. An empty 304
+response means the authenticated roster was checked and is unchanged; it
+refreshes the local age without discarding cached state. A roster older than
+30 seconds is unknown even with a live
 chat connection. Working/idle reflects reported activity, not merely connection
 health. A source that exposes no metric cannot supply it automatically.
 

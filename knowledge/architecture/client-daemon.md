@@ -113,6 +113,13 @@ wrong.
 
 # `status.json`, and why the status line never touches the network
 
+Later than the pin: roster invalidations now share fixed 100 ms windows,
+retaining one pending invalidation during an in-flight fetch. The periodic
+refresh uses the configurable three-second interval. Private ETag validation
+renews the local fetch timestamp on a valid 304; a URL or token change discards
+the validator. Finite roster JSON negotiates gzip, while SSE stays unbuffered.
+The original bundle pin and verification stamps are unchanged.
+
 The daemon writes one file the status line reads, atomically, via a temporary
 file and a rename, so a reader never sees half of it.[^daemon-src] It carries
 the session id, the names, the connection state, the URL, counts of others

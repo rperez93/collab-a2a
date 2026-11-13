@@ -99,3 +99,7 @@ polling is cancellable and bounded. The pin remains unchanged.
 
 - Later than the pin: documented 2.1.2 proactive batch pickup and its configurable
   five-minute idle delay in the existing CLI surface page; pin unchanged.
+
+* **Update (later than the pin)**: Recorded fixed-window roster coalescing,
+  conditional private revalidation and finite JSON compression in the existing
+  client-daemon architecture page. No pin or verified stamp changed.

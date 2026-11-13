@@ -60,6 +60,12 @@ STATUS_HEARTBEAT = 3.0
 #: their own feed subscribes — so a roster read triggered by that event still
 #: shows them offline. Re-read it on a timer as well as on events.
 SNAPSHOT_REFRESH = 9.0
+#: Presence/task bursts used to cause one HTTP roster read per event whenever
+#: the hub answered faster than the next event arrived. One fixed 100 ms window
+#: combines those invalidations without postponing a busy room indefinitely;
+#: chat delivery never waits for this task. Keep only a dirty bit, not a queue
+#: proportional to the peer's event rate.
+SNAPSHOT_COALESCE = 0.1
 #: How often an unchanged activity is re-asserted, so that its `updated_at`
 #: means «still true» rather than «last edited». Well inside activity.STALE_AFTER,
 #: so a missed one costs nothing.
@@ -2496,7 +2502,7 @@ class Daemon:
                     self._schedule_refresh("housekeeping", self._housekeeping_once)
                     if self.state == "live" and self._http is not None:
                         from ..runtime_settings import get
-                        self._schedule_refresh("participants", lambda: self._refresh_snapshot(self._http),
+                        self._schedule_refresh("participants", lambda: self._poll_snapshot(self._http),
                                                interval=get("participant_refresh_interval"))
                         self._schedule_refresh("activity", lambda: self._report_activity(self._http))
                         self._schedule_refresh("worker-stats", self._refresh_worker_stats_from_command)
@@ -2531,7 +2537,27 @@ class Daemon:
         # SSE reader for a 10-second HTTP timeout before it can read chat.
         if hasattr(self, "_refresh_due"):
             self._refresh_due["participants"] = 0
-        self._schedule_refresh("participants", lambda: self._refresh_snapshot(client))
+        self._snapshot_requested = True
+        self._schedule_refresh("participants", lambda: self._drain_snapshot_requests(client))
+
+    async def _poll_snapshot(self, client):
+        await self._refresh_snapshot(client)
+        # An event can arrive while the periodic read is already on the wire.
+        # The scheduler owns only one task, so that task must drain the event's
+        # invalidation too rather than quietly discarding it as «already busy».
+        await self._drain_snapshot_requests(client)
+
+    async def _drain_snapshot_requests(self, client):
+        while getattr(self, "_snapshot_requested", False) and not self._stop.is_set():
+            # A fixed window, not a sliding debounce: continuous presence must
+            # still update the board. An event arriving DURING the fetch sets
+            # the bit again and earns one trailing read; dropping it left a
+            # task completion stale until the periodic refresh.
+            await asyncio.sleep(SNAPSHOT_COALESCE)
+            self._snapshot_requested = False
+            await self._refresh_snapshot(client)
+        from ..runtime_settings import get
+        self._refresh_due["participants"] = time.monotonic() + get("participant_refresh_interval")
 
     async def _refresh_snapshot(self, client: httpx.AsyncClient) -> None:
         # The initial handshake also fetches directly. Serialize it with the
@@ -2543,15 +2569,25 @@ class Daemon:
 
     async def _fetch_snapshot(self, client: httpx.AsyncClient) -> None:
         try:
+            # Validators belong to one authenticated URL, never to a different
+            # route/session after reconnect. An older hub simply omits ETag and
+            # continues serving ordinary full responses.
+            target = (self.profile.url, self.profile.token)
+            etag = (getattr(self, "_snapshot_etag", None)
+                    if getattr(self, "_snapshot_target", None) == target else None)
             r = await client.get(
                 f"{self.profile.url}{EXT_PREFIX}/participants",
-                headers=request_headers(self.profile.token),
+                headers=request_headers(self.profile.token,
+                                        {"If-None-Match": etag} if etag else None),
                 timeout=10.0,
             )
-            if r.status_code == 200:
+            if r.status_code == 200 or (r.status_code == 304 and etag and self.snapshot):
                 self._snapshot_error = ""
-                self.snapshot = r.json()
-                self._adopt_identity()
+                if r.status_code == 200:
+                    self.snapshot = r.json()
+                    self._snapshot_target = target
+                    self._snapshot_etag = r.headers.get("etag")
+                    self._adopt_identity()
                 # The viewer reads this instead of the network, so it keeps
                 # working while the hub is briefly unreachable.
                 #
