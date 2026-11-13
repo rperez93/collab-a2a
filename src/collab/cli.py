@@ -6601,6 +6601,17 @@ def cmd_capacity(args: argparse.Namespace) -> int:
 
 
 SKILL_STATES = ("accepted", "declined", "done")
+REQUEST_ID_RE = re.compile(r"sr_[0-9a-f]{12}")
+SKILL_REQUEST_TTL = 24 * 3600
+SHOWN_ARGS = 500
+
+
+def _peer_args(args: str) -> str:
+    """A peer's arguments on their own line, marked, capped and scrubbed."""
+    if not args:
+        return ""
+    clipped = args[:SHOWN_ARGS] + ("…" if len(args) > SHOWN_ARGS else "")
+    return "\n      peer-supplied arguments (untrusted): " + said(clipped)
 
 
 def _skill_requests(client, profile) -> list[dict[str, Any]]:
@@ -6621,19 +6632,58 @@ def _skill_requests(client, profile) -> list[dict[str, Any]]:
         reply = (env.body or {}).get("skill_response")
         if mine(env, "sender", "sender_id") and isinstance(reply, dict) and reply.get("state") in SKILL_STATES:
             states[(str(reply.get("id")), env.to)] = reply["state"]
+    from datetime import datetime, timezone
+    from .skill_sharing import NAME_RE
     found, seen = [], set()
     for env in events:
         ask = (env.body or {}).get("skill_request")
-        if not mine(env, "to", "to_id") or not isinstance(ask, dict) or not isinstance(ask.get("id"), str):
+        if not mine(env, "to", "to_id") or not isinstance(ask, dict):
             continue
-        key = (ask["id"], env.sender)
+        # Validated on receipt: the sender controls every field, and a forged
+        # id or skill carrying escapes was printed inside collab's own
+        # instructions. Anything malformed is dropped, not repaired.
+        request_id, skill, args = ask.get("id"), ask.get("skill"), ask.get("args", "")
+        if (not isinstance(request_id, str) or not REQUEST_ID_RE.fullmatch(request_id)
+                or not isinstance(skill, str) or not NAME_RE.fullmatch(skill)
+                or not isinstance(args, str)):
+            continue
+        key = (request_id, env.sender)
         if key in seen:
             continue
         seen.add(key)
-        found.append({"id": ask["id"], "from": env.sender, "skill": str(ask.get("skill", "")),
-                      "args": str(ask.get("args", "")), "seq": env.seq,
-                      "state": states.get(key, "pending")})
+        try:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(
+                str(env.ts).replace("Z", "+00:00"))).total_seconds()
+        except ValueError:
+            age = 0.0
+        state = states.get(key, "pending")
+        if state == "pending" and age > SKILL_REQUEST_TTL:
+            state = "expired"
+        found.append({"id": request_id, "from": env.sender, "skill": skill,
+                      "args": args[:4000], "seq": env.seq, "state": state})
     return found
+
+
+def _human_consents(match: dict[str, Any], args: argparse.Namespace) -> bool:
+    """Consent is the human's: asked on a terminal, or vouched for explicitly.
+
+    An agent runs commands without a TTY, so without --human-approved a
+    non-interactive accept is refused: the agent must ask its human first and
+    say so with the flag. On a terminal the human answers here.
+    """
+    if getattr(args, "human_approved", False):
+        return True
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        fail("accepting runs a peer's request on this machine: ask your human, then repeat "
+             "with --human-approved (or run it yourself in a terminal)")
+        return False
+    print(f"  {said(match['from'])} asks this machine to run `{said(match['skill'])}`"
+          + _peer_args(match["args"]))
+    try:
+        answer = input("  Allow it? [y/N] ")
+    except EOFError:
+        return False
+    return answer.strip().lower() in ("y", "yes")
 
 
 def cmd_skills_remote(args: argparse.Namespace) -> int:
@@ -6676,8 +6726,8 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
                     print("No skill requests addressed to you.")
                 else:
                     for item in found:
-                        print(f"  {item['id']}  [{item['state']}]  {said(item['from'])} asks for "
-                              f"{said(item['skill'])}" + (f": {said(item['args'])}" if item['args'] else ""))
+                        print(f"  {said(item['id'])}  [{item['state']}]  {said(item['from'])} asks for "
+                              f"{said(item['skill'])}" + _peer_args(item["args"]))
                     print(dim("  answer with `collab skills accept|decline|done ID [--note TEXT]` — accept only with your human's consent"))
                 return 0
             if args.action == "ask":
@@ -6688,9 +6738,9 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
                 if args.to == profile.name:
                     raise ValueError("ask a peer; your own skills need no request")
                 request_id = "sr_" + uuid.uuid4().hex[:12]
-                text = (f"asks you to run the skill `{args.target}`" + (f" with: {rest}" if rest else "")
-                        + f". It runs only if your human consents: `collab skills accept {request_id}` "
-                        f"or `collab skills decline {request_id}`.")
+                text = (f"asks you to run the skill `{args.target}` (request {request_id}). "
+                        "It runs only if your human consents with `collab skills accept`; "
+                        "older collab versions cannot accept skill requests.")
                 client.send(Envelope(kind=KIND_CHAT, text=text, sender=profile.name, to=args.to,
                                      body={"skill_request": {"id": request_id, "skill": args.target,
                                                              "args": rest[:4000]}}))
@@ -6709,6 +6759,8 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
                 raise ValueError("only an accepted request can be reported done")
             if args.action in ("accept", "decline") and match["state"] != "pending":
                 raise ValueError(f"request {args.target} is already {match['state']}")
+            if args.action == "accept" and not _human_consents(match, args):
+                return 1
             state = {"accept": "accepted", "decline": "declined", "done": "done"}[args.action]
             words = {"accepted": f"accepted your request to run `{match['skill']}`; running it now",
                      "declined": f"declined your request to run `{match['skill']}`",
@@ -6717,10 +6769,10 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
                                  sender=profile.name, to=match["from"],
                                  body={"skill_response": {"id": match["id"], "state": state,
                                                           "text": rest[:4000]}}))
-            ok(f"{state}: {match['id']}")
+            ok(f"{state}: {said(match['id'])}")
             if state == "accepted":
-                print(f"  now run the skill `{match['skill']}`" + (f" with: {match['args']}" if match['args'] else "")
-                      + f", then `collab skills done {match['id']} --note '<result>'`")
+                print(f"  now run the skill `{said(match['skill'])}`, then "
+                      f"`collab skills done {said(match['id'])} --note '<result>'`" + _peer_args(match["args"]))
             return 0
     except (HubError, OSError, ValueError) as exc:
         fail(str(exc))
@@ -7605,6 +7657,8 @@ Esc cancels a draft, q quits. Editor commands run without a shell.""")
     sk.add_argument("--to", help="with ask: the participant to ask")
     sk.add_argument("--args", help="with ask: arguments for the requested skill")
     sk.add_argument("--note", help="with accept/decline/done: a reason or the result")
+    sk.add_argument("--human-approved", action="store_true",
+                    help="with accept, without a terminal: your human has explicitly consented")
     sk.add_argument("--name", help="published skill name override")
     sk.add_argument("--description", help="published skill description override")
     sk.add_argument("--after", default="", help="shared inventory page cursor")

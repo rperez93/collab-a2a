@@ -36,7 +36,8 @@ def sanitise_list(value: Any) -> list[dict[str, str]]:
         if not isinstance(name, str) or not NAME_RE.fullmatch(name):
             continue
         description = description if isinstance(description, str) else ''
-        description = ' '.join(description.split())[:MAX_LISTED_DESCRIPTION]
+        from .protocol import scrub
+        description = scrub(' '.join(description.split()))[:MAX_LISTED_DESCRIPTION]
         size += len(name) + len(description.encode('utf-8'))
         if size > MAX_LIST_BYTES:
             break
