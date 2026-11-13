@@ -79,6 +79,8 @@ ACTIVITY_REFRESH = 300.0
 #: no new information; once a minute keeps the stamp inside any threshold
 #: that calls a figure old, and a CHANGED figure never waits for this.
 STATS_REASSERT = 60.0
+#: Seconds between rescans of the installed skill directory (R4).
+SKILL_SCAN = 300.0
 #: How long to leave a failed automatic compaction before probing the pane
 #: again. The heartbeat runs every three seconds and an agent sitting over its
 #: threshold sits there for a long time, so without this a pane in copy mode
@@ -934,6 +936,18 @@ class Daemon:
         hands its status line a cost and rate-limit snapshot, which the status
         line drops in a file for us. Anything absent is simply not reported.
         """
+        from ..runtime_settings import get as setting
+        sharing_skills = setting("share_skill_list")
+        if not sharing_skills and not getattr(self, "_skills_withdrawn", False):
+            # Once per daemon lifetime, whatever happened while it was down and
+            # whether or not stats are shared: off means no list on the hub.
+            try:
+                r = await client.post(f"{self.profile.url}{EXT_PREFIX}/stats",
+                                      headers=request_headers(self.profile.token),
+                                      json={"skills": []}, timeout=10.0)
+                self._skills_withdrawn = r.status_code == 200
+            except httpx.HTTPError:
+                pass
         if not share_stats_enabled():
             return
         # OURS ONLY. The file is written by whatever the agent runs — a status
@@ -946,6 +960,9 @@ class Daemon:
         if worker_usage is not None:
             figures = {**figures, "worker": worker_usage}
         payload = {**peers.identity(), "stats": figures}
+        if sharing_skills:
+            self._skills_withdrawn = False
+            payload["skills"] = await self._installed_skills()
         changed = payload != self._last_stats
         # An unchanged figure in a file rewritten since we last sent it is
         # the route saying «still true», and the hub's stamp has to say so
@@ -971,6 +988,18 @@ class Daemon:
             # Kept, not dropped: the file is fresh and the room is not seeing
             # it, and that is a fact `collab check` has to be able to state.
             self._stats_post_error = f"{type(exc).__name__}: {exc}"[:200]
+
+    async def _installed_skills(self) -> list[dict[str, str]]:
+        """Rescanned at most every SKILL_SCAN seconds, off the event loop."""
+        cached = getattr(self, "_skills_cache", None)
+        if cached is None or time.time() - cached[0] > SKILL_SCAN:
+            from ..skills import installed_list
+            try:
+                cached = (time.time(), await asyncio.to_thread(installed_list))
+            except OSError:
+                cached = (time.time(), [])
+            self._skills_cache = cached
+        return cached[1]
 
     async def _report_activity(self, client: httpx.AsyncClient) -> None:
         # A wake can publish idle while a heartbeat is still posting working.

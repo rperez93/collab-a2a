@@ -158,6 +158,30 @@ def catalog() -> list[dict[str, str]]:
     return entries
 
 
+def installed_list(env: dict[str, str] | None = None) -> list[dict[str, str]]:
+    """The skills the coding agent running collab has installed: name and summary.
+
+    Only the detected host's own skills directory, and only each SKILL.md's
+    front matter: what a peer may ask this agent to run, not how it is written.
+    """
+    from .hosttool import detect
+    from .skill_sharing import read_selected, sanitise_list
+    key = detect(env)
+    target = next((t for t in known_targets() if t.key == key and t.kind == "skills"), None)
+    if target is None or not target.path.is_dir():
+        return []
+    found = []
+    for entry in sorted(target.path.iterdir()):
+        if not (entry / "SKILL.md").is_file():
+            continue
+        try:
+            info = read_selected(entry / "SKILL.md")
+        except (OSError, ValueError):
+            continue
+        found.append({"name": info["name"], "description": info["description"]})
+    return sanitise_list(found)
+
+
 def instructions_block(skills_dir: Path, executable: str) -> str:
     """A cheap capability index, not an entire workflow on every prompt."""
     routes = {

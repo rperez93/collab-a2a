@@ -115,6 +115,7 @@ the project. A session belongs to a repository; a theme does not.
 | `task_auto_pickup` | notify the coding agent about suitable unclaimed batch work; default `true` | the user wants to tune this behavior; read current value first |
 | `task_pickup_idle_delay` | continuous idle seconds before a batch pickup notification; default `300` | the user wants to tune this behavior; read current value first |
 | `task_pickup_repeat` | seconds before repeating an unchanged batch pickup notification; default `300` | the user wants to tune this behavior; read current value first |
+| `share_skill_list` | opt in to publishing installed skill names and descriptions to the session; default `False` | the user wants to tune this behavior; read current value first |
 | `worker_auto_start` | enable a worker on session setup unless explicitly turned off; default `True` | the user wants to tune this behavior; read current value first |
 | `worker_agent` | provider for automatic worker setup; codex or claude; default `codex` | the user wants to tune this behavior; read current value first |
 | `worker_turn_gap` | minimum seconds between conversation worker turns; default `5` | the user wants to tune this behavior; read current value first |
