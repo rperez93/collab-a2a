@@ -27,6 +27,32 @@ START_TIMEOUT = 25.0
 #: answer for our own agent, whichever API port it ended up on.
 _LOG_URL_RE = re.compile(r'url=(https://[^\s"]+)')
 
+#: ngrok's own diagnosis when it refuses to start. It prints the sentence once
+#: as `failed to start tunnel: ...` and the code as `ERR_NGROK_<n>`. Both are
+#: read back so the host can say WHY there is no tunnel: on 2026-11-13 the
+#: account's one endpoint was held by another ngrok process (ERR_NGROK_334),
+#: and `collab host` answered with «ngrok was not found» — true of nothing.
+_LOG_ERR_CODE_RE = re.compile(r"ERR_NGROK_\d+")
+#: The sentence ends at a full stop FOLLOWED BY SPACE — the message quotes a
+#: domain, and a bare «.» stopped it at «https://willing-settled-iguana».
+_LOG_ERR_TEXT_RE = re.compile(r"failed to start tunnel: (.+?)(?:\.(?=\s|$)|\\n|\n|\")")
+
+#: What to do about the failures people actually meet. Keyed by ngrok's code;
+#: anything else gets ngrok's own words and the generic «tunnel it yourself».
+TUNNEL_REMEDIES = {
+    "ERR_NGROK_334": (
+        "this ngrok account's endpoint is already online in another ngrok "
+        "process. Use a reserved domain of your own — `collab host --resume "
+        "--domain <domain>`, or once for every session: `collab config "
+        "ngrok_domain <domain>` — or stop that other process yourself."),
+    "ERR_NGROK_4018": (
+        "ngrok has no authtoken: `ngrok config add-authtoken <token>`, then "
+        "re-run `collab host --resume`."),
+    "ERR_NGROK_108": (
+        "this ngrok account allows one agent session at a time, and another "
+        "is running. Reuse it (`ngrok http <port>` in that agent) or stop it."),
+}
+
 
 def ngrok_path() -> str | None:
     return shutil.which("ngrok")
@@ -130,13 +156,45 @@ def _url_from_log(path: str | None, offset: int) -> str | None:
     return matches[-1] if matches else None
 
 
+def failure_from_log(path: str | None, offset: int) -> str:
+    """ngrok's reason for refusing to start, from our own agent's log.
+
+    Empty when the log says nothing recognisable — a caller then says «no
+    URL» rather than inventing a cause.
+    """
+    if not path:
+        return ""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            fh.seek(offset)
+            body = fh.read()
+    except OSError:
+        return ""
+    codes = _LOG_ERR_CODE_RE.findall(body)
+    text = _LOG_ERR_TEXT_RE.search(body)
+    reason = text.group(1).strip() if text else ""
+    if codes and reason:
+        return f"{codes[-1]}: {reason}"
+    return codes[-1] if codes else reason
+
+
+def remedy_for(error: str) -> str:
+    """The advice for a failure `failure_from_log` reported, or empty."""
+    code = _LOG_ERR_CODE_RE.search(error or "")
+    return TUNNEL_REMEDIES.get(code.group(0), "") if code else ""
+
+
 def start_tunnel(port: int, *, log_path: str | None = None,
-                 domain: str | None = None) -> Tunnel | None:
+                 domain: str | None = None,
+                 errors: list[str] | None = None) -> Tunnel | None:
     """Return a public https URL for ``port``, or None if ngrok is unavailable.
 
     ``domain`` pins a reserved ngrok domain. Worth doing: without one, a tunnel
     that dies comes back on a *different* random URL, which invalidates every
     join link already handed out.
+
+    ``errors``, when given, receives ngrok's reason for a failed start, so the
+    host can print it instead of a guess.
     """
     exe = ngrok_path()
     if not exe:
@@ -167,7 +225,12 @@ def start_tunnel(port: int, *, log_path: str | None = None,
     deadline = time.time() + START_TIMEOUT
     while time.time() < deadline:
         if proc.poll() is not None:
-            return None  # ngrok exited (missing authtoken is the usual cause)
+            # ngrok exited. Its log names the cause — a missing authtoken, or
+            # the account's endpoint already online elsewhere — so carry it.
+            if errors is not None:
+                errors.append(failure_from_log(log_path, offset)
+                              or f"ngrok exited with status {proc.returncode}")
+            return None
         # Our own log first: it is definitive for our agent regardless of which
         # API port it landed on.
         if (url := _url_from_log(log_path, offset)) is not None:
@@ -176,6 +239,9 @@ def start_tunnel(port: int, *, log_path: str | None = None,
             return Tunnel(public_url=url, process=proc)
         time.sleep(0.4)
 
+    if errors is not None:
+        errors.append(failure_from_log(log_path, offset)
+                      or f"ngrok gave no public URL within {START_TIMEOUT:.0f} s")
     # TERMINATE, THEN MAKE SURE. One SIGTERM to a process in its own session and
     # an immediate return leaves a slow ngrok running with nobody holding its
     # pid: `own_pid()` reports 0, nothing records it, and `collab kill` never
@@ -189,6 +255,17 @@ def start_tunnel(port: int, *, log_path: str | None = None,
         with contextlib.suppress(subprocess.TimeoutExpired, OSError):
             proc.wait(timeout=5)
     return None
+
+
+#: For a machine where ngrok IS installed but did not give us a tunnel. The
+#: session is local-only until one of these is handed out instead.
+TUNNEL_YOURSELF_HELP = """\
+This session is reachable on this machine only. To share it, tunnel it yourself
+and hand out that URL instead:
+  ngrok http {port} --domain <a reserved domain>
+  cloudflared tunnel --url http://localhost:{port}
+  tailscale funnel {port}
+"""
 
 
 NO_NGROK_HELP = """\
@@ -228,6 +305,8 @@ class TunnelSupervisor:
         self.domain = domain
         self.tunnel: Tunnel | None = None
         self.restarts = 0
+        #: ngrok's reason the last start failed; empty once a start succeeds.
+        self.last_error = ""
 
     @property
     def public_url(self) -> str:
@@ -240,7 +319,10 @@ class TunnelSupervisor:
         return int(self.tunnel.process.pid)
 
     def start(self) -> str:
-        self.tunnel = start_tunnel(self.port, log_path=self.log_path, domain=self.domain)
+        errors: list[str] = []
+        self.tunnel = start_tunnel(self.port, log_path=self.log_path,
+                                   domain=self.domain, errors=errors)
+        self.last_error = "" if self.tunnel is not None else (errors[-1] if errors else "")
         return self.public_url
 
     def ensure(self) -> tuple[str, bool]:

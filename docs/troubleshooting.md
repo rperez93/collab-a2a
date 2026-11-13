@@ -34,6 +34,9 @@ invalidates a link you already shared.
   collab host --domain your-name.ngrok-free.app
   ```
 
+  or sets it once for every new session with
+  `collab config ngrok_domain your-name.ngrok-free.app`.
+
 The session, its history, and every issued token survive a tunnel restart; only
 the public address changes.
 
@@ -110,6 +113,18 @@ about the other.
 
 A session hosted inside WSL is reachable from Windows on the same machine, and
 from elsewhere through a tunnel, in the usual way.
+
+## ngrok refused to start
+
+`collab host` prints «no public tunnel — ngrok refused:» followed by ngrok's own
+error code and reason. The session is still reachable on this machine.
+
+- `ERR_NGROK_334` — the account's endpoint is already online in another ngrok
+  process (a free account has one). Pin a reserved domain of your own with
+  `collab host --resume --domain <domain>`, or set it once with
+  `collab config ngrok_domain <domain>`; or stop the other process yourself.
+- `ERR_NGROK_4018` — ngrok has no authtoken: `ngrok config add-authtoken <token>`.
+- `ERR_NGROK_108` — another ngrok agent session is running on the same account.
 
 ## ngrok was not found
 

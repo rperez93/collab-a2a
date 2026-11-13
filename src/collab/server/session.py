@@ -48,6 +48,12 @@ class HubConfig:
     #: A reserved ngrok domain, if one was given. Without it a restarted
     #: tunnel comes back on a new address and invalidates shared links.
     domain: str = ""
+    #: ngrok's own reason the tunnel did not start, empty while one is up.
+    #: Recorded so `collab host` can print the cause and its remedy: without
+    #: it the host saw «ngrok was not found» on a machine where ngrok was
+    #: installed and had refused with ERR_NGROK_334. An older collab ignores
+    #: the key, as `HubConfig.load` filters unknown ones.
+    tunnel_error: str = ""
     pid: int = 0
     home: str = ""
     #: The hub and the tunnel again, STAMPED — the pid with the start time and
