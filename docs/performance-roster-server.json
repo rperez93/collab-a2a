@@ -1,102 +1,151 @@
 {
-  "recorded_at": "2026-11-13T22:54:34.765075+00:00",
-  "measurement": "Each row runs in a fresh Python subprocess. CPU measures request loop. Absolute peak RSS is Linux /proc/self/status VmHWM after imports, payload setup and request loop; getrusage fallback elsewhere. Body bytes exclude HTTP headers. Changing boards increment seq and change one task detail every request. Representative board has 40 agents and 80 tasks; near-limit board has 40 agents and 250 tasks with details at most 8000 characters.",
+  "recorded_at": "2026-11-13T23:37:59.919332+00:00",
+  "measurement": "Each row uses a fresh Python subprocess. CPU measures request loop. Absolute peak RSS is Linux /proc/self/status VmHWM. Body bytes exclude HTTP headers. Synthetic fixtures: 40 agents, 80 tasks or 250 tasks with details at most 8000 chars near 2MiB. All variants have a closed batch whose counted_at advances on every request. Changing variants also increment seq and change one task detail. Baseline is ordinary JSONResponse; prior_optimization loads the committed HEAD helper in the same fixture; optimized is the working one-pass helper.",
+  "prior_revision": "38d13804523540904b5019cf6e5d48679defa034",
   "results": [
     {
-      "board": "representative",
+      "board": "synthetic",
       "state": "unchanged",
       "variant": "baseline",
       "requests": 100,
-      "payload_bytes": 17649,
-      "body_bytes": 1764900,
+      "payload_bytes": 17746,
+      "body_bytes": 1774600,
       "responses_200": 100,
       "responses_304": 0,
-      "cpu_seconds": 0.010844934,
-      "peak_rss_kib": 25352
+      "cpu_seconds": 0.011133231000000007,
+      "peak_rss_kib": 25572
     },
     {
-      "board": "representative",
+      "board": "synthetic",
       "state": "unchanged",
       "variant": "optimized",
       "requests": 100,
-      "payload_bytes": 17649,
-      "body_bytes": 893,
+      "payload_bytes": 17746,
+      "body_bytes": 1025,
       "responses_200": 1,
       "responses_304": 99,
-      "cpu_seconds": 0.016986831000000008,
-      "peak_rss_kib": 25472
+      "cpu_seconds": 0.017687969999999997,
+      "peak_rss_kib": 25664
     },
     {
-      "board": "representative",
+      "board": "synthetic",
       "state": "changing",
       "variant": "baseline",
       "requests": 100,
-      "payload_bytes": 17649,
-      "body_bytes": 1773874,
+      "payload_bytes": 17746,
+      "body_bytes": 1783574,
       "responses_200": 100,
       "responses_304": 0,
-      "cpu_seconds": 0.010900710000000008,
-      "peak_rss_kib": 25508
+      "cpu_seconds": 0.010446233999999999,
+      "peak_rss_kib": 25880
     },
     {
-      "board": "representative",
+      "board": "synthetic",
       "state": "changing",
       "variant": "optimized",
       "requests": 100,
-      "payload_bytes": 17649,
-      "body_bytes": 109157,
+      "payload_bytes": 17746,
+      "body_bytes": 118348,
       "responses_200": 100,
       "responses_304": 0,
-      "cpu_seconds": 0.028035461999999997,
-      "peak_rss_kib": 25884
+      "cpu_seconds": 0.019527595999999994,
+      "peak_rss_kib": 26288
     },
     {
       "board": "near_2mib",
       "state": "unchanged",
       "variant": "baseline",
       "requests": 20,
-      "payload_bytes": 2031359,
-      "body_bytes": 40627180,
+      "payload_bytes": 2031457,
+      "body_bytes": 40629140,
       "responses_200": 20,
       "responses_304": 0,
-      "cpu_seconds": 0.154429811,
-      "peak_rss_kib": 31192
+      "cpu_seconds": 0.151095963,
+      "peak_rss_kib": 31244
     },
     {
       "board": "near_2mib",
       "state": "unchanged",
       "variant": "optimized",
       "requests": 20,
-      "payload_bytes": 2031359,
-      "body_bytes": 17321,
+      "payload_bytes": 2031457,
+      "body_bytes": 17244,
       "responses_200": 1,
       "responses_304": 19,
-      "cpu_seconds": 0.181943092,
-      "peak_rss_kib": 29828
+      "cpu_seconds": 0.168910449,
+      "peak_rss_kib": 31416
     },
     {
       "board": "near_2mib",
       "state": "changing",
       "variant": "baseline",
       "requests": 20,
-      "payload_bytes": 2031359,
-      "body_bytes": 40626827,
+      "payload_bytes": 2031457,
+      "body_bytes": 40628787,
       "responses_200": 20,
       "responses_304": 0,
-      "cpu_seconds": 0.16051185499999998,
-      "peak_rss_kib": 33380
+      "cpu_seconds": 0.149105504,
+      "peak_rss_kib": 33184
     },
     {
       "board": "near_2mib",
       "state": "changing",
       "variant": "optimized",
       "requests": 20,
-      "payload_bytes": 2031359,
-      "body_bytes": 347511,
+      "payload_bytes": 2031457,
+      "body_bytes": 333890,
       "responses_200": 20,
       "responses_304": 0,
-      "cpu_seconds": 0.323104348,
-      "peak_rss_kib": 31540
+      "cpu_seconds": 0.20766069699999998,
+      "peak_rss_kib": 31568
+    },
+    {
+      "board": "synthetic",
+      "state": "unchanged",
+      "variant": "prior_optimization",
+      "requests": 100,
+      "payload_bytes": 17746,
+      "body_bytes": 95210,
+      "responses_200": 100,
+      "responses_304": 0,
+      "cpu_seconds": 0.038777992,
+      "peak_rss_kib": 26332
+    },
+    {
+      "board": "synthetic",
+      "state": "changing",
+      "variant": "prior_optimization",
+      "requests": 100,
+      "payload_bytes": 17746,
+      "body_bytes": 115097,
+      "responses_200": 100,
+      "responses_304": 0,
+      "cpu_seconds": 0.03806357499999999,
+      "peak_rss_kib": 26956
+    },
+    {
+      "board": "near_2mib",
+      "state": "unchanged",
+      "variant": "prior_optimization",
+      "requests": 20,
+      "payload_bytes": 2031457,
+      "body_bytes": 348533,
+      "responses_200": 20,
+      "responses_304": 0,
+      "cpu_seconds": 0.33891617,
+      "peak_rss_kib": 29952
+    },
+    {
+      "board": "near_2mib",
+      "state": "changing",
+      "variant": "prior_optimization",
+      "requests": 20,
+      "payload_bytes": 2031457,
+      "body_bytes": 349212,
+      "responses_200": 20,
+      "responses_304": 0,
+      "cpu_seconds": 0.313007765,
+      "peak_rss_kib": 31760
     }
   ]
 }

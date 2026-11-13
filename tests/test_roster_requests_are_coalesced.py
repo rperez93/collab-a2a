@@ -14,6 +14,25 @@ async def settle(daemon):
     await asyncio.wait_for(daemon._refresh_tasks["participants"], 2)
 
 
+async def test_periodic_reads_keep_the_scheduler_deadline_instead_of_skipping_a_heartbeat(profile):
+    """Completing a read after its launch must not postpone an already due timer."""
+    daemon = Daemon(profile)
+    calls = []
+    async def read(client):
+        calls.append(time.monotonic())
+        await asyncio.sleep(.002)
+    daemon._refresh_snapshot = read
+    try:
+        for _ in range(8):
+            daemon._schedule_refresh("participants", lambda: daemon._poll_snapshot(None), interval=.03)
+            await asyncio.sleep(.035)
+        await settle(daemon)
+        assert len(calls) >= 7
+        assert max(b - a for a, b in zip(calls, calls[1:])) < .06
+    finally:
+        daemon.inbox.close()
+
+
 async def test_a_hundred_spaced_events_share_one_request_without_delaying_chat(profile):
     """Previously a fast response completed before each next event: 100 GETs."""
     daemon = Daemon(profile)

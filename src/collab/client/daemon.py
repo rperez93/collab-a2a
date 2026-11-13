@@ -2548,6 +2548,7 @@ class Daemon:
         await self._drain_snapshot_requests(client)
 
     async def _drain_snapshot_requests(self, client):
+        fetched = False
         while getattr(self, "_snapshot_requested", False) and not self._stop.is_set():
             # A fixed window, not a sliding debounce: continuous presence must
             # still update the board. An event arriving DURING the fetch sets
@@ -2556,8 +2557,14 @@ class Daemon:
             await asyncio.sleep(SNAPSHOT_COALESCE)
             self._snapshot_requested = False
             await self._refresh_snapshot(client)
-        from ..runtime_settings import get
-        self._refresh_due["participants"] = time.monotonic() + get("participant_refresh_interval")
+            fetched = True
+        if fetched:
+            # A periodic read with no queued invalidation already owns the
+            # scheduler's deadline. Moving it to completion+interval made the
+            # next three-second heartbeat miss by the request's duration and
+            # silently changed ordinary polling from three to six seconds.
+            from ..runtime_settings import get
+            self._refresh_due["participants"] = time.monotonic() + get("participant_refresh_interval")
 
     async def _refresh_snapshot(self, client: httpx.AsyncClient) -> None:
         # The initial handshake also fetches directly. Serialize it with the

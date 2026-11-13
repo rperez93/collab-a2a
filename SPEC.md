@@ -160,7 +160,8 @@ All of these require `Authorization: Bearer <participant token>` except
 Finite `/participants` and `/snapshot` JSON responses negotiate gzip above
 1 KiB and up to 2 MiB; SSE and file streams remain unbuffered. Both responses
 are `Cache-Control: private, no-cache`, varying on authorization and encoding.
-The roster's weak ETag covers all viewer-visible state except `server_time`;
+The roster's weak ETag covers all viewer-visible state except `server_time`
+and `batch.counted_at`, which are sampling clocks retained in full responses;
 a matching `If-None-Match` returns 304 after authentication. Clients retain
 their cached roster and renew its fetch age, discarding the validator when
 the authenticated URL or token changes. Unconditional requests still return
