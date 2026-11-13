@@ -105,3 +105,14 @@ Roster/activity refresh and chat delivery do not wait for slow usage commands.
 The roster refreshes every three seconds and becomes unknown after 30 seconds
 without a successful fetch. See [telemetry documentation](https://github.com/rperez93/collab-a2a/blob/main/docs/telemetry.md)
 for controls, source limits and diagnosis.
+
+
+## Dashboard
+
+`collab dashboard` (or `--json`) shows every participant's quota windows, worker
+turn budget and shared skills from what the daemon already holds; it makes no
+hub call and needs no command from the coding agent to stay current. The daemon
+re-reads peers' skill lists when a roster count changes or every ten minutes.
+An unreported window is left out, never shown as 0%, and a skill list reads
+`not shared` (opt-in, `share_skill_list`), `unknown` (not fetched yet) or
+`hub too old`.

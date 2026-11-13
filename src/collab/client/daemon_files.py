@@ -59,6 +59,11 @@ class DaemonPaths:
     def snapshot(self) -> Path:
         return self.root / "snapshot.json"
 
+    @property
+    def skills(self) -> Path:
+        """Peers' skill lists, cached by the daemon for `collab dashboard` (R12)."""
+        return self.root / "skills.json"
+
 
 #: How large `daemon.log` or `hub.log` may be before the next process to open
 #: one rolls it aside. Two megabytes is some tens of thousands of lines: far
