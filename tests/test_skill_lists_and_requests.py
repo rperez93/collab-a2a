@@ -116,6 +116,11 @@ def test_a_flood_of_requests_cannot_break_the_worker_turn():
     assert len(added) == 27 and 'More skill requests' in added[-1]['question']
 
 
-def test_the_list_is_opt_in():
+def test_the_list_is_shared_by_default_and_host_join_say_so(capsys, monkeypatch):
     from collab import runtime_settings
-    assert runtime_settings.get('share_skill_list') is False
+    assert runtime_settings.get('share_skill_list') is True
+    cli._skill_list_notice()
+    assert 'share_skill_list false' in capsys.readouterr().out
+    runtime_settings.set_value('share_skill_list', False)
+    cli._skill_list_notice()
+    assert capsys.readouterr().out == ''

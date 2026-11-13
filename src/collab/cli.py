@@ -271,6 +271,14 @@ def _client(profile: SessionProfile) -> HubClient:
     return HubClient(profile.url, profile.token)
 
 
+def _skill_list_notice() -> None:
+    """Say once, at host and join, that installed skill names are shared (R4)."""
+    from .runtime_settings import get
+    if get("share_skill_list"):
+        print(dim("  sharing your installed skill names and one-line descriptions with this session "
+                  "(never their text); `collab config share_skill_list false` stops it"))
+
+
 def _monitor_hint(profile: SessionProfile, status: dict[str, Any]) -> None:
     """Tell the agent to arm a watcher NOW, and to keep it armed.
 
@@ -704,6 +712,7 @@ def cmd_host(args: argparse.Namespace) -> int:
         print(dim(f"  (local only — LAN address is http://{local_ip()}:{cfg.port})"))
 
     _monitor_hint(profile, status)
+    _skill_list_notice()
     # The monitor first — it is the thing that must be armed NOW — then how to
     # behave, which is the other decision an agent makes on arrival.
     print(_rules_briefing())
@@ -1247,6 +1256,7 @@ def cmd_join(args: argparse.Namespace) -> int:
 
     _print_snapshot(snapshot, profile.name)
     _monitor_hint(profile, status)
+    _skill_list_notice()
     print(_rules_briefing())
     if pointer := _learnings_pointer():
         print(pointer)

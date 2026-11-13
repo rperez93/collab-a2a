@@ -65,7 +65,7 @@ visible in `collab worker status`; there is no automatic provider fallback.
 | `task_auto_pickup` | `true` | notify the coding agent about suitable unclaimed batch work |
 | `task_pickup_idle_delay` | `300` | continuous idle seconds before a batch pickup notification |
 | `task_pickup_repeat` | `300` | seconds before repeating an unchanged batch pickup notification |
-| `share_skill_list` | `False` | opt in to publishing installed skill names and descriptions to the session |
+| `share_skill_list` | `True` | publish installed skill names and one-line descriptions to the session |
 | `worker_auto_start` | `True` | enable a worker on session setup unless explicitly turned off |
 | `worker_agent` | `codex` | provider for automatic worker setup; codex or claude |
 | `worker_turn_gap` | `5` | minimum seconds between conversation worker turns |

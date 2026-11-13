@@ -4,7 +4,8 @@ description: Publish a specifically selected skill to the current Collab session
 ---
 
 Publish only the skill the user selected. Do not upload their private skill
-catalog; the only exception is the opt-in name list below. This shares the selected `SKILL.md` entrypoint, including
+catalog; the only exception is the name list below, which is names and one-line
+descriptions, never text. This shares the selected `SKILL.md` entrypoint, including
 its name, description, byte length and SHA-256; referenced scripts and assets
 need separate explicit file sharing.
 
@@ -34,11 +35,11 @@ that its execution succeeded. Record acceptance evidence with the task handoff.
 
 ## Skill lists and consented requests
 
-With the user's opt-in (`collab config share_skill_list true`), the daemon
-publishes the names and one-line descriptions of the skills the coding agent
-has installed, never their text. Descriptions can name employers or internal
-systems: ask the user before turning it on. Read peers' lists on demand and ask
-a peer to run one:
+By default the daemon publishes the names and one-line descriptions of the
+skills the coding agent has installed, never their text; host and join say so
+in one line. Descriptions can name employers or internal systems: if the user
+does not want that shared, `collab config share_skill_list false` stops it and
+withdraws the list. Read peers' lists on demand and ask a peer to run one:
 
 ```bash
 collab skills peers                                # peers' installed skill names
