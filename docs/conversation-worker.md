@@ -165,6 +165,11 @@ The default durable limit is 60 model attempts per hour, including failures;
 `worker_max_attempts` and `worker_budget_window` configure it live;
 restarting the daemon does not reset it. Reaching the limit reports a recovery
 time instead of funding an endless worker-to-worker acknowledgement loop.
+Once half the budget is spent, turns are paced: the time left in the window is
+spread over the attempts left, so a busy session batches more messages per turn
+rather than going silent until the window rolls. The remaining budget and its
+reset time travel with the worker's figures (`budget_remaining`,
+`budget_reset_at`) for everyone's roster.
 
 The CLI flags and configuration controls are based on the official
 [Codex configuration reference](https://developers.openai.com/codex/config-reference/),

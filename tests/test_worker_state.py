@@ -346,3 +346,23 @@ def test_main_send_while_worker_enabled_is_queued_not_posted(tmp_path, monkeypat
     queued = [(r['text'], r['to'], r['room'], r.get('thread')) for r in store.outbox()]
     assert queued == [('ship it', '', 'general', 't1'), ('for you', 'bob', '', None),
                       ('in ops', '', 'ops', None)]
+
+
+def test_a_busy_session_paces_the_worker_instead_of_exhausting_it():
+    """R3 follow-up: 60 turns in under an hour went silent; spread the rest."""
+    from collab.worker import pace
+    now = 1000.0
+    assert pace({'remaining': 40, 'reset_at': now + 3000}, limit=60, gap=5, now=now) == 5
+    assert pace({'remaining': 29, 'reset_at': now + 3000}, limit=60, gap=5, now=now) == 100
+    assert pace({'remaining': 0, 'reset_at': now + 600}, limit=60, gap=5, now=now) == 600
+    assert pace({'remaining': 10, 'reset_at': now + 10}, limit=60, gap=5, now=now) == 5
+
+
+def test_remaining_budget_is_published_with_worker_figures(tmp_path):
+    store = worker.Store(tmp_path)
+    store.configure({'agent': 'claude', 'scope': 'Coordinate'})
+    store.reserve_turn(expected_generation=store.snapshot()['generation'], limit=60, window=3600)
+    figures = worker.metrics(tmp_path)
+    assert figures['budget_remaining'] == 59 and figures['budget_reset_at'] > 0
+    from collab.telemetry import worker_report
+    assert worker_report(figures)['budget_remaining'] == 59

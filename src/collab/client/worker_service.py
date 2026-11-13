@@ -347,7 +347,9 @@ class Conversation:
             # An empty poll used to spend the same cooldown as a paid turn,
             # making the next real question wait up to two daemon heartbeats.
             # Charge the configurable gap only when a model call is reserved.
-            self.next_at = time.time() + setting("worker_turn_gap")
+            self.next_at = time.time() + worker.pace(
+                store.budget(limit=setting("worker_max_attempts"), window=setting("worker_budget_window")),
+                limit=setting("worker_max_attempts"), gap=setting("worker_turn_gap"))
             store.health(running=True, expected_generation=snapshot["generation"])
             result = await worker_runtime.run_turn(
                 cfg["agent"], (setting(f"worker_{cfg['agent']}_model") if cfg.get("model_default") else cfg.get("model", "")), payload, self.root / "worker-runtime",
