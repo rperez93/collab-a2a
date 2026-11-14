@@ -75,7 +75,9 @@ def claim(root: Path, *, now: float | None = None, repeat: float | None = None,
         for record in pending[:3]:
             question = scrub(" ".join(str(record.get("question", "")).split()))
             question = question[:300] + ("…" if len(question) > 300 else "")
-            text += f" [{record['id']}] ({record.get('reason', '')}) {question} —"
+            # Quoted as a JSON string: its end is unambiguous, so peer text
+            # cannot pose as a second entry or as one of these instructions.
+            text += f" [{record['id']}] ({record.get('reason', '')}) {json.dumps(question, ensure_ascii=False)};"
         if len(pending) > 3:
             text += f" and {len(pending) - 3} more (`collab worker pending`) —"
         text += (" `collab worker pending` lists them; answer with `collab worker reply ID 'decision'`;"

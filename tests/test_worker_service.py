@@ -681,4 +681,7 @@ def test_provider_backoff_table():
 
 
     assert [(p["seq"], p["question"]) for p in store.pending()] == [(0, "Which branch?")]
+
+
+    assert [(p["seq"], p["question"]) for p in store.pending()] == [(1, "Which branch?")], "the only message in the turn"
     assert not store.status()["error"]
