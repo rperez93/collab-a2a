@@ -41,6 +41,7 @@ from . import exclusive
 # importing this module to do it cost them httpx, websockets and asyncio for
 # the async class below. The names stay importable from here so nothing that
 # already reads them off `client.daemon` has to move.
+from .daemon_files import open_log
 from .daemon_files import (DEAD_AFTER, POLL_FILE, STALE_AFTER,  # noqa: F401
                            DaemonPaths, _alive, _started_at,
                            effective_state, is_running, last_poll, polled,
@@ -2848,14 +2849,18 @@ class Daemon:
             return  # still alive; this is a network problem, not a dead hub
 
         logger.warning("hub process %s is gone; restarting it", cfg.pid)
-        log = (self.paths.root / "hub.log").open("a")
-        subprocess.Popen(
-            [sys.executable, "-m", "collab.hub_main", cfg.session_id],
-            stdout=log, stderr=log, stdin=subprocess.DEVNULL,
-            start_new_session=True,
-            env={**os.environ, "COLLAB_HOME": cfg.home,
-                 **({"COLLAB_AGENT_KIND": k} if (k := current_kind()) else {})},
-        )
+        # THE CAPPED OPENER, and closed once the child has it. A bare
+        # `open("a")` here skipped the cap a hub that fails at start-up — before
+        # its own watcher runs — relies on, and leaked one descriptor per
+        # restart into this long-lived process.
+        with open_log(self.paths.root / "hub.log") as log:
+            subprocess.Popen(
+                [sys.executable, "-m", "collab.hub_main", cfg.session_id],
+                stdout=log, stderr=log, stdin=subprocess.DEVNULL,
+                start_new_session=True,
+                env={**os.environ, "COLLAB_HOME": cfg.home,
+                     **({"COLLAB_AGENT_KIND": k} if (k := current_kind()) else {})},
+            )
 
     # --- the feed --------------------------------------------------------------
 

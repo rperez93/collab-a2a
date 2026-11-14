@@ -91,7 +91,7 @@ refused on read when the stamp is not this agent's.
 | `current` | The session id this home currently answers about. |
 | `hub.json` | What the detached hub needs to come up: port, bind, invite, host token, tunnel state. Since 1.40.0 the hub's pid and the tunnel's each carry a stamp beside them — start time and boot — because `collab kill` signals those numbers. |
 | `hub.db` | The append-only event log, the participants, the rooms, the board, the batches. |
-| `hub.log` | The detached hub's stdout and stderr. Rolled aside to `hub.log.1` by the next process to open it past two megabytes; one generation is kept. Later than the pin: capped while the hub runs, see below. |
+| `hub.log` | The detached hub's stdout and stderr. At the pin: rolled aside to `hub.log.1` by the next process to open it past two megabytes; one generation is kept. Later than the pin: copied and truncated in place past 3 MiB, at open and while the hub and the daemon run, with 10 MB as the budget for every file of it — see below. |
 | `profile.json` | This participant's credentials and identity for the session. |
 | `daemon.lock` | The advisory `flock` a live listener holds. See [the daemon lock](/architecture/daemon-lock.md). |
 | `daemon.pid` | The listener's pid, for *saying* — never for deciding whether it is alive. Three lines since 1.40.0: the number, the start time, and the boot it was written on. |
@@ -120,12 +120,19 @@ held at `23db6d0`.
 Every log in the session directory — `daemon.log`, `hub.log`, `ngrok.log` and
 `worker.log` — is capped at 10 MB including its rotated generation, and since
 the change recorded in [the log](/log.md) for 2026-11-13 the cap holds while
-the writer runs rather than only when the next process is spawned. Past 4 MiB
+the writer runs rather than only when the next process is spawned. Past 3 MiB
 the tail is copied to `<name>.1` and the file is truncated in place: every
 writer opens these files `O_APPEND`, so a process still holding one goes on
 writing at the new end, where a rename would have sent its writes into the
-rotated copy. The daemon caps its own log, the hub caps `hub.log` and ngrok's,
-and the worker caps its file as it writes each line. Later than the pin.
+rotated copy. The daemon caps its own log and, on a host, `hub.log` and
+ngrok's as well — ngrok runs in a session of its own and outlives a hub that was
+killed — the hub caps `hub.log` and ngrok's, and the worker caps its file as it
+writes each line. The watcher looks once a second, and more often as a log's
+observed growth rate rises; that holds the budget against a runaway writer of
+about 3.7 MB/s from a standing start, and the review measured the first version,
+which went back to a slow interval after one fast pass, at 31.8 MB under 5 MB/s.
+The diagnostic record (`diagnostics/`) is bounded by its seven-day retention,
+not by this cap. Later than the pin.
 
 Two of these files are written by more than one process at a time, and since
 1.41.1 each writer takes a temp name of its own rather than the directory's
