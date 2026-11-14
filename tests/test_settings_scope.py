@@ -66,3 +66,59 @@ def test_config_json_reports_scope_and_source(capsys):
     data = json.loads(capsys.readouterr().out)
     assert data["worker_max_attempts"]["scope"] == "agent" and data["worker_max_attempts"]["source"] == "agent"
     assert data["theme"]["scope"] == "machine"
+
+
+def _age(path):
+    import os, time
+    old = time.time() - 60
+    os.utime(path, (old, old))
+    config._CACHE.clear()
+    config._AGENT_CACHE.clear()
+
+
+def test_setters_that_edit_what_they_read_are_not_lost_on_a_settled_cache():
+    """The cached dict was handed out and edited in place: every write was a no-op."""
+    machine = config.global_config_path()
+    machine.parent.mkdir(parents=True, exist_ok=True)
+    machine.write_text(json.dumps({"display_name": "old", "editor": "vim"}))
+    _age(machine)
+    config.load_config()  # warm and trust the cache
+    config.load_config()
+    config.set_default_name("neo")
+    config._write_editor("nano")
+    assert config.load_config()["display_name"] == "neo"
+    assert config.load_config()["editor"] == "nano"
+
+
+def test_one_agents_unset_never_removes_the_shared_default(tmp_path, monkeypatch):
+    config.global_config_path().parent.mkdir(parents=True, exist_ok=True)
+    config.global_config_path().write_text(json.dumps({"display_name": "team"}))
+    config._CACHE.clear()
+    config.setting("display_name").write("mine")
+    config.unset_setting("display_name")
+    assert json.loads(config.global_config_path().read_text())["display_name"] == "team"
+    assert config.load_config()["display_name"] == "team"
+    config.unset_setting("display_name")  # nothing of this agent's left: still a no-op
+    assert json.loads(config.global_config_path().read_text())["display_name"] == "team"
+
+
+def test_the_agent_file_lives_inside_the_agents_state_not_in_the_repository(tmp_path, monkeypatch):
+    monkeypatch.delenv("COLLAB_AGENT_CONFIG")
+    repo = tmp_path / "repo"
+    monkeypatch.setenv("COLLAB_HOME", str(repo / ".collab-me"))
+    config._AGENT_PATH.clear()
+    assert config.agent_config_path() == repo / ".collab-me" / config.AGENT_SETTINGS
+    monkeypatch.setenv("COLLAB_HOME", str(repo / ".collab-other"))
+    assert config.agent_config_path() != repo / ".collab-me" / config.AGENT_SETTINGS
+
+
+def test_an_explicit_set_pins_even_the_inherited_value(capsys):
+    import argparse
+    from collab import cli
+    config.global_config_path().parent.mkdir(parents=True, exist_ok=True)
+    config.global_config_path().write_text(json.dumps({"display_name": "team"}))
+    config._CACHE.clear()
+    args = argparse.Namespace(key="display_name", value="team", unset=False, json=False, tui=False,
+                              edit=False, machine=False)
+    assert cli.cmd_config(args) == 0
+    assert config.setting_source("display_name") == "agent"
