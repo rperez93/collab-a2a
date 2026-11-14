@@ -224,7 +224,7 @@ def test_the_humans_final_answer_reaches_the_peer_verbatim_without_a_model_turn(
     texts = [(r["to"], r["text"]) for r in store.outbox()]
     assert texts[-1] == ("bob", "Yes — merge after CI, exactly as written.")
     assert not store.pending() and not store.snapshot()["answers"], "no paraphrasing turn needed"
-    assert any("already sent" in c["text"] for c in store.snapshot()["context"])
+    assert any("already queued" in c["text"] for c in store.snapshot()["context"])
 
 
 def test_a_long_wait_on_the_human_is_mentioned_again(tmp_path):
@@ -310,7 +310,8 @@ def test_c6_reply_to_a_decision_awaiting_the_human_needs_a_mode(tmp_path, monkey
     assert reply() == 2 and "--verbatim" in capsys.readouterr().err
     assert store.pending()[0]["id"] == decision_id, "nothing sent"
     assert reply(verbatim=True) == 0
-    assert "sent to @bob verbatim" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "queued for @bob verbatim" in out and "sent" not in out, "queued, not yet delivered"
 
 
 def test_verbatim_without_a_known_asker_is_refused(tmp_path, monkeypatch, capsys):
