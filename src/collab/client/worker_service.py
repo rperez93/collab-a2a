@@ -368,14 +368,15 @@ class Conversation:
                     # conversation. Preserve the original inbox entry and turn
                     # it into an explicit main-agent request, without a model
                     # guessing at a chopped message or malformed address.
-                    store.commit_turn(expected_cursor=snapshot["cursor"], cursor=event.seq,
+                    escalated = store.commit_turn(expected_cursor=snapshot["cursor"], cursor=event.seq,
                         summary=snapshot["summary"], replies=[], escalations=[{
                             "reason": "scope", "seq": event.seq,
                             "question": f"Message #{event.seq} exceeds the worker input limit. Inspect it with collab recv before answering; supply a concise decision and valid reply routing."}],
                         expected_generation=snapshot["generation"], expected_turn=snapshot["turn"])
                     # A local escalation, no model: counted as a turn in
                     # `worker.db`, and so logged as the skip it is.
-                    self._log_skip(cfg, {event.kind: 1}, escalations=1)
+                    if escalated:       # a commit that did not happen is no line
+                        self._log_skip(cfg, {event.kind: 1}, escalations=1)
                     self._delivery_health(store, snapshot["generation"])
                     return
                 size += candidate_size

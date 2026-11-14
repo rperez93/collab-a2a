@@ -232,10 +232,10 @@ def _copy(src, dst, until: int) -> int:
 # a ledger of worker attempts is read as a sequence, and a sequence with its
 # beginning cut off and nothing saying so reads as complete.
 
-#: How many lines may wait for the writer. A worker line is about 280 bytes,
-#: so a full queue holds about 280 KB — measured below in
-#: tests/test_logs_stay_capped.py — and a thousand lines is hours of worker
-#: turns, so a queue that fills is a disk that stopped, not a busy worker.
+#: How many lines may wait for the writer. A full queue of ~300-byte worker
+#: lines measured 732–809 KiB traced (the strings, their tuples and paths) —
+#: see tests/test_logs_stay_capped.py — and a thousand lines is hours of
+#: worker turns, so a queue that fills is a disk that stopped, not a busy worker.
 LINES_MAX = 1000
 
 #: How long `flush` waits for the disk. Bounded because it runs on the way
@@ -263,23 +263,19 @@ class LineWriter:
         self._ready = threading.Condition()
         self._thread: threading.Thread | None = None
         self._registered = False
+        self._gave_up = False
 
     def put(self, path: Path | str, line: str) -> bool:
         """Queue one line. False when it was dropped because the queue is full."""
         path = Path(path)
         with self._ready:
-            missed = self._dropped.get(path, 0)
-            room = self.limit - len(self._pending)
-            if room <= 0 or (missed and room < 2):
-                # Full, or room only for the gap's own line: this one is lost,
-                # and counted, and the gap note will carry it.
-                self._dropped[path] = missed + 1
+            if len(self._pending) >= self.limit:
+                # Full: this one is lost, and counted. The gap line is written
+                # by the writer when it next empties the queue, which is the
+                # only moment room returns (see `_loop`).
+                self._dropped[path] = self._dropped.get(path, 0) + 1
                 self.dropped_total += 1
                 return False
-            if missed:
-                self._pending.append((path, _dropped_line(missed)))
-                self._queued += 1
-                del self._dropped[path]
             self._pending.append((path, line.rstrip("\n")))
             self._queued += 1
             self._ready.notify()
@@ -297,11 +293,21 @@ class LineWriter:
         with self._ready:
             target = self._queued
             if self._written >= target:
+                self._gave_up = False
                 return True
+            if self._gave_up:
+                # ONE DEADLINE A PROCESS, not one per caller. On a stalled
+                # disk the daemon's exit flushed for 2 s, `atexit` flushed for
+                # 2 s more, and the logging listener waited 2 s on top: past
+                # the 5 s the stopper allows before SIGKILL. Once a flush has
+                # timed out the disk has had its chance; the next returns now.
+                return False
             self._ready.notify()
         self._start()
         with self._ready:
-            return self._ready.wait_for(lambda: self._written >= target, timeout)
+            done = self._ready.wait_for(lambda: self._written >= target, timeout)
+            self._gave_up = not done
+            return done
 
     def _start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -335,7 +341,24 @@ class LineWriter:
                 self._dropped.clear()
                 upto = self._queued
             if batch:
-                _write_lines(batch, self.cap)
+                try:
+                    lost = _write_lines(batch, self.cap)
+                except Exception:                            # noqa: BLE001
+                    # A writer thread that died would strand every later line
+                    # and leave `flush` waiting out its deadline each time.
+                    lost = {}
+                    for path, _line in batch:
+                        lost[path] = lost.get(path, 0) + 1
+                if not isinstance(lost, dict):
+                    lost = {}
+                if lost:
+                    with self._ready:
+                        # NOT WRITTEN IS DROPPED, and said like any other drop:
+                        # a failed write used to discard the rest of its batch
+                        # with no count and no line.
+                        for path, count in lost.items():
+                            self._dropped[path] = self._dropped.get(path, 0) + count
+                            self.dropped_total += count
             with self._ready:
                 # AFTER THE WRITE: anything earlier tells a waiting `flush`
                 # «done» while the lines are still in this thread's hands.
@@ -350,24 +373,49 @@ def _dropped_line(count: int) -> str:
                        "event": "dropped", "lines": count})
 
 
-def _write_lines(batch: list, cap: int) -> None:
+def _write_lines(batch: list, cap: int) -> dict:
     """One batch on to the disk: grouped by file, whole lines per write, then
-    each file trimmed. On the writer thread; a failure costs the batch."""
+    each file trimmed. On the writer thread.
+
+    Returns how many lines per file did NOT reach it, so the writer can count
+    them and say so. A write cut short — a full disk — leaves the file ending
+    mid-line; the next batch to that file starts with a newline first, or its
+    first line would be glued on to the fragment and both would be unreadable.
+    """
     from .diagnostics import _chunks
 
     by_file: dict[Path, list[str]] = {}
     for path, line in batch:
         by_file.setdefault(path, []).append(line)
+    lost: dict[Path, int] = {}
     for path, lines in by_file.items():
+        chunks = _chunks(lines)
+        sent = 0
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
+            torn = _ends_mid_line(path)
             with open(path, "a", encoding="utf-8") as fh:
-                for chunk in _chunks(lines):
+                if torn:
+                    fh.write("\n")
+                    fh.flush()
+                for chunk in chunks:
                     fh.write(chunk)
                     fh.flush()
+                    sent += 1
         except Exception:                                     # noqa: BLE001
+            lost[path] = sum(chunk.count("\n") for chunk in chunks[sent:])
             continue
         trim(path, cap)
+    return lost
+
+
+def _ends_mid_line(path: Path) -> bool:
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(-1, os.SEEK_END)
+            return fh.read(1) != b"\n"
+    except OSError:                       # missing, or empty (seek before 0)
+        return False
 
 
 #: The one writer for this process.

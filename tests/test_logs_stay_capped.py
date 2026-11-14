@@ -649,10 +649,15 @@ async def test_every_attempt_writes_exactly_one_line(conversation, tmp_path,
 #
 # MEASURED on this machine, with a 304-byte worker line:
 #
-#   append, disk healthy     median 5.8 µs, p99 52 µs (1,000 calls)
+#   append, disk healthy     median 5.8 µs, p99 52 µs (1,000 calls back to back;
+#                            the reviewer measured 56.5 µs median, 147 µs p99
+#                            with calls 0.2 ms apart — the GIL hand-off to the
+#                            woken writer, still never a wait on the disk)
 #   append, disk stalled     median 4.8 µs, p99 25 µs (5,000 calls; 4,000 dropped)
 #   flood, 100,000 lines     1.09 s wall, writer 0.17 s CPU — 1.7 µs a line, 28 MB/s
-#   queue full (1,000 lines) 732 KiB traced, Path objects and strings included
+#                            (the test below runs 20,000 to stay quick)
+#   queue full (1,000 lines) 732 KiB traced (809 KiB in the review, 219-byte
+#                            lines), Path objects and strings included
 
 def _line(n: int = 0) -> str:
     return json.dumps({"ts": "2026-11-13T23:46:07Z", "event": "turn",
@@ -721,8 +726,9 @@ def test_a_gap_is_said_where_it_happened_when_room_returns(tmp_path, monkeypatch
 
 
 def test_the_writer_keeps_up_with_a_flood_cheaply(tmp_path):
-    """A hundred thousand lines as fast as the caller can produce them: the
-    writer thread's CPU per line, and the whole drain, measured."""
+    """Twenty thousand lines as fast as the caller can produce them: the
+    writer thread's CPU per line, and the whole drain, measured. (The figure
+    above is from a 100,000-line run of the same loop.)"""
     path = tmp_path / "worker.log"
     writer = logcap.LineWriter()
     line = _line()
@@ -796,3 +802,80 @@ def test_a_stalled_handler_does_not_stall_a_logging_call():
         log.handlers.clear()
     assert took < 0.5, f"{took:.3f} s for 2,000 warnings"
     assert pipe.dropped_total >= 2000 - 51
+
+
+def test_a_failed_write_is_counted_and_a_torn_line_is_not_glued_to_the_next(
+        tmp_path):
+    """A write the disk refused discarded the rest of its batch with no count
+    and no line, and the fragment it left had the next batch's first line glued
+    to it — «xxx…after» on one line. RLIMIT_FSIZE stands in for the full disk,
+    in a child so the limit stays there."""
+    import collab
+
+    path = tmp_path / "worker.log"
+    probe = (
+        "import resource, signal, sys, json\n"
+        "signal.signal(signal.SIGXFSZ, signal.SIG_IGN)\n"
+        "from collab import logcap\n"
+        "w = logcap.LineWriter()\n"
+        "resource.setrlimit(resource.RLIMIT_FSIZE, (100, resource.RLIM_INFINITY))\n"
+        "for n in range(5):\n"
+        "    w.put(sys.argv[1], 'x' * 60)\n"
+        "w.flush()\n"
+        "resource.setrlimit(resource.RLIMIT_FSIZE, (resource.RLIM_INFINITY,) * 2)\n"
+        "w.put(sys.argv[1], 'after')\n"
+        "w.flush()\n"
+        "print(w.dropped_total)\n")
+    env = {**os.environ,
+           "PYTHONPATH": os.path.dirname(os.path.dirname(collab.__file__))}
+    out = subprocess.run([sys.executable, "-c", probe, str(path)],
+                         capture_output=True, text=True, env=env, timeout=30)
+    assert int(out.stdout.strip() or -1) >= 3, out.stderr
+    lines = path.read_text().splitlines()
+    assert "after" in lines, "on a line of its own, not glued to a fragment"
+    gap = [json.loads(x) for x in lines if x.startswith("{")]
+    assert gap and gap[0]["event"] == "dropped" and gap[0]["lines"] >= 3
+
+
+def test_one_stalled_flush_is_the_whole_exit_deadline(tmp_path, monkeypatch):
+    """On a stalled disk the daemon's own exit flush waited 2 s and `atexit`
+    another 2 s, and with the listener's 2 s the exit outlasted the 5 s the
+    stopper gives before SIGKILL. A flush after one that timed out returns at
+    once."""
+    import threading
+
+    gate = threading.Event()
+    monkeypatch.setattr(logcap, "_write_lines", lambda batch, cap: gate.wait(10))
+    writer = logcap.LineWriter()
+    writer.put(tmp_path / "worker.log", _line())
+    began = time.monotonic()
+    assert writer.flush(0.3) is False
+    assert writer.flush(0.3) is False
+    assert time.monotonic() - began < 0.5, "the second flush did not wait again"
+    gate.set()
+    deadline = time.monotonic() + 2
+    while writer._written < writer._queued and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert writer.flush(0.5) is True, "and a later flush that can succeed does"
+
+
+@pytest.mark.asyncio
+async def test_a_local_skip_that_did_not_commit_writes_no_line(conversation, tmp_path,
+                                                                monkeypatch):
+    """The oversized-event path logged `committed / skipped-local` without
+    looking at whether its commit happened — a ledger line for a turn the
+    worker's own state never recorded."""
+    from collab import worker
+
+    service = conversation
+    _configure(service, tmp_path)
+    _incoming(service, 1, "z" * 70_000)                 # past MAX_EVENTS_BYTES
+    monkeypatch.setattr(worker.Store, "commit_turn", lambda self, **kw: False)
+    await service.turn()
+    logcap.flush()
+    assert not (tmp_path / "worker.log").exists()
+    monkeypatch.undo()
+    _configure(service, tmp_path)
+    await service.turn()
+    row = json.loads(_worker_log(tmp_path).splitlines()[-1])
+    assert (row["outcome"], row["escalation_count"]) == ("skipped-local", 1)

@@ -128,8 +128,18 @@ class _Bounded(queue.Queue):
         """
         with self.mutex:
             if item is _SENTINEL:
-                while self.maxsize > 0 and self._qsize() >= self.maxsize:
-                    self._get()
+                # The last thing in: the gap goes before it, and whatever is
+                # evicted to make room for the two is counted INTO that gap —
+                # an eviction here used to be a silent loss.
+                need = 2 if self.dropped else 1
+                while self.maxsize > 0 and self._qsize() > self.maxsize - need:
+                    queue.Queue._get(self)
+                    self.dropped += 1
+                    self.dropped_total += 1
+                    need = 2
+                if self.dropped:
+                    self._admit(_gap(self.dropped))
+                    self.dropped = 0
                 self._admit(item)
                 return
             room = self.maxsize - self._qsize() if self.maxsize > 0 else 2
@@ -150,6 +160,23 @@ class _Bounded(queue.Queue):
         self._put(item)
         self.unfinished_tasks += 1
         self.not_empty.notify()
+
+    def _get(self) -> Any:
+        """Take the next record — and, if that empties a queue that has been
+        dropping, put the gap line in behind it.
+
+        Without this the gap was said only by the NEXT record to arrive, so
+        drops followed by silence — a burst, then a quiet daemon, or a burst
+        and then an exit — were never said at all. The queue emptying is the
+        moment room returns; the listener is the one taking from it, and it
+        will take the gap on its next pass.
+        """
+        item = queue.Queue._get(self)
+        if self.dropped and not self._qsize():
+            self._put(_gap(self.dropped))
+            self.unfinished_tasks += 1
+            self.dropped = 0
+        return item
 
 
 #: `QueueListener`'s sentinel, which `_Bounded` must never drop.
