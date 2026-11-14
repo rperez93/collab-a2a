@@ -323,11 +323,19 @@ def capture_logging_into(path: Path) -> bool:
     """
     from .. import logcap
 
+    import sys
+    import threading
+
     if _listener is None:
         return False
     swapped = []
     for handler in _listener.handlers:
-        if type(handler) is logging.StreamHandler:
+        # ONLY the handler writing to a stderr that is not a terminal — the
+        # log file a detached process was handed. A daemon or hub run by hand
+        # in a terminal keeps logging to the terminal.
+        if (type(handler) is logging.StreamHandler
+                and getattr(handler, "stream", None) is sys.stderr
+                and not _isatty(sys.stderr)):
             capped = logcap.capped_handler(path)
             capped.setLevel(handler.level)
             capped.setFormatter(handler.formatter)
@@ -335,7 +343,34 @@ def capture_logging_into(path: Path) -> bool:
         else:
             swapped.append(handler)
     _listener.handlers = tuple(swapped)
+    # THE RAW WRITERS, routed through `logging` too, so they reach the capped
+    # handler instead of stderr: `warnings`, an exception that ends a thread,
+    # and an exception nobody could raise (`__del__`, a finaliser). What is
+    # left on raw stderr is the interpreter's own last traceback.
+    logging.captureWarnings(True)
+    log = logging.getLogger("collab.uncaught")
+
+    def thread_hook(args) -> None:
+        if args.exc_type is SystemExit:
+            return
+        log.error("uncaught in thread %s", getattr(args.thread, "name", "?"),
+                  exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+
+    def unraisable_hook(unraisable) -> None:
+        log.error("unraisable in %r: %s", unraisable.object, unraisable.err_msg or "",
+                  exc_info=(unraisable.exc_type, unraisable.exc_value,
+                            unraisable.exc_traceback))
+
+    threading.excepthook = thread_hook
+    sys.unraisablehook = unraisable_hook
     return True
+
+
+def _isatty(stream) -> bool:
+    try:
+        return bool(stream.isatty())
+    except (AttributeError, ValueError, OSError):
+        return False
 
 
 def open_log(path: Path, cap: int = LOG_CAP, *, trim: bool = True):

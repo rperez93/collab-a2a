@@ -23,7 +23,22 @@ def main() -> int:
     # file, which is when the process whose output this is has gone.
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
-    collect(sys.stdin.fileno(), sys.argv[1])
+    source = sys.stdin.fileno()
+    try:
+        collect(source, sys.argv[1])
+    except BaseException:                                    # noqa: BLE001
+        # NEVER STOP READING. A collector that dies closes the only reader of
+        # ngrok's pipe, and ngrok's next line then kills it with SIGPIPE — a
+        # tunnel lost, and on a free plan its URL with it, for a log line.
+        # Whatever went wrong, the rest is drained and discarded until ngrok
+        # itself has gone.
+        import os
+
+        try:
+            while os.read(source, 65536):
+                pass
+        except OSError:
+            pass
     return 0
 
 

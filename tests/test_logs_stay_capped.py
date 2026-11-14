@@ -1071,6 +1071,11 @@ def test_the_collector_is_cheap_under_a_flood():
         _, status, usage = os.wait4(collector.pid, 0)
         collector.returncode = os.waitstatus_to_exitcode(status)
         assert logcap.total(path) <= logcap.BUDGET
+        # IT RAN. Against the parent commit, where `collab.logpipe` did not
+        # exist, the collector exited at once and «cheap» passed vacuously.
+        assert collector.returncode == 0
+        text = open(path, errors="replace").read()
+        assert "msg=flood" in text and "dropped here" in text
     cpu = usage.ru_utime + usage.ru_stime
     rss_mib = peak_kib / 1024
     assert cpu < 3.0, f"{cpu:.2f} s of CPU for a 25 MB flood"
@@ -1200,3 +1205,147 @@ def test_a_failure_reason_is_found_after_ngrok_log_was_trimmed(tmp_path):
     path.write_text('lvl=eror msg="failed to start tunnel" err="ERR_NGROK_334 '
                     'The endpoint is already online."\n')
     assert "334" in failure_from_log(str(path), offset=50_000)
+
+
+def test_several_writers_on_one_log_never_pass_the_budget_together(tmp_path):
+    """The size check and the write are one act under the trim lock. Without
+    it three processes each saw room and all wrote: 16 KiB records measured a
+    live file past twice the cap, and 3 MiB records a total of 12.9 MB. Four
+    writer processes and a watcher here, every write sampled by its writer."""
+    path = tmp_path / "hub.log"
+    writer = (
+        "import os, sys\n"
+        "from collab import logcap\n"
+        "out = logcap.CappedFile(sys.argv[1])\n"
+        "block = (('w' * 1023 + '\\n') * int(sys.argv[2])).encode()\n"
+        "peak = 0\n"
+        "for _ in range(int(sys.argv[3])):\n"
+        "    out.write(block)\n"
+        "    peak = max(peak, logcap.total(sys.argv[1]))\n"
+        "print(peak)\n")
+    env = {**os.environ, "PYTHONPATH": _src()}
+    procs = [subprocess.Popen([sys.executable, "-c", writer, str(path), size, count],
+                              stdout=subprocess.PIPE, text=True, env=env)
+             for size, count in (("16", "1500"), ("16", "1500"),
+                                 ("1024", "12"), ("1024", "12"))]
+    watcher = logcap.Watcher([path], every=0.05)
+    watcher.start()
+    try:
+        peaks = [int(p.communicate(timeout=120)[0].strip() or 0) for p in procs]
+    finally:
+        watcher.stop()
+    assert all(p.returncode == 0 for p in procs)
+    assert max(peaks) <= logcap.BUDGET, f"peak {max(peaks) / 1e6:.2f} MB"
+
+
+def test_a_flood_of_tiny_lines_costs_the_collector_little(tmp_path):
+    """One write per read, and a window on lines as well as bytes: a flood of
+    one-byte lines held the per-line collector at a full core and slowed the
+    writer to 0.25 MB/s. Measured here: the collector's CPU for 5 MB of «x\\n»."""
+    path = tmp_path / "ngrok.log"
+    env = {**os.environ, "PYTHONPATH": _src()}
+    collector = subprocess.Popen([sys.executable, "-m", "collab.logpipe", str(path)],
+                                 stdin=subprocess.PIPE, env=env)
+    began = time.monotonic()
+    flood = subprocess.Popen([sys.executable, "-c",
+                              "import sys\nsys.stdout.write('x\\n' * 2_500_000)\n"],
+                             stdout=collector.stdin)
+    collector.stdin.close()
+    flood.wait(60)
+    _, status, usage = os.wait4(collector.pid, 0)
+    took = time.monotonic() - began
+    cpu = usage.ru_utime + usage.ru_stime
+    assert os.waitstatus_to_exitcode(status) == 0
+    assert cpu < 3.0, f"{cpu:.2f} s of CPU for 2.5 million one-byte lines"
+    assert took < 10, f"{took:.1f} s to drain"
+    assert "dropped here" in path.read_text()
+
+
+def test_a_collector_that_fails_keeps_draining_so_ngrok_lives(tmp_path):
+    """If the collector died, ngrok's next line would meet a closed pipe and
+    SIGPIPE would end the tunnel. Whatever fails inside it, it drains to end
+    of file: the writer here finishes and exits 0, not -13."""
+    probe = (
+        "import sys\n"
+        "from collab import logcap, logpipe\n"
+        "def broken(*a, **k):\n"
+        "    raise RuntimeError('collector fault')\n"
+        "logpipe.collect = broken\n"
+        "sys.argv = ['logpipe', sys.argv[1]]\n"
+        "raise SystemExit(logpipe.main())\n")
+    env = {**os.environ, "PYTHONPATH": _src()}
+    collector = subprocess.Popen([sys.executable, "-c", probe, str(tmp_path / "x.log")],
+                                 stdin=subprocess.PIPE, env=env)
+    writer = subprocess.Popen([sys.executable, "-c",
+                               "import sys\nfor _ in range(20000): "
+                               "sys.stdout.write('lvl=info msg=still here\\n')\n"],
+                              stdout=collector.stdin)
+    collector.stdin.close()
+    assert writer.wait(30) == 0
+    assert collector.wait(30) == 0
+
+
+def test_daemon_main_captures_its_logging_into_the_capped_file(tmp_path, monkeypatch):
+    """The capped handler is only as good as the call that installs it: the
+    daemon's entry point must hand its own log path to it."""
+    from collab import daemon_main
+
+    seen = []
+    monkeypatch.setattr(daemon_main, "setup_logging", lambda: None)
+    monkeypatch.setattr(daemon_main, "capture_logging_into", seen.append)
+    monkeypatch.setattr(daemon_main.logcap, "watch", lambda *p: None)
+    monkeypatch.setattr(daemon_main.logcap, "flush", lambda *a: True)
+    monkeypatch.setattr(daemon_main.SessionProfile, "load",
+                        staticmethod(lambda sid: SimpleNamespace(dir=tmp_path)))
+
+    async def nothing(profile):
+        return None
+
+    monkeypatch.setattr(daemon_main, "run_daemon", nothing)
+    monkeypatch.setattr(daemon_main.sys, "argv", ["daemon_main", "s_x"])
+    assert daemon_main.main() == 0
+    assert seen == [tmp_path / "daemon.log"]
+
+
+def test_the_hub_routes_uvicorn_and_its_log_through_the_cap():
+    """uvicorn's default config gives its loggers their own stderr handlers,
+    around the cap; the hub passes `log_config=None` so they reach the root
+    logger, and captures its logging into `hub.log`."""
+    import inspect
+
+    from collab import hub_main
+
+    source = inspect.getsource(hub_main.main)
+    assert "log_config=None" in source
+    assert 'capture_logging_into(DaemonPaths(cfg.dir).root / "hub.log")' in source
+
+
+def test_only_a_non_terminal_stderr_handler_is_captured(tmp_path, monkeypatch):
+    """A daemon or hub run by hand in a terminal keeps logging there; only the
+    stderr a detached process was handed — the log file — is swapped."""
+    import io
+    import logging
+
+    from collab.client import daemon_files
+
+    class Listener:
+        handlers = ()
+
+    terminal = logging.StreamHandler(io.StringIO())
+    listener = Listener()
+    listener.handlers = (terminal,)
+    monkeypatch.setattr(daemon_files, "_listener", listener)
+    hooks = (sys.unraisablehook, __import__("threading").excepthook)
+    try:
+        assert daemon_files.capture_logging_into(tmp_path / "daemon.log")
+        assert listener.handlers == (terminal,), "not stderr: left alone"
+        file_like = open(tmp_path / "stderr.txt", "w")
+        monkeypatch.setattr(sys, "stderr", file_like)
+        stderr_handler = logging.StreamHandler(sys.stderr)
+        listener.handlers = (stderr_handler,)
+        assert daemon_files.capture_logging_into(tmp_path / "daemon.log")
+        assert listener.handlers[0] is not stderr_handler
+        file_like.close()
+    finally:
+        sys.unraisablehook, __import__("threading").excepthook = hooks
+        logging.captureWarnings(False)
