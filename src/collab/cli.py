@@ -314,9 +314,10 @@ def _legacy_probe_note(*, once: bool = True) -> str | None:
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.touch()
     probe = str(config_module.load_machine_config().get("stats_command"))
-    return (f"the machine file's stats_command {said(probe)!r} no longer reports for this agent; "
-            f"`collab config stats_command {shlex.quote(probe)}` keeps it for this agent "
-            f"(or `--kind` for every conversation of this agent kind)")
+    return (f"the machine file's stats_command {said(probe)!r} no longer reports for this agent, and "
+            f"automatic telemetry setup waits until you choose: `collab config stats_command "
+            f"{shlex.quote(probe)}` keeps it for this agent (or `--kind` for this agent kind); "
+            f"`collab config stats_command ''` turns reporting off")
 
 
 def _monitor_hint(profile: SessionProfile, status: dict[str, Any]) -> None:
@@ -5011,7 +5012,8 @@ def cmd_check(args: argparse.Namespace) -> int:
         return 1
 
     results = _checks(profile)
-    if (note := _legacy_probe_note()) is not None:
+    # Every run while un-adopted: a loop must keep seeing why telemetry is off.
+    if (note := _legacy_probe_note(once=False)) is not None:
         results.append({"check": "settings", "verdict": CHECK_WARN, "detail": note, "fix": ""})
     worst = (CHECK_FAIL if any(r["verdict"] == CHECK_FAIL for r in results)
              else CHECK_WARN if any(r["verdict"] == CHECK_WARN for r in results)
