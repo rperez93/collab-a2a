@@ -122,3 +122,19 @@ async def test_escalations_carry_the_askers_id_and_audience_from_the_source(conv
     await conversation.turn()
     row = worker.Store(conversation.root).pending()[0]
     assert (row["source_id"], row["private"], row["subject"]) == ("p_b", True, "PR#141@087570a")
+
+
+@pytest.mark.asyncio
+async def test_a_hub_rejection_during_flush_stays_failed(conversation, tmp_path):
+    """arma's P1: the flush rejects on 404 and then acknowledges; failed must not become delivered."""
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    rid = store.send("to a name that is gone", to="ghost")
+    async def transport(request):
+        return httpx.Response(404, json={"detail": "no such participant"})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        conversation.daemon._http = client
+        await conversation._flush(store, store.snapshot()["generation"])
+    entry = next(e for e in store.snapshot()["main_sent"] if e["id"] == rid)
+    assert entry["status"] == "failed", entry
+    assert store.outbox() == []

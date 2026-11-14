@@ -592,9 +592,12 @@ class Store:
         with self._db() as db:
             row = db.execute("SELECT data FROM records WHERE id=? AND kind='outbox'", (record_id,)).fetchone()
             db.execute("DELETE FROM records WHERE id=? AND kind='outbox'", (record_id,))
-            state = self._state(db)
-            self._mark_sent(state, record_id, "delivered")
-            self._save(db, state)
+            # Only a row still queued was delivered now: after a rejection the
+            # row is already gone, and its failed status must stand.
+            if row is not None:
+                state = self._state(db)
+                self._mark_sent(state, record_id, "delivered")
+                self._save(db, state)
         _drop_stash(row)
 
     def defer(self, record_id: str, *, retry_at: float, error: str) -> bool:
