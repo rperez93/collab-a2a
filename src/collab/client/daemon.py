@@ -2807,117 +2807,7 @@ class Daemon:
             self.profile.save(make_current=False)
 
     def _hub_address(self) -> str:
-        """Where this session's hub answers now, as best this machine knows.
-
-        THE HOST reads its own hub.json: it owns the hub, so it is the one that
-        wrote the new address down.
-
-        A GUEST has no hub.json — it does not own the hub — so this used to
-        return nothing and the guest went on dialling a dead address for ever.
-        That is not a rare case: reviving a hub gives it a NEW PORT, because the
-        old one may not be free, and the host follows that move while every
-        guest is left behind. Killing one hub cost two agents their session and
-        a manual rejoin each.
-
-        The answer was already on the machine. Every daemon announces itself
-        into the peers registry on each heartbeat, and the host's record carries
-        this session's id and its current URL. So a guest asks the registry —
-        the same place `collab join` looks, and the same one the host is
-        writing to seconds after the move.
-
-        FOUR THINGS ARE REQUIRED OF A RECORD BEFORE IT IS FOLLOWED, and each is
-        here because the obvious version of this is unsafe:
-
-        · the same SESSION, or this joins a different conversation;
-        · a HOST record — a guest's only repeats the address it holds, which in
-          this situation is the same dead one;
-        · this MACHINE and this USER, checked rather than assumed. «The registry
-          is per user» is a fact about a directory, and the directory is not
-          always where you think: a synced or NFS home, a devcontainer or WSL
-          bind-mount, or COLLAB_PEERS_DIR pointed at shared storage all put
-          another machine's records under our nose. `alive` does not save us
-          there — `kill(pid, 0)` against a foreign pid namespace finds some
-          unrelated live process and says yes;
-        · a LOOPBACK address, never the public one. This is the part that
-          matters: following an address out of a file means sending our bearer
-          token to it, and the token is not a defence against a URL somebody
-          else chose — it is the thing they wanted. An address that cannot
-          leave this machine cannot carry the token off it either.
-
-        The last of those is why a host publishes `local_url` separately from
-        the address it advertises for sharing.
-
-        AND WHAT THIS IS NOT: the machine check is a correctness control, not a
-        security one — `machine_id` is a hash of world-readable inputs, so any
-        local user can compute ours. What actually holds is that the registry is
-        the user's own private directory (`announce` keeps it 0700) and that
-        nothing but a loopback address is ever adopted from it. On a shared
-        COLLAB_PEERS_DIR that ownership premise is gone. Such a registry may
-        describe peers, but private_records refuses automatic credential
-        routing through it; loopback syntax alone is not enough.
-
-        AND IT ONLY RUNS AFTER A RECONNECT HAS FAILED. A feed that is up is
-        never interrupted to go reading files, so a remote guest talking happily
-        to a tunnel is never re-pointed at a loopback address it cannot reach.
-        """
-        from ..server.session import HubConfig
-
-        cfg = HubConfig.load(self.profile.session_id, self.profile.home)
-        if cfg is not None:
-            # A hub.json with no port yet — written but not started — composes
-            # to `http://:0`, which is truthy and would be saved over a working
-            # address. An address with no host in it is not an address.
-            # A host's tunnel can flap while its own listener remains live.
-            # Returning the public URL here undid local selection on every
-            # reconnect, flipping the saved profile between local/public.
-            mine = cfg.local_url
-            return mine if _has_host(mine) else ""
-
-        here, user = peers.machine_id(), peers.current_user()
-        found: list[peers.Peer] = []
-        # UNFOLDED, and read without deleting anything. `discover` folds by
-        # session and role — it would hand us one of two competing hosts with
-        # no sign that it had chosen — and it prunes dead records as a side
-        # effect, which is not a thing to do from inside a reconnect loop while
-        # everybody else's daemon is reconnecting too.
-        from ..routes import private_records
-        for peer in private_records(self.profile.session_id):
-            if (peer.role != "host"
-                    or peer.machine_id != here or peer.user != user):
-                continue
-            # private_records already checked process liveness without pruning
-            # another participant's record. A host announces the hub pid, so
-            # that check names the serving process rather than the agent.
-            found.append(peer)
-
-        # AMBIGUITY IS NOT AN ANSWER. A session directory copied into another
-        # checkout and hosted there —worktrees make that cheap— gives two live
-        # hosts for one session id, sharing a store and therefore tokens. The
-        # guest would attach to whichever record won, get a clean `ready`, and
-        # sit in silence while the real conversation carried on somewhere else.
-        # Refusing leaves it failing loudly, which is the honest outcome.
-        addresses = {p.local_url or p.url for p in found}
-        if len(addresses) > 1:
-            logger.warning("%s is hosted twice on this machine (%s) — not"
-                           " following either", self.profile.session_id,
-                           ", ".join(sorted(addresses)))
-            return ""
-        for peer in found:
-            candidate = peer.local_url or peer.url
-            if _is_loopback(candidate):
-                return candidate
-        if found:
-            # Something is hosting this session here and we still cannot use it.
-            # Either the hub was bound to a real interface rather than loopback,
-            # or it is an older collab that announces no local address — and
-            # both used to fail in complete silence, which is the worst way for
-            # a recovery path to fail.
-            logger.warning(
-                "found a local host for %s but no address that is safe to"
-                " follow (%s) — a guest can only adopt a loopback address",
-                self.profile.session_id,
-                ", ".join(sorted(p.local_url or p.url for p in found)) or "none")
-        return ""
+        return saved_hub_address(self.profile, prefer_local=True)
 
     def _revive_hub_if_host(self) -> None:
         """Restart our own hub if it died — same session, same tokens.
@@ -3306,8 +3196,9 @@ def saved_hub_address(profile: SessionProfile, *, prefer_local: bool = False) ->
     local user can compute ours. What actually holds is that the registry is
     the user's own private directory (`announce` keeps it 0700) and that
     nothing but a loopback address is ever adopted from it. On a shared
-    COLLAB_PEERS_DIR the first of those is gone, and the second is all that
-    stands between a planted record and this agent's token.
+    COLLAB_PEERS_DIR that ownership premise is gone. Such a registry may
+    describe peers, but private_records refuses automatic credential
+    routing through it; loopback syntax alone is not enough.
 
     AND IT ONLY RUNS AFTER A RECONNECT HAS FAILED. A feed that is up is
     never interrupted to go reading files, so a remote guest talking happily
@@ -3320,8 +3211,10 @@ def saved_hub_address(profile: SessionProfile, *, prefer_local: bool = False) ->
         # A hub.json with no port yet — written but not started — composes
         # to `http://:0`, which is truthy and would be saved over a working
         # address. An address with no host in it is not an address.
-        mine = (cfg.local_url if prefer_local and _is_loopback(cfg.local_url)
-                else (cfg.public_url or cfg.local_url))
+        # A host's tunnel can flap while its own listener remains live.
+        # Returning the public URL here undid local selection on every
+        # reconnect, flipping the saved profile between local/public.
+        mine = cfg.local_url if prefer_local else (cfg.public_url or cfg.local_url)
         return mine if _has_host(mine) else ""
 
     here, user = peers.machine_id(), peers.current_user()
@@ -3331,14 +3224,14 @@ def saved_hub_address(profile: SessionProfile, *, prefer_local: bool = False) ->
     # no sign that it had chosen — and it prunes dead records as a side
     # effect, which is not a thing to do from inside a reconnect loop while
     # everybody else's daemon is reconnecting too.
-    for peer in peers.live_records(profile.session_id):
+    from ..routes import private_records
+    for peer in private_records(profile.session_id):
         if (peer.role != "host"
                 or peer.machine_id != here or peer.user != user):
             continue
-        # Liveness is not checked here: `discover` already drops records
-        # whose process is gone, and for a HOST record that process is the
-        # hub itself — a host announces its hub's pid, not its own. A second
-        # check here would read as the guard and never fire.
+        # private_records already checked process liveness without pruning
+        # another participant's record. A host announces the hub pid, so
+        # that check names the serving process rather than the agent.
         found.append(peer)
 
     # AMBIGUITY IS NOT AN ANSWER. A session directory copied into another

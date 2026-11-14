@@ -45,6 +45,36 @@ async def connect(port, certificate):
                                          server_hostname="127.0.0.1")
 
 
+@pytest.mark.parametrize('local_available', [True, False])
+async def test_saved_guest_resumes_pinned_tls_or_its_trusted_public_fallback(
+        context, tmp_path, live_server, monkeypatch, local_available):
+    from collab import cli, routes
+    from collab.config import SessionProfile
+    forwarder = tls.LocalTLS(live_server['base'], '127.0.0.1', context)
+    await forwarder.start()
+    secure = f'https://127.0.0.1:{forwarder.port}'
+    home = tmp_path / 'guest'
+    monkeypatch.setenv('COLLAB_PEERS_DIR', str(tmp_path / 'isolated-peers'))
+    profile = SessionProfile(session_id='s_test', name='alice', host_name='alice',
+                             token=live_server['host_token'], url=secure,
+                             home=str(home), working_path=str(tmp_path))
+    profile.save()
+    assert routes.remember(profile, {'session_id': 's_test',
+        'secure_local_url': secure, 'local_certificate': tls.read_certificate(tmp_path),
+        'public_url': live_server['base']}, original_url=live_server['base'])
+    if not local_available:
+        await forwarder.close()
+    try:
+        result = await asyncio.to_thread(cli.main,
+            ['resume', 's_test', '--home', str(home), '--no-daemon'])
+        assert result == 0
+        saved = SessionProfile.load_from(profile.dir)
+        assert saved.url == (secure if local_available else live_server['base'])
+        assert saved.token == profile.token
+    finally:
+        await forwarder.close()
+
+
 async def close_writer(writer):
     writer.close()
     with contextlib.suppress(OSError, ssl.SSLError):

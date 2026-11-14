@@ -169,10 +169,12 @@ the SSE `id:`. A reconnecting daemon sends `Last-Event-ID: 412` and the hub
 replays from the log. Kill the hub with `-9`, restart it: the feed resumes with
 no gap.
 
-One session remains reachable locally and through its public tunnel. New join
-links can prefer private same-machine discovery or a pinned TLS entrance on
-the LAN, then fall back publicly without changing membership. Older links and
-clients retain their public route. [Route selection and recovery](docs/local-routes.md)
+One session remains reachable locally and through its public tunnel. A join
+can use verified private same-machine discovery. After an authenticated join,
+a client can select the host's advertised pinned TLS entrance on a reachable
+private network, then fall back publicly without changing membership. A link
+alone cannot authorize that LAN destination. Older links and clients retain
+their public route. [Route selection and recovery](docs/local-routes.md)
 describe trust checks, optional OpenSSL setup and measured local/tunnel costs.
 
 ## Install
