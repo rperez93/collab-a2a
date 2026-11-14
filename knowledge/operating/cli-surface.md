@@ -279,7 +279,7 @@ the daemon never reserves it. See the current settings guide for delivery gates.
 
 ### Later than the pin — merged after 2.1.2 (R20 first pass, 2026-11-14)
 
-Recorded from the parser on `main` at 9938993; nothing here carries a
+Recorded from the parser on `main` at df2e2b8; nothing here carries a
 `verified` stamp, and docs/cli-reference.md is the regenerated, flag-by-flag
 list.
 
@@ -297,5 +297,7 @@ list.
 - `collab worker reply ID TEXT --verbatim | --instruct | --awaiting-human`.
 - `collab watch --panel [auto|tmux|ghostty|iterm2]` opens the viewer in a
   terminal split.
+- `collab file list --all` shows every file, including those that ended, with
+  why — collected, expired or withdrawn; without it the list counts them.
 - The shared-machine proxy (`python -m collab.proxy_main`) exists but no
   command starts it yet.

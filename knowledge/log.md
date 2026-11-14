@@ -1,7 +1,7 @@
 # Bundle Update Log
 
 ## 2026-11-14 (R20 first pass)
-* **Update (later than the pin)**: Recorded in [the command surface](operating/cli-surface.md) the commands and flags merged after 2.1.2 — `dashboard`, `config --machine/--kind`, `ngrok_domain`, `resume --keep` and the takeover refusal, `worker reply` answer modes, `watch --panel` — and that the shared-machine proxy is not yet started by any command. The pin and verification stamps are unchanged.
+* **Update (later than the pin)**: Recorded in [the command surface](operating/cli-surface.md) the commands and flags merged after 2.1.2 — `dashboard`, `config --machine/--kind`, `ngrok_domain`, `resume --keep` and the takeover refusal, `worker reply` answer modes, `watch --panel`, `file list --all` — recorded at `main` df2e2b8 — and that the shared-machine proxy is not yet started by any command. The pin and verification stamps are unchanged.
 
 ## 2026-11-14 (identity authorization)
 * **Update (later than the pin)**: Recorded stable-ID reply routing and

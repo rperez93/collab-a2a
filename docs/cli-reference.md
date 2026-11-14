@@ -660,7 +660,7 @@ options:
 
 ```text
 usage: collab file [-h] [--to TO] [--room ROOM] [--output OUTPUT] [--keep]
-                   [--json] [--session SESSION]
+                   [--all] [--json] [--session SESSION]
                    {send,get,list,rm} [target]
 
 positional arguments:
@@ -673,6 +673,8 @@ options:
   --room ROOM
   --output, -o OUTPUT  directory to save into (default: here)
   --keep               do not confirm receipt, so the host keeps its copy
+  --all                list: include files that already ended (collected,
+                       expired, withdrawn)
   --json
   --session SESSION    act on this session id instead of the current one
 ```
