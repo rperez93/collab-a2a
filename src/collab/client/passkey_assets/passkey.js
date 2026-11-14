@@ -1,7 +1,7 @@
 /* This local page forwards evidence; only the hub verifies signatures and trust. */
 export const LIMITS = Object.freeze({rpc: 512 * 1024, review: 64 * 1024, challenge: 32,
-  credential: 1024, clientData: 16384, authenticator: 8192, signature: 8192,
-  attestation: 65536, publicKey: 8192, credentials: 32});
+  credential: 1024, clientData: 8192, authenticator: 8192, signature: 4096,
+  attestation: 65536, publicKey: 4096, credentials: 32});
 const utf8 = new TextEncoder();
 
 function boundedText(value, maximum, label) {
@@ -333,7 +333,8 @@ export function createApp(environment = globalThis) {
   return app;
 }
 
-if (typeof window !== "undefined" && typeof document !== "undefined") {
+if (typeof window !== "undefined" && typeof document !== "undefined" &&
+    /^\/consent\/[A-Za-z0-9_-]{1,128}\/?$/.test(window.location?.pathname || "")) {
   try {
     const app = createApp(window);
     window.addEventListener("pagehide", () => app.dispose(), {once: true});

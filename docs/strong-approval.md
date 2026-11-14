@@ -1,14 +1,18 @@
 # Local passkey review frontend
 
-`collab.client.passkey` provides a localhost review page and an injectable
-adapter boundary for request approval by the strong-approval dispatcher.
+`collab.client.passkey` provides a localhost review page. The bounded
+`PasskeyHubAdapter` forwards the draft v1 hub protocol using an authenticated
+profile, an immutable operation binding and an explicit credential ID.
 Request windows cannot enrol or replace a key: neither the page nor its HTTP
-capability exposes registration. The separate human-started `collab consent enrol`
-flow belongs to pending core integration. This module does not provide a hub
+capability exposes registration. The separate human-started service is
+`collab.client.passkey_enrol.EnrolService`; CLI and dispatcher adoption remain
+core integration gates. This module does not provide a hub
 approval API, register a real credential by itself, or turn a terminal receipt
 into cryptographic approval. With no adapter it reports «unsupported» and
-submits no decision. Wiring the final versioned hub contract and testing real
-human enrolment and approval remain integration gates.
+submits no decision. Every operation checks capability discovery: the current
+draft core reports «operation_integration_pending» and refuses production
+availability. No local flag overrides it. Real human enrolment and approval
+remain integration gates.
 
 The dispatcher awaits `passkey.open(request_id, adapter=adapter)` on its existing
 daemon event loop, then calls `passkey.close()` during shutdown. The adapter
@@ -41,22 +45,26 @@ The review displays the complete bounded UTF-8 canonical bytes as text alongside
 their SHA-256 digest, subject, requester, destination, authority and expiry.
 Rendering never interprets embedded request markup. The requester is an explicit
 `Requester(participant_id, display_name)` and both fields are displayed. The
-trusted adapter must obtain them from the same canonical hub review, rather
-than infer an identity from a name. Approval requires a button click and user
+adapter obtains the participant ID from the canonical hub review. The dispatcher
+may supply a display name from the authenticated source event; it remains an
+untrusted label and does not affect authority or receipt binding. Missing labels
+stay «Name unavailable», rather than being guessed. Approval requires a button click and user
 verification. No request-window code calls `navigator.credentials.create`.
-The standalone registration utilities are reserved for the future separate
-human-started flow: they require the participant ID's UTF-8 bytes as the WebAuthn
-user ID, request attestation «none», constrain SPKI algorithms and preserve the
-browser's raw base64url evidence.
-The adapter forwards original clientDataJSON, authenticator data, attestation
-and signature bytes without reconstruction. The hub must independently verify
+The separate enrolment flow uses the participant ID's exact UTF-8 bytes as the
+WebAuthn user ID, refusing identities larger than 64 bytes. It requests
+attestation «none» and only ES256 or RS256. Creation exports the credential ID,
+algorithm and bounded SPKI. A subsequent get proves possession using that same
+credential and the original hub challenge. Creation attestation is not
+forwarded or treated as proof. The adapter forwards original clientDataJSON,
+authenticator data and signature bytes without reconstruction. The hub must independently verify
 the challenge, origin, RP hash, UV flags, signature, counters, nonce and review
 binding before consuming a decision.
 
 The core must refuse approvals using a key enrolled less than ten minutes ago,
-allowing time for the loud enrolment announcement and human intervention. This
-is a pending hub-enforced integration gate; the page cannot certify it by its
-own clock. Acceptance must include attempted virtual-authenticator enrolment
+allowing time for the loud enrolment announcement and human intervention. The
+draft core implements this cooldown; combined integration remains a gate. The
+page displays the hub's usable-at metadata and cannot waive it using its own
+clock. Acceptance must include attempted virtual-authenticator enrolment
 using a stolen request capability and a real human-approved path.
 
 First enrolment is trust on first use. Software and virtual authenticators can
@@ -69,6 +77,42 @@ the window uncertain. It cannot mint another decision until an explicit review
 refresh confirms the current hub state. Local expiry is checked again after
 body collection, and ceremonies cannot outlive the review or local capability.
 The hub remains responsible for authoritative expiry and single consumption.
+
+The request adapter needs a trusted dispatcher binding from an authenticated
+operation preparation: session, target and requester IDs, request ID, digest,
+expiry, destination, authority and source sequence where applicable. A name or
+browser-supplied request ID cannot create that binding. The review endpoint
+does not admit bindings itself. The dispatcher uses `register_binding(binding)`
+on its existing adapter for later operations: at most sixteen states are
+retained, expired unlocked states may be pruned, and a conflicting existing
+request binding is refused. The review endpoint
+does not supply expiry. If a challenge outlives its request, the adapter caps
+only the local ceremony deadline and preserves the hub's original challenge
+bytes. A changed route, token or certificate invalidates transport work before
+another request is sent. A successful proof releases an opaque receipt only
+through a private one-use dispatcher handoff, never to the browser; taking it
+is not execution of the operation.
+
+`EnrolService(page, transport).human_start()` is the local front-door API. It
+mounts separate enrolment routes under the existing guarded listener, with one
+independent capability and flow alongside at most sixteen request windows.
+The eight-connection cap is shared. No HTTP endpoint or request event mints an
+enrolment capability. Same origin is not isolation between pages: distinct
+capabilities, text-only rendering and the restrictive content policy remain
+essential. Stopping the page revokes the capability and retains a bounded
+marker for an uncertain finish. Refresh confirms only the exact credential ID,
+algorithm and SPKI fingerprint in the authenticated registry; empty or
+mismatching keys never authorize repeating an uncertain finish or replacing a
+key. A cancelled create/get step can leave a credential on the authenticator
+without hub enrolment; the UI promises neither deletion nor rollback.
+
+The transport caps request bodies at 128 KiB and raw responses at 256 KiB,
+rejects encoded responses and bounds JSON depth, node count and field sizes.
+Signed client data is limited to 8 KiB, authenticator data to 8 KiB, signatures
+and SPKI to 4 KiB each, and credential IDs to 1 KiB. A five-second budget covers
+each multi-request adapter operation. Enrolment handling has a ten-second
+whole-operation deadline including its three-second body budget. These are
+component limits, not a final process-tree CPU/RSS guarantee.
 
 Component tests use synthetic adapters and browser API stubs. Socket resource
 tests measure owned flooding, silent and trickling peers in fresh processes;
