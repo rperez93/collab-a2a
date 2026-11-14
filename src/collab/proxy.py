@@ -84,6 +84,13 @@ UPSTREAM_LIMITS = {"max_connections": None, "max_keepalive_connections": 64}
 #: a poor link, does not stall for this long.
 BODY_IDLE = 30.0
 
+#: The slowest a request body may arrive, on average, once BODY_GRACE has
+#: passed. BODY_IDLE alone was reset by one byte every 29 s, so ~500 such
+#: uploads from the internet held ~1,000 descriptors indefinitely (review of
+#: #119). 256 B/s is far below any real link and far above a drip.
+BODY_MIN_RATE = 256.0
+BODY_GRACE = 30.0
+
 #: How long the primary-session lookup is trusted. It was a file read on every
 #: proxied request — every poll, roster read and send.
 PRIMARY_CACHE_SECONDS = 1.0
@@ -245,13 +252,19 @@ def build_app(routes: Routes | None = None, *, primary: Any = None) -> Any:
                                follow_redirects=False)
 
     async def body(request: Request) -> Any:
-        """The request body, given up on after BODY_IDLE without a byte."""
+        """The request body, given up on after BODY_IDLE without a byte, or
+        once it averages under BODY_MIN_RATE after BODY_GRACE."""
         chunks = request.stream().__aiter__()
+        started, seen = time.monotonic(), 0
         while True:
             try:
                 chunk = await asyncio.wait_for(chunks.__anext__(), BODY_IDLE)
             except StopAsyncIteration:
                 return
+            seen += len(chunk)
+            elapsed = time.monotonic() - started
+            if elapsed > BODY_GRACE and seen / elapsed < BODY_MIN_RATE:
+                raise asyncio.TimeoutError("request body below the minimum rate")
             yield chunk
 
     async def handle(request: Request) -> Any:
