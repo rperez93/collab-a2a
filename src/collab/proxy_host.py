@@ -100,6 +100,12 @@ class SharedProxy:
         if self.primary_holder:
             logger.warning("the shared proxy's primary is %s; bare-domain links "
                            "reach that session, not this one", holder)
+            # Refused once, asked no more: `ensure()` re-runs `start()` and so
+            # this claim whenever it finds the proxy dead, and a refused hub
+            # kept asking — it took the slot silently after the holder was
+            # purged and the proxy restarted (adversarial review of #163). The
+            # CLI drops the recorded claim too; asking again is explicit.
+            self.primary = False
 
     def start(self) -> str:
         self._claim()
