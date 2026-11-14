@@ -135,7 +135,9 @@ def set_value(name, value):
     from .config import load_config, save_config
     parse = next(spec[2] for spec in SPECS if spec[0] == name)
     result = parse(value)
-    save_config({**load_config(), name: result})
+    cfg = load_config()  # a view that keeps its read baseline (R21)
+    cfg[name] = result
+    save_config(cfg)
     return result
 
 def settings():

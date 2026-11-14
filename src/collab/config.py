@@ -573,6 +573,16 @@ def setting_source(key: str) -> str:
     return "default"
 
 
+class ConfigView(dict):
+    """The merged settings, remembering what was read and for which identity.
+
+    save_config diffs a view against its OWN baseline, so a setter that read
+    under one agent home and saves after another was selected (cache expired
+    or not) writes only what it changed, never the old home's private values.
+    """
+    __slots__ = ("baseline",)
+
+
 def load_config() -> dict[str, Any]:
     """The settings in force for THIS agent: its own file over the machine's.
 
@@ -586,7 +596,9 @@ def load_config() -> dict[str, Any]:
     agent = load_agent_config()
     merged = {k: v for k, v in machine.items() if k not in IDENTITY_KEYS}
     merged.update({k: v for k, v in agent.items() if agent_scoped(k)})
-    return copy.deepcopy(merged)
+    view = ConfigView(copy.deepcopy(merged))
+    view.baseline = copy.deepcopy(merged)
+    return view
 
 
 def _write_json(p: Path, data: dict[str, Any]) -> None:
@@ -626,7 +638,7 @@ def save_config(cfg: dict[str, Any]) -> None:
     # only the keys it changed relative to that view are its change. They are
     # applied to the identity selected NOW, and nothing else of the old view
     # (another home's private overrides) is ever carried across.
-    seen = load_config()
+    seen = cfg.baseline if isinstance(cfg, ConfigView) else load_config()
     changed = {k for k in set(cfg) | set(seen)
                if (k in cfg) != (k in seen) or (k in cfg and cfg[k] != seen[k])}
     if WRITE_MACHINE["on"] and WRITE_MACHINE.get("key"):
