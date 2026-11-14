@@ -6014,7 +6014,7 @@ def cmd_worker(args: argparse.Namespace) -> int:
                 return 2
             store.answer(args.decision_id, args.text, verbatim=verbatim, notify_to=to, notify_room=room)
             # Queued: the durable outbox delivers it; nothing was sent yet.
-            ok(f"queued for {('@' + to) if to else ('#' + room)} verbatim" if verbatim
+            ok(f"queued for {('@' + said(to)) if to else ('#' + said(room))} verbatim" if verbatim
                else "decision queued for the collaboration worker")
         elif args.worker_action == "context":
             store.context(args.text)
