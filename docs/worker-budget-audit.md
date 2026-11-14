@@ -46,6 +46,25 @@ presentation, not outstanding decisions or failed model attempts. A separate
 recovery notice correctly exposed the budget error. Notifications must recheck
 current state and avoid waking the main agent repeatedly for resolved work.
 
+## Continued baseline observation after UTC midnight
+
+On 2026-11-14 at 00:18:47 UTC, the same listener reported the hourly-limit
+error with retry at 00:28:31.609, an active daemon, no pending decisions and an
+empty outbox. Those state fields do not prove there was no unprocessed input.
+The worker subsequently cleared the error and began a model turn without any
+restart or budget change. Its next limit response scheduled 00:29:26.268;
+a later sample recorded 114 lifetime reservations, 60 within the rolling hour,
+235 committed turns and retry at 00:31:59.639.
+
+The later usage counters were 4,267,960 input, 22,101 output and 449,280 cached
+tokens, observed at 00:29:33.485 UTC. These remain lifetime observations, not a
+new matched measurement window or a useful-call ratio. PR #100 pacing and the
+R14 outcome ledger were not installed in this listener. Repeated scheduled-cap
+notifications continued to wake the main agent even with no pending decisions.
+This is further baseline evidence for distinguishing a scheduled retry from an
+intervention-required recovery and suppressing duplicate notices until state
+changes. It is not evidence to raise or reset the configured cap.
+
 ## Why the existing counters cannot measure useful-call ratio
 
 `Store.reserve_turn` reserves before a provider launch and includes failed or
