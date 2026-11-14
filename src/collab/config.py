@@ -505,23 +505,31 @@ def agent_scoped(key: str) -> bool:
 
 
 _AGENT_CACHE: dict[str, Any] = {}
+AGENT_SETTINGS = "agent-settings.json"
 _AGENT_PATH: dict[tuple, Path | None] = {}
 #: Set by `collab config --machine`: write agent-scoped keys to the shared file.
 WRITE_MACHINE = {"on": False}
 
 
 def agent_config_path() -> Path | None:
-    """This agent's own settings file, beside its collab state; None if unknown."""
+    """This agent's own settings file, INSIDE its collab state directory.
+
+    Inside, not beside: a `--home .collab-me` or a legacy `<repo>/.collab`
+    has the repository as its parent, and a named profile created after a
+    collision shares its parent with the first agent. The state directory is
+    the one thing that is this agent's alone (and is git-ignored).
+    """
     env = (os.environ.get("COLLAB_AGENT_CONFIG"), os.environ.get("COLLAB_HOME"),
-           os.environ.get("COLLAB_STATE_DIR"), *(os.environ.get(k) for k in AGENT_SESSION_KEYS))
+           os.environ.get("COLLAB_STATE_DIR"), str(Path.cwd()),
+           *(os.environ.get(k) for k in AGENT_SESSION_KEYS))
     if env not in _AGENT_PATH:
         if env[0]:
             path: Path | None = Path(env[0])
         elif env[1]:
-            path = Path(env[1]).expanduser().parent / "settings.json"
+            path = Path(env[1]).expanduser() / AGENT_SETTINGS
         else:
             try:
-                path = base_home().parent / "settings.json"
+                path = base_home() / AGENT_SETTINGS
             except Exception:  # no workspace or agent identity: machine file only
                 path = None
         _AGENT_PATH.clear()
@@ -550,12 +558,14 @@ def load_config() -> dict[str, Any]:
 
     Only agent-scoped keys are taken from the agent's file; a machine-wide key
     there is ignored, so one agent cannot change another's theme or tunnel.
+    A fresh copy every time: setters edit what they get and hand it to
+    save_config, and editing the cached dict made every such write a no-op.
     """
+    import copy
     machine = load_machine_config()
     agent = load_agent_config()
-    if not agent:
-        return machine
-    return {**machine, **{k: v for k, v in agent.items() if agent_scoped(k)}}
+    merged = {**machine, **{k: v for k, v in agent.items() if agent_scoped(k)}}
+    return copy.deepcopy(merged)
 
 
 def _write_json(p: Path, data: dict[str, Any]) -> None:
@@ -569,44 +579,63 @@ def _write_json(p: Path, data: dict[str, Any]) -> None:
         discard(tmp)
 
 
+def _read_raw(p: Path | None) -> dict[str, Any]:
+    if p is None:
+        return {}
+    try:
+        data = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def save_config(cfg: dict[str, Any]) -> None:
-    """Write what changed against the merged view, each key to its own file.
+    """Write what changed against what is on disk, each key to its own file.
 
     Callers pass the whole merged config with their change in it; only the
     keys that differ are written, agent-scoped ones to this agent's file
     (unless --machine), so agent values never spill into the shared file.
+    Removing an agent-scoped key removes THIS agent's value only: the shared
+    default other agents use is changed only with --machine.
     """
-    machine = dict(load_machine_config())
-    agent_path = agent_config_path()
-    agent = dict(load_agent_config())
-    current = load_config()
+    machine_path, agent_path = global_config_path(), agent_config_path()
+    machine, agent = _read_raw(machine_path), _read_raw(agent_path)
+    current = {**machine, **{k: v for k, v in agent.items() if agent_scoped(k)}}
     changed_machine = changed_agent = False
     for key in set(cfg) | set(current):
         if key in cfg and key in current and cfg[key] == current[key]:
             continue
         to_agent = agent_scoped(key) and agent_path is not None and not WRITE_MACHINE["on"]
-        target = agent if to_agent else machine
         if key in cfg:
-            target[key] = cfg[key]
+            (agent if to_agent else machine)[key] = cfg[key]
+        elif to_agent:
+            if key not in agent:
+                continue  # nothing of this agent's to remove; the shared value stays
+            agent.pop(key)
         else:
-            target.pop(key, None)
-            if to_agent:
-                machine_value = machine.get(key)
-                if machine_value is not None and key not in agent:
-                    machine.pop(key, None)  # an explicit unset clears the legacy shared value too
-                    changed_machine = True
-        if to_agent:
-            changed_agent = True
-        else:
-            changed_machine = True
+            machine.pop(key, None)
+        changed_agent |= to_agent
+        changed_machine |= not to_agent
     if changed_machine:
-        _write_json(global_config_path(), machine)
+        _write_json(machine_path, machine)
     if changed_agent and agent_path is not None:
         _write_json(agent_path, agent)
     # So a writer never has to wait for their own change to "age": inside the
     # same second the stamp might not have moved yet.
     _CACHE.clear()
     _AGENT_CACHE.clear()
+
+
+def pin_agent_value(key: str, value: Any) -> None:
+    """Give this agent its own value even when it equals the inherited one."""
+    path = agent_config_path()
+    if path is None or not agent_scoped(key) or WRITE_MACHINE["on"]:
+        return
+    agent = _read_raw(path)
+    if agent.get(key) != value or key not in agent:
+        agent[key] = value
+        _write_json(path, agent)
+        _AGENT_CACHE.clear()
 
 
 def _git_user_name() -> str | None:
