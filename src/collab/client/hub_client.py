@@ -312,7 +312,8 @@ class HubClient:
                              params={"id": task_id})["prs"]
 
     def task_pr_action(self, action: str, *, task_id: str, url: str,
-                       number: int | None = None) -> list[dict[str, Any]]:
+                       number: int | None = None,
+                       evidence: dict[str, str] | None = None) -> list[dict[str, Any]]:
         """add / remove. Returns every pull request the task has afterwards.
 
         The whole list rather than the one row, because a task has as many as
@@ -321,6 +322,18 @@ class HubClient:
         payload: dict[str, Any] = {"action": action, "id": task_id, "url": url}
         if number is not None:
             payload["number"] = number
+        if evidence:
+            from collab.pr_review import FIELDS, commit_sha
+            if action != "add" or any(field not in FIELDS for field in evidence):
+                raise HubError("invalid PR evidence action or field")
+            try:
+                checked = {field: commit_sha(value) for field, value in evidence.items()}
+            except ValueError as exc:
+                raise HubError(str(exc)) from exc
+            capabilities = self._request("GET", f"{EXT_PREFIX}/task-pr-capabilities")
+            if capabilities.get("commit_evidence") != 1:
+                raise HubError("host does not support commit evidence; upgrade it before recording a review")
+            payload.update(checked)
         return self._request("POST", f"{EXT_PREFIX}/task-prs",
                              json=payload)["prs"]
 

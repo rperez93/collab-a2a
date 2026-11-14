@@ -78,3 +78,26 @@ notices arrive after five continuous idle minutes through the monitor or wake
 route; `collab config task_pickup_idle_delay 300` changes that delay and
 `collab config task_auto_pickup false` disables automatic notices. Keep activity
 accurate; silence alone does not mean idle.
+
+## Pin review evidence
+
+Record the exact commits covered by review and tests, then observe the PR head:
+
+```bash
+collab task pr --id T_9a1c --url https://github.com/owner/repo/pull/12 --reviewed-sha <full-sha> --tested-sha <full-sha> --check-head
+```
+
+`--check-head` uses the local authenticated `gh` CLI against github.com, with a
+10-second and 4-KiB limit (POSIX/WSL). For another forge, record an independently
+observed full commit with `--head-sha`. Omitted evidence preserves previous values;
+relinking a URL never silently approves a new commit. Full SHA-1 or SHA-256 hashes
+are required. Old hosts refuse evidence recording before any write.
+
+Task list/show and snapshot task records warn when the observed head differs from
+the reviewed or tested commit. The transcript carries that warning too. Unknown
+stays unknown; observations include their reporter and time. There is no background
+forge polling: run `task pr --check-head` again before relying on the evidence.
+These are participants' evidence statements, not forge approvals. They never merge
+a PR. At merge time use the forge's atomic expected-head guard, for example
+`gh api --method PUT repos/OWNER/REPO/pulls/NUMBER/merge -f sha=<reviewed-and-tested-sha>`;
+a prior observation alone cannot prevent the head changing before the merge.

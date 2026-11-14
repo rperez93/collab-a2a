@@ -460,6 +460,7 @@ def _print_snapshot(snapshot: dict[str, Any], me: str) -> None:
             owner = scrub(str(t.get("owner"))) if t.get("owner") else dim("unclaimed")
             print(f"  {t['id']}  {scrub(str(t['title']))}  "
                   f"[{short_state(t['state'])}]  {owner}")
+            _task_review_warning(t)
 
     if recent := snapshot.get("recent"):
         heading("Recent")
@@ -2077,7 +2078,27 @@ def cmd_activity(args: argparse.Namespace) -> int:
     return 0
 
 
+def _describe_pr_evidence(pr: dict) -> None:
+    from collab.pr_review import FIELDS, status
+    print(f"    {status(pr)}")
+    for field in FIELDS:
+        if pr.get(field):
+            print(f"    {field}: {said(pr[field])}")
+    if pr.get("head_observed_at"):
+        print(f"    head observed at: {said(str(pr['head_observed_at']))}")
+
+
+def _task_review_warning(task: dict) -> None:
+    from collab.pr_review import task_warning
+    if message := task_warning(task):
+        print(f"    {message}")
+
+
 def cmd_task(args: argparse.Namespace) -> int:
+    if args.action != "pr" and any(getattr(args, field, None) for field in
+            ("reviewed_sha", "tested_sha", "head_sha", "check_head")):
+        fail("commit evidence flags belong to task pr")
+        return 1
     # `list` and `show` only read; everything else is a claim, a proposal or a
     # completion under this agent's name.
     profile = (_require_profile(args) if args.action in ("list", "show")
@@ -2095,6 +2116,7 @@ def cmd_task(args: argparse.Namespace) -> int:
                     owner = said(t.get("owner")) or dim("unclaimed")
                     print(f"  {said(t['id'])}  {said(t['title'])}  "
                           f"[{short_state(t['state'])}]  {owner}")
+                    _task_review_warning(t)
                 return 0
             if args.action == "show":
                 if not args.id:
@@ -2125,10 +2147,27 @@ def cmd_task(args: argparse.Namespace) -> int:
                     fail(f"`collab task {args.action} --id T_xxx --url"
                          " https://github.com/owner/repo/pull/12`")
                     return 1
+                from collab.pr_review import FIELDS, commit_sha, github_head
+                evidence = {}
+                try:
+                    for field in FIELDS:
+                        value = getattr(args, field, None)
+                        if value is not None:
+                            evidence[field] = commit_sha(value)
+                    if getattr(args, "check_head", False):
+                        if "head_sha" in evidence:
+                            raise ValueError("use either --head-sha or --check-head")
+                        evidence["head_sha"] = github_head(url)
+                    if evidence and args.action != "pr":
+                        raise ValueError("commit evidence belongs to task pr")
+                except ValueError as exc:
+                    fail(str(exc))
+                    return 1
                 prs = client.task_pr_action(
                     "add" if args.action == "pr" else "remove",
                     task_id=args.id, url=url,
-                    number=getattr(args, "number", None))
+                    number=getattr(args, "number", None),
+                    **({"evidence": evidence} if evidence else {}))
                 ok(f"{args.action}: {said(args.id)}")
                 # ALL OF THEM, EVERY TIME. A task has as many pull requests as
                 # the work took, and printing only the one just added is how
@@ -2136,6 +2175,7 @@ def cmd_task(args: argparse.Namespace) -> int:
                 for one in prs:
                     num = f"#{one['number']}" if one.get("number") else ""
                     print(f"  {said(num)} {dim(said(one.get('url')))}")
+                    _describe_pr_evidence(one)
                 if not prs:
                     print(dim("  no pull requests on it now"))
                 return 0
@@ -2242,6 +2282,7 @@ def _describe_task(task: dict[str, Any], *, as_json: bool = False,
     for pr in prs or []:
         num = f"#{pr['number']}" if pr.get("number") else ""
         print(f"  {'pr':<12} {said(num)} {dim(said(pr.get('url')))}")
+        _describe_pr_evidence(pr)
     for note in comments or []:
         when = activity.elapsed({"since": note.get("created_at")}) or ""
         print(f"\n  {said(note.get('author'))} {dim(when)}")
@@ -7497,6 +7538,11 @@ def build_parser() -> argparse.ArgumentParser:
                         " of the one it is in. `move` changes nothing else:"
                         " not the state, not the owner, not the batch")
     t.add_argument("--url", help="with pr/pr-remove: the pull request's url")
+    t.add_argument("--reviewed-sha", help="with pr: full commit SHA covered by review")
+    t.add_argument("--tested-sha", help="with pr: full commit SHA covered by tests")
+    t.add_argument("--head-sha", help="with pr: explicitly observed full PR head SHA")
+    t.add_argument("--check-head", action="store_true",
+                   help="with pr: observe GitHub head via gh (10 seconds, 4 KiB)")
     t.add_argument("--number", type=int,
                    help="with pr: its number, if the url does not end in one")
     t.add_argument("--files", nargs="*", metavar="PATH",
