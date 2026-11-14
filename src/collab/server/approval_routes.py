@@ -16,6 +16,7 @@ from starlette.responses import JSONResponse
 
 from ..protocol import EXT_PREFIX
 from .approval_keys import KeyChanges
+from .approval_skills import SkillApprovals
 from .approval_store import ApprovalStore, Rejected
 from .auth import RateLimiter
 
@@ -118,8 +119,10 @@ async def _body(request, required, optional):
 def install(app, store, session_id):
     core = ApprovalStore(store, session_id)
     changes = KeyChanges(core)
+    skills = SkillApprovals(core)
     app.state.approvals = core
     app.state.approval_keys = changes
+    app.state.approval_skills = skills
     slots = asyncio.Semaphore(MAX_INFLIGHT)
     ingress = RateLimiter(limit=HTTP_RATE, window=60)
     router = APIRouter(prefix=PREFIX, tags=["approval"])
@@ -184,4 +187,7 @@ def install(app, store, session_id):
           {"challenge_id": str, "proof": dict})
     route("/key-changes/{change_id}/apply", "POST", lambda token, path, body: changes.apply(token, path["change_id"], **body), {"receipt": str})
     route("/key-changes/{change_id}", "GET", lambda token, path, body: changes.status(token, path["change_id"]))
+    route("/skills/prepare", "POST", lambda token, path, body: skills.prepare(token, **body), {"source_seq": int})
+    route("/skills/{request_id}/accept", "POST", lambda token, path, body: skills.accept(token, path["request_id"], **body), {"receipt": str})
+    route("/skills/{request_id}", "GET", lambda token, path, body: skills.status(token, path["request_id"]))
     app.include_router(router)

@@ -30,9 +30,6 @@ def enqueue(db, session_id, owner, kind, now, metadata):
                "key_reported_changed": "changed", "key_change_applied": "key-change"}
     if kind not in actions:
         return
-    if db.execute("SELECT COUNT(*) FROM approval_alarm_outbox").fetchone()[0] >= MAX_PENDING:
-        from .approval_store import Rejected
-        raise Rejected("alarm_capacity", 429)
     fingerprint = metadata["fingerprint"]
     if (type(fingerprint) is not str or len(fingerprint) != 64
             or any(c not in "0123456789abcdef" for c in fingerprint)):
@@ -64,6 +61,16 @@ def enqueue(db, session_id, owner, kind, now, metadata):
     env = Envelope(kind=KIND_SYSTEM, sender="collab", room=DEFAULT_ROOM,
                    ts=datetime.fromtimestamp(now, timezone.utc).isoformat(),
                    text=scrub(text), body=body)
+    enqueue_event(db, session_id, now, identity, env)
+
+
+def enqueue_event(db, session_id, now, identity, env):
+    """Internal adoption boundary for server-created approval system events."""
+    if env.kind != KIND_SYSTEM:
+        raise ValueError("approval event must be server-owned")
+    if db.execute("SELECT COUNT(*) FROM approval_alarm_outbox").fetchone()[0] >= MAX_PENDING:
+        from .approval_store import Rejected
+        raise Rejected("alarm_capacity", 429)
     db.execute("INSERT INTO approval_alarm_outbox VALUES(?,?,?,?)",
                (identity, session_id, now, json.dumps(env.to_dict())))
 
@@ -81,7 +88,8 @@ def _persist_next(core):
                 return None
             env = Envelope.from_dict(json.loads(row["payload"]))
             cur = db.execute("INSERT INTO events(kind,room,sender,recipient,sender_id,recipient_id,ts,payload) VALUES(?,?,?,?,?,?,?,?)",
-                             (env.kind, env.room, env.sender, None, "", None, env.ts, ""))
+                             (env.kind, env.room, env.sender, env.to, env.sender_id,
+                              env.to_id or ("unresolved:private" if env.to else None), env.ts, ""))
             env.seq = int(cur.lastrowid)
             db.execute("UPDATE events SET payload=? WHERE seq=?", (json.dumps(env.to_dict()), env.seq))
             db.execute("DELETE FROM approval_alarm_outbox WHERE id=?", (row["id"],))

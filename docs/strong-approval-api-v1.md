@@ -39,8 +39,9 @@ pending change storage is capped at 128 globally and eight per owner, with
 600-second expiry. Capacity exhaustion fails closed rather than dropping old
 fingerprints and permitting silent reuse.
 
-Bounded HTTP routes and durable security alarms are wired into the hub.
-Operation-specific authorization/adoption, adapter wiring and real human
+Bounded HTTP routes, durable security alarms and a server-side peer-skill
+acceptance adapter are wired into the hub. Frontend adoption, local execution
+policy, other operation-specific integrations, adapter wiring and real human
 ceremonies remain outstanding. The capability endpoint does not advertise
 availability based on these components alone.
 
@@ -201,6 +202,50 @@ reported separately by capability discovery.
 * `GET /key-changes/{change_id}` lets the owner inspect state, request ID,
   authorizer ID and expiry; it releases no receipt.
 * `GET /audit` returns `{api_version,events:[...]}` filtered to the caller.
+
+## Concrete peer-skill acceptance adapter
+
+`POST /skills/prepare` accepts only `{source_seq}`. The authenticated receiver
+must own the private source event, whose server-stamped sender must remain
+active. It must be a chat with an exact `skill_request` object containing
+`id` (`sr_` plus twelve lowercase hex digits), `skill`, full `args` (at most
+4000 characters), and `required_strength:"strong"`. Legacy requests are not
+silently upgraded. The source expires after 24 hours. SQL selects a bounded
+prefix of the stored event before allocating its Python representation; an
+event over 32 KiB is refused rather than truncated into a review.
+
+The server constructs the canonical review itself from the stored event:
+immutable requester/target IDs, exact source sequence and fingerprint, skill,
+full arguments, destination and `skill-request:accept` authority. It does not
+accept a caller-built review or an arbitrary destination. The response returns
+the ordinary approval request ID/digest/expiry plus `source_seq`; the existing
+review/challenge/approve routes then produce the strong receipt.
+
+`POST /skills/{request_id}/accept` accepts `{receipt}`. It rechecks the original
+source, participant authority, credential generation and receipt, then consumes
+the receipt atomically with a durable private accepted event. It returns the
+source sequence and event ID with `execution:"not_performed"`: this operation
+records acceptance only. `GET /skills/{request_id}` exposes the owner's durable
+acceptance state and event ID so a caller can reconcile a lost response without
+executing again. It never releases the receipt. A source can be accepted once;
+two concurrent connections cannot create two accepted events. An expired
+receipt needs a fresh review/approval, and its old request cannot be reused.
+
+The event is a hub-owned `system` event addressed by immutable IDs to the two
+participants. It uses a distinct `strong_skill_response` field, **not** the
+legacy `skill_response` field. A frontend must check the server-owned event
+kind, both identities, source sequence and reviewed digest; it must never trust
+a peer chat that merely copies a `strength` label. The old first-wins request
+parser cannot inherit acceptance for another message reusing the same short
+request ID. Reusing a request ID under an existing source binding is refused.
+
+Bindings are bounded to 4096 globally and 256 per receiver, retained until the
+source expires; acceptance and request-expiry do not immediately erase replay
+protection. Accepted events share the bounded durable approval-event outbox
+with security alarms and preserve private entitlement in live and replay feeds.
+Production frontend consumption and the policy that prevents a legacy weak
+acceptance from satisfying a strong request remain integration gates. Collab
+does not execute a skill as a side effect of this API.
 
 ## Proof bytes and origin binding
 
