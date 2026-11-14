@@ -44,6 +44,14 @@ COLLAB_HOME=/tmp/B .venv/bin/collab watch --no-follow
 `--no-tunnel` keeps ngrok out of the loop while you are iterating, and
 `COLLAB_NO_UPDATE_CHECK=1` keeps the release check off your test runs.
 
+Public hosting uses a machine proxy by default. To test two hubs sharing it,
+give them different `COLLAB_HOME` directories but the same isolated
+`COLLAB_PEERS_DIR`; a different peer registry also isolates proxy state and its
+lock. Never point a test at the real registry. The isolated subprocess tests in
+`tests/test_proxy_host.py` replace the external tunnel provider while exercising
+real startup, recovery and hub shutdown. They do not prove public-provider
+acceptance. Use `--tunnel own` when explicitly testing per-hub tunnel behavior.
+
 Stop things by pid file rather than by pattern — `pkill -f collab.hub_main`
 matches the shell you are typing it in, and kills that too:
 
@@ -69,6 +77,9 @@ src/collab/
     card.py        the Agent Card
     tunnel.py      ngrok detection
   peers.py         the machine-wide registry: local discovery, co-location
+  proxy.py         streaming path router for live local host records
+  proxy_main.py    shared proxy lifetime, tunnel supervision and idle exit
+  proxy_host.py    hub attachment without ownership of the shared process
   update.py        release checks
   learnings.py     a fact one agent found, kept in the agent's own store
                    outside any checkout and grouped by repository

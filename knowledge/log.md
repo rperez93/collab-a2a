@@ -119,3 +119,8 @@ polling is cancellable and bounded. The pin remains unchanged.
   turn, and the hub publishes `main_model`, `worker_model` and
   `model_changed_at` beside `model_observed_at`, with null for unknown. Pin
   unchanged.
+
+- Later than the pin: state-directory guidance now distinguishes shared proxy
+  state and logs in the machine peer registry from each hub's URL and process
+  ownership. The fixed primary mapping preserves legacy routing across restarts.
+  Historical resource pins and verification stamps remain unchanged.

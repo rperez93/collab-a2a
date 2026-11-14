@@ -126,6 +126,7 @@ class ProxyState:
     #: check` can repeat the low-limit warning to the person — in the proxy's
     #: own log nobody would see it before the outage (review of #119).
     descriptors: int = 0
+    error: str = ''
 
     @classmethod
     def load(cls) -> "ProxyState":

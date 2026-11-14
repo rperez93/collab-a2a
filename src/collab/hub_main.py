@@ -55,6 +55,7 @@ def remember_url(cfg: HubConfig, supervisor: TunnelSupervisor | None,
     # a stale reason left on disk would be printed by the next `collab host`.
     update_fields(cfg.dir, public_url=url, pid=os.getpid(),
                   tunnel_pid=cfg.tunnel_pid, tunnel_stamp=cfg.tunnel_stamp,
+                  tunnel='proxy' if getattr(supervisor, 'shared', False) else 'ngrok',
                   tunnel_error="")
     if address_changed:
         logger.warning("tunnel came back on a new address: %s", url)
@@ -192,16 +193,21 @@ def main() -> int:
 
     supervisor = None
     if os.environ.get("COLLAB_NO_TUNNEL") != "1":
-        supervisor = TunnelSupervisor(
-            cfg.port,
-            log_path=str(cfg.dir / "ngrok.log"),
-            domain=cfg.domain or None,
-        )
+        from .config import proxy_mode
+        from .proxy_host import SharedProxy, use_proxy
+        if use_proxy(cfg.tunnel_mode, proxy_mode()):
+            supervisor = SharedProxy(cfg.session_id, domain=cfg.domain)
+        else:
+            supervisor = TunnelSupervisor(
+                cfg.port,
+                log_path=str(cfg.dir / "ngrok.log"),
+                domain=cfg.domain or None,
+            )
         supervisor.start()
 
     if supervisor is not None and supervisor.public_url:
         cfg.public_url = supervisor.public_url
-        cfg.tunnel = "ngrok"
+        cfg.tunnel = "proxy" if isinstance(supervisor, SharedProxy) else "ngrok"
         # Only what we started: a tunnel we merely reused belongs to whoever
         # launched it, and stopping it would be taking something that is not
         # ours.
@@ -209,7 +215,7 @@ def main() -> int:
         cfg.tunnel_error = ""
     else:
         cfg.public_url = ""
-        cfg.tunnel = "none"
+        cfg.tunnel = "proxy" if getattr(supervisor, 'shared', False) else "none"
         cfg.record_tunnel(0)
         # ngrok's reason, for `collab host` to print — it reads this file.
         cfg.tunnel_error = supervisor.last_error if supervisor is not None else ""

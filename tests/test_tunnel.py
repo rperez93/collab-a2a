@@ -342,7 +342,7 @@ def test_a_tunnel_that_will_not_start_is_stopped_rather_than_asked(monkeypatch):
     assert proc.waits >= 2, "it did not wait for the process to actually go"
 
 
-def test_recording_an_address_does_not_revert_a_rotated_invite(tmp_path):
+def test_recording_an_address_does_not_revert_a_rotated_invite(tmp_path, monkeypatch):
     """Two writers, and one of them used to lose.
 
     The watcher rewrites the address whenever the tunnel is relaunched, and
@@ -382,11 +382,9 @@ def test_recording_an_address_does_not_revert_a_rotated_invite(tmp_path):
     # of the timing.
     def stale(session_id, home=None):
         return cfg
-    HubConfig.load = staticmethod(stale)  # type: ignore[method-assign]
-    try:
+    with monkeypatch.context() as patch:
+        patch.setattr(HubConfig, "load", staticmethod(stale))
         hub_main.remember_url(cfg, Supervisor(), "https://pinned.example", False)
-    finally:
-        del HubConfig.load
 
     on_disk = jsonlib.loads((cfg.dir / "hub.json").read_text())
     assert on_disk["invite"] == "INVITE-NEW", "the rotated invite was reverted"
