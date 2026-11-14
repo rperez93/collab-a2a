@@ -36,7 +36,7 @@ def run(command: str, *, timeout: float = 20, max_bytes: int = 1024 * 1024, canc
                         continue
                     total += len(block)
                     if total > max_bytes:
-                        raise subprocess.SubprocessError('telemetry command output exceeds 1 MiB')
+                        raise subprocess.SubprocessError(f'telemetry command output exceeds {max_bytes} bytes')
                     chunks[key.data].extend(block)
             # A child can close both pipes and keep running. EOF must not
             # replace the cancellation-aware selector with a 20-second wait.
@@ -46,10 +46,12 @@ def run(command: str, *, timeout: float = 20, max_bytes: int = 1024 * 1024, canc
                 left = deadline - time.monotonic()
                 if left <= 0:
                     raise subprocess.TimeoutExpired(command, timeout)
-                if cancel is not None:
-                    cancel.wait(min(.1, left))
-                else:
-                    time.sleep(min(.1, left))
+                try:
+                    # wait() wakes on actual exit. Sleeping here made a fast
+                    # command cost an extra100ms whenever EOF won the reap race.
+                    proc.wait(timeout=min(left, .1))
+                except subprocess.TimeoutExpired:
+                    continue  # recheck cancellation and the whole deadline
             code = proc.returncode
             return subprocess.CompletedProcess(command, code, *(bytes(b).decode('utf-8', errors='replace') for b in chunks))
     finally:
