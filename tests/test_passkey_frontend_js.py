@@ -64,6 +64,19 @@ def run_js(tmp_path, body):
     assert done.returncode == 0, done.stdout + done.stderr
 
 
+def test_importing_binary_helpers_from_a_separate_enrollment_page_does_not_start_a_request_window(tmp_path):
+    """The enrollment module imports helpers without requesting a second page/capability."""
+    run_js(tmp_path, r'''
+globalThis.window={location:{pathname:'/enrol/owned_test'},addEventListener(){assert.fail('request lifecycle started on enrollment page');}};
+globalThis.document={getElementById(){assert.fail('request UI touched on enrollment page');}};
+const helpers=await import('./passkey.mjs?separate-enrol-import');
+assert.equal(typeof helpers.decodeBinary,'function');
+assert.equal(helpers.LIMITS.clientData,8192);
+assert.equal(helpers.LIMITS.signature,4096);
+assert.equal(helpers.LIMITS.publicKey,4096);
+''')
+
+
 def test_binary_fields_are_canonical_bounded_and_byte_exact(tmp_path):
     run_js(tmp_path, r'''
 const original=bytes(0,255,128,1,2);
