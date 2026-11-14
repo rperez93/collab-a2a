@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""Developer iteration helper; a fast run is never a merge gate."""
+from __future__ import annotations
+
+import argparse
+import ast
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+GATES = ('tests/test_docs_match_cli.py', 'tests/test_skill_settings_match_the_registry.py',
+         'tests/test_okf_bundle.py')
+MAX_GIT_BYTES = 1024 * 1024
+MAX_SOURCE_BYTES = 512 * 1024
+MAX_TEST_FILES = 4096
+
+
+def git(root: Path, *args: str) -> str:
+    # Git output goes to disk, then is read with a cap. A broken command cannot
+    # fill memory or hold selection forever. No shell or external diff driver.
+    with tempfile.TemporaryFile() as output:
+        result = subprocess.run(['git', *args], cwd=root, stdout=output,
+                                stderr=subprocess.DEVNULL, timeout=10)
+        output.seek(0)
+        data = output.read(MAX_GIT_BYTES + 1)
+    if result.returncode:
+        raise ValueError('git could not resolve the changes; check --base and repository state')
+    if len(data) > MAX_GIT_BYTES:
+        raise ValueError('changed-path output exceeds 1 MiB; use an explicit --test selection')
+    return os.fsdecode(data)
+
+
+def changed_paths(root: Path, base: str) -> set[str]:
+    commit = git(root, 'rev-parse', '--verify', '--end-of-options', base + '^{commit}').strip()
+    committed = git(root, 'diff', '--no-ext-diff', '--no-textconv', '--name-only',
+                    '--no-renames', '-z', commit + '...HEAD', '--')
+    working = git(root, 'diff', '--no-ext-diff', '--no-textconv', '--name-only',
+                  '--no-renames', '-z', 'HEAD', '--')
+    untracked = git(root, 'ls-files', '--others', '--exclude-standard', '-z', '--',
+                    'src', 'tests', 'scripts', 'docs', 'CONTRIBUTING.md', 'pyproject.toml')
+    return {p for p in (committed + working + untracked).split('\0') if p}
+
+
+def imports(path: Path) -> set[str]:
+    with path.open('rb') as stream:
+        data = stream.read(MAX_SOURCE_BYTES + 1)
+    if len(data) > MAX_SOURCE_BYTES:
+        raise ValueError(f'{path.name} exceeds the 512 KiB selector limit; use --test')
+    try:
+        tree = ast.parse(data, filename=str(path))
+    except SyntaxError as exc:
+        raise ValueError(f'cannot inspect {path.name}: {exc.msg}; fix it or use --test') from exc
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            found.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            found.add(node.module)
+            found.update(node.module + '.' + alias.name for alias in node.names)
+    return found
+
+
+def test_target(root: Path, target: str) -> str:
+    file, *nodes = target.split('::')
+    path = (root / file).resolve()
+    if not path.is_relative_to((root / 'tests').resolve()) or not path.is_file():
+        raise ValueError(f'--test must name an existing file under tests/: {target}')
+    if path.suffix != '.py':
+        raise ValueError(f'--test must name a Python test: {target}')
+    return path.relative_to(root).as_posix() + ''.join('::' + node for node in nodes)
+
+
+def select(root: Path, changed: set[str], explicit: list[str]) -> tuple[list[str], list[str]]:
+    selected = {test_target(root, name) for name in GATES}
+    if explicit:
+        selected.update(test_target(root, name) for name in explicit)
+        return sorted(selected), []
+    modules = {p[4:-3].replace('/', '.') for p in changed
+               if p.startswith('src/collab/') and p.endswith('.py')}
+    matched = set()
+    count = 0
+    for path in (root / 'tests').rglob('test_*.py'):
+        count += 1
+        if count > MAX_TEST_FILES:
+            raise ValueError('more than 4096 test files; use --test')
+        if not path.resolve().is_relative_to(root.resolve()) or path.is_symlink():
+            raise ValueError('test symlinks are not inspected; use --test for a local file')
+        name = path.relative_to(root).as_posix()
+        if name in changed:
+            selected.add(name)
+        if modules:
+            referenced = imports(path)
+            hits = {m for m in modules if any(i == m or i.startswith(m + '.') for i in referenced)}
+            hits.update(m for m in modules if path.stem == 'test_' + m.rsplit('.', 1)[-1])
+            if hits:
+                selected.add(name)
+                matched.update(hits)
+    unmatched = sorted(modules - matched)
+    broad = {p for p in changed if p == 'pyproject.toml' or
+             (p.startswith('tests/') and p.endswith('.py') and
+              not Path(p).name.startswith('test_'))}
+    unmatched.extend(sorted(broad))
+    unmatched.extend(sorted(p for p in changed if p.startswith('scripts/')))
+    return sorted(selected), unmatched
+
+
+def supports_worker_optout(root: Path) -> bool:
+    # Configuring a scratch Store never runs a provider. Force auto-start on
+    # so a missing host marker or default-off preference cannot fake support.
+    with tempfile.TemporaryDirectory(prefix='collab-fast-guard-') as folder:
+        scratch = Path(folder)
+        config = scratch / 'config.json'
+        config.write_text(json.dumps({'worker_auto_start': True, 'worker_agent': 'codex'}))
+        env = {**os.environ, 'PYTHONPATH': str(root / 'src'),
+               'COLLAB_CONFIG': str(config), 'COLLAB_AGENT_CONFIG': str(config),
+               'COLLAB_HOME': str(scratch / 'home'), 'COLLAB_STATE_DIR': str(scratch / 'state'),
+               'COLLAB_PEERS_DIR': str(scratch / 'peers'), 'COLLAB_NO_WORKER': '1'}
+        code = ('import sys; from collab.worker import Store; '
+                's=Store(sys.argv[1]); s.ensure_default(); '
+                'sys.exit(0 if not (s.configuration() or {}).get("enabled") else 3)')
+        try:
+            result = subprocess.run([sys.executable, '-c', code, str(scratch / 'worker')],
+                                    cwd=root, env=env, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, timeout=10)
+            return result.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest='command', required=True)
+    test = sub.add_parser('test', help='run developer iteration checks')
+    test.add_argument('--fast', action='store_true', required=True,
+                      help='changed-test selection plus docs/registry/OKF checks; not a merge gate')
+    test.add_argument('--base', default='origin/main', help='compare branch to this ref (default: origin/main)')
+    test.add_argument('--test', action='append', default=[], metavar='FILE[::NODE]',
+                      help='explicit affected tests instead of automatic selection; gates still run')
+    test.add_argument('--list', action='store_true', help='print the selection without running it')
+    args = parser.parse_args(argv)
+    started = time.monotonic()
+    try:
+        changed = set() if args.test else changed_paths(ROOT, args.base)
+        tests, unmatched = select(ROOT, changed, args.test)
+        if unmatched:
+            raise ValueError('no reliable fast selection for ' + ', '.join(unmatched) +
+                             '; supply affected --test paths (the full suite is still required for merging)')
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        print(f'FAIL: selection: {exc}', file=sys.stderr)
+        return 2
+    print(f'Fast iteration: {len(tests)} targets; target <60 s, not a timeout or merge gate.', flush=True)
+    print('Selection uses changed test files and direct imports; indirect coverage needs explicit --test.', flush=True)
+    for name in tests:
+        print('  ' + name, flush=True)
+    if args.list:
+        print('DONE: selection only; no tests ran.', flush=True)
+        return 0
+    if not supports_worker_optout(ROOT):
+        print('FAIL: checkout lacks verified COLLAB_NO_WORKER support; no tests started. '
+              'Integrate the worker opt-out prerequisite first.', file=sys.stderr)
+        return 2
+    env = {**os.environ, 'COLLAB_NO_WORKER': '1', 'COLLAB_NO_UPDATE_CHECK': '1',
+           'PYTHONPATH': str(ROOT / 'src')}
+    try:
+        result = subprocess.run([sys.executable, '-m', 'pytest', '-q', *tests], cwd=ROOT, env=env)
+        code = result.returncode
+    except KeyboardInterrupt:
+        code = 130
+    except OSError as exc:
+        print(f'FAIL: could not start pytest: {exc}', file=sys.stderr)
+        return 2
+    elapsed = time.monotonic() - started
+    print(f'{"DONE" if code == 0 else "FAIL"}: fast iteration, {elapsed:.2f}s; full suite still required.', flush=True)
+    if elapsed >= 60:
+        print('Over the 60 s target: narrow --test for iteration; do not drop merge-wave coverage.', flush=True)
+    return code if code >= 0 else 128 - code
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
