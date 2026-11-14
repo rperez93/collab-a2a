@@ -598,3 +598,44 @@ async def test_an_escalation_with_a_wrong_seq_is_kept_not_thrown_away(conversati
     store = worker.Store(conversation.root)
     assert [(p["seq"], p["question"]) for p in store.pending()] == [(1, "Which branch?")], "the only message in the turn"
     assert not store.status()["error"]
+
+
+@pytest.mark.asyncio
+async def test_a_worker_reply_repeating_an_open_question_to_someone_else_is_dropped(conversation, tmp_path, monkeypatch):
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    incoming(conversation, 1, "May we drop the legacy API in 3.0?")
+    snap = store.snapshot()
+    store.commit_turn(expected_cursor=snap["cursor"], cursor=1, summary="", replies=[],
+                      escalations=[{"reason": "decision", "seq": 1,
+                                    "question": "Bob asks: may we drop the legacy API in 3.0?"}])
+    incoming(conversation, 2, "anything new?")
+    async def run(*args, **kwargs):
+        return {"summary": "", "escalations": [], "replies": [
+            {"text": "FYI all: Bob asks: may we drop the legacy API in 3.0? waiting", "to": "", "room": "general"},
+            {"text": "Still with the main agent.", "to": "bob", "room": ""}]}
+    monkeypatch.setattr("collab.worker_runtime.run_turn", run)
+    sent = []
+    async def transport(request):
+        sent.append(json.loads(request.content)["text"])
+        return httpx.Response(200, json={"seq": 3})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        conversation.daemon._http = client
+        await conversation.turn()
+    assert sent == ["Still with the main agent."]
+
+
+@pytest.mark.asyncio
+async def test_the_worker_sees_the_open_board(conversation, tmp_path, monkeypatch):
+    configure(conversation, tmp_path)
+    conversation.daemon.snapshot["tasks"] = [{"id": "T_22", "title": "R22 consent primitive", "owner": "arma",
+                                              "state": "working"}]
+    payloads = []
+    async def run(*args, **kwargs):
+        payloads.append(args[2])
+        return {"summary": "", "replies": [], "escalations": []}
+    monkeypatch.setattr("collab.worker_runtime.run_turn", run)
+    incoming(conversation, 1, "does R22 exist?")
+    await conversation.turn()
+    assert payloads[0]["board"] == [{"id": "T_22", "title": "R22 consent primitive", "owner": "arma",
+                                     "state": "working"}]

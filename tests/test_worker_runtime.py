@@ -377,3 +377,14 @@ def test_an_unanchored_escalation_or_a_waiting_peer_counts_as_routed():
                               selected, pending=[]) == []
     assert unrouted_deferrals({"replies": [defer], "escalations": []}, selected,
                               pending=[{"seq": 2, "sender": "bob", "awaiting_human": True}]) == []
+
+
+def test_an_old_decision_about_a_peer_does_not_hide_a_new_promise_to_them():
+    from collab.worker_runtime import unrouted_deferrals
+    selected = [{"seq": 9, "sender": "bob", "to": "", "room": "general", "text": "And the port?"},
+                {"seq": 10, "sender": "carol", "to": "", "room": "general", "text": "hi"}]
+    result = {"replies": [{"text": "I'll check and confirm.", "to": "bob", "room": ""}],
+              "escalations": [{"reason": "decision", "seq": 0, "question": "carol's thing"}]}
+    old = [{"seq": 2, "sender": "bob", "question": "old"}]
+    assert [e["seq"] for e in unrouted_deferrals(result, selected, pending=old)] == [9], \
+        "an unrelated pending decision and another peer's unanchored escalation route nothing for bob"

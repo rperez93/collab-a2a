@@ -32,6 +32,13 @@ are independent" below describe 2.1.x only; an explicit `worker start` may still
 choose another provider. While the worker is enabled, the main agent's `send`,
 proposals, votes, task/project comments and file sends are queued through it.
 `COLLAB_NO_WORKER=1` gives a session no automatic worker.
+Later still (R18): decision notices carry the question itself (scrubbed, quoted,
+framed as peer-derived data), any collab command prints a one-line reminder while
+decisions wait, and `collab worker reply ID --awaiting-human 'note'` keeps a
+decision open while the main agent asks its human; the peer is told once, peers
+see the wait on the roster (a 2.1.2 hub drops that figure), and the human's final
+answer is sent to the peer verbatim. The worker reads open board tasks and never
+repeats an open question to anyone but its asker.
 
 Later than the pin: 2.1.0 enables a scoped Codex/Luna worker during host/join
 setup. `collab worker start` customizes its provider and scope; `worker off` is
