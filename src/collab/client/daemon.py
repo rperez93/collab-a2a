@@ -83,6 +83,8 @@ STATS_REASSERT = 60.0
 SKILL_SCAN = 300.0
 #: Seconds before peers' skill lists are re-read with no count change (R12).
 SKILLS_REFRESH = 600.0
+#: Read limit for peers' skill lists (R12).
+SKILLS_MAX_BYTES = 4 * 1024 * 1024
 #: How long to leave a failed automatic compaction before probing the pane
 #: again. The heartbeat runs every three seconds and an agent sitting over its
 #: threshold sits there for a long time, so without this a pane in copy mode
@@ -2670,38 +2672,57 @@ class Daemon:
         """Fetch peers' skill lists when a count changed, or every SKILLS_REFRESH.
 
         The roster carries only counts (R4), so a change there is the cue; the
-        lists themselves are read at most once per change and cached for the
-        dashboard, which then needs no hub call of its own (R12).
+        lists are read at most once per change, validated with an ETag, and
+        cached for the dashboard, which then needs no hub call of its own (R12).
+        Nothing is fetched while nobody shares a list, and failures back off.
         """
-        signature = tuple(sorted((p.get("id", ""), p.get("skills_count"))
-                                 for p in self.snapshot.get("participants", [])))
-        if (signature == getattr(self, "_skills_signature", None)
-                and time.time() - getattr(self, "_skills_at", 0.0) < SKILLS_REFRESH):
+        people = self.snapshot.get("participants", [])
+        if not any(p.get("skills_count") for p in people):
             return
-        # Committed only by a fetch that wrote the file, so a change seen
-        # while a fetch is in flight, or a failed fetch, is retried next roster.
+        signature = tuple(sorted((p.get("id", ""), p.get("skills_count")) for p in people))
+        now = time.time()
+        if now < getattr(self, "_skills_retry_at", 0.0):
+            return
+        if (signature == getattr(self, "_skills_signature", None)
+                and now - getattr(self, "_skills_at", 0.0) < SKILLS_REFRESH):
+            return
         self._schedule_refresh("skills", lambda: self._fetch_skills(client, signature))
 
     async def _fetch_skills(self, client: httpx.AsyncClient, signature=None) -> None:
+        etag = getattr(self, "_skills_etag", None)
         try:
-            r = await client.get(f"{self.profile.url}{EXT_PREFIX}/participant-skills",
-                                 headers=request_headers(self.profile.token), timeout=10.0)
-            if r.status_code == 404:
-                data = {"unsupported": True}  # a hub older than skill lists
-            elif r.status_code == 200:
-                body = r.json()
-                people = body.get("participants") if isinstance(body, dict) else None
-                if not isinstance(people, list):
-                    return
-                data = {"participants": people, "untrusted": True}
-            else:
-                return
-            data["fetched_at"] = time.time()
-            tmp = self.paths.root / "skills.tmp"
-            tmp.write_text(json.dumps(data))
-            tmp.replace(self.paths.skills)
+            async with client.stream(
+                    "GET", f"{self.profile.url}{EXT_PREFIX}/participant-skills",
+                    headers=request_headers(self.profile.token, {"If-None-Match": etag} if etag else None),
+                    timeout=10.0) as r:
+                if r.status_code == 304 and etag:
+                    data = None
+                elif r.status_code == 404:
+                    data = {"unsupported": True}  # a hub older than skill lists
+                elif r.status_code == 200:
+                    raw = bytearray()
+                    async for chunk in r.aiter_bytes():
+                        raw.extend(chunk)
+                        if len(raw) > SKILLS_MAX_BYTES:
+                            raise ValueError("participant skill lists exceed the read limit")
+                    body = json.loads(bytes(raw))
+                    people = body.get("participants") if isinstance(body, dict) else None
+                    if not isinstance(people, list):
+                        raise ValueError("malformed participant skill lists")
+                    data = {"participants": people, "untrusted": True}
+                    self._skills_etag = r.headers.get("etag")
+                else:
+                    raise ValueError(f"hub answered {r.status_code}")
+            if data is not None:
+                data["fetched_at"] = time.time()
+                tmp = self.paths.root / "skills.tmp"
+                tmp.write_text(json.dumps(data))
+                tmp.replace(self.paths.skills)
         except (httpx.HTTPError, ValueError, OSError):
+            backoff = min(max(2 * getattr(self, "_skills_backoff", 1.5), 3.0), SKILLS_REFRESH)
+            self._skills_backoff, self._skills_retry_at = backoff, time.time() + backoff
             return
+        self._skills_backoff, self._skills_retry_at = 0.0, 0.0
         self._skills_signature, self._skills_at = signature, time.time()
 
     def _adopt_identity(self) -> None:

@@ -133,10 +133,14 @@ def register_routes(app, store, require_user) -> None:
         every change, and up to 16 KiB per participant there would multiply.
         """
         require_user(request)
+        from .server.roster_transport import roster_response
         people = await asyncio.to_thread(store.participants)
-        return {'participants': [{'id': p.id, 'name': p.name, 'skills': p.meta.get('skills', [])}
-                                 for p in people],
-                'untrusted': True}
+        # Validated and compressed like the roster (#101): every daemon re-reads
+        # this when any count changes, and an unchanged room answers 304.
+        return roster_response({'participants': [{'id': p.id, 'name': p.name,
+                                                  'skills': p.meta.get('skills', [])}
+                                                 for p in people],
+                                'untrusted': True}, request, conditional=True)
 
     @app.get(f'{EXT_PREFIX}/shared-skills')
     async def inventory(request: Request, after: str = '', limit: int = 100):

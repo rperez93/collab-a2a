@@ -100,10 +100,12 @@ for controls, source limits and diagnosis.
 
 ## Dashboard
 
-`collab dashboard` (or `--json`) shows every participant's quota windows, worker
-turn budget and shared skills from what the daemon already holds; it makes no
-hub call and needs no command from the coding agent to stay current. The daemon
-re-reads peers' skill lists when a roster count changes or every ten minutes.
-An unreported window is left out, never shown as 0%, and a skill list reads
-`not shared` (opted out with `share_skill_list false`), `unknown` (not fetched yet) or
-`hub too old`.
+`collab dashboard` (or `--json`) shows every participant's quota windows (with
+resets, and marked old when the report is stale), the main and worker models
+(`unknown` when unreported), the worker's turn budget and shared skills, from
+what the daemon already holds; it makes no hub call and needs no command from
+the coding agent to stay current. The daemon re-reads peers' skill lists, with
+an ETag, only when someone shares one and a roster count changes, or every ten
+minutes; failures back off. A roster from a stopped listener shows nobody
+connected and no quota. A skill list reads `not shared`, `unknown` (not fetched
+yet, or a peer older than skill lists) or `hub too old`.

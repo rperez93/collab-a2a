@@ -1204,7 +1204,11 @@ def quota_summary(stats: dict[str, Any], *, with_resets: bool = False) -> str:
         # is worth drawing depends on whether the row holds another one.
         labels = window_labels([name for name, _figures in ranked])
         for name, figures in ranked:
-            piece = f"{labels[name]} {float(figures['used_pct']):.0f}%"
+            try:
+                used = min(max(float(figures['used_pct']), 0.0), 999.0)
+            except (TypeError, ValueError):
+                continue
+            piece = f"{labels[name]} {used:.0f}%"
             if with_resets and figures.get("resets_at"):
                 piece += f" (→{_short_reset(str(figures['resets_at']))})"
             parts.append(piece)
@@ -1221,9 +1225,14 @@ def _short_reset(value: str) -> str:
     from datetime import datetime, timezone
 
     candidates = []
-    if value.isdigit():
+    if value.isascii() and value.isdigit() and len(value) <= 11:
         # Epoch seconds: what Claude Code's status line reports for resets.
-        candidates.append(datetime.fromtimestamp(int(value), timezone.utc))
+        # A peer controls this string: '²', 30 nines or a year-10000 epoch
+        # crashed every roster view that rendered it.
+        try:
+            candidates.append(datetime.fromtimestamp(int(value), timezone.utc))
+        except (ValueError, OverflowError, OSError):
+            pass
     for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%MZ"):
         try:
             candidates.append(datetime.strptime(value, fmt).replace(tzinfo=timezone.utc))
