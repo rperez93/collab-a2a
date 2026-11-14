@@ -29,7 +29,10 @@ def gather(focus: str = "", cwd: Path | None = None) -> dict[str, Any]:
     # NO `cwd` AND NO `remote` (T_5b4dac18307e). The working directory is a
     # full path that names the account; the remote URL can carry a token. The
     # repository's NAME and branch say what the arrival line needs to say.
-    hello: dict[str, Any] = {"focus": focus.strip()}
+    # `remote_consent_version` tells a host this receiver understands remote
+    # offers, so it never sends one to a legacy receiver that would run it.
+    hello: dict[str, Any] = {"focus": focus.strip(),
+                             "remote_consent_version": 1}
 
     if repo_root:
         hello["repo"] = Path(repo_root).name
