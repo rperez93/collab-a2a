@@ -71,6 +71,10 @@ workload supports eight participants with up to eight pooled connections each;
 remaining slots accommodate CLI traffic. This finite cap does not promise
 unlimited room capacity. Excess sockets close so clients can fall back
 publicly; shutdown reaps only this listener's connections and tasks.
+Accepted TLS sockets explicitly enable `TCP_NODELAY` before handshaking so
+small shutdown notifications are not held by Nagle buffering. This changes no
+idle timeout or retry policy and does not guarantee every pooled close/reuse
+race is eliminated; an uncertain POST must not be blindly repeated.
 
 In one active-session run, five reads each had median round trips of 4.033 ms
 over loopback, 5.316 ms over pinned TLS, and 225.075 ms through the tunnel.
