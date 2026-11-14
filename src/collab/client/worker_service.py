@@ -55,23 +55,28 @@ def _page(records, budget=24_000):
 def skill_requests(events, escalations, me: str, me_id: str = "") -> list[dict]:
     """Consent to run a skill belongs to the human behind the main agent (R4).
 
-    Every skill_request in the turn becomes a decision, whatever the model
-    proposed, so a worker can never accept one by replying on its own.
+    Each requesting peer gets a decision, whatever the model proposed, so a
+    worker can never accept one by replying on its own or multiply prompts.
     """
     routed = {e["seq"] for e in escalations}
-    senders: set[tuple[str, str]] = set()
     room = max(0, 32 - len(escalations))  # commit_turn's per-turn cap
-    added = []
+    requests = []
     for event in events:
         ask = (event.body or {}).get("skill_request") if isinstance(event.body, dict) else None
         # By participant id when known: a rename must not bypass consent.
         mine = (event.to_id == me_id) if (me_id and getattr(event, "to_id", "")) else event.to == me
-        sender_id = getattr(event, "sender_id", "")
-        requester = ("id", sender_id) if sender_id else ("name", event.sender)
         if not isinstance(ask, dict) or not mine:
             continue
+        sender_id = getattr(event, "sender_id", "")
+        requester = ("id", sender_id) if sender_id else ("name", event.sender)
+        requests.append((event, ask, requester))
+    # A model may escalate a later request from the same peer. Reserve every
+    # existing decision before considering earlier events, regardless of order.
+    senders = {requester for event, _, requester in requests if event.seq in routed}
+    added = []
+    for event, ask, requester in requests:
         # A rename cannot multiply prompts, and a reused name cannot suppress
-        # another participant. Reserve preexisting decisions for this turn too.
+        # another participant. The fallback namespace is only for legacy events.
         if requester in senders:
             continue
         senders.add(requester)

@@ -352,6 +352,7 @@ def test_an_old_hub_gets_nothing_written_when_it_cannot_address_by_id(monkeypatc
     ([('one', 'p_1'), ('two', 'p_1'), ('three', 'p_1')], [], 1),
     ([('alice', 'p_1'), ('alice', 'p_2')], [], 2),
     ([('before', 'p_1'), ('after', 'p_1')], [1], 0),
+    ([('before', 'p_1'), ('after', 'p_1')], [2], 0),
     ([('legacy', ''), ('legacy', '')], [], 1),
     ([('p_1', ''), ('alice', 'p_1')], [], 2),
 ])
