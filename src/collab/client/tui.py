@@ -58,7 +58,8 @@ from ..protocol import file_outcome
 from .. import activity, peers
 from .. import themes
 from ..config import watch_roster_settings, watch_status_settings
-from ..stats import read_stats
+from ..stats import is_stale, read_stats, reported_age
+from ..telemetry import number as _metric_number
 from . import statusbar
 from .statusbar import money_text
 from . import participant_metrics
@@ -1785,6 +1786,32 @@ def participant_key(person: dict[str, Any]) -> str:
     return str(person.get("id") or person.get("participant_id") or person.get("name") or "?")
 
 
+def _worker_pending_alert(worker: dict[str, Any], width: int, *, online: bool) -> str:
+    """A known coordination blocker must not be hidden behind metric disclosure.
+
+    Worker `observed_at` can describe an unrelated token/cost observation, so
+    only an explicit status `reported_at` can date this decision count. Older
+    telemetry has no such field; say «age unknown» rather than making it fresh
+    because a token reading changed. Missing/invalid counts never imply zero.
+    """
+    pending = _metric_number(worker.get("pending"))
+    if pending is None or pending <= 0 or pending != int(pending):
+        return ""
+    count = str(int(pending)) if pending <= 999 else "999+"
+    label = f"{count} {'decision' if pending == 1 else 'decisions'} pending"
+    observation = {"reported_at": worker.get("reported_at")}
+    age = reported_age(observation)
+    qualified = not online or is_stale(observation)
+    prefix = "last: " if not online or (qualified and age != "age unknown") else ""
+    full = prefix + label + " · " + age
+    if _w(full) <= width:
+        return full
+    # Keep the qualification ahead of the count when both cannot fit. At the
+    # supported 38-column pane even «undated: 999+ decisions pending» fits.
+    short_prefix = "last: " if not online or age != "age unknown" else "undated: "
+    return _clip(short_prefix + label, width)
+
+
 def _participant_card(person: dict[str, Any], width: int, *, who: str,
                       state: str, online: bool, selected: bool,
                       fields: list[str] | tuple[str, ...], detailed: bool,
@@ -1801,8 +1828,9 @@ def _participant_card(person: dict[str, Any], width: int, *, who: str,
     width = max(width, 1)
     short_state = state.split(" · ", 1)[0]
     if not detailed:
-        # A collapsed card is one stable line, including its padding. All
-        # measurements remain in disclosure, even for a solo participant.
+        # A collapsed card keeps its stable heading. A pending decision gets
+        # one warning row below it: hiding that coordination blocker among
+        # worker metrics made it invisible until the user expanded the card.
         stats = person.get("stats") or {}
         worker = stats.get("worker") or {}
         doing_state = person.get("activity") or {}
@@ -1835,10 +1863,15 @@ def _participant_card(person: dict[str, Any], width: int, *, who: str,
             spare -= extra
         text = " " + " ".join(_clip(value, size) for value, size in zip(values, sizes))
         text += " " * max(width - _w(text) - _w(right), 0) + right
-        return [Row(_clip(text, width), C_SELECTION if selected else C_TEXT,
+        rows = [Row(_clip(text, width), C_SELECTION if selected else C_TEXT,
                     curses.A_BOLD if selected else 0,
                     edge=0 if selected else _theme_colour(theme["roster"], person.get("name", "?")),
                     head=0 if selected else len(text), participant=ident, participant_header=True)]
+        indent = " " * min(theme["roster_indent"], max(width - 4, 0))
+        alert = _worker_pending_alert(worker, width - len(indent), online=online)
+        if alert:
+            rows.append(Row(indent + alert, C_WARN, curses.A_BOLD, participant=ident))
+        return rows
     # Keep both models visible at the top of an expanded card too: on a
     # narrow pane the worker section may otherwise be several pages below it.
     rows = _participant_card(person, width, who=who, state=state, online=online,

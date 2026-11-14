@@ -42,7 +42,8 @@ but stored outside the checkout under `$XDG_STATE_HOME/collab`, defaulting to
 
 ## If the user is in tmux — give them a pane
 
-Check `$TMUX`. If it is set, this puts the conversation beside their work:
+If the user is in tmux, this puts the conversation beside their work. An empty
+`TMUX` in an isolated tool shell is not evidence that their terminal is outside:
 
 ```bash
 collab watch --tmux
@@ -58,21 +59,12 @@ collab watch --tmux --percent 50    # give it half the window
 You stay in the original pane — the split runs detached, so your own session is
 not interrupted.
 
-`--tmux` reads `$TMUX` from **your** shell, not from the machine. An agent whose
-shell is not the tmux client's — one running its commands in a sandbox, or
-started outside tmux — is told *not inside a tmux session* while the user's
-tmux is plainly running. Do not conclude tmux is absent. Split the pane yourself
-from any shell; it works whenever the user's tmux server is up, and it must
-carry the state directory because a new pane inherits the tmux server's
-environment, not yours:
-
-```bash
-tmux split-window -d "COLLAB_HOME=/home/perez/.local/state/collab/repositories/WORKSPACE_HASH/agents/AGENT_HASH/.collab collab watch --session s_bb9c59a3"
-```
-
-`collab lock` prints the directory as `state` and the session id on its first
-line. With more than one tmux session, add `-t <session>` to say which. If that
-too is refused, fall back to the second-terminal instructions below.
+`--tmux` targets an exact socket and pane. On Linux it can recover stripped
+variables by matching the coding host's ancestor tty to an owned private
+server. It never guesses from the active window. Missing/ambiguous evidence
+leaves panes untouched; use the second-terminal instructions below when the
+sandbox hides the context. The launcher passes `COLLAB_HOME` explicitly because
+a new pane inherits the tmux server's environment, not the agent's shell.
 
 ## Letting tmux own the layout
 
@@ -301,10 +293,12 @@ The Cyberpunk and Matrix themes are selected with `collab theme cyberpunk` and
 support. Read `collab watch --help` for panel geometry controls available in the
 installed version.
 
-Collapsed participant cards use exactly one padded, participant-coloured line
+Collapsed participant cards keep one padded, participant-coloured heading
 for identity, main model, worker model/state and activity duration. Both model
 columns remain visible with every field preset. A fixed state-symbol legend sits
-below the participants. Expanded cards show main-agent and worker measurements side by
+below the participants. Known positive worker decisions add a warning row even
+without expansion; missing/stale timestamps stay qualified and usage clocks
+cannot make the count fresh. Expanded cards show main-agent and worker measurements side by
 side in wide panes and stack them in narrow panes. Hidden or stale fields keep
 their meaning when the layout changes.
 
