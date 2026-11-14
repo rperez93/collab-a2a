@@ -170,3 +170,5 @@ polling is cancellable and bounded. The pin remains unchanged.
   machine (R21); identity settings are no longer inherited from the machine
   file, except a telemetry opt-out, which stays machine-wide. Recorded in
   architecture/state-ownership.md. No pin or verified stamp changed.
+
+* **Update (later than the pin)**: Recorded the hub approval-security alarm route and filtered custom-recipe inputs in [the wake page](collaboration/wake.md). The bundle revision and historical verification stamps are unchanged.

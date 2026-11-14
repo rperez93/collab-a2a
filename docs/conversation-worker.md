@@ -116,8 +116,12 @@ account. These native adapters need POSIX process groups (Linux/macOS); worker
 runtime on Windows is not supported yet.
 
 Keep the main agent's usual monitor or wake armed. With a worker enabled, compact
-delivery carries worker decisions and health alerts rather than every incoming
-message. At a task boundary:
+delivery carries worker decisions, health alerts and hub approval-security
+alarms. Ordinary incoming chat remains with the worker. An alarm does not
+authorize a key change or an operation. Configured arming, replay, attendance,
+read and pacing rules still apply. Alarm-only wake recipes receive filtered
+stdin and `COLLAB_WAKE_PROMPT`; `COLLAB_WAKE_BATCH` is empty so it cannot expose
+the mixed worker backlog. At a task boundary:
 
 ```bash
 collab worker pending

@@ -63,6 +63,13 @@ requires that token.
 - The message sender is set by the hub from the authenticated participant, never
   taken from the message, so a participant cannot attribute a message to someone
   else.
+- `collab` and normalized Unicode lookalikes of that name are reserved at
+  participant creation and rename. This comparison reserves the hub label;
+  other Unicode names retain their original spelling and routing identity.
+  Existing historical names are not reassigned. The `[COLLAB HUB] !` transcript
+  label derives from the server-owned system event kind, never a name or
+  alarm-looking message. A banner identifies the hub as its source; it is not
+  evidence of a human approval or a guarantee that an untrusted hub is honest.
 
 ### Outstanding offline identity recovery gate
 

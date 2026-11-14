@@ -31,6 +31,7 @@ from typing import Any, Iterable
 
 from ..batch import DONE_STATE as COMPLETED_STATE
 from ..protocol import Envelope
+from ..names import validate_participant_name
 
 class TaskClaimConflict(ValueError):
     """A competing claim or completion won before this write acquired the lock."""
@@ -740,6 +741,7 @@ class Store:
     def add_participant(self, name: str, token: str, *, is_host: bool = False,
                         meta: dict[str, Any] | None = None) -> Participant:
         """Insert a participant, suffixing the name if it is already taken."""
+        validate_participant_name(name)
         now = time.time()
         pid = new_participant_id()
         with self._lock:
@@ -924,6 +926,7 @@ class Store:
 
     def rename(self, participant_id: str, new: str) -> str:
         """Change the display name. The id — and so all routing — is untouched."""
+        validate_participant_name(new)
         now = time.time()
         with self._lock:
             final, n = new, 2

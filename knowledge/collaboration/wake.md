@@ -296,3 +296,8 @@ agent that is not running has nothing to be woken.
 
 [^wake-src]: collab.wake — the recipes, the settling, and the framing
 [^agents-run]: collab wake agents, run against a live session
+
+Later than the pin: hub approval-security system events can also reach the armed
+main-agent route while a worker owns conversation. They preserve ordinary wake
+and replay gates and do not authorize an operation. Alarm-only custom recipes
+use filtered stdin or COLLAB_WAKE_PROMPT; COLLAB_WAKE_BATCH is empty.

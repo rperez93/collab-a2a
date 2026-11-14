@@ -43,6 +43,7 @@ import math
 import os
 import re
 import shlex
+import stat
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -91,6 +92,11 @@ BACKOFF_STEPS = 15
 #: did I miss», not an archive: the conversation is still in the inbox, and the
 #: prompt tells the agent to go and read it.
 MAX_BATCH = 40
+
+# Forty 8,000-character events at four UTF-8 bytes/character fit below 2 MiB.
+# The worker-enabled alarm check runs on the heartbeat, so neither historical
+# batch count nor a damaged spool may turn it into an unbounded file scan.
+SECURITY_SCAN_BYTES = 2 * 1024 * 1024
 
 #: A hard ceiling on the prompt, well under Linux's 128 KiB limit for a single
 #: argument. Five of the recipes pass the prompt as one argument, and a batch
@@ -771,6 +777,7 @@ class Batch:
     """One file of events, and the turn it is owed."""
 
     path: Path
+    security_only: bool = False
 
     @property
     def name(self) -> str:
@@ -778,9 +785,13 @@ class Batch:
 
     def read(self) -> str:
         try:
-            return self.path.read_text(encoding="utf-8")
+            raw = (_security_text(self.path) if self.security_only
+                   else self.path.read_text(encoding="utf-8"))
         except OSError:
             return ""
+        if not self.security_only:
+            return raw
+        return "".join(line + "\n" for line in raw.splitlines() if _alarm_line(line))
 
     def events(self) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
@@ -788,6 +799,29 @@ class Batch:
             with contextlib.suppress(ValueError):
                 out.append(json.loads(line))
         return out
+
+
+def _alarm_line(line: str) -> bool:
+    try:
+        event = json.loads(line)
+    except (ValueError, RecursionError):
+        return False
+    return isinstance(event, dict) and attention.approval_security(event.get("kind"), event.get("body"))
+
+
+def _security_text(path: Path, limit: int = SECURITY_SCAN_BYTES) -> str:
+    """Read at most one normal bounded spool; refuse oversized/corrupt files."""
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(descriptor, "rb") as source:
+        if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+            raise OSError("security wake spool is not a regular file")
+        raw = source.read(limit + 1)
+    if len(raw) > limit:
+        raise OSError("security wake spool exceeds scan budget")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeError:
+        raise OSError("security wake spool is not UTF-8") from None
 
 
 class Waker:
@@ -854,9 +888,9 @@ class Waker:
         news — without that floor, arming in a busy session immediately
         delivered the entire replayed history as one enormous first turn.
         """
-        if env.kind not in WAKE_KINDS:
+        if not attention.relevant(env.kind, env.body):
             return False
-        if own_name and env.sender == own_name:
+        if own_name and env.sender == own_name and env.kind in WAKE_KINDS:
             return False            # our own words, echoed back off the feed
         config = self.config()
         if not config.enabled:
@@ -870,6 +904,9 @@ class Waker:
             "seq": getattr(env, "seq", None),
             "at": when,
             "kind": env.kind,
+            # Keep only the routing marker, not arbitrary metadata. Persist it
+            # so notice-mode/read filtering still admits the alarm after restart.
+            **({"body": {"event": "approval-security"}} if env.kind == "system" else {}),
             "from": env.sender,
             # WHOLE. This cut each message at two thousand characters with
             # «…[truncated; `collab recv` has it all]» appended, and a woken
@@ -974,7 +1011,7 @@ class Waker:
     # --- deciding --------------------------------------------------------------
 
     def due(self, config: WakeConfig | None = None, *,
-            start_clock: bool = True) -> tuple[bool, str]:
+            start_clock: bool = True, security_only: bool = False) -> tuple[bool, str]:
         """Is a turn owed right now — and if not, why not?
 
         The reason comes back rather than being logged and lost: «why did
@@ -991,14 +1028,19 @@ class Waker:
         every time.
         """
         config = config or self.config()
+        selected = (self._security_match([*self._security_batches(), self.pending])
+                    if security_only else None)
+        if security_only and selected is None:
+            return False, "no unread security alarm"
+        outstanding = bool(selected and selected != self.pending) if security_only else None
         if not config.enabled:
             return False, "no wake command configured"
         if config.delivery == "notice" and attention.pending(self.root):
             return False, "notice already delivered; waiting for collab recv"
         if config.delivery == "notice":
-            paths = [self.pending, *(b.path for b in self.outstanding())]
-            events = [event for path in paths for event in Batch(path).events()
-                      if event.get("kind") in WAKE_KINDS]
+            paths = [selected] if security_only else [self.pending, *(b.path for b in self.outstanding())]
+            events = [event for path in paths for event in Batch(path, security_only=security_only).events()
+                      if attention.relevant(event.get("kind"), event.get("body"))]
             if events and attention.all_read(self.root, [e.get("seq") or 0 for e in events]):
                 return False, "queued messages have already been read"
         now = self.now()
@@ -1018,7 +1060,7 @@ class Waker:
         if self.failed_at and waited < self.retry_pause:
             broken = f" ({self.failures} failures)" if self.broken else ""
             return False, f"retrying in {int(self.retry_pause - waited)}s{broken}"
-        if not self.outstanding() and not self.waiting():
+        if not (outstanding if security_only else self.outstanding()) and not (selected if security_only else self.waiting()):
             # THE REMINDER IS ASKED HERE AND NOWHERE EARLIER. Above this line
             # something is unread, and a reminder firing there would spend the
             # turn the messages were owed and then hold them behind `min_gap`
@@ -1052,9 +1094,14 @@ class Waker:
         # where the wake should be dropped.
         if self.attended():
             return False, "somebody is already reading"
-        if self.outstanding():
+        if outstanding if security_only else self.outstanding():
             return True, "a batch is waiting to be delivered"
-        age = now - self.oldest_pending_at()
+        if security_only:
+            events = Batch(selected, security_only=True).events()
+            oldest = min((float(event.get("at") or now) for event in events), default=now)
+        else:
+            oldest = self.oldest_pending_at()
+        age = now - oldest
         if age < config.settle:
             return False, f"letting the burst finish ({int(config.settle - age)}s)"
         return True, "unread messages and nobody reading"
@@ -1088,6 +1135,65 @@ class Waker:
         except OSError:
             return None
         return Batch(target)
+
+    def security_pending(self) -> bool:
+        """A worker handles chat, but does not suppress the hub's security alarm."""
+        return self._security_match([self.pending, *self._security_batches()]) is not None
+
+    def _security_match(self, paths: list[Path]) -> Path | None:
+        budget = SECURITY_SCAN_BYTES
+        for path in paths:
+            try:
+                raw = _security_text(path, budget)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return None
+            budget -= len(raw.encode("utf-8"))
+            if any(_alarm_line(line) for line in raw.split("\n", MAX_BATCH + 1)[:MAX_BATCH + 1]):
+                return path
+            if budget <= 0:
+                break
+        return None
+
+    def _security_batches(self) -> list[Path]:
+        paths = []
+        try:
+            with os.scandir(self.batches) as entries:
+                for count, entry in enumerate(entries):
+                    if count >= MAX_BATCH:
+                        break
+                    if entry.name.endswith(".jsonl") and entry.is_file(follow_symlinks=False):
+                        paths.append(Path(entry.path))
+        except OSError:
+            pass
+        return sorted(paths)
+
+    def take_security(self) -> Batch | None:
+        """Present alarms only, retaining ordinary backlog until ordinary delivery."""
+        existing = self._security_batches()
+        selected = self._security_match([*existing, self.pending])
+        if selected is None:
+            return None
+        if selected != self.pending:
+            return Batch(selected, security_only=True)
+        if existing:
+            # Reuse the ordinary remainder instead of accumulating one new
+            # outstanding mixed file per successful alarm. The existing fold
+            # retains its normal forty-row overflow/inbox policy.
+            try:
+                _security_text(existing[0])
+            except OSError:
+                return None
+            self._fold_into(Batch(existing[0]))
+            return Batch(existing[0], security_only=True)
+        self.ensure()
+        target = self.batches / f"{int(self.now() * 1000)}-{next(_WRITES)}.jsonl"
+        try:
+            os.replace(self.pending, target)
+        except OSError:
+            return None
+        return Batch(target, security_only=True)
 
     def _fold_into(self, batch: Batch) -> None:
         """Move what is waiting into a batch that has yet to be delivered.
@@ -1340,7 +1446,7 @@ class Waker:
         """
         if self.config().delivery == "notice":
             events = [e for e in batch.events()
-                      if e.get("kind") in WAKE_KINDS
+                      if attention.relevant(e.get("kind"), e.get("body"))
                       and not attention.was_read(self.root, e.get("seq") or 0)]
             return attention.notice(self.session_id, len(events),
                                     max((e.get("seq") or 0 for e in events), default=0))
@@ -1447,7 +1553,24 @@ class Waker:
             attention.delivered(self.root, max((e.get("seq") or 0 for e in events), default=0),
                                 seqs=[e["seq"] for e in events if e.get("seq")])
         with contextlib.suppress(OSError):
-            os.replace(batch.path, self.done / batch.name)
+            if batch.security_only:
+                # The worker-enabled bypass must neither disclose nor consume
+                # ordinary chat. Replace one file atomically only after success;
+                # a failed delivery keeps the complete original for retry.
+                raw = _security_text(batch.path)
+                remaining = "".join(line + "\n" for line in raw.splitlines() if not _alarm_line(line))
+                if remaining:
+                    temporary = batch.path.with_suffix(f".writing.{os.getpid()}.{next(_WRITES)}")
+                    try:
+                        temporary.write_text(remaining, encoding="utf-8")
+                        os.replace(temporary, batch.path)
+                    finally:
+                        with contextlib.suppress(OSError):
+                            temporary.unlink()
+                else:
+                    os.replace(batch.path, self.done / batch.name)
+            else:
+                os.replace(batch.path, self.done / batch.name)
         self._trim()
 
     def try_again_later(self, batch: Batch | None) -> None:

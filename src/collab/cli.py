@@ -2000,7 +2000,8 @@ def cmd_listen(args: argparse.Namespace) -> int:
                 continue
             if args.room and env.room != args.room:
                 continue
-            if not args.mine_too and env.sender == profile.name:
+            if (not args.mine_too and env.sender == profile.name
+                    and not attention.approval_security(env.kind, env.body)):
                 continue
             if compact:
                 digest.add(env, time.monotonic())
@@ -2041,11 +2042,13 @@ def cmd_listen(args: argparse.Namespace) -> int:
             digest.gap = runtime_setting("attention_gap")
             if compact and now - worker_checked >= 1.0:
                 worker_checked = now
+                previously_enabled = worker_enabled
                 worker_enabled = worker_notices.enabled(root)
                 if worker_enabled:
                     # The conversation owner consumes ordinary events. Only
                     # decisions and failures need a turn in the coding agent.
-                    digest.sent(now)
+                    if not previously_enabled:
+                        digest.sent(now)
                     claim = worker_notices.claim(root)
                     if claim:
                         try:
@@ -2071,18 +2074,22 @@ def cmd_listen(args: argparse.Namespace) -> int:
             # Recover unread backlog on startup and after each consumed page.
             # Filtering happens in SQL before LIMIT, so presence/own echoes
             # cannot hide a relevant request forever behind the first page.
-            if compact and not worker_enabled and not digest.count and now - backlog_checked >= 1.0:
+            if compact and not digest.count and now - backlog_checked >= 1.0:
                 backlog_checked = now
                 if not attention.pending(root):
                     for env in inbox.notice_events(
                             room=args.room,
                             exclude_sender="" if args.mine_too else profile.name,
-                            exclude_sender_id="" if args.mine_too else profile.participant_id, kinds=kinds):
+                            exclude_sender_id="" if args.mine_too else profile.participant_id,
+                            kinds=(("system",) if worker_enabled and (not kinds or "system" in kinds)
+                                   else kinds)):
+                        if worker_enabled and not attention.approval_security(env.kind, env.body):
+                            continue
                         digest.add(env, now)
             # A busy transcript must not open SQLite and a lock for each line.
             # The counters are constant-memory; checking the doorbell once per
             # second keeps a remote flood from turning into local IO churn.
-            if compact and not worker_enabled and digest.due(now) and now - notice_checked >= 1.0:
+            if compact and digest.due(now) and now - notice_checked >= 1.0:
                 notice_checked = now
                 if attention.all_read(root, [*digest.seqs, digest.seq]):
                     digest.sent(now)
@@ -2119,11 +2126,12 @@ def cmd_listen(args: argparse.Namespace) -> int:
                 continue
             if args.room and env.room != args.room:
                 continue
-            if args.mine_too is False and env.sender == profile.name:
+            if (args.mine_too is False and env.sender == profile.name
+                    and not attention.approval_security(env.kind, env.body)):
                 continue
             # flush on every line: a Monitor only sees what is actually written.
             if compact:
-                if not worker_enabled:
+                if not worker_enabled or attention.approval_security(env.kind, env.body):
                     digest.add(env, time.monotonic())
             else:
                 print(_format(env, args.json), flush=True)
@@ -2155,6 +2163,7 @@ def _format_reminder(drop: dict[str, Any], as_json: bool) -> str:
 
 def cmd_recv(args: argparse.Namespace) -> int:
     """Drain unread messages; optionally wait for one to arrive."""
+    from .attention import approval_security
     profile = _require_profile(args)
     if getattr(args, "repair", False):
         from .client.recovery import repair_inbox
@@ -2175,7 +2184,8 @@ def cmd_recv(args: argparse.Namespace) -> int:
     deadline = time.time() + args.wait
     while True:
         events = inbox.take_unread(limit=args.limit, mark=not args.peek)
-        events = [e for e in events if args.mine_too or e.sender != profile.name]
+        events = [e for e in events if args.mine_too or e.sender != profile.name
+                  or approval_security(e.kind, e.body)]
         if events:
             for env in events:
                 print(_format(env, args.json))

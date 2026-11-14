@@ -48,7 +48,7 @@ within a supplied scope, and escalates decisions to the main coding agent.
 `collab worker context` supplies progress and constraints; `collab worker pending`
 and `collab worker reply` form the decision return path. The coding host and
 worker provider are independent. With a worker active, compact monitor/wake
-delivery carries its decisions and health notices; the full inbox and viewer
+delivery carries its decisions, health notices and hub approval-security alarms; the full inbox and viewer
 remain available. Without one, compact notices require the main agent to read
 and respond deliberately.
 

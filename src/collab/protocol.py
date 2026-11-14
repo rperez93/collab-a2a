@@ -8,6 +8,8 @@ emits, one JSON object per event.
 
 from __future__ import annotations
 
+from .terminal_text import HUB_LABEL, display_text
+
 import time
 import unicodedata
 import uuid
@@ -535,9 +537,11 @@ class Envelope:
         characters on the way out (see `scrub`): a name carrying an escape
         sequence must not get to rewrite the reader's screen.
         """
-        return scrub(self._render_line())
+        return display_text(scrub(self._render_line()), peer=self.kind != KIND_SYSTEM)
 
     def _render_line(self) -> str:
+        if self.kind == KIND_SYSTEM:
+            return f"{HUB_LABEL} ! {self.text or self.body}"
         if self.kind == KIND_CHAT:
             where = f"dm→{self.to}" if self.is_direct() else f"#{self.room}"
             return f"[{where}] {self.sender}: {self.text}"

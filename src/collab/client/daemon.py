@@ -1747,23 +1747,24 @@ class Daemon:
         self._waking = None
         from .. import worker_notices
 
-        if worker_notices.enabled(self.profile.dir):
+        worker_enabled = worker_notices.enabled(self.profile.dir)
+        if worker_enabled and not self.waker.security_pending():
             await self._maybe_worker_notice()
             if self._waking is None:
                 await self._maybe_task_pickup()
             return
-        due, why = self.waker.due()
+        due, why = self.waker.due(security_only=worker_enabled)
         self._wake_note = why
         if not due:
             await self._maybe_task_pickup()
             return
-        batch = self.waker.take()
+        batch = self.waker.take_security() if worker_enabled else self.waker.take()
         # THE MESSAGES ARE CUT FIRST, ALWAYS. The standing reminder rides along
         # with a turn that is being spent anyway and goes on its own only when
         # nothing else is going — asked here, after `take()`, precisely so that
         # nothing unread can be displaced by it.
         reminder = ""
-        if self.waker.reminder_due():
+        if not worker_enabled and self.waker.reminder_due():
             reminder = self._reminder_text()
             self.waker.reminded("wake")
         if batch is None and not reminder:
@@ -1781,7 +1782,7 @@ class Daemon:
         cfg = self.waker.config()
         if batch is not None and cfg.delivery == "notice":
             seqs = [e["seq"] for e in batch.events()
-                    if e.get("seq") and e.get("kind") in attention.KINDS]
+                    if e.get("seq") and attention.relevant(e.get("kind"), e.get("body"))]
             if seqs:
                 notice_seq = max(seqs)
                 # A monitor can start after due() checked attendance. Reserve
@@ -1906,7 +1907,10 @@ class Daemon:
         # misled by its own tooling.
         env = {**os.environ,
                "COLLAB_WAKE_PROMPT": str(self.waker.write_prompt(batch, reminder)),
-               "COLLAB_WAKE_BATCH": str(batch.path) if batch is not None else "",
+               # A security-only view deliberately retains ordinary worker
+               # context in its backing file. Do not expose that mixed path to
+               # custom recipes; stdin and COLLAB_WAKE_PROMPT are filtered.
+               "COLLAB_WAKE_BATCH": str(batch.path) if batch is not None and not batch.security_only else "",
                "COLLAB_WAKE_KIND": "messages" if batch is not None else ("worker" if worker_notice else "task" if task_notice else "reminder"),
                "COLLAB_SESSION": self.profile.session_id}
         try:

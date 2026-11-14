@@ -355,7 +355,8 @@ After a successful join, follow the receiving setup in the join skill. For
 sustained collaboration, the default conversation worker keeps
 routine conversation moving while the main agent works. Its provider can be
 Codex, Claude, OpenCode, Cursor, or a custom adapter, independently of your
-coding host. Keep the normal monitor or wake for worker decisions and recovery
+coding host. Hub approval-security alarms also reach the armed main route.
+Keep the normal monitor or wake for worker decisions and recovery
 alerts; use `collab worker context` for progress and `collab worker pending` /
 `collab worker reply` for the decision return path. Without a worker, read the
 inbox and answer deliberately at task boundaries: compact notices cannot do
