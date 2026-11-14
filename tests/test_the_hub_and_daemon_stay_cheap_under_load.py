@@ -252,3 +252,70 @@ def test_batch_start_and_close_leave_task_rows_alone_and_figures_current(board):
     board.close_batch("B_1")
     assert hub.batch_figures()["state"] == "closed"
     assert len(board.batch_tasks("B_1")) == 500
+
+
+# --- the hub's memory per message (R17) ------------------------------------------------
+
+def _rss_kib() -> int:
+    with open("/proc/self/status") as status:
+        return next(int(line.split()[1]) for line in status if line.startswith("VmRSS"))
+
+
+def _a2a_send(client, headers, i, method="SendMessage"):
+    import uuid
+
+    return client.post("/a2a", headers={**headers, "A2A-Version": "1.0"}, json={
+        "jsonrpc": "2.0", "id": str(i), "method": method,
+        "params": {"message": {"messageId": uuid.uuid4().hex, "role": "ROLE_USER", "parts": [{
+            "data": {"kind": "chat", "room": "general", "text": "load message " + "words " * 20},
+            "mediaType": "application/json"}]}}})
+
+
+def _open_tasks(app) -> int:
+    return len(app.state.a2a_handler._active_task_registry._active_tasks)
+
+
+@pytest.mark.skipif(not Path("/proc/self/status").exists(), reason="reads VmRSS from /proc")
+def test_a_message_sent_over_a2a_leaves_nothing_behind_in_the_hub(session, host_headers):
+    """THE HUB GREW 36 KiB PER MESSAGE, FOR EVER. a2a-sdk keeps an ActiveTask
+    per SendMessage until the task finishes, and one answered with a Message —
+    the hub's ack — never does. Measured, R17 plateau run: +20.6 MiB per 10
+    minutes at one message a second, linear over 30 minutes, the same with
+    MALLOC_ARENA_MAX=2; under memray the live allocations were the SDK's
+    `_setup_active_task` and its queues. In process: 35.8 KiB per send and one
+    registry entry per message before; 0.5–1.4 KiB per send (SQLite's page
+    cache settling) and no entries after.
+
+    The registry count is the exact check; the RSS bound is the one that
+    names the cost, set at a quarter of what the leak cost."""
+    import gc
+
+    from fastapi.testclient import TestClient
+
+    app = session["app"]
+    with TestClient(app) as client:
+        for i in range(200):                       # warm: caches, pools, imports
+            assert "error" not in _a2a_send(client, host_headers, i).json()
+        gc.collect()
+        before = _rss_kib()
+        sends = 1000
+        for i in range(sends):
+            reply = _a2a_send(client, host_headers, i).json()
+            assert reply["result"]["message"]["parts"][0]["data"]["kind"] == "ack"
+        gc.collect()
+        per_send = (_rss_kib() - before) / sends
+        assert _open_tasks(app) == 0, f"{_open_tasks(app)} answered tasks still held"
+    assert per_send < 9.0, f"{per_send:.1f} KiB of RSS per message"
+
+
+def test_the_streaming_send_closes_its_task_too(session, host_headers):
+    """The same task is opened by SendStreamingMessage: a client choosing it
+    must not bring the growth back."""
+    from fastapi.testclient import TestClient
+
+    app = session["app"]
+    with TestClient(app) as client:
+        for i in range(20):
+            reply = _a2a_send(client, host_headers, i, method="SendStreamingMessage")
+            assert reply.status_code == 200
+        assert _open_tasks(app) == 0
