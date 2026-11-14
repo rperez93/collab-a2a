@@ -64,7 +64,29 @@ HOP_HEADERS = frozenset({
     "te", "trailer", "transfer-encoding", "upgrade", "host",
 })
 
-STATE_FILE = "proxy.json"
+#: IN A SUBDIRECTORY, NOT BESIDE THE RECORDS. `peers.discover(prune=True)`
+#: deletes any `*.json` in the registry it cannot read as a peer once it is
+#: older than STALE_AFTER — and it took `proxy.json` with it 90 s after the
+#: proxy started (review of #111): the primary session, and the pid and stamp
+#: of the ngrok it runs, gone with the first `collab discover`.
+STATE_FILE = "state.json"
+
+#: Upstream connections are not pooled to a fixed size. httpx's default of 100
+#: was shared by every session on the machine: 100 unauthenticated slow
+#: uploads, or 105 ordinary SSE feeds across all sessions, and every further
+#: request waited 10 s and got 502 PoolTimeout (measured, review of #111).
+#: The bound on a misbehaving client is per request instead — see BODY_IDLE.
+UPSTREAM_LIMITS = {"max_connections": None, "max_keepalive_connections": 64}
+
+#: How long a request body may go without a single byte before the proxy gives
+#: up on it. A slow-drip upload (1 byte/s, no token) held an upstream
+#: connection open for as long as the attacker liked; a real upload, even over
+#: a poor link, does not stall for this long.
+BODY_IDLE = 30.0
+
+#: How long the primary-session lookup is trusted. It was a file read on every
+#: proxied request — every poll, roster read and send.
+PRIMARY_CACHE_SECONDS = 1.0
 
 
 def state_dir() -> Path:
@@ -72,6 +94,10 @@ def state_dir() -> Path:
     `COLLAB_PEERS_DIR` moving one must move the other — or a test's registry
     would be routed by the machine's proxy."""
     return peers.peers_dir()
+
+
+def state_path() -> Path:
+    return state_dir() / "proxy" / STATE_FILE
 
 
 @dataclass
@@ -93,7 +119,7 @@ class ProxyState:
     @classmethod
     def load(cls) -> "ProxyState":
         try:
-            data = json.loads((state_dir() / STATE_FILE).read_text())
+            data = json.loads(state_path().read_text())
         except (OSError, ValueError):
             return cls()
         if not isinstance(data, dict):
@@ -107,7 +133,7 @@ class ProxyState:
             return cls()
 
     def save(self) -> None:
-        path = state_dir() / STATE_FILE
+        path = state_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(asdict(self), indent=2))
@@ -176,6 +202,13 @@ def split_target(path: str, primary: str) -> tuple[str, str] | None:
     return None
 
 
+def has_dot_segment(raw_path: str) -> bool:
+    """A `.` or `..` segment, which an HTTP client would resolve and so change
+    the request before the hub saw it: `/s/<id>/../../etc/passwd` reached the
+    hub as `/etc/passwd`. The hub has no use for one, so it is refused."""
+    return any(part in (".", "..") for part in raw_path.split("/"))
+
+
 def forward_headers(headers: Any, client_host: str, scheme: str) -> dict[str, str]:
     out = {k: v for k, v in headers.items() if k.lower() not in HOP_HEADERS}
     out["x-forwarded-for"] = client_host
@@ -193,15 +226,43 @@ def build_app(routes: Routes | None = None, *, primary: Any = None) -> Any:
     from starlette.responses import PlainTextResponse, StreamingResponse
     from starlette.routing import Route
 
+    import asyncio
+
     routes = routes or Routes()
-    primary = primary or (lambda: ProxyState.load().primary)
+    if primary is None:
+        cached = {"at": float("-inf"), "value": ""}
+
+        def primary() -> str:
+            now = time.monotonic()
+            if now - cached["at"] >= PRIMARY_CACHE_SECONDS:
+                cached["value"], cached["at"] = ProxyState.load().primary, now
+            return cached["value"]
+
     # NO READ TIMEOUT: the feed is an SSE stream that may be quiet for minutes
     # by design. Connect is bounded — a hub that is not listening fails fast.
     client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=None),
+                               limits=httpx.Limits(**UPSTREAM_LIMITS),
                                follow_redirects=False)
 
+    async def body(request: Request) -> Any:
+        """The request body, given up on after BODY_IDLE without a byte."""
+        chunks = request.stream().__aiter__()
+        while True:
+            try:
+                chunk = await asyncio.wait_for(chunks.__anext__(), BODY_IDLE)
+            except StopAsyncIteration:
+                return
+            yield chunk
+
     async def handle(request: Request) -> Any:
-        target = split_target(request.url.path, primary())
+        # THE RAW PATH, still percent-encoded. The decoded one turned `%3F`
+        # into a query, `%23` into a fragment and `%2F` into a separator, so
+        # the hub received a different request from the one that was sent.
+        raw = request.scope.get("raw_path", b"").decode("latin-1") or request.url.path
+        if has_dot_segment(raw):
+            return PlainTextResponse("dot segments are not forwarded\n",
+                                     status_code=400)
+        target = split_target(raw, primary())
         if target is None:
             return PlainTextResponse(
                 "no collab session at this address — `collab discover` on the "
@@ -212,16 +273,20 @@ def build_app(routes: Routes | None = None, *, primary: Any = None) -> Any:
             return PlainTextResponse(f"no live session {session_id} here\n",
                                      status_code=404)
         url = base + upstream_path
-        if request.url.query:
-            url += "?" + request.url.query
+        query = request.scope.get("query_string", b"").decode("latin-1")
+        if query:
+            url += "?" + query
         client_host = request.client.host if request.client else ""
         upstream = client.build_request(
             request.method, url,
             headers=forward_headers(request.headers, client_host, request.url.scheme),
-            content=request.stream(),
+            content=body(request),
         )
         try:
             response = await client.send(upstream, stream=True)
+        except asyncio.TimeoutError:
+            return PlainTextResponse(f"request body stalled for {BODY_IDLE:.0f} s\n",
+                                     status_code=408)
         except httpx.HTTPError as exc:
             return PlainTextResponse(f"the hub for {session_id} did not answer: "
                                      f"{type(exc).__name__}\n", status_code=502)

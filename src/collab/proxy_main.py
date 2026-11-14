@@ -33,7 +33,35 @@ def _record_ngrok(state: proxy.ProxyState, supervisor) -> None:
     """The ngrok pid we started, with its stamp; 0 when we reuse another's."""
     pid = supervisor.own_pid() if supervisor is not None else 0
     state.ngrok_pid = pid
-    state.ngrok_stamp = exclusive.stamp(pid) if pid else ""
+    state.ngrok_stamp = exclusive.stamp_for(pid).encode() if pid else ""
+
+
+def _stop_orphaned_ngrok(previous: proxy.ProxyState) -> bool:
+    """End the ngrok a previous proxy recorded, if that exact process is alive.
+
+    Only when its stamp — pid, start time and boot — still matches: a pid
+    alone may by now belong to anything. It was started in its own session,
+    so its group is its own and ending the group cannot reach this process.
+    """
+    import signal
+
+    if not previous.ngrok_pid or not previous.ngrok_stamp:
+        return False
+    stamp = exclusive.decode(previous.ngrok_stamp)
+    if not stamp or stamp.pid != previous.ngrok_pid or not stamp.alive():
+        return False
+    if os.getpgid(stamp.pid) != stamp.pid:
+        return False            # not the session leader we started; leave it
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(stamp.pid, sig)
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            if not stamp.alive():
+                logger.warning("stopped an orphaned ngrok (pid %d)", stamp.pid)
+                return True
+            time.sleep(0.05)
+    return not stamp.alive()
 
 
 def lock_root() -> "os.PathLike[str]":
@@ -93,7 +121,14 @@ def main(argv: list[str] | None = None) -> int:
     routes = proxy.Routes()
     state = proxy.ProxyState.load()
     state.pid, state.port, state.started_at = os.getpid(), port, time.time()
-    state.stamp = exclusive.stamp(os.getpid())
+    state.stamp = exclusive.stamp_for(os.getpid()).encode()
+
+    # AN ORPHANED NGROK FROM A PROXY THAT DIED HARD. It runs in its own session
+    # so it outlives a SIGKILLed proxy, keeps the account's one endpoint (the
+    # new tunnel then fails with ERR_NGROK_334), and forwards the public domain
+    # to the OLD loopback port — whatever binds that port next is published.
+    # Stopped here by its recorded stamp, never by name.
+    _stop_orphaned_ngrok(proxy.ProxyState.load())
 
     supervisor = None
     if not args.no_tunnel:
@@ -108,7 +143,12 @@ def main(argv: list[str] | None = None) -> int:
     state.save()
 
     config = uvicorn.Config(proxy.build_app(routes), host="127.0.0.1", port=port,
-                            log_level="warning", lifespan="on")
+                            log_level="warning", lifespan="on",
+                            # A ceiling on concurrent connections at the door,
+                            # far above sessions × participants × feeds, so a
+                            # flood is refused with 503 instead of exhausting
+                            # file descriptors.
+                            limit_concurrency=2000)
     server = uvicorn.Server(config)
 
     async def run() -> None:
