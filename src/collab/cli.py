@@ -7041,10 +7041,10 @@ def cmd_skills_install_shared(args: argparse.Namespace) -> int:
         content = record.get("content")
         if not isinstance(content, str) or hashlib.sha256(content.encode()).hexdigest() != record.get("sha256"):
             raise ValueError("the publication's text does not match its SHA-256; not installing it")
-        name = sk.shared_install_name(str(record.get("owner") or "peer"), str(record.get("name") or ""))
+        dest = sk.check_installable(record, target=target, force=args.force)  # before asking
         heading(f"shared skill {said(record.get('name', ''))} from {said(record.get('owner', '?'))}")
-        print(f"  {record.get('size_bytes', len(content.encode()))} bytes · sha256 {said(record.get('sha256', ''))}")
-        print(f"  would install as {target.path / said(name)}")
+        print(f"  {len(content.encode())} bytes · sha256 {said(record.get('sha256', ''))}")
+        print(f"  would install as {said(str(dest))}, renamed `{said(dest.name)}` in its front matter")
         print(dim("  ---- peer-authored text (untrusted): read it before agreeing ----"))
         print(scrub_block(content))
         print(dim("  ---- end of text ----"))

@@ -206,30 +206,90 @@ def skills_target(agent: str | None = None) -> Target:
     return target
 
 
+def installed_text(content: str, install_name: str) -> str:
+    """The text as installed: its front-matter name is the namespaced one.
+
+    Agents take a skill's name from its front matter, so writing the peer's
+    `name: commit` verbatim let it shadow the user's own `commit` skill
+    whatever the directory was called.
+    """
+    lines = content.split("\n")
+    if lines and lines[0].strip() == "---" and "---" in [l.strip() for l in lines[1:]]:
+        end = 1 + [l.strip() for l in lines[1:]].index("---")
+        head = [l for l in lines[1:end] if not l.startswith("name:")]
+        return "\n".join(["---", f"name: {install_name}", *head] + lines[end:])
+    return f"---\nname: {install_name}\n---\n" + content
+
+
+def check_installable(record: dict, *, target: Target, force: bool) -> Path:
+    """Where the skill would go, refused before the human is asked when it cannot.
+
+    --force replaces only an earlier install of the SAME publication name from
+    the SAME publisher: never a directory of the user's own, never another
+    peer's skill whose namespaced name happens to collide.
+    """
+    import json as _json
+    import unicodedata
+    content = str(record.get("content") or "")
+    if any(unicodedata.category(ch) == "Cf" for ch in content.lstrip("\ufeff")):
+        raise ValueError("the text contains invisible formatting characters (bidi or zero-width) "
+                         "that can make the review differ from what is installed; not installing it")
+    dest = target.path / shared_install_name(str(record.get("owner") or "peer"), str(record.get("name") or ""))
+    if dest.is_symlink() or (dest.exists() and not dest.is_dir()):
+        raise ValueError(f"{dest} exists and is not a skill directory")
+    if dest.exists():
+        meta = dest / PROVENANCE
+        try:
+            previous = _json.loads(meta.read_text(encoding="utf-8")) if meta.is_file() and not meta.is_symlink() else None
+        except (OSError, ValueError):
+            previous = None
+        if not isinstance(previous, dict):
+            raise ValueError(f"{dest.name} exists and was not installed by collab; not touching it")
+        if (previous.get("publisher_id"), previous.get("name")) != (record.get("owner_id"), record.get("name")):
+            raise ValueError(f"{dest.name} holds another publisher's skill; not replacing it")
+        if not force:
+            raise ValueError(f"{dest.name} is already installed; pass --force to replace it")
+    return dest
+
+
 def install_shared(record: dict, *, target: Target, session_id: str, force: bool = False) -> Path:
     """Write a reviewed, consented peer skill and the provenance beside it (R19).
 
-    The caller has verified the hash and obtained the human's consent; this
-    only refuses to overwrite and keeps the record of where the text came from.
+    Built in a fresh directory and swapped in, so a replaced version leaves no
+    stale files and nothing is written through a symlink.
     """
     import hashlib
     import json as _json
+    import shutil
+    import tempfile
     import time as _time
     from .skill_sharing import validate_publication
     clean = validate_publication({k: record.get(k) for k in ("name", "description", "content", "sha256")})
-    dest = target.path / shared_install_name(str(record.get("owner") or "peer"), clean["name"])
-    if dest.is_symlink() or (dest.exists() and not dest.is_dir()):
-        raise ValueError(f"{dest} exists and is not a skill directory")
-    if dest.exists() and not force:
-        raise ValueError(f"{dest.name} is already installed; pass --force to replace it")
-    dest.mkdir(parents=True, exist_ok=True)
-    (dest / "SKILL.md").write_text(clean["content"], encoding="utf-8")
-    (dest / "SKILL.md").chmod(0o644)
-    provenance = {"session_id": session_id, "publisher": record.get("owner", ""),
-                  "publisher_id": record.get("owner_id", ""), "publication_id": record.get("id", ""),
-                  "name": clean["name"], "sha256": hashlib.sha256(clean["content"].encode()).hexdigest(),
-                  "installed_at": _time.time()}
-    (dest / PROVENANCE).write_text(_json.dumps(provenance, indent=2), encoding="utf-8")
+    dest = check_installable(record, target=target, force=force)
+    text = installed_text(clean["content"], dest.name)
+    target.path.mkdir(parents=True, exist_ok=True)
+    fresh = Path(tempfile.mkdtemp(prefix=".collab-install-", dir=target.path))
+    try:
+        (fresh / "SKILL.md").write_text(text, encoding="utf-8")
+        (fresh / "SKILL.md").chmod(0o644)
+        provenance = {"session_id": session_id, "publisher": record.get("owner", ""),
+                      "publisher_id": record.get("owner_id", ""), "publication_id": record.get("id", ""),
+                      "name": clean["name"], "sha256": clean["sha256"],
+                      "installed_sha256": hashlib.sha256(text.encode()).hexdigest(),
+                      "installed_at": _time.time()}
+        (fresh / PROVENANCE).write_text(_json.dumps(provenance, indent=2), encoding="utf-8")
+        fresh.chmod(0o755)
+        if dest.exists():
+            old = dest.with_name(dest.name + ".collab-old")
+            shutil.rmtree(old, ignore_errors=True)
+            dest.rename(old)
+            fresh.rename(dest)
+            shutil.rmtree(old, ignore_errors=True)
+        else:
+            fresh.rename(dest)
+    except BaseException:
+        shutil.rmtree(fresh, ignore_errors=True)
+        raise
     return dest
 
 
@@ -243,9 +303,11 @@ def shared_installs(target: Target) -> list[dict]:
         meta = entry / PROVENANCE
         if entry.is_dir() and not entry.is_symlink() and meta.is_file():
             try:
-                found.append({"dir": entry.name, **_json.loads(meta.read_text(encoding="utf-8"))})
+                data = _json.loads(meta.read_text(encoding="utf-8"))
             except (OSError, ValueError):
-                found.append({"dir": entry.name, "error": "unreadable provenance"})
+                data = None
+            found.append({**data, "dir": entry.name} if isinstance(data, dict)
+                         else {"dir": entry.name, "error": "unreadable provenance"})
     return found
 
 

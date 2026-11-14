@@ -45,9 +45,12 @@ collab skills uninstall-shared shared-bob-review
 `install-shared` checks the text against its SHA-256, prints the publisher, size,
 hash and the full text, and installs only after the human's explicit yes: in a
 terminal it asks; without one it is refused unless `--human-approved` says your
-human read the text and agreed. A conversation worker never installs. The skill
+human read the text and agreed; it is your statement, so never pass it
+without asking. A conversation worker has no shell and cannot run it. The skill
 lands as `shared-<publisher>-<name>` in your agent's skills directory, never over
-an existing one without `--force`, with `.collab-provenance.json` (session,
+an existing one; `--force` replaces only an earlier install of the same
+publication from the same publisher, and the front-matter name is rewritten to
+the namespaced one so it cannot shadow your own skills, with `.collab-provenance.json` (session,
 publisher, publication id, hash, time) beside it. `uninstall-shared` removes
 only directories carrying that provenance (the operator's status view lists
 them). Only the `SKILL.md` entrypoint is
