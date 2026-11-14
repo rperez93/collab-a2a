@@ -301,32 +301,34 @@ class Store:
                 data["body"] = body
             return self._add(db, "outbox", data)
 
-    def queue_file(self, path: Path, *, to: str = "", room: str = "") -> str:
+    def queue_file(self, path: Path, *, to: str = "", room: str = "",
+                   keep: bool | None = None, source: str = "") -> str:
         """A file the main agent shares, delivered by the worker in order (R3).
 
         The bytes are copied now, so what is delivered is what was sent even if
         the file changes or disappears before the listener gets to it.
         """
-        import hashlib
-        import shutil
-        source = Path(path)
-        if not source.is_file():
-            raise ValueError(f"no such file: {source}")
+        from .file_retention import copy_upload, durable_source
+        if keep is not None and type(keep) is not bool:
+            raise ValueError("queued keep must be bool or None")
+        if not isinstance(source, str):
+            raise ValueError("queued durable source must be text")
+        recovery = durable_source(source)
+        path = Path(path)
         if not (to.strip() or room.strip()):
             raise ValueError("a queued file needs a recipient or a room")
         stash_dir = self.path.parent / "outbox-files"
         stash_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        stash = stash_dir / f"{uuid.uuid4().hex}-{source.name[:100]}"
-        shutil.copyfile(source, stash)
-        stash.chmod(0o600)
-        digest = hashlib.sha256(stash.read_bytes()).hexdigest()
+        stash = stash_dir / f"{uuid.uuid4().hex}-{path.name[:100]}"
         try:
+            digest = copy_upload(path, stash)
+            stash.chmod(0o600)
             with self._db() as db:
                 if not (self._state(db)["config"] or {}).get("enabled"):
                     raise ValueError("start the worker before queueing a file")
-                return self._add(db, "outbox", {"kind": "file", "stash": str(stash), "name": source.name,
+                return self._add(db, "outbox", {"kind": "file", "stash": str(stash), "name": path.name, "keep": keep, "source": recovery,
                                                 "to": to, "room": room, "sha256": digest,
-                                                "text": f"file {source.name}"})
+                                                "text": f"file {path.name}"})
         except BaseException:
             stash.unlink(missing_ok=True)
             raise
@@ -484,10 +486,12 @@ class Store:
         with self._db() as db:
             return self._records(db, "outbox")
 
-    def acknowledge(self, record_id: str) -> None:
+    def acknowledge(self, record_id: str, *, warning: str = "") -> None:
         with self._db() as db:
             row = db.execute("SELECT data FROM records WHERE id=? AND kind='outbox'", (record_id,)).fetchone()
             db.execute("DELETE FROM records WHERE id=? AND kind='outbox'", (record_id,))
+            if row is not None and warning:
+                self._add(db, "escalation", {"reason": "blocker", "seq": 0, "question": _text(warning, "upload warning")})
         _drop_stash(row)
 
     def defer(self, record_id: str, *, retry_at: float, error: str) -> bool:

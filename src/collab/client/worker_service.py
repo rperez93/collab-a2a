@@ -217,13 +217,13 @@ class Conversation:
                 # a total deadline also bounds slow trickles, not only silence.
                 timeout = setting("worker_delivery_timeout")
                 if message.get("kind") == "file":
-                    status = await self._upload(message, timeout=setting("worker_delivery_timeout") * 8)
+                    status, warning = await self._upload(message, timeout=setting("worker_delivery_timeout") * 8)
                     if 400 <= status < 500 and status not in (401, 408, 425, 429):
                         store.reject(message["id"], reason=f"hub answered {status}")
-                    elif status >= 400:
+                    elif not 200 <= status < 300:
                         raise RuntimeError(f"upload answered {status}")
                     else:
-                        store.acknowledge(message["id"])
+                        store.acknowledge(message["id"], warning=warning)
                     if attempts >= setting("worker_delivery_batch"):
                         break
                     continue
@@ -282,19 +282,60 @@ class Conversation:
             if attempts >= setting("worker_delivery_batch"):
                 break
 
-    async def _upload(self, message, *, timeout) -> int:
-        """Upload a queued file's private copy; the HTTP status decides its fate."""
+    async def _upload(self, message, *, timeout):
+        """A known success is acknowledged once, even if confirmation is unreadable."""
         import hashlib
-        stash = Path(message["stash"])
-        data = stash.read_bytes()
-        if hashlib.sha256(data).hexdigest() != message.get("sha256"):
-            return 422  # the private copy changed: never send different bytes
+        from ..file_retention import read_upload, durable_source, retention_warning, CONFIRM_BYTES, CONFIRM_SECONDS
+        try:
+            data = read_upload(Path(message["stash"]))
+            if hashlib.sha256(data).hexdigest() != message.get("sha256"):
+                return 422, ""
+            keep = message.get("keep")
+            if keep is not None and type(keep) is not bool:
+                return 422, ""
+            source = durable_source(message.get("source") or "")
+        except (OSError, ValueError):
+            return 422, ""
         params = {k: message[k] for k in ("to", "room") if message.get(k)}
-        response = await self.daemon._http.post(
-            f"{self.daemon.profile.url}{EXT_PREFIX}/files",
-            headers=request_headers(self.daemon.profile.token), params=params,
-            files={"file": (message["name"], data, "application/octet-stream")}, timeout=timeout)
-        return response.status_code
+        if keep is not None: params["keep"] = "true" if keep else "false"
+        if source: params["source"] = source
+        status = None
+        warning = retention_warning(None, keep, source)
+        async def upload():
+            nonlocal status, warning
+            async with self.daemon._http.stream("POST", f"{self.daemon.profile.url}{EXT_PREFIX}/files",
+                    headers=request_headers(self.daemon.profile.token), params=params,
+                    files={"file": (message["name"], data, "application/octet-stream")}, timeout=timeout) as response:
+                status = response.status_code
+                if not 200 <= status < 300:
+                    return
+                async def confirm():
+                    raw = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        if len(raw) + len(chunk) > CONFIRM_BYTES:
+                            raise ValueError("upload confirmation exceeds limit")
+                        raw.extend(chunk)
+                    return json.loads(raw)
+                try:
+                    record = await asyncio.wait_for(confirm(), min(timeout, CONFIRM_SECONDS))
+                    warning = retention_warning(record, keep, source)
+                except Exception:
+                    # Known2xx must not trigger duplicate reuploads. Keep only a
+                    # fixed local warning, never peer response/error contents.
+                    warning = retention_warning(None, keep, source)
+        try:
+            await asyncio.wait_for(upload(), timeout)
+        except asyncio.CancelledError:
+            if status is not None and 200 <= status < 300:
+                # Preserve task cancellation without resending bytes whose
+                # accepted status we already saw. This is the same atomic
+                # acknowledgement/warning used by the ordinary return path.
+                worker.Store(self.daemon.profile.dir).acknowledge(message["id"], warning=warning)
+            raise
+        except Exception:
+            if status is None or not 200 <= status < 300:
+                raise  # unknown outcome retains the existing retry policy
+        return status, warning
 
     def _source(self, record):
         """A compact summary cannot be trusted to remember a reply address."""
@@ -509,3 +550,15 @@ class Conversation:
             detail = str(exc) if isinstance(exc, worker_runtime.WorkerRuntimeError) else type(exc).__name__
             self.next_at = time.time() + setting("worker_retry_delay")
             store.health(error=detail[:300], retry_at=self.next_at, running=False, expected_generation=snapshot["generation"])
+
+
+def deliver_queued_file(profile, message):
+    """The synchronous manual-off drain shares the bounded async file path."""
+    import httpx
+    from .. import routes
+    from types import SimpleNamespace
+    async def run():
+        async with httpx.AsyncClient(**routes.options(profile)) as client:
+            service = Conversation(SimpleNamespace(profile=profile, _http=client))
+            return await service._upload(message, timeout=setting("worker_delivery_timeout") * 8)
+    return asyncio.run(run())

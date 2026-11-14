@@ -163,6 +163,8 @@ def file_outcome(body: dict[str, Any]) -> str:
     """
     if body.get("deleted", "remaining" not in body):
         return "deleted from the host"
+    if body.get("kept") is True:
+        return "kept on the host until explicit withdrawal"
     # A COUNT THAT IS NOT A COUNT SAYS NOTHING. This was `int(x or 0)`, and the
     # body is a remote party's: `"lots"` raised, and none of the four renderers
     # that call this — the transcript, the watch pane, the viewer, `file get`
