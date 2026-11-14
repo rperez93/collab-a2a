@@ -1396,3 +1396,36 @@ def test_settle_waits_for_the_collector_rather_than_guessing(tmp_path):
 
     _settle(str(tmp_path / "ngrok.log"), Collector())
     assert Collector.waited == 1.0
+
+
+def test_a_failed_collector_write_keeps_the_dropped_count(tmp_path, monkeypatch):
+    """A «dropped here» note that failed to be written was counted as one lost
+    line: five dropped and one new line came back as 2, five alone as 1. The
+    note carries its count forward, so here the gap said is 6."""
+    import threading
+
+    path = tmp_path / "ngrok.log"
+    failing = {"on": False}
+    real = logcap.CappedFile.write
+    monkeypatch.setattr(logcap.CappedFile, "write",
+                        lambda self, data: False if failing["on"] else real(self, data))
+    read_end, write_end = os.pipe()
+    worker = threading.Thread(target=logcap.collect, args=(read_end, path),
+                              kwargs={"window_lines": 2, "window": 0.2})
+    worker.start()
+    try:
+        os.write(write_end, b"".join(f"line {n}\n".encode() for n in range(7)))
+        time.sleep(0.3)                       # 2 written, 5 dropped
+        failing["on"] = True
+        os.write(write_end, b"one more\n")    # note(5) + this line: both fail
+        time.sleep(0.3)
+        failing["on"] = False
+        os.write(write_end, b"after\n")       # the note now says 6
+        time.sleep(0.3)
+    finally:
+        os.close(write_end)
+        worker.join(10)
+        os.close(read_end)
+    text = path.read_text()
+    assert "collab: 6 lines dropped here" in text, text
+    assert "after" in text
