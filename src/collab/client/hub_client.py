@@ -380,7 +380,8 @@ class HubClient:
     # --- files ------------------------------------------------------------
 
     def upload_file(self, path: Path, *, to: str | None = None,
-                    room: str | None = None) -> dict[str, Any]:
+                    room: str | None = None, keep: bool | None = None,
+                    source: str = "") -> dict[str, Any]:
         import httpx
 
         params: dict[str, Any] = {}
@@ -388,6 +389,10 @@ class HubClient:
             params["to"] = to
         if room:
             params["room"] = room
+        if keep is not None:
+            params["keep"] = "true" if keep else "false"
+        if source:
+            params["source"] = source
         with path.open("rb") as fh:
             files = {"file": (path.name, fh, "application/octet-stream")}
             try:
@@ -404,8 +409,9 @@ class HubClient:
             raise HubError(f"upload failed ({r.status_code}): {r.text}")
         return r.json()
 
-    def list_files(self) -> list[dict[str, Any]]:
-        return self._request("GET", f"{EXT_PREFIX}/files")["files"]
+    def list_files(self, *, include_gone: bool = False) -> list[dict[str, Any]]:
+        return self._request("GET", f"{EXT_PREFIX}/files",
+                             params={"include_gone": "true"} if include_gone else {})["files"]
 
     def download_file(self, file_id: str, dest_dir: Path) -> tuple[Path, str]:
         """Stream a file to disk and return its path plus the server's checksum."""
