@@ -344,6 +344,13 @@ class Store:
         missing pieces are added and backfilled rather than the session being
         written off.
         """
+        columns = self._columns("task_prs")
+        for field in ("reviewed_sha", "tested_sha", "head_sha", "reviewed_by", "tested_by", "head_observed_by"):
+            if field not in columns:
+                self._db.execute(f"ALTER TABLE task_prs ADD COLUMN {field} TEXT")
+        for field in ("reviewed_at", "tested_at", "head_observed_at"):
+            if field not in columns:
+                self._db.execute(f"ALTER TABLE task_prs ADD COLUMN {field} REAL")
         now = time.time()
 
         # Identity used to be the display name. Give everyone an id, and record
@@ -1197,7 +1204,14 @@ class Store:
             sql += (" WHERE state NOT IN ('TASK_STATE_COMPLETED','TASK_STATE_CANCELED',"
                     "'TASK_STATE_FAILED','TASK_STATE_REJECTED')")
         sql += " ORDER BY created_at"
-        return self._task_query(sql, ())
+        # Each task carries its pull requests and their review/test evidence
+        # (#137), so a board read can warn when the head moved past what was
+        # reviewed. From the same per-change cache as the rows: a PR write
+        # bumps `_task_rev` too, or a relinked head would read stale.
+        by_task: dict[str, list[dict[str, Any]]] = {}
+        for pr in self._task_query("SELECT * FROM task_prs ORDER BY added_at", ()):
+            by_task.setdefault(pr["task_id"], []).append(pr)
+        return [dict(r, prs=by_task.get(r["id"], [])) for r in self._task_query(sql, ())]
 
     def _task_query(self, sql: str, args: tuple) -> list[dict[str, Any]]:
         """Task rows for `sql`, from the per-change cache when it still holds.
@@ -1462,7 +1476,7 @@ class Store:
         return [dict(r) for r in rows]
 
     def add_task_pr(self, task_id: str, *, url: str, number: int | None,
-                    added_by: str) -> dict[str, Any]:
+                    added_by: str, evidence: dict[str, str] | None = None) -> dict[str, Any]:
         """Record a pull request against a task. Idempotent on the URL.
 
         A task has as many pull requests as the work took — a fix and its
@@ -1481,6 +1495,11 @@ class Store:
         the number from the URL and yields None when it cannot. A second
         mention of a pull request must not be able to forget its number.
         """
+        from collab.pr_review import FIELDS, commit_sha
+        evidence = evidence or {}
+        if any(field not in FIELDS for field in evidence):
+            raise ValueError("unknown PR evidence field")
+        evidence = {field: commit_sha(value) for field, value in evidence.items()}
         now = time.time()
         with self._lock:
             known = self._db.execute(
@@ -1495,7 +1514,13 @@ class Store:
                 " number=COALESCE(excluded.number, task_prs.number)",
                 (task_id, url, number, added_by, now),
             )
+            for field, value in evidence.items():
+                prefix = {"reviewed_sha": "reviewed", "tested_sha": "tested", "head_sha": "head_observed"}[field]
+                self._db.execute(
+                    f"UPDATE task_prs SET {field}=?, {prefix}_by=?, {prefix}_at=? WHERE task_id=? AND url=?",
+                    (value, added_by, now, task_id, url))
             self._db.commit()
+            self._task_rev += 1  # tasks() carries PR rows from the task cache
             row = self._db.execute(
                 "SELECT * FROM task_prs WHERE task_id=? AND url=?",
                 (task_id, url)).fetchone()
@@ -1508,6 +1533,7 @@ class Store:
                 "DELETE FROM task_prs WHERE task_id=? AND url=?",
                 (task_id, normalise_pr_url(url)))
             self._db.commit()
+            self._task_rev += 1  # tasks() carries PR rows from the task cache
         return cur.rowcount > 0
 
     def task_prs(self, task_id: str) -> list[dict[str, Any]]:
