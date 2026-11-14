@@ -180,7 +180,10 @@ line per attempt**. `phase` is the furthest stage reached (`reserved`, `launched
 `committed`), not a stream of phase events. `outcome` is explicit (`output`,
 `no-op`, `invalid`, `failed`, `cancelled`, `skipped-local`). The opaque 12-hex
 `attempt` value identifies duplicates across rotation. Token/cost fields appear
-only when reported; a missing value is unknown. `event=dropped` marks lost lines.
+only when reported; a missing value is unknown. `event=dropped` marks lost lines. The current R14 follow-up (message 1792)
+names their number `lines`; the earlier draft named it `count`. The reader
+accepts either, counts equal dual fields once, and marks conflicting or invalid
+fields as an unknown loss count.
 The implementation and deployment of R14 still need verification against this
 contract before a paired before/after audit can be accepted.
 

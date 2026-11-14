@@ -186,3 +186,16 @@ print(json.dumps({'records':out['terminal_records_observed'],'cpu':after.ru_utim
     assert metrics['records']==20000
     assert metrics['cpu']<6 and metrics['wall']<8
     assert metrics['rss_kib']<98304
+
+
+@pytest.mark.parametrize('fields,known,unknown',[
+    ({'lines':7},7,0), ({'count':7},7,0), ({'lines':7,'count':7},7,0),
+    ({'lines':7,'count':9},0,1), ({'lines':7,'count':True},0,1),
+    ({'lines':-1},0,1), ({'lines':None},0,1), ({},0,1),
+])
+def test_current_and_draft_gap_shapes_do_not_double_count(tmp_path,fields,known,unknown):
+    p=write(tmp_path/'worker.log',[record(),{'event':'dropped',**fields}])
+    result=audit.summarize([p],since=START,until=END)
+    assert result['coverage']=='incomplete'
+    assert result['diagnostics'].get('reported_dropped_lines',0)==known
+    assert result['diagnostics'].get('unknown_drop_counts',0)==unknown
