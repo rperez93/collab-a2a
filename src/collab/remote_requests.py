@@ -32,7 +32,8 @@ TERMINAL = ('declined', 'expired', 'delivered', 'failed', 'uncertain')
 
 
 def _identifier(value, name):
-    if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}', value):
+    pattern = r'[A-Za-z0-9_.:%-]{1,200}' if name in ('target', 'local target') else r'[A-Za-z0-9_.:-]{1,200}'
+    if not isinstance(value, str) or not re.fullmatch(pattern, value):
         raise ValueError(f'invalid {name}')
     return value
 
@@ -148,8 +149,9 @@ class Inbox:
             columns = {row[1] for row in db.execute('PRAGMA table_info(offers)')}
             if 'approval_version' not in columns:
                 db.execute('ALTER TABLE offers ADD COLUMN approval_version INTEGER NOT NULL DEFAULT 0')
-            # Old flag/hash approvals cannot survive migration to terminal receipts.
-            self._revoke(db, db.execute("SELECT * FROM offers WHERE state='accepted' AND approval_version=0"),
+            # Grants from before terminal receipts or explicit destination scope
+            # must be reviewed again, never silently gain a broader scope.
+            self._revoke(db, db.execute("SELECT * FROM offers WHERE state='accepted' AND approval_version<2"),
                          now=time.time(), reason='legacy_approval')
             yield db
             db.commit()
@@ -224,6 +226,11 @@ class Inbox:
             db.execute('INSERT OR REPLACE INTO local_binding VALUES (1,?,?)',
                        (target, fingerprint))
 
+    def invalidate(self, reason):
+        with self._db() as db:
+            self._revoke(db, db.execute("SELECT * FROM offers WHERE state='accepted'"),
+                         now=time.time(), reason=reason)
+
     def bound_target(self, command, cwd=None):
         """Return the receiver-selected target only while local argv matches."""
         with self._db() as db:
@@ -263,7 +270,7 @@ class Inbox:
             consent.consume(self.root.parent, approval, subject='remote',
                             request_id=request_id, digest=reviewed_digest, binding=binding)
             self._audit('acceptance_requested', offer, binding=binding)
-            db.execute("UPDATE offers SET state='accepted',approval_version=1,binding=?,updated=? WHERE id=?",
+            db.execute("UPDATE offers SET state='accepted',approval_version=2,binding=?,updated=? WHERE id=?",
                        (binding, now, request_id))
 
     def decline(self, request_id, *, now=None):

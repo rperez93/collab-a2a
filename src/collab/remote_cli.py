@@ -5,7 +5,7 @@ import json
 
 from . import consent, wake
 from .remote_requests import Inbox, make_offer, wire_text, digest, binding_digest, supports_remote_consent
-from .remote_delivery import working_directory
+from .remote_delivery import working_directory, destination
 
 
 def run(args, profile):
@@ -52,8 +52,11 @@ def run(args, profile):
     if action == 'bind':
         if not args.target:
             raise ValueError('--target must name the local coding session')
+        actual = destination(command)
+        if actual['session_id'] != args.target:
+            raise ValueError('--target must equal the actual wake adapter session id')
         inbox.bind(args.target, command, cwd)
-        print(json.dumps({'target': args.target, 'cwd': str(cwd), 'bound': True,
+        print(json.dumps({'target': args.target, 'actual_destination': actual, 'cwd': str(cwd), 'bound': True,
                           'authorizes_execution': False}, ensure_ascii=True))
         return 0
     if not args.request_id:
@@ -71,12 +74,19 @@ def run(args, profile):
         print('Declined locally.')
         return 0
     target = inbox.bound_target(command, cwd)
+    try:
+        actual = destination(command)
+        if actual['session_id'] != target:
+            raise ValueError('bound target differs from the actual adapter session')
+    except ValueError:
+        inbox.invalidate('unsupported_or_changed_destination')
+        raise
     receipt = consent.request(
         profile.dir, subject='remote', request_id=args.request_id,
         digest=row['sha256'], binding=binding_digest(target, command, cwd),
-        review={'offer': row, 'local_target': target, 'local_command': command,
+        review={'offer': row, 'local_target': target, 'actual_destination': actual, 'local_command': command,
                 'local_cwd': str(cwd),
-                'authority': 'Runs one turn with the configured local adapter permissions.'})
+                'authority': 'Uses the existing coding session permissions; may modify files and run commands. No additional sandbox is applied.'})
     current_command = list(wake.read_config(profile.dir).command)
     current_cwd = working_directory(profile)
     current_target = inbox.bound_target(current_command, current_cwd)

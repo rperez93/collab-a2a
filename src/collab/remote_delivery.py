@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 from pathlib import Path
 import tempfile
 import time
@@ -14,6 +15,33 @@ from .worker_runtime import WorkerRuntimeError, _exchange
 
 PROMPT_TTL = 7200
 MAX_PROMPTS = 128
+
+
+def destination(command):
+    """Decode only the shipped adapters that address an existing session."""
+    if not isinstance(command, list) or len(command) not in (7, 11):
+        raise ValueError('remote delivery requires a session-addressed codex or tmux wake adapter')
+    if not Path(command[0]).is_absolute():
+        raise ValueError('re-arm the session adapter with collab wake set --agent codex or tmux')
+    installed = shutil.which('collab')
+    executable = shutil.which(command[0])
+    try:
+        trusted = installed and executable and os.path.samefile(installed, executable)
+    except OSError:
+        trusted = False
+    if not trusted or command[1:4] != ['wake', 'deliver', '--to'] or command[5] != '--target':
+        raise ValueError('remote delivery requires the installed collab session adapter')
+    adapter, target = command[4], command[6]
+    if adapter == 'codex' and len(command) == 7 and target:
+        return {'adapter': adapter, 'session_id': target, 'scope': 'codex-thread'}
+    if (adapter == 'tmux' and len(command) == 11 and target
+            and command[7] == '--expect-pid' and command[8].isdigit()
+            and int(command[8]) > 0 and command[9] == '--expect-command' and command[10]):
+        return {'adapter': adapter, 'session_id': target,
+                'expected_pid': command[8], 'expected_command': command[10],
+                'scope': 'tmux-pane',
+                'scope_notice': 'Approval applies to this pane, including replacement conversations of the same agent. The provider conversation identity is not verified.'}
+    raise ValueError('remote adapter must address an existing session with required identity pins')
 
 
 def working_directory(profile):
@@ -42,7 +70,11 @@ def prepare(profile):
     command = list(config.command)
     try:
         target = inbox.bound_target(command, cwd)
+        actual = destination(command)
+        if actual['session_id'] != target:
+            raise ValueError('bound target differs from the actual adapter session')
     except ValueError:
+        inbox.invalidate('unsupported_or_changed_destination')
         return None
     if retained >= MAX_PROMPTS:
         return None

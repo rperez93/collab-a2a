@@ -29,8 +29,19 @@ snapshot and both replayed and live SSE events. This protects a saved session
 resumed by older software even if its stored capability is stale; replay
 cursors still advance past excluded events.
 
-Configure the ordinary local wake adapter first, then bind its exact command
-and local working directory to the coding session the human selected:
+Configure a session-addressed wake adapter first (`collab wake set --agent codex`
+or `collab wake set --agent tmux`), then bind its exact command and local working
+directory. The target must equal the actual thread or pane in that command;
+an arbitrary label cannot redirect an offer to a different session. Tmux also
+requires the recorded PID and process identity, which its delivery adapter
+checks before typing. **Tmux approval is scoped to the pane, not a provider's
+conversation ID:** another conversation of the same agent in that pane can
+receive the approved turn. The approval review explicitly displays this scope.
+Use the Codex thread adapter when the grant must name one exact Codex thread.
+Remote delivery requires the installed Collab executable
+at an absolute path and the shipped adapter arguments. Custom commands and
+recipes that start a fresh process are ordinary wake options, not supported
+destinations for this session-addressed remote feature.
 
 ```sh
 collab remote bind --target CODING_SESSION_ID
@@ -46,6 +57,9 @@ terminal multiplexer. The review shows the escaped offer, local command,
 working directory and adapter authority. A fresh one-time code appears only
 on the controlling terminal; type it there to approve. Stdin, a content hash,
 and an agent-provided approval flag cannot authorize execution.
+The review states that the existing session retains its configured permissions:
+it may modify files or run commands, and this feature adds no further sandbox.
+The receiver must configure the coding session's permissions before approving.
 
 The resulting receipt binds this exact operation and local configuration,
 expires after 120 seconds and is consumed once before acceptance. See
@@ -53,8 +67,9 @@ expires after 120 seconds and is consumed once before acceptance. See
 boundary: this channel restricts supported CLI paths but does not prove human
 identity or isolate hostile programs with the same OS privileges.
 
-Saved approvals created by the former flag/hash channel are invalidated when
-the queue is opened. Pending offers can be reviewed through the new channel;
+Saved approvals created by the former flag/hash channel or before explicit
+destination-scope review are invalidated when the queue is opened. Pending
+offers can be reviewed through the new channel;
 failed legacy approvals require a fresh offer. An observed command change
 during review also invalidates earlier approvals, even if that command is
 subsequently restored.

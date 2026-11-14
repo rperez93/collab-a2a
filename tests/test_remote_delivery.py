@@ -11,7 +11,10 @@ from collab.remote_requests import Inbox, digest, make_offer
 
 
 @pytest.fixture
-def approved(tmp_path):
+def approved(tmp_path, monkeypatch):
+    # Transport-state tests deliberately use a local subprocess double. Native
+    # destination validation is exercised separately, not claimed by this fixture.
+    monkeypatch.setattr(remote_delivery, 'destination', lambda command: {'adapter': 'test-double', 'session_id': 'coding'})
     profile = SimpleNamespace(dir=tmp_path, session_id='s_room', participant_id='p_local')
     output = tmp_path / 'received.txt'
     command = [sys.executable, '-c',
@@ -157,3 +160,65 @@ def test_pending_offer_never_enters_ordinary_wake_even_from_old_queue(tmp_path):
     queued.write_text(json.dumps({'seq': 2, 'kind': 'chat', 'text': env.text}) + '\n')
     assert 'UNAPPROVED_SENTINEL' not in waker.turn_prompt(wake.Batch(queued))
     assert waker.take() is None
+
+
+def test_native_destination_requires_exact_recipe_and_pinned_tmux_identity():
+    import shutil
+    binary = shutil.which('collab')
+    command = [binary, 'wake', 'deliver', '--to', 'codex', '--target', 'thread-123']
+    assert remote_delivery.destination(command) == {'adapter': 'codex', 'session_id': 'thread-123', 'scope': 'codex-thread'}
+    pane = [binary, 'wake', 'deliver', '--to', 'tmux', '--target', '%3',
+            '--expect-pid', '123', '--expect-command', 'claude']
+    assert remote_delivery.destination(pane)['session_id'] == '%3'
+    assert remote_delivery.destination(pane)['scope'] == 'tmux-pane'
+    assert 'replacement conversations' in remote_delivery.destination(pane)['scope_notice']
+    for bad in (command + ['--target', 'other'], ['sh', '-c', ' '.join(command)],
+                ['collab', *command[1:]], pane[:7], [*pane[:8], '0', *pane[9:]]):
+        with pytest.raises(ValueError):
+            remote_delivery.destination(bad)
+
+
+def test_existing_custom_approval_cannot_dispatch(tmp_path):
+    inbox = Inbox(tmp_path)
+    command = [sys.executable, '-c', 'raise SystemExit(0)']
+    inbox.bind('coding', command)
+    offer = make_offer(session_id='s_room', sender_id='p_peer', recipient_id='p_local',
+                       target='coding', kind='prompt', text='old custom approval')
+    inbox.receive(offer, session_id='s_room', sender_id='p_peer', recipient_id='p_local')
+    inbox.accept(offer['id'], reviewed_digest=digest(offer), session_id='s_room', recipient_id='p_local',
+                 target='coding', command=command, approval=receipt(inbox, offer, 'coding', command))
+    profile = SimpleNamespace(dir=tmp_path, session_id='s_room', participant_id='p_local')
+    wake.write_config(tmp_path, wake.WakeConfig(command=command))
+    assert remote_delivery.prepare(profile) is None
+    assert inbox.list()[0]['state'] == 'failed'
+
+
+def test_native_codex_recipe_delivers_to_exact_thread_with_stub_cli(tmp_path, monkeypatch):
+    """Actual Collab adapter subprocess; fake Codex endpoint, no model calls."""
+    import json
+    import shutil
+    binary = shutil.which('collab')
+    output = tmp_path / 'codex-argv.json'
+    stub = tmp_path / 'codex'
+    stub.write_text('#!' + sys.executable + '\nimport json,os,pathlib,sys\n'
+                    'pathlib.Path(os.environ["TEST_CODEX_OUTPUT"]).write_text(json.dumps(sys.argv[1:]))\n')
+    stub.chmod(0o700)
+    monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
+    monkeypatch.setenv('TEST_CODEX_OUTPUT', str(output))
+    command = [binary, 'wake', 'deliver', '--to', 'codex', '--target', 'test-only-thread']
+    profile = SimpleNamespace(dir=tmp_path / 'receiver', session_id='s_room', participant_id='p_local')
+    inbox = Inbox(profile.dir)
+    wake.write_config(profile.dir, wake.WakeConfig(command=command))
+    inbox.bind('test-only-thread', command)
+    offer = make_offer(session_id='s_room', sender_id='p_peer', recipient_id='p_local',
+                       target='test-only-thread', kind='prompt', text='approved fixture content')
+    inbox.receive(offer, session_id='s_room', sender_id='p_peer', recipient_id='p_local')
+    inbox.accept(offer['id'], reviewed_digest=digest(offer), session_id='s_room', recipient_id='p_local',
+                 target='test-only-thread', command=command,
+                 approval=receipt(inbox, offer, 'test-only-thread', command))
+    assert asyncio.run(remote_delivery.deliver(profile, remote_delivery.prepare(profile))) is True
+    args = json.loads(output.read_text())
+    assert args[:4] == ['queue', '--thread', 'test-only-thread', '--message']
+    assert offer['text'] in args[4]
+    assert inbox.list()[0]['state'] == 'delivered'
+    assert remote_delivery.prepare(profile) is None
