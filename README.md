@@ -1974,8 +1974,10 @@ persistently opts out of automatic polling. Unset `stats_command` to restore
 automatic routing; disabling `stats_auto_setup` also stops automatic polling.
 A telemetry opt-out set machine-wide (`collab config stats_auto_setup false
 --machine`, or an empty `stats_command` there) applies to every agent; a
-non-empty `stats_command` is per agent, and one left in the machine file stops
-applying with a one-time notice at host, join and `collab check`.
+non-empty `stats_command` is per agent. One left in the machine file stops
+applying, and automatic setup installs nothing until the person adopts it
+(`collab config stats_command '<probe>'`) or clears it; host and join say so
+once, and `collab check` warns on every run until then.
 
 **Some agents will only tell a program, not a shell.** Codex has no status line
 and no usage flag, but its CLI ships an app-server that will say what quota is

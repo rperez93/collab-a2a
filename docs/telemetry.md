@@ -44,8 +44,10 @@ stats_command` restores automatic routing for a configured participant.
 hook setup; it does not uninstall a hook already in Claude's settings.
 A telemetry opt-out set machine-wide (`collab config stats_auto_setup false
 --machine`, or an empty `stats_command` there) applies to every agent; a
-non-empty `stats_command` is per agent, and one left in the machine file stops
-applying with a one-time notice at host, join and `collab check`.
+non-empty `stats_command` is per agent. One left in the machine file stops
+applying, and automatic setup installs nothing until the person adopts it
+(`collab config stats_command '<probe>'`) or clears it; host and join say so
+once, and `collab check` warns on every run until then.
 `share_stats off` stops main and worker publication. Existing explicit adapters
 and manual reports remain available.
 
