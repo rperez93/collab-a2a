@@ -339,3 +339,19 @@ async def test_the_read_limit_holds_without_content_length_and_is_checked_from_t
         except Exception:
             pass
     assert not paths.skills.exists(), "a declared size over the limit is refused before reading"
+
+
+@pytest.mark.parametrize("observed,reported,stale", [(3600, 7200, True), (-5, None, False), (-25200, None, True), (None, None, True)])
+def test_future_and_missing_report_stamps_keep_quota_age_honest(monkeypatch, observed, reported, stale):
+    """Two future stamps remain unknown; a missing report uses a valid observation."""
+    import time
+    now = time.time()
+    stats = {"quotas": {"5h": {"used_pct": 10}}}
+    if observed is not None:
+        stats["quota_observed_at"] = now + observed
+    if reported is not None:
+        stats["reported_at"] = now + reported
+    row = dashboard_rows({"participants": [{"name": "p", "stats": stats}]}, None)[0]
+    assert row["quota_stale"] is stale
+    if observed is None or (observed > 0 and reported is not None and reported > 0):
+        assert row["reported"] == "age unknown"
