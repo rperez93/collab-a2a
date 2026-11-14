@@ -6178,6 +6178,16 @@ def _say_if_a_retired_key_is_still_there() -> None:
 
 
 def cmd_config(args: argparse.Namespace) -> int:
+    """See `_cmd_config`; the write-layer flags never outlive one command."""
+    from . import config as config_module
+    try:
+        return _cmd_config(args)
+    finally:
+        config_module.WRITE_MACHINE.update(on=False, key=None)
+        config_module.WRITE_KIND.update(on=False, key=None, kind=None)
+
+
+def _cmd_config(args: argparse.Namespace) -> int:
     """Every global setting in one place — see them, and change them.
 
     The settings arrived one command at a time and there was no way to ask what
@@ -6192,6 +6202,15 @@ def cmd_config(args: argparse.Namespace) -> int:
     # person asks for the shared machine default on purpose.
     config_module.WRITE_MACHINE["on"] = bool(getattr(args, "machine", False))
     config_module.WRITE_MACHINE["key"] = getattr(args, "key", None)
+    kind = getattr(args, "kind", None)
+    if kind is not None and getattr(args, "machine", False):
+        fail("--kind and --machine choose different layers; use one")
+        return 2
+    if kind is not None and args.key and not config_module.agent_scoped(args.key):
+        fail(f"{args.key} belongs to the machine, not to an agent kind; drop --kind")
+        return 2
+    config_module.WRITE_KIND.update(on=kind is not None, key=getattr(args, "key", None),
+                                    kind=(kind or config_module.current_kind()) if kind is not None else None)
     if getattr(args, "tui", False):
         if args.key or args.value is not None or args.unset or args.json or editing or getattr(args, "machine", False):
             fail("--tui cannot be combined with a key, value, --unset, --edit, --json or --machine")
@@ -6318,13 +6337,24 @@ def cmd_config(args: argparse.Namespace) -> int:
         item.write(item.parse(args.value))
         # An explicit set pins this agent's own value even when it equals
         # what it inherited, so a later shared change does not move it.
-        config_module.pin_agent_value(item.name, config_module.load_config().get(item.name))
+        if not config_module.WRITE_KIND["on"]:
+            config_module.pin_agent_value(item.name, config_module.load_config().get(item.name))
     except ValueError as exc:
         fail(f"{item.name}: {exc}")
         return 2
-    where = ("" if not config_module.agent_scoped(item.name) or getattr(args, "machine", False)
-             or config_module.agent_config_path() is None else " for this agent")
-    ok(f"{item.name} is now {c(_shown(item.read()), '1')}{where}")
+    written = item.parse(args.value)
+    if getattr(args, "machine", False):
+        ok(f"{item.name} set to {c(_shown(written), '1')} for every agent here")
+    elif config_module.WRITE_KIND["on"]:
+        ok(f"{item.name} set to {c(_shown(written), '1')} for every "
+           f"{config_module.WRITE_KIND['kind']} conversation on this machine")
+    else:
+        where = ("" if not config_module.agent_scoped(item.name)
+                 or config_module.agent_config_path() is None else " for this agent")
+        ok(f"{item.name} is now {c(_shown(item.read()), '1')}{where}")
+    if (getattr(args, "machine", False) or config_module.WRITE_KIND["on"]) and item.read() != written:
+        print(dim(f"  this agent still uses its own {_shown(item.read())} "
+                  f"(`collab config {item.name} --unset` follows the new value)"))
     return _settle_in_the_session(item.name, args)
 
 
@@ -8505,6 +8535,7 @@ def build_parser() -> argparse.ArgumentParser:
   collab config KEY VALUE               set directly
   collab config KEY --unset             restore the default
   collab config KEY VALUE --machine     set an agent setting as everyone's default
+  collab config KEY VALUE --kind [KIND] keep it for every conversation of one agent kind
   collab config KEY --edit              edit interactively (terminal required)
   collab config --tui                   browse/edit; r resets to default
   collab config editor nano             choose vim, nvim, nano, or a command
@@ -8525,6 +8556,9 @@ Esc cancels a draft, q quits. Editor commands run without a shell.""")
     cf.add_argument("--tui", action="store_true", help="interactive keyboard/mouse settings editor")
     cf.add_argument("--machine", action="store_true",
                     help="write an agent-scoped setting to the shared machine file (every agent here)")
+    cf.add_argument("--kind", nargs="?", const="", metavar="KIND",
+                    help="write an agent setting for every conversation of one agent kind "
+                         "(default: the one running this command, e.g. claude-code or codex)")
     cf.set_defaults(func=cmd_config)
 
     col = sub.add_parser("color", help="show or set the colour others see you in")

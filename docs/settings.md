@@ -20,8 +20,12 @@ Everything else (tunnel domain, theme, `watch_*`, editor, timezone, rules,
 freshness thresholds, prices) belongs to the person and the machine, and lives
 in the shared file.
 
-Precedence for an agent setting: **this agent's file, then the machine file,
-then the default.** A machine-wide key found in an agent's file is ignored.
+Precedence for an agent setting: **this agent's file, then its agent kind's
+file, then the machine file, then the default.** The kind layer
+(`~/.config/collab/kinds/<kind>.json`, kind = `claude-code`, `codex`, … as
+detected, or `COLLAB_AGENT_KIND`) is what outlives one conversation: `collab
+config display_name friday --kind` keeps that name, or a Codex quota probe,
+for every Codex conversation on this machine without reaching Claude agents. A machine-wide key found in an agent's file is ignored.
 `collab config KEY VALUE` writes an agent setting for the current agent only;
 `--machine` sets it as everyone's shared default instead. `--unset` removes this
 agent's own value only, so it follows the shared one again; `--unset --machine`
