@@ -1,6 +1,6 @@
 """Durable approval state, sharing the hub's participant transaction boundary.
 
-Internal service only: no route enables it yet. Callers pass the bearer from
+The bounded approval routes and internal adopters pass the bearer from
 the authenticated request, not a participant name or caller-asserted ID. Each
 transaction revalidates that token against the hub's current participant row.
 The caller still owns operation-specific authorization and dispatch semantics.
@@ -16,6 +16,7 @@ import time
 
 from . import approval_challenge as challenges
 from . import approval_crypto as crypto
+from . import approval_alarms as alarms
 from .store import token_hash
 
 KEY_COOLDOWN = 600
@@ -86,7 +87,7 @@ class ApprovalStore:
     def __init__(self, store, session_id: str, *, clock=time.time):
         self.store, self.session_id, self.clock = store, _text(session_id), clock
         with store._lock:
-            store._db.executescript(SCHEMA)
+            store._db.executescript(SCHEMA + alarms.SCHEMA)
             with store._db:
                 columns = {r[1] for r in store._db.execute("PRAGMA table_info(approval_requests)")}
                 if "credential_generation" not in columns:
@@ -114,6 +115,7 @@ class ApprovalStore:
         return row[0]
 
     def _audit(self, db, owner, kind, now, request_id="", **metadata):
+        alarms.enqueue(db, self.session_id, owner, kind, now, metadata)
         db.execute("INSERT INTO approval_audit(session_id,owner_id,kind,at,request_id,metadata) VALUES(?,?,?,?,?,?)",
                    (self.session_id, owner, kind, now, request_id, json.dumps(metadata, sort_keys=True)))
         db.execute("DELETE FROM approval_audit WHERE seq <= COALESCE((SELECT seq FROM approval_audit ORDER BY seq DESC LIMIT 1 OFFSET ?),-1)",
@@ -446,6 +448,8 @@ class ApprovalStore:
                 observed = hashlib.sha256(crypto.decode(observed_spki, limit=crypto.MAX_SPKI)).hexdigest()
                 if secrets.compare_digest(observed, key["fingerprint"]):
                     return self._key_metadata(db, owner, credential_id)
+            if key["state"] == "frozen":
+                return self._key_metadata(db, owner, credential_id)
             db.execute("UPDATE approval_keys SET state='frozen' WHERE session_id=? AND owner_id=? AND credential_id=?",
                        (self.session_id, owner, credential_id))
             db.execute("UPDATE approval_generation SET generation=generation+1 WHERE session_id=? AND owner_id=?", (self.session_id, owner))
