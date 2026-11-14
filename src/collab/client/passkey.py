@@ -65,11 +65,17 @@ class NotReady(Exception):
 
 
 @dataclass(frozen=True)
+class Requester:
+    participant_id: str
+    display_name: str
+
+
+@dataclass(frozen=True)
 class Review:
     canonical: bytes
     digest: bytes
     subject: str
-    requester: str
+    requester: Requester
     destination: str
     authority: str
     expires: float
@@ -176,7 +182,13 @@ def _review_payload(request_id, review):
             or review.status not in ("pending", "approved", "declined", "expired", "unknown")):
         raise ValueError("invalid canonical review")
     summary = {name: _text(getattr(review, name), 8192)
-               for name in ("subject", "requester", "destination", "authority")}
+               for name in ("subject", "destination", "authority")}
+    if (not isinstance(review.requester, Requester)
+            or not isinstance(review.requester.participant_id, str)
+            or not re.fullmatch(r"p_[A-Za-z0-9_-]{1,126}", review.requester.participant_id)):
+        raise ValueError("missing requester principal")
+    summary["requester"] = {"participant_id": review.requester.participant_id,
+                            "display_name": _text(review.requester.display_name, 256)}
     summary.update(digest=review.digest.hex(), expires=review.expires)
     return {"request_id": request_id, "canonical_review": review.canonical.decode("utf-8"),
             "summary": summary, "trust": {"label": _text(review.trust_label, 256),
@@ -405,12 +417,14 @@ class PasskeyPage:
             except Exception:
                 return _reply("unavailable", "The hub review could not be confirmed.", 502)
             finally: window.busy = False
-        if request.method != "POST" or action not in ("enrol/options", "enrol/result", "approve/options", "approve/result", "decline"):
+        if request.method != "POST" or action not in ("approve/options", "approve/result", "decline"):
             return _reply("missing", "Not found.", 404)
         if window.terminal or window.uncertain or window.review is None:
             return _reply("refused", "Refresh and confirm the current hub status before deciding.", 409)
         if time.time() >= window.review.expires:
             return _reply("expired", "The review has expired. Refresh it before deciding.", 410)
+        if action.startswith("approve/") and not window.review.enrolled:
+            return _reply("refused", "Enrolment requires the separate human-started consent flow.", 409)
         window.busy = True
         forwarded = False
         reading = True
