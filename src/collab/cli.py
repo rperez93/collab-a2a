@@ -3550,6 +3550,18 @@ def cmd_file(args: argparse.Namespace) -> int:
                     fail(f"{path.name} is {size / 1024 / 1024:.1f}MB — the limit is "
                          f"{MAX_FILE_BYTES // 1024 // 1024}MB")
                     return 1
+                from .worker import Store
+                if getattr(profile, "dir", None) and Store(profile.dir).enabled():
+                    # R3: the worker is this participant's one voice while it is on.
+                    record_id = Store(profile.dir).queue_file(
+                        path, to=args.to or "", room="" if args.to else (args.room or profile.room or "general"))
+                    try:
+                        onboard.ensure_daemon(profile, wait=False)
+                    except (OSError, RuntimeError, HubError):
+                        pass
+                    ok(f"{said(path.name)} queued for delivery by your worker: {record_id}")
+                    print(dim("  `collab worker status` shows it until it is delivered"))
+                    return 0
                 record = client.upload_file(path, to=args.to, room=args.room)
                 if args.json:
                     print(json.dumps(record, indent=2))
@@ -6085,6 +6097,11 @@ def cmd_worker(args: argparse.Namespace) -> int:
                 try:
                     with _client(profile) as client:
                         for record in queued:
+                            if record.get("kind") == "file":
+                                client.upload_file(Path(record["stash"]), to=record.get("to") or None,
+                                                   room=None if record.get("to") else (record.get("room") or None))
+                                store.acknowledge(record["id"])
+                                continue
                             if record.get("kind") == "comment":
                                 client._request("POST", f"{protocol_prefix}/comments", json={
                                     "subject": record["subject"], "id": record["subject_id"],
@@ -6099,9 +6116,12 @@ def cmd_worker(args: argparse.Namespace) -> int:
                                                        "collab_worker_delivery": record["id"]}))
                             store.acknowledge(record["id"])
                 except HubError as exc:
-                    fail(f"{len(store.outbox())} queued message(s) could not be delivered ({exc}); "
-                         "the worker stays on until they are")
-                    return 1
+                    left = len(store.outbox())
+                    store.off()
+                    warn(f"{left} queued message(s) could not be delivered now ({exc}); they are kept "
+                         "and go out, in order, the next time the worker is started")
+                    ok("collaboration worker disabled; pending decisions and replies are preserved")
+                    return 0
             store.off()
             ok("collaboration worker disabled; pending decisions and replies are preserved")
         elif args.worker_action == "reply":

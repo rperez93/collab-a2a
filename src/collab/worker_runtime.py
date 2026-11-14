@@ -161,7 +161,7 @@ DEFERRAL = re.compile(
 
 
 def unrouted_deferrals(result: dict, selected: list[dict], pending: list[dict],
-                       answers: list[str] = ()) -> list[dict]:
+                       answered: set[str] | frozenset = frozenset()) -> list[dict]:
     """Escalations for deferring replies the model did not route itself.
 
     A peer the turn escalated about, or one already waiting on a pending
@@ -175,9 +175,10 @@ def unrouted_deferrals(result: dict, selected: list[dict], pending: list[dict],
     for reply in result["replies"]:
         if not DEFERRAL.search(reply["text"]) or reply["to"] in routed_to:
             continue
-        # Relaying the main agent's own answer is not a new promise; flagging
-        # it filed a decision about that answer, every turn.
-        if any(a and (a.strip() in reply["text"] or reply["text"].strip() in a) for a in answers):
+        # A peer whose question the main agent answered this turn is being
+        # given that answer, however the worker words it; a decision about
+        # the relay would loop. By peer, not by matching the text.
+        if reply["to"] in answered:
             continue
         # The peer's own message, else the newest message in the same named
         # room; never someone else's DM.

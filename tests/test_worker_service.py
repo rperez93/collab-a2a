@@ -542,3 +542,44 @@ async def test_board_comments_ride_the_outbox_in_order_with_chat(conversation, t
     comment = seen[1][1]
     assert comment["subject"] == "task" and comment["id"] == "T_1" and comment["collab_worker_delivery"]
     assert not store.outbox()
+
+
+
+@pytest.mark.asyncio
+async def test_a_queued_file_is_uploaded_and_its_copy_removed(conversation, tmp_path):
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    source = tmp_path / "r.txt"
+    source.write_text("data")
+    store.queue_file(source, to="bob")
+    stash = store.outbox()[0]["stash"]
+    seen = []
+    async def transport(request):
+        seen.append((request.url.path.rsplit("/", 1)[-1], request.url.params.get("to")))
+        return httpx.Response(200, json={"id": "f_1"})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        conversation.daemon._http = client
+        await conversation._flush(store, store.snapshot()["generation"])
+    assert seen == [("files", "bob")] and not store.outbox()
+    from pathlib import Path
+    assert not Path(stash).exists()
+
+
+@pytest.mark.asyncio
+async def test_under_collab_no_worker_queued_messages_are_still_delivered(conversation, tmp_path, monkeypatch):
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    store.send("ship it", to="bob")
+    monkeypatch.setenv("COLLAB_NO_WORKER", "1")
+    calls = []
+    monkeypatch.setattr("collab.worker_runtime.run_turn", lambda *a, **k: calls.append(a))
+    sent = []
+    async def transport(request):
+        sent.append(json.loads(request.content)["text"])
+        return httpx.Response(200, json={"seq": 1})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        conversation.daemon._http = client
+        incoming(conversation, 1, "Question")
+        await conversation.tick()
+        await asyncio.wait_for(conversation.delivery, 2)
+    assert sent == ["ship it"] and calls == [], "delivered, but no model call"
