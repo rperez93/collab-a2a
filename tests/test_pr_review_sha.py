@@ -197,3 +197,12 @@ def test_real_silent_gh_times_out_and_is_reaped(tmp_path, monkeypatch):
         github_head(URL)
     assert 9 <= time.monotonic()-start < 13
     with pytest.raises(ProcessLookupError): os.kill(int(marker.read_text()),0)
+
+
+def test_observation_time_from_a_malformed_host_cannot_control_the_terminal(capsys):
+    """A host timestamp is response data, never trusted terminal formatting."""
+    from collab.cli import _describe_pr_evidence
+    _describe_pr_evidence({'head_observed_at': '\x1b]52;c;SYNTHETIC\x07\nFAKE SUCCESS'})
+    out = capsys.readouterr().out
+    assert '\x1b' not in out and '\x07' not in out
+    assert '\nFAKE SUCCESS' not in out
