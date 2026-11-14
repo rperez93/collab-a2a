@@ -297,6 +297,11 @@ list.
 - `collab worker reply ID TEXT --verbatim | --instruct | --awaiting-human`.
 - `collab watch --panel [auto|tmux|ghostty|iterm2]` opens the viewer in a
   terminal split.
+- `collab consent enrol` (the human, in a terminal: a Windows Hello key proved
+  over the hub's enrolment challenge) and `collab consent keys`; `collab skills
+  ask --strong` sends a request only the hub's review plus a Hello gesture can
+  accept — `--human-approved`, the terminal y/N and a chat reply never do.
+  (Later than the pin, R22b.)
 - `collab file list --all` shows every file, including those that ended, with
   why — collected, expired or withdrawn; without it the list counts them.
 - The shared-machine proxy (`python -m collab.proxy_main`) exists but no

@@ -7427,6 +7427,8 @@ def _skill_requests(client, profile) -> list[dict[str, Any]]:
     def mine(env, name_field, id_field):
         ident = getattr(env, id_field, "") or ""
         return ident == me_id if (me_id and ident) else getattr(env, name_field) == me
+    from .client import approval as strong
+
     events = client.history(limit=500)
     states = {}
     for env in events:
@@ -7438,6 +7440,40 @@ def _skill_requests(client, profile) -> list[dict[str, Any]]:
     found, seen = [], set()
     for env in events:
         ask = (env.body or {}).get("skill_request")
+        if strong.is_strong_ask(env):
+            # A request that ASKED FOR STRONG APPROVAL is never read the legacy
+            # way: by participant id only, a malformed one dropped rather than
+            # downgraded, and its state taken from the hub's own acceptance
+            # event — a `skill_response` chat saying «accepted», ours or
+            # anybody's, is not one (R22b; v1 «peer-skill acceptance»).
+            source = strong.strong_request(env, me_id)
+            if source is None:
+                continue
+            # FIRST WINS per (request id, requester), as for ordinary requests:
+            # a peer reusing an id must not get a second request listed — and
+            # an acceptance is matched to its own source SEQUENCE, so one given
+            # to a later copy never marks the first accepted.
+            if (source.id, source.requester_id) in seen:
+                continue
+            seen.add((source.id, source.requester_id))
+            accepted = any(strong.strong_acceptance(
+                e, requester_id=source.requester_id, target_id=me_id,
+                source_seq=source.seq) for e in events)
+            legacy = states.get((source.id, source.requester_id))
+            state = ("done" if accepted and legacy == "done" else "accepted" if accepted
+                     else "declined" if legacy == "declined" else "pending")
+            try:
+                age = (datetime.now(timezone.utc) - datetime.fromisoformat(
+                    source.ts.replace("Z", "+00:00"))).total_seconds()
+            except ValueError:
+                age = SKILL_REQUEST_TTL + 1
+            if state == "pending" and age > SKILL_REQUEST_TTL:
+                state = "expired"
+            found.append({"id": source.id, "from": source.requester_name,
+                          "from_id": source.requester_id, "skill": source.skill,
+                          "args": source.args, "seq": source.seq, "state": state,
+                          "strength": "strong", "source": source})
+            continue
         if not mine(env, "to", "to_id") or not isinstance(ask, dict):
             continue
         # Validated on receipt: the sender controls every field, and a forged
@@ -7463,6 +7499,94 @@ def _skill_requests(client, profile) -> list[dict[str, Any]]:
         found.append({"id": request_id, "from": env.sender, "from_id": env.sender_id, "skill": skill,
                       "args": args[:4000], "seq": env.seq, "state": state})
     return found
+
+
+def _accept_strong(client, profile, match: dict[str, Any], args: argparse.Namespace) -> int:
+    """Accept a STRONG skill request: the hub's review, a human gesture, the
+    hub's receipt — and nothing else will do (R22b, v1 on #161).
+
+    In order: the source was already checked (`strong_request`); the key is
+    chosen before anything is asked of the human; the hub prepares the
+    request and returns its own review, which is checked against the source
+    before the window opens; the window shows the canonical review; the
+    challenge is fetched only on Approve; the proof goes to `/approve`, and the
+    receipt at once to `/skills/{id}/accept`, the adopting path, which records
+    the acceptance as a server-owned event. collab executes nothing.
+    """
+    from .client import approval as strong
+
+    me = str(getattr(profile, "participant_id", "") or "")
+    source = match["source"]
+    api = strong.ApprovalClient(client)
+    try:
+        caps = api.capabilities()
+        key, why = strong.usable_key(api.keys())
+        if key is None:
+            fail(why)
+            return 1
+        if not caps.get("available") or key["method"] not in (caps.get("methods") or []):
+            fail("this session's hub does not offer strong approval yet "
+                 f"({said(str(caps.get('reason') or 'unavailable'))}); a strong request "
+                 "cannot be accepted any other way")
+            return 1
+        prepared = api.skills_prepare(source.seq)
+        reviewed = strong.verify_review(api.review(prepared.get("request_id")),
+                                        prepared=prepared, source=source, me_id=me,
+                                        session_id=profile.session_id)
+        request = strong.window_request(reviewed, requester_name=source.requester_name,
+                                        credential_id=key["credential_id"])
+        print(dim("  the approval window is open: read the review there, and approve or "
+                  "decline it yourself"))
+        outcome = strong.open_window(
+            request, lambda: api.challenge(reviewed.request_id, key["credential_id"]),
+            method=key["method"])
+        choice = outcome.get("choice")
+        if choice == "decline":
+            api.decline(reviewed.request_id)
+            client.send(Envelope(kind=KIND_CHAT, sender=profile.name, to=match["from"],
+                                 to_id=match["from_id"],
+                                 text=f"declined your request to run `{match['skill']}`.",
+                                 body={"skill_response": {"id": match["id"], "state": "declined",
+                                                          "text": ""}}))
+            ok(f"declined: {said(match['id'])}")
+            return 0
+        if choice != "approve":
+            fail(f"not approved — {said(str(choice))}"
+                 + (f" ({said(str(outcome.get('reason')))})" if outcome.get("reason") else "")
+                 + "; nothing was accepted")
+            return 1
+        try:
+            approved = api.approve(reviewed.request_id,
+                                   challenge_id=outcome["challenge_id"],
+                                   credential_id=outcome["credential_id"],
+                                   proof=outcome["proof"])
+        except strong.Uncertain:
+            fail("the hub's answer to the approval was lost: its receipt cannot be "
+                 "recovered, and nothing was accepted. Run accept again for a fresh review.")
+            return 1
+        try:
+            accepted = api.skills_accept(reviewed.request_id, approved["receipt"])
+        except strong.Uncertain:
+            # Reconciled, never retried blind: the receipt is single-use.
+            accepted = api.skills_status(reviewed.request_id)
+            if accepted.get("state") != "accepted":
+                fail("the acceptance's outcome is unknown and the hub has not recorded "
+                     "it; run accept again for a fresh review")
+                return 1
+    except strong.ApprovalRefused as exc:
+        fail(f"the hub refused: {said(exc.code)}; nothing was accepted")
+        return 1
+    except strong.Mismatch as exc:
+        fail(f"no window was opened: {exc}")
+        return 1
+    except strong.Uncertain as exc:
+        fail(f"the hub could not be read ({exc}); nothing was accepted")
+        return 1
+    ok(f"accepted with strong approval: {said(match['id'])} "
+       f"(event {said(str(accepted.get('event_id', '?')))})")
+    print(f"  now run the skill `{said(match['skill'])}`, then "
+          f"`collab skills done {said(match['id'])} --note '<result>'`" + _peer_args(match["args"]))
+    return 0
 
 
 def _human_consents(match: dict[str, Any], args: argparse.Namespace) -> bool:
@@ -7522,13 +7646,15 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
             if args.action == "requests":
                 found = _skill_requests(client, profile)
                 if args.json:
-                    print(json.dumps(found, indent=2, ensure_ascii=True))
+                    print(json.dumps([{k: v for k, v in item.items() if k != "source"}
+                                      for item in found], indent=2, ensure_ascii=True))
                 elif not found:
                     print("No skill requests addressed to you.")
                 else:
                     for item in found:
+                        strength = " (strong approval)" if item.get("strength") == "strong" else ""
                         print(f"  {said(item['id'])}  [{item['state']}]  {said(item['from'])} asks for "
-                              f"{said(item['skill'])}" + _peer_args(item["args"]))
+                              f"{said(item['skill'])}{strength}" + _peer_args(item["args"]))
                     print(dim("  answer with `collab skills accept|decline|done ID [--note TEXT]` — accept only with your human's consent"))
                 return 0
             if args.action == "ask":
@@ -7542,9 +7668,17 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
                 text = (f"asks you to run the skill `{args.target}` (request {request_id}). "
                         "It runs only if your human consents with `collab skills accept`; "
                         "older collab versions cannot accept skill requests.")
+                ask = {"id": request_id, "skill": args.target, "args": rest[:4000]}
+                if getattr(args, "strong", False):
+                    # EXACTLY the hub's four keys (`/skills/prepare` refuses any
+                    # other set): a strong request is accepted only through the
+                    # hub's review and a human gesture, never a typed «yes».
+                    ask["required_strength"] = "strong"
+                    text = (f"asks you to run the skill `{args.target}` (request {request_id}) "
+                            "with STRONG approval: it runs only if your human approves it in "
+                            "collab's approval window (`collab skills accept`).")
                 client.send(Envelope(kind=KIND_CHAT, text=text, sender=profile.name, to=args.to,
-                                     body={"skill_request": {"id": request_id, "skill": args.target,
-                                                             "args": rest[:4000]}}))
+                                     body={"skill_request": ask}))
                 ok(f"asked @{args.to} to run {args.target}: {request_id}")
                 return 0
             # accept / decline / done
@@ -7562,6 +7696,12 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
                 raise ValueError(f"request {args.target} is already {match['state']}")
             if not match.get("from_id"):
                 raise ValueError("request has no verified requester identity; ask the peer to resend")
+            if args.action == "accept" and match.get("strength") == "strong":
+                if getattr(args, "human_approved", False):
+                    fail("this request asked for STRONG approval: --human-approved cannot "
+                         "satisfy it. Your human approves it in collab's approval window.")
+                    return 1
+                return _accept_strong(client, profile, match, args)
             if args.action == "accept" and not _human_consents(match, args):
                 return 1
             state = {"accept": "accepted", "decline": "declined", "done": "done"}[args.action]
@@ -7580,6 +7720,109 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
     except (HubError, OSError, ValueError) as exc:
         fail(str(exc))
         return 1
+
+
+def cmd_consent(args: argparse.Namespace) -> int:
+    """Strong-approval keys (R22b): `enrol` one, or list them (`keys`).
+
+    ENROLMENT IS THE HUMAN'S, AND ONLY THEIRS TO START. It needs a terminal on
+    both ends and takes no flag that vouches for a human: an agent that could
+    enrol a key could approve with it. The hub does the rest of what makes a
+    first key trustworthy enough to use — it verifies possession, holds the key
+    in a 10-minute cooling-off, and announces the enrolment to the session.
+    """
+    from .client import approval as strong
+
+    profile = _require_own_profile(args)
+    me = str(getattr(profile, "participant_id", "") or "")
+    try:
+        with _client(profile) as client:
+            api = strong.ApprovalClient(client)
+            if args.action == "keys":
+                keys = api.keys()
+                if args.json:
+                    print(json.dumps(keys, indent=2, ensure_ascii=True))
+                    return 0
+                if not keys:
+                    print("No strong-approval key is enrolled. Enrol one yourself: "
+                          "`collab consent enrol`.")
+                for key in keys:
+                    ready = key.get("usable_at", 0) <= time.time()
+                    print(f"  {said(str(key.get('credential_id')))}  {said(str(key.get('method')))}"
+                          f"  {said(str(key.get('state')))}"
+                          f"  fingerprint {said(str(key.get('fingerprint', ''))[:16])}…"
+                          f"  {'usable' if ready else 'cooling off'}"
+                          f"  trust {said(str(key.get('trust', '')))}")
+                return 0
+            # enrol
+            if not (sys.stdin.isatty() and sys.stdout.isatty()):
+                fail("enrolling a strong-approval key is your human's to do: they run "
+                     "`collab consent enrol` themselves, in a terminal")
+                return 1
+            if not strong.is_participant_id(me):
+                fail("this session has no participant id for you yet; reconnect, then retry")
+                return 1
+            hello = strong._hello()
+            if not hello.available():
+                fail("Windows Hello is not available here; passkey enrolment needs the "
+                     "passkey page, which is not part of this build")
+                return 1
+            caps = api.capabilities()
+            if "hello" not in (caps.get("supported_methods") or []):
+                fail("this session's hub does not support Windows Hello keys")
+                return 1
+            name = strong.hello_key_name(profile.session_id, me)
+            print(f"  Enrol a Windows Hello key for strong approvals as {said(profile.name)} "
+                  f"({said(me)}) in {said(profile.session_id)}.")
+            print(dim("  Two Hello prompts follow: one creates the key, one proves you hold it."))
+            try:
+                answer = input("  Continue? [y/N] ")
+            except EOFError:
+                answer = ""
+            if answer.strip().lower() not in ("y", "yes"):
+                print("Nothing was enrolled.")
+                return 1
+            begun = api.enrol_begin("hello")
+            try:
+                hello.public_key(name)
+                exists = True
+            except hello.NotEnrolled:
+                exists = False
+            # A key left by an enrolment whose proof was cancelled is PROVEN,
+            # never replaced: Hello refuses to overwrite a key, and so do we.
+            record = (hello.prove(name, begun["challenge"]) if exists
+                      else hello.enrol(name, begun["challenge"]))
+            credential = api.enrol_finish(begun["challenge_id"], record).get("credential") or {}
+    except strong.ApprovalRefused as exc:
+        reasons = {
+            "signed_key_change_required": "you already have a key in this session; "
+                                          "adding or replacing one is a signed key change",
+            "enrollment_in_progress": "an enrolment is already in progress; it expires "
+                                      "within two minutes",
+            "not_supported": "this session's hub has no strong approval",
+        }
+        fail(reasons.get(exc.code, f"the hub refused: {said(exc.code)}"))
+        return 1
+    except strong.Uncertain as exc:
+        fail(f"the hub could not be read ({exc}); check `collab consent keys`")
+        return 1
+    except (HubError, OSError, ValueError) as exc:
+        fail(str(exc))
+        return 1
+    except Exception as exc:                  # a Hello refusal or failure
+        from . import consent_hello
+        if isinstance(exc, consent_hello.Refused):
+            print("Cancelled; nothing was enrolled.")
+            return 1
+        if isinstance(exc, consent_hello.HelloError):
+            fail(f"Windows Hello: {said(exc.status)}; nothing was enrolled")
+            return 1
+        raise
+    ok(f"enrolled {said(str(credential.get('credential_id', name)))} "
+       f"(fingerprint {said(str(credential.get('fingerprint', ''))[:16])}…)")
+    print(dim("  usable after a 10-minute cooling-off; everyone in the session has been told, "
+              "and the key is marked unverified (trust on first use)"))
+    return 0
 
 
 def cmd_skills(args: argparse.Namespace) -> int:
@@ -8485,6 +8728,13 @@ Esc cancels a draft, q quits. Editor commands run without a shell.""")
     add_session_flag(cap)
     cap.set_defaults(func=cmd_capacity)
 
+    co = sub.add_parser("consent",
+                        help="strong-approval keys: enrol one yourself, or list them")
+    co.add_argument("action", choices=["enrol", "keys"])
+    co.add_argument("--json", action="store_true", help="with keys: structured output")
+    add_session_flag(co)
+    co.set_defaults(func=cmd_consent)
+
     sk = sub.add_parser("skills",
                         help="teach your coding agents to use collab")
     sk.add_argument("action", choices=["install", "uninstall", "status", "publish", "shared", "show", "withdraw",
@@ -8494,7 +8744,10 @@ Esc cancels a draft, q quits. Editor commands run without a shell.""")
     sk.add_argument("--args", help="with ask: arguments for the requested skill")
     sk.add_argument("--note", help="with accept/decline/done: a reason or the result")
     sk.add_argument("--human-approved", action="store_true",
-                    help="with accept, without a terminal: your human has explicitly consented")
+                    help="with accept, without a terminal: your human has explicitly consented "
+                         "(never enough for a strong request)")
+    sk.add_argument("--strong", action="store_true",
+                    help="with ask: require strong approval, a human gesture checked by the hub")
     sk.add_argument("--name", help="published skill name override")
     sk.add_argument("--description", help="published skill description override")
     sk.add_argument("--after", default="", help="shared inventory page cursor")
