@@ -220,7 +220,7 @@ async def test_an_ambiguous_human_answer_never_consumes_or_sends_the_decision(
         await service.turn()
         assert _durable(state)
         assert not state.outbox()
-        assert bool(calls) is (failure != "missing")
+        assert bool(calls) is (failure == "unrelated")
     finally:
         inbox.close()
 

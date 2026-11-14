@@ -49,6 +49,22 @@ repaired (sender id, room, private or broadcast); any other is set aside
 intact as quarantined, never sent, and one decision names it so you can
 resend it yourself. The worker never stops on such an answer.
 
+An answer follows its original participant ID when that peer renames. The
+worker shows the peer's current name in the model input; it never substitutes
+someone taking the old name. A reply using a conflicting old label is discarded
+with its whole turn result and summary, and only the affected answer is held
+locally for review. Unrelated valid work can continue without that private input.
+Recovery notices contain metadata only. After reviewing a held answer, use
+`collab worker reply ID --instruct 'reviewed locally'` to acknowledge its notice;
+this records a local note and keeps the original answer held. It creates no
+model answer or delivery, and `--verbatim` cannot forward a held answer. To send
+it after confirming the intended participant, explicitly queue a fresh message
+with `collab worker send --to NAME 'TEXT'`.
+`--awaiting-human` on a recovery notice records local waiting only; its note is
+not sent to a peer or model. Acknowledging recovery suppresses its notice but
+does not delete the held record or free its slot at the pending-record limit.
+At that limit, normal backpressure still applies until explicit local cleanup.
+
 Provider failures are classified. A rate limit waits for the provider's
 stated retry time, at least 15 minutes and at most one hour, and status shows
 `(rate limit)`. Network and other failures use the normal retry delay; a wait
