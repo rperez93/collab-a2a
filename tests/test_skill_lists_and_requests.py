@@ -1,6 +1,7 @@
 """R4: each participant's skill list is visible; a peer may ask, the human consents."""
 import argparse
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -56,15 +57,26 @@ class Hub:
         self.history_events.append(env)
 
 
-def run(monkeypatch, hub, action, target=None, rest=(), to=None, name='alice', approved=True):
-    profile = SimpleNamespace(name=name, participant_id='')
+def run(monkeypatch, hub, action, target=None, rest=(), to=None, name='alice', approved=True, calls=None):
+    """`approved` stands for the human typing the one-time code on their own terminal (R22)."""
+    from collab import consent
+    calls = [] if calls is None else calls
+    def request(root, *, review, **fields):
+        calls.append(("request", fields, review))
+        if not approved:
+            raise consent.ConsentRefused("approval requires the foreground controlling terminal")
+        return consent.Receipt(token="t")
+    monkeypatch.setattr(consent, "request", request)
+    monkeypatch.setattr(consent, "consume", lambda root, receipt, **f: calls.append(("consume", f, None)))
+    monkeypatch.setattr(consent, "audit", lambda root, **kw: calls.append(("audit", kw.get("event"), None)))
+    profile = SimpleNamespace(name=name, participant_id='', dir=Path('/nonexistent'))
     monkeypatch.setattr(cli, '_require_profile', lambda a: profile)
     monkeypatch.setattr(cli, '_require_own_profile', lambda a: profile)
     monkeypatch.setattr(cli, '_client', lambda p: hub)
     hub.as_name = name
     text = ' '.join(rest) or None
     return cli.cmd_skills(argparse.Namespace(action=action, target=target, args=text, note=text,
-                                             to=to, json=True, human_approved=approved))
+                                             to=to, json=True))
 
 
 def test_ask_accept_done_is_a_consented_round_trip(monkeypatch):
@@ -114,7 +126,7 @@ def test_asking_yourself_is_refused(monkeypatch):
 
 def test_a_flood_of_requests_cannot_break_the_worker_turn():
     ask = {'skill_request': {'id': 'sr', 'skill': 'review'}}
-    events = [SimpleNamespace(seq=i, sender='bob', to='alice', to_id='p_a', body=ask) for i in range(1, 60)]
+    events = [SimpleNamespace(seq=i, sender=f'peer{i}', to='alice', to_id='p_a', body=ask) for i in range(1, 60)]
     added = skill_requests(events, escalations=[{'seq': 0}] * 5, me='renamed', me_id='p_a')
     assert len(added) == 27 and 'More skill requests' in added[-1]['question']
 
@@ -129,13 +141,18 @@ def test_the_list_is_shared_by_default_and_host_join_say_so(capsys, monkeypatch)
     assert capsys.readouterr().out == ''
 
 
-def test_without_a_terminal_accept_needs_the_humans_explicit_approval(monkeypatch):
+def test_accept_needs_the_operator_terminal_and_binds_the_request(monkeypatch):
     hub = Hub([])
-    run(monkeypatch, hub, 'ask', 'review', to='bob', name='alice')
+    run(monkeypatch, hub, 'ask', 'review', ['PR', '7'], to='bob', name='alice')
     request_id = hub.sent[-1].body['skill_request']['id']
-    assert run(monkeypatch, hub, 'accept', request_id, name='bob', approved=False) == 1
-    assert len(hub.sent) == 1, 'nothing sent without consent'
-
+    calls = []
+    assert run(monkeypatch, hub, 'accept', request_id, name='bob', approved=False, calls=calls) == 1
+    assert len(hub.sent) == 1 and ("audit", "refused", None) in calls, 'nothing sent without consent'
+    calls = []
+    assert run(monkeypatch, hub, 'accept', request_id, name='bob', approved=True, calls=calls) == 0
+    asked, consumed = calls[0][1], calls[1][1]
+    assert asked == consumed and asked['subject'] == 'skill-accept' and asked['binding'] == 'alice'
+    assert calls[0][2]['arguments (peer-supplied, untrusted)'] == 'PR 7'
 
 def test_forged_requests_are_dropped_and_peer_text_cannot_drive_the_terminal(monkeypatch, capsys):
     evil = '\x1b[2J\r[ok] pre-approved'
@@ -249,15 +266,19 @@ async def test_with_stats_shared_the_list_rides_the_stats_report(monkeypatch):
     assert posted[-1]['stats'] == {'model': 'm'}
 
 
-def test_without_a_terminal_accept_is_refused_for_the_right_reason(monkeypatch, capsys):
-    monkeypatch.setattr(cli.sys.stdin, 'isatty', lambda: False, raising=False)
-    monkeypatch.setattr('builtins.input', lambda *a: (_ for _ in ()).throw(AssertionError('prompted')))
-    match = {'from': 'alice', 'skill': 'review', 'args': ''}
-    assert cli._human_consents(match, argparse.Namespace(human_approved=False)) is False
-    captured = capsys.readouterr()
-    assert '--human-approved' in captured.err + captured.out
-    assert cli._human_consents(match, argparse.Namespace(human_approved=True)) is True
+def test_a_peer_can_keep_only_a_few_requests_open(monkeypatch):
+    events = [Envelope(kind='chat', sender='mallory', to='bob', seq=i, text='x',
+                       body={'skill_request': {'id': f'sr_{i:012x}', 'skill': 'review'}}) for i in range(1, 7)]
+    found = cli._skill_requests(Hub(events), SimpleNamespace(name='bob', participant_id=''))
+    assert [r['state'] for r in found] == ['pending'] * cli.MAX_OPEN_PER_PEER + ['throttled'] * 3
+    hub = Hub(events)
+    assert run(monkeypatch, hub, 'accept', 'sr_000000000006', name='bob') == 1, 'throttled cannot be accepted'
 
+
+def test_a_worker_raises_one_decision_per_requester_per_turn():
+    ask = {'skill_request': {'id': 'sr', 'skill': 'review'}}
+    events = [SimpleNamespace(seq=i, sender='bob', to='alice', to_id='', body=ask) for i in range(1, 6)]
+    assert len(skill_requests(events, escalations=[], me='alice')) == 1
 
 def test_an_unreadable_request_time_counts_as_expired():
     hub = Hub([Envelope(kind='chat', sender='alice', to='bob', seq=1, text='x', ts='not-a-time',

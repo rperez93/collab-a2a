@@ -55,13 +55,17 @@ def skill_requests(events, escalations, me: str, me_id: str = "") -> list[dict]:
     proposed, so a worker can never accept one by replying on its own.
     """
     routed = {e["seq"] for e in escalations}
+    senders: set[str] = set()
     room = max(0, 32 - len(escalations))  # commit_turn's per-turn cap
     added = []
     for event in events:
         ask = (event.body or {}).get("skill_request") if isinstance(event.body, dict) else None
         # By participant id when known: a rename must not bypass consent.
         mine = (event.to_id == me_id) if (me_id and getattr(event, "to_id", "")) else event.to == me
+        if isinstance(ask, dict) and mine and event.sender in senders:
+            continue  # one decision per requesting peer per turn: no flood of prompts
         if isinstance(ask, dict) and mine and event.seq not in routed:
+            senders.add(event.sender)
             if len(added) >= room:
                 # Over the cap, the last decision names the rest instead.
                 if added:
