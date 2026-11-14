@@ -750,6 +750,12 @@ def cmd_host(args: argparse.Namespace) -> int:
     env = {**os.environ, "COLLAB_HOME": cfg.home, **config_module_kind_env()}
     if args.no_tunnel:
         env["COLLAB_NO_TUNNEL"] = "1"
+    # Recorded with the session, not only in this one child's environment: the
+    # daemon revives a dead hub with its own environment, and that hub must
+    # keep the host's choice (see `HubConfig.no_tunnel`). Each `collab host`
+    # decides afresh, so resuming without the flag publishes the session again.
+    cfg.no_tunnel = bool(args.no_tunnel)
+    cfg.save()
 
     # NAMED HERE OR NOT AT ALL. The hub is detached and reparented just as the
     # daemon is, so the agent that owns it has to be recorded by the process
