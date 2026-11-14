@@ -152,3 +152,23 @@ The live own-session invocation took 0.11 s wall time, 0.02 s user CPU and
 the summarizer process and its pipe wait, not the CLI producer or model service.
 Focused audit and documentation checks passed (82 tests). No full suite or
 additional provider call was launched for this measurement.
+
+## Continued baseline before R3/R14 deployment
+
+At 2026-11-14T01:31:57.688222+00:00, arma still used the verified machine configuration of
+60 attempts per 3,600 seconds and Codex `gpt-5.6-luna`. The capture reported
+174 lifetime reservations, 374 committed turns and
+60 reservations in the rolling window, spanning
+3451.099 seconds. Remaining reservations were
+0; the reported budget-limit state was
+true, with 3.678 seconds until its scheduled retry.
+No cap reset or increase was performed.
+
+The observed lifetime counters were 6,478,117 input,
+34,458 output and 771,840 cached tokens. These do not
+measure this rolling window or establish useful-call efficiency. Outcome
+counts and cost remain unknown until the R14 ledger is deployed. R3/R7 are
+being tested together in an isolated checkout; that is not a live worker
+pacing improvement. The host machine's separately authorized 120-attempt
+setting is a different baseline and must not be pooled into this 60-attempt
+machine comparison.
