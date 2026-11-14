@@ -103,7 +103,9 @@ class AlreadyEnrolled(HelloError):
 
 
 class Unavailable(HelloError):
-    """No Windows Hello here: no powershell.exe, no TPM, or the device locked."""
+    """No Windows Hello here: no powershell.exe, or the security device locked.
+    (A machine with no usable TPM most likely answers UnknownError, which is
+    a plain HelloError — unverified.)"""
 
 
 #: KeyCredentialStatus → the outcome it means. Anything else is a HelloError
@@ -550,6 +552,15 @@ def open_window(request: dict) -> dict:
     except HelloError as exc:
         if exc.status == "Timeout":
             return {"choice": "expired"}
+        return {"choice": "unavailable", "reason": exc.status}
+    # CHECKED HERE TOO, against the key's own public half — read without a
+    # prompt. The hub's verification is the one that counts; this one stops a
+    # signature this machine's Hello did not make (a swapped powershell.exe, a
+    # broken answer) being forwarded as if it were an approval.
+    try:
+        if not verify(public_key(cred), challenge, signature):
+            return {"choice": "unavailable", "reason": "SignatureMismatch"}
+    except HelloError as exc:
         return {"choice": "unavailable", "reason": exc.status}
     return {"choice": "approve", "method": "hello", "cred_id": cred,
             "signature_b64": base64.b64encode(signature).decode("ascii")}

