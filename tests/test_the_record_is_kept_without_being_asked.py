@@ -262,13 +262,22 @@ def test_a_flush_restarts_a_writer_that_has_died(tmp_path):
     """
     root = str(tmp_path / "state")
     said = _in_a_fresh_interpreter(
-        "import pathlib\n"
+        "import pathlib, threading\n"
         "from collab import diagnostics as diag\n"
         f"root = pathlib.Path({root!r})\n"
         "diag.begin(root, 'daemon')\n"
+        # Never detach a live writer: two writers could take separate batches,
+        # then the empty one advance _written before the other persisted all5.
+        "real_start = diag._start_writer\n"
+        "diag._start_writer = lambda: None\n"
         "for i in range(5):\n"
         "    diag.log('wake_attempt', n=i)\n"
-        "diag._writer = None            # as if the thread had died\n"
+        "diag._writer = threading.Thread(target=lambda: None)\n"
+        "diag._writer.start()\n"
+        "diag._writer.join()\n"
+        "assert not diag._writer.is_alive()\n"
+        "assert len(diag._pending) == 5 and diag._queued == 5 and diag._written == 0\n"
+        "diag._start_writer = real_start\n"
         "diag.flush(5)\n"
         "print(len(diag.records(root)))\n", tmp_path)
     assert said == "5", f"only {said} of 5 records reached the disk"
