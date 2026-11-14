@@ -27,12 +27,20 @@ session that held the domain then. The primary is chosen explicitly, with
 `collab host --primary` (which implies `--tunnel proxy`), and is kept with the
 session so a hub its daemon revives asks again. Starting or restarting the
 proxy never chooses one. Once recorded, only that session may set it; a second
-session asking is refused, and `collab host` says which session holds it. The
+session asking is refused, `collab host` says which session holds it, and the
+refused claim is not kept (ask again with `--primary` once the slot is free). The
 primary remains fixed when that session stops: the bare route returns 404,
 never another session, until it is hosted again. `collab kill --purge` of the
 primary session releases it, since a purged session never comes back.
 Otherwise, changing it is deliberate: with the proxy stopped, remove `primary`
 from `proxy/state.json` in the peer registry.
+
+Only a session whose hub attached itself to the proxy (`--tunnel proxy`) is
+routed at `/s/<id>`; one with its own ngrok, a failed tunnel, or a record from an
+older collab is not. Guests of a session that is NOT the primary must rejoin
+with its `/s/<id>` link once it moves behind the proxy: their old bare-domain
+link reaches the primary's hub, which refuses their token (the daemon then
+says it was removed — it was not; it needs the new link).
 
 A session its host kept local (`--no-tunnel`, or `COLLAB_NO_TUNNEL=1`) is
 never routed: the proxy reads each session's own record on this machine and

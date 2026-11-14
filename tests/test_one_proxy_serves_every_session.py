@@ -45,7 +45,7 @@ def registry(tmp_path, monkeypatch):
 _HOME: Path = Path("/nonexistent")
 
 
-def _session(session_id: str, *, no_tunnel: bool = False) -> str:
+def _session(session_id: str, *, no_tunnel: bool = False, tunnel: str = "proxy") -> str:
     """The session's own record on this machine, which the proxy reads to see
     whether its host kept it local (R11d-2): no record, no route."""
     import json
@@ -54,7 +54,7 @@ def _session(session_id: str, *, no_tunnel: bool = False) -> str:
     where.mkdir(parents=True, exist_ok=True)
     (where / "hub.json").write_text(json.dumps({
         "session_id": session_id, "host_name": "h", "port": 1, "bind": "127.0.0.1",
-        "invite": "i", "host_token": "t", "no_tunnel": no_tunnel}))
+        "invite": "i", "host_token": "t", "no_tunnel": no_tunnel, "tunnel": tunnel}))
     return str(_HOME)
 
 
@@ -653,3 +653,27 @@ def test_a_released_primary_is_not_restored_by_the_running_proxys_save(registry)
     running.public_url = "https://moved.test"
     running.save()
     assert proxy.ProxyState.load().primary == ""
+
+
+def test_only_a_session_that_attached_itself_is_a_route(registry):
+    """A host record that never joined the proxy — an older collab's
+    `--no-tunnel` session (no `no_tunnel` key), an own-ngrok session, one whose
+    tunnel failed — gets no public path at `/s/<id>` (adversarial review of
+    #163: an older local-only session answered 200 a second after the proxy
+    started)."""
+    _announce("s_attached", "http://127.0.0.1:41030")
+    for sid, port, tunnel in (("s_old_local", 41031, "none"),
+                              ("s_own", 41032, "ngrok"),
+                              ("s_failed", 41033, "")):
+        peers.announce(session_id=sid, name="h", role="host",
+                       url=f"http://127.0.0.1:{port}", repo="/r",
+                       home=_session(sid, tunnel=tunnel), pid=os.getpid())
+    assert proxy.Routes(ttl=0).table() == {"s_attached": "http://127.0.0.1:41030"}
+
+
+def test_an_unknown_session_path_never_falls_through_to_the_primary():
+    """`/s/<anything>` names a session or nothing; it is never the primary's,
+    whatever the id looks like (mutant P11 in the #163 review)."""
+    for path in ("/s/unknown/a2a", "/s/x/ext/collab/v1/health", "/s/s_nope"):
+        target = proxy.split_target(path, "s_primary")
+        assert target is None or target[0] != "s_primary", path

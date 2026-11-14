@@ -934,6 +934,14 @@ def cmd_host(args: argparse.Namespace) -> int:
         if holder != cfg.session_id:
             warn(f"the shared proxy's primary session is {holder or 'nobody'}: "
                  "bare-domain links reach that session, not this one")
+            # A REFUSED claim is not kept. Left recorded, it was retried by
+            # every revive and by the next `collab host`, so this session took
+            # the slot silently once the holder was purged — after the person
+            # had been told it would not (adversarial review of #163). Asking
+            # again is explicit: `collab host --resume ... --primary`.
+            if holder:
+                from .server.session import update_fields
+                update_fields(cfg.dir, proxy_primary=False)
 
     # The host is participant #0: it joins its own session and comes up
     # listening, so it is live before anyone else connects.
