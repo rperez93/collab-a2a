@@ -416,7 +416,7 @@ class Store:
                                          "room": prompt.get("notify_room", "")})
                 self._add(db, "context", {"text": _text(
                     f"Answered for the main agent to {prompt.get('notify_to') or prompt.get('notify_room')}"
-                    f" (already sent, do not repeat): {text[:2000]}", "context")})
+                    f" (already queued, do not repeat): {text[:2000]}", "context")})
                 return
             # Reuse the decision id; consuming the answer in a committed turn
             # is the only operation that removes the coding agent's response.
