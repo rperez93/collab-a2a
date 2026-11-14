@@ -1,5 +1,13 @@
 # Bundle Update Log
 
+## 2026-11-14 (R9)
+* **Update (later than the pin)**: Recorded immediate join offers and the
+  finished-task hint in [the command surface](operating/cli-surface.md).
+  Completion reuses a fresh cached board and suppresses the hint when no other
+  eligible work is known, without another request or automatic claim. Clarified
+  the separation between claiming work and opening the watch view in the join
+  skill. The pin and verification stamps are unchanged.
+
 ## 2026-11-14 (R18)
 * **Update (later than the pin)**: Recorded the worker → main agent → human chain (questions in notices, `--awaiting-human`, verbatim final answers, roster waiting state, board context) in [the wake page](collaboration/wake.md). The pin and verification stamps are unchanged.
 

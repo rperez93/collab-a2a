@@ -267,8 +267,9 @@ def test_join_offer_only_suggests_available_current_batch_work(tmp_path, fault):
 
 
 @pytest.mark.parametrize('enabled', [True, False])
+@pytest.mark.parametrize('remaining', [True, False])
 def test_live_cli_offers_work_on_join_and_after_current_task_completion(
-        tmp_path, live_server, monkeypatch, capsys, enabled):
+        tmp_path, live_server, monkeypatch, capsys, enabled, remaining):
     from collab import cli
     from collab.client.hub_client import HubClient
     from collab.config import SessionProfile
@@ -279,18 +280,44 @@ def test_live_cli_offers_work_on_join_and_after_current_task_completion(
     with HubClient(live_server['base'], live_server['host_token']) as host:
         host.batch_action('start', name='accepted work')
         first = host.task_action('propose', title='first bounded task')['id']
-        host.task_action('propose', title='second bounded task')
+        if remaining:
+            host.task_action('propose', title='second bounded task')
     url = live_server['base'] + '#' + live_server['invite']
     assert cli.main(['join', url, '--name', 'bob', '--no-daemon', '--no-update-check']) == 0
     joined = capsys.readouterr().out
-    assert ('Batch work available: 2 unclaimed' in joined) == enabled
+    assert (f'Batch work available: {2 if remaining else 1} unclaimed' in joined) == enabled
     profile = SessionProfile.current()
     with HubClient(profile.url, profile.token) as client:
         assert all(not t['owner'] for t in client.tasks())  # an offer claims nothing
     assert cli.main(['task', 'claim', '--id', first]) == 0
+    # --no-daemon has no cache writer; stage its authenticated current snapshot.
+    with HubClient(profile.url, profile.token) as client:
+        snapshot = client.snapshot()
+    snapshot['fetched_at'] = time.time()
+    (profile.dir / 'snapshot.json').write_text(json.dumps(snapshot))
     capsys.readouterr()
     assert cli.main(['task', 'complete', '--id', first]) == 0
     completed = capsys.readouterr().out
-    assert ('next: `collab task list --open`' in completed) == enabled
+    assert ('next: `collab task list --open`' in completed) == (enabled and remaining)
     from collab import activity
     assert activity.read_local(profile)['state'] == 'idle'
+
+
+@pytest.mark.parametrize('fault', ['missing', 'stale', 'future', 'huge', 'malformed', 'other_owned'])
+def test_completion_offer_requires_known_fresh_available_work(tmp_path, monkeypatch, fault):
+    snapshot, _ = seed(tmp_path)
+    monkeypatch.setattr(pickup.time, 'time', lambda: 1000.0)
+    path = tmp_path / 'snapshot.json'
+    if fault == 'missing':
+        path.unlink()
+    elif fault == 'malformed':
+        path.write_text('[]')
+    else:
+        if fault == 'stale': snapshot['fetched_at'] = 0
+        if fault == 'future': snapshot['fetched_at'] = 1001
+        if fault == 'huge': snapshot['fetched_at'] = 10**400
+        if fault == 'other_owned':
+            snapshot['tasks'].append({'id': 'owned', 'owner': 'alice',
+                                      'state': 'TASK_STATE_WORKING'})
+        path.write_text(json.dumps(snapshot))
+    assert pickup.completion_offer(tmp_path, 'finished') is None

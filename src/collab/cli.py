@@ -2236,8 +2236,8 @@ def cmd_task(args: argparse.Namespace) -> int:
         if mine.get("task") == task["id"]:
             _publish_activity(profile, act.IDLE, quiet=True)
             print(dim("       and you are shown as idle again"))
-            from .runtime_settings import get
-            if get('task_auto_pickup'):
+            from .task_pickup import completion_offer
+            if completion_offer(profile.dir, task['id']):
                 print(dim("       next: `collab task list --open`; inspect dependencies and"
                           " current ownership, then claim suitable work within the accepted"
                           " goal without waiting for the lead"))

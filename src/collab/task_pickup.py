@@ -87,6 +87,21 @@ def join_offer(snapshot):
         return None
 
 
+def completion_offer(root, task_id):
+    """Reuse a fresh cached board after a confirmed terminal task update."""
+    from .runtime_settings import get
+    try:
+        snapshot = _read(Path(root) / 'snapshot.json')
+        if not _fresh(snapshot.get('fetched_at'), time.time(),
+                      get('participant_stale_after')):
+            return None
+        snapshot = {**snapshot, 'tasks': [t for t in snapshot.get('tasks', [])
+                                         if t.get('id') != task_id]}
+        return join_offer(snapshot)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
+        return None
+
+
 def opportunity(root, now):
     from .runtime_settings import get
     from .capacity import estimate_capacity

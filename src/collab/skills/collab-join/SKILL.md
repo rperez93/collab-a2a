@@ -24,7 +24,9 @@ Both ends need stable Collab 2.x. An older host must be upgraded and restarted.
 State lives outside the repository, isolated by workspace and agent session.
 Read the returned roster and shared work snapshot before proposing duplicate
 work. If a batch offer appears and you are ready within the accepted goal, inspect
-dependencies and claim suitable unowned work immediately; do not wait for the lead. After joining succeeds, run `collab watch --tmux` when already inside tmux;
+dependencies and claim suitable unowned work immediately; do not wait for the lead.
+
+After joining succeeds, run `collab watch --tmux` when already inside tmux;
 otherwise tell the user to run `collab watch` in a separate terminal.
 
 For local discovery, changed URLs, separate agent identities, stale locks or

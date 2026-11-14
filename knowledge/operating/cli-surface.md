@@ -24,6 +24,16 @@ stale_after: 2026-10-01T00:00:00Z
 
 # How this list was produced
 
+**Later than the pin (R9, 2026-11-14):** Joining an open batch can offer
+unclaimed work from the authenticated join snapshot. Finishing the task recorded
+as current activity can print a next-work hint when a fresh cached snapshot
+shows other eligible unclaimed work. Missing or stale caches suppress that hint.
+Both respect `task_auto_pickup`, exclude archived or owned work, and reuse the
+same eligibility check. Neither adds a network request, reserves a task, nor
+claims one automatically. Inspect dependencies and current ownership before
+claiming; cached availability can change. The original pin and verification
+stamps below are unchanged.
+
 By building the parser and printing `--help` for the top level and for every
 subcommand, at commit `23db6d0`.[^parser-run] The descriptions below are the
 parser's own, verbatim.
