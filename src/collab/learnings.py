@@ -120,13 +120,17 @@ def store_dir() -> Path | None:
         else global_config_path().parent / "learnings"
 
 
-def _git(*args: str, cwd: Path | None = None) -> str:
+def _git(*args: str, cwd: Path | None = None) -> str | None:
+    """git's answer; "" when git ANSWERED no (a non-zero exit: no `origin`,
+    not a repository), None when it could not answer at all (a timeout, no
+    git). The two used to be one "", and `repo_key` then remembered the
+    fallback a timeout produced as if it were the truth — see there."""
     try:
         done = subprocess.run(["git", *args], capture_output=True, text=True,
                               timeout=5, cwd=str(cwd) if cwd else None,
                               check=False)
     except (OSError, subprocess.SubprocessError):
-        return ""
+        return None
     return done.stdout.strip() if done.returncode == 0 else ""
 
 
@@ -184,6 +188,14 @@ def repo_key(cwd: Path | None = None) -> str:
 
     Remembered for `REPO_KEY_TTL` per directory: still derived from this
     checkout, never from anything that arrived on the wire.
+
+    ONLY AN ANSWER GIT ACTUALLY GAVE IS REMEMBERED. A git that timed out — what
+    a loaded machine produces — made the key fall back to `local/<directory>`,
+    and with the cache that fallback was kept for five minutes: the daemon
+    filed spooled learnings durably into the wrong bundle for all of them,
+    where before the cache it was one heartbeat (review of #158). A degraded
+    answer is never stored; the last answer git did give, however old, is
+    returned instead when there is one, and the next healthy call refreshes it.
     """
     import time as _time
 
@@ -192,20 +204,26 @@ def repo_key(cwd: Path | None = None) -> str:
     now = _time.monotonic()
     if held is not None and now - held[0] < REPO_KEY_TTL:
         return held[1]
-    key = _repo_key(cwd)
+    key, degraded = _repo_key(cwd)
+    if degraded:
+        return held[1] if held is not None else key
     if len(_repo_keys) >= 64:
         _repo_keys.clear()
     _repo_keys[where_key] = (now, key)
     return key
 
 
-def _repo_key(cwd: Path | None = None) -> str:
-    key = normalise_remote(_git("remote", "get-url", "origin", cwd=cwd))
+def _repo_key(cwd: Path | None = None) -> tuple[str, bool]:
+    """The key, and whether it is DEGRADED: a git call that raised instead
+    of answering, so the fallback may not be the repository's real key."""
+    remote = _git("remote", "get-url", "origin", cwd=cwd)
+    key = normalise_remote(remote or "")
     if key:
-        return key
+        return key, False
     root = _git("rev-parse", "--show-toplevel", cwd=cwd)
     where = Path(root) if root else Path(cwd or Path.cwd())
-    return "local/" + (_safe_segment(where.name) or "repo")
+    return ("local/" + (_safe_segment(where.name) or "repo"),
+            remote is None or root is None)
 
 
 def _safe_segment(text: str) -> str:

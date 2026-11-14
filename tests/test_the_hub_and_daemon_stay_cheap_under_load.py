@@ -103,6 +103,25 @@ def test_releasing_a_project_moves_the_cache_too(board):
     assert {t["id"]: t["project"] for t in board.tasks()}["T_9"] is None
 
 
+def test_two_batches_read_back_to_back_are_two_batches(board):
+    """The cache is keyed on the query AND its arguments. Keyed on the SQL
+    alone (mutant S5b, review of #158), `batch_tasks('B_2')` straight after
+    `batch_tasks('B_1')` — no write between, so the stamp still matched —
+    returned B_1's five hundred rows."""
+    board.close_batch("B_1")
+    board.add_batch("B_2", name="second", opened_by="a")
+    for i in range(3):
+        board.upsert_task(f"U_{i}", title=f"second {i}", state="TASK_STATE_SUBMITTED",
+                          owner=None, room="general", created_by="a",
+                          join_open_batch=True)
+    first = board.batch_tasks("B_1")
+    second = board.batch_tasks("B_2")
+    assert len(first) == 500 and {t["batch"] for t in first} == {"B_1"}
+    assert [t["id"] for t in second] == ["U_0", "U_1", "U_2"]
+    assert {t["batch"] for t in board.batch_tasks("B_2")} == {"B_2"}
+    assert len(board.batch_tasks("B_1")) == 500
+
+
 def test_each_reader_gets_its_own_rows(board):
     """Callers decorate what they are handed. A cache that returned its own
     dicts would let one roster read change the next one's."""
@@ -150,6 +169,46 @@ def test_the_key_follows_a_changed_remote_after_the_ttl(repo, monkeypatch):
     assert learnings.repo_key(repo) == "example.com/owner/name", "remembered"
     clock = [time.monotonic() + learnings.REPO_KEY_TTL + 1]
     monkeypatch.setattr("time.monotonic", lambda: clock[0])
+    assert learnings.repo_key(repo) == "example.com/owner/renamed"
+
+
+def _git_times_out(monkeypatch):
+    """`git` that does not answer in time, as on a loaded machine; returns a
+    switch that puts the real one back."""
+    real = learnings.subprocess.run
+
+    def stuck(cmd, *a, **kw):
+        if cmd[:1] == ["git"]:
+            raise subprocess.TimeoutExpired(cmd, kw.get("timeout", 5))
+        return real(cmd, *a, **kw)
+
+    monkeypatch.setattr(learnings.subprocess, "run", stuck)
+    return lambda: monkeypatch.setattr(learnings.subprocess, "run", real)
+
+
+def test_a_key_git_could_not_give_is_not_remembered(repo, monkeypatch):
+    """A git timeout made the key fall back to `local/<directory>`, and the
+    cache kept that for REPO_KEY_TTL: five minutes of learnings filed durably
+    into the wrong bundle, where uncached it was one heartbeat (review of
+    #158). The next healthy call must give the real key."""
+    healthy = _git_times_out(monkeypatch)
+    assert learnings.repo_key(repo) == "local/checkout"     # the fallback, once
+    healthy()
+    assert learnings.repo_key(repo) == "example.com/owner/name"
+
+
+def test_a_timeout_after_a_real_answer_keeps_the_real_answer(repo, monkeypatch):
+    """Once git has named the repository, a later timeout — the cache having
+    expired — answers with that name rather than the directory's, and does
+    not extend it: the next healthy call asks git again."""
+    assert learnings.repo_key(repo) == "example.com/owner/name"
+    later = [time.monotonic() + learnings.REPO_KEY_TTL + 1]
+    monkeypatch.setattr("time.monotonic", lambda: later[0])
+    healthy = _git_times_out(monkeypatch)
+    assert learnings.repo_key(repo) == "example.com/owner/name"
+    healthy()
+    subprocess.run(["git", "-C", str(repo), "remote", "set-url", "origin",
+                    "https://example.com/owner/renamed.git"], check=True)
     assert learnings.repo_key(repo) == "example.com/owner/renamed"
 
 
