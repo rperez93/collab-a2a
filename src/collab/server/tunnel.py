@@ -123,6 +123,10 @@ class Tunnel:
             self.process.terminate()
             with contextlib.suppress(subprocess.TimeoutExpired):
                 self.process.wait(timeout=5)
+        if self.process is not None:
+            from ..logcap import release_collector
+
+            release_collector(self.process)
 
 
 def _all_tunnels() -> list[dict]:
@@ -176,6 +180,36 @@ def _url_from_log(path: str | None, offset: int) -> str | None:
     return matches[-1] if matches else None
 
 
+def _settle(path: str | None, collector=None, *, limit: float = 1.0,
+            step: float = 0.05) -> None:
+    """Wait for ngrok's last lines to reach its log, briefly.
+
+    ngrok's output reaches the log through a collector process
+    (collab.logcap.spawn_collected), which writes a moment after ngrok said it
+    and exits at end of file — so waiting for THAT is exact. Without its
+    handle, wait until the file stops growing.
+    """
+    if collector is not None:
+        try:
+            collector.wait(timeout=limit)
+            return
+        except Exception:                                    # noqa: BLE001
+            return
+    if not path:
+        return
+    end = time.monotonic() + limit
+    last = -1
+    while time.monotonic() < end:
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            size = 0
+        if size == last and size > 0:
+            return
+        last = size
+        time.sleep(step)
+
+
 def failure_from_log(path: str | None, offset: int) -> str:
     """ngrok's reason for refusing to start, from our own agent's log.
 
@@ -192,6 +226,10 @@ def failure_from_log(path: str | None, offset: int) -> str:
         # last one, and a cap that kept the first 64 KB returned an early,
         # superseded failure from a 92 KB log.
         size = os.path.getsize(path)
+        # TRIMMED UNDER US, as in `_url_from_log`: a log shorter than where
+        # this run began was rotated in place, and all of it is this run's.
+        if size < offset:
+            offset = 0
         with open(path, encoding="utf-8", errors="replace") as fh:
             fh.seek(max(offset, size - _ERR_READ_CAP))
             body = fh.read(_ERR_READ_CAP)
@@ -250,21 +288,36 @@ def start_tunnel(port: int, *, log_path: str | None = None,
             offset = os.path.getsize(log_path)
         except OSError:
             offset = 0
-    log = open(log_path, "a") if log_path else subprocess.DEVNULL
-    proc = subprocess.Popen(
-        argv,
-        stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-        start_new_session=True, env=os.environ.copy(),
-    )
+    # NGROK NEVER WRITES ITS LOG ITSELF. It used to be handed `ngrok.log`
+    # opened for append, so nothing collab did could stop a burst reaching the
+    # disk before the watcher's next pass. Its output goes through a bounded
+    # collector process that writes the file under the 10 MB cap at write time
+    # (collab.logcap.spawn_collected); the collector outlives a hub that dies,
+    # as ngrok does, so a tunnel a restarted hub reuses keeps its log.
+    if log_path:
+        from ..logcap import spawn_collected
+
+        proc = spawn_collected(argv, log_path, stdin=subprocess.DEVNULL,
+                               start_new_session=True, env=os.environ.copy())
+    else:
+        proc = subprocess.Popen(
+            argv,
+            stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL, start_new_session=True, env=os.environ.copy(),
+        )
 
     deadline = time.time() + START_TIMEOUT
     while time.time() < deadline:
         if proc.poll() is not None:
             # ngrok exited. Its log names the cause — a missing authtoken, or
             # the account's endpoint already online elsewhere — so carry it.
+            # The collector writes the log a moment after ngrok said it, so
+            # wait for the file to stop growing first (at most a second).
             if errors is not None:
+                _settle(log_path, getattr(proc, "collector", None))
                 errors.append(failure_from_log(log_path, offset)
                               or f"ngrok exited with status {proc.returncode}")
+            _release(proc)
             return None
         # Our own log first: it is definitive for our agent regardless of which
         # API port it landed on.
@@ -289,7 +342,16 @@ def start_tunnel(port: int, *, log_path: str | None = None,
         proc.kill()
         with contextlib.suppress(subprocess.TimeoutExpired, OSError):
             proc.wait(timeout=5)
+    _release(proc)
     return None
+
+
+def _release(proc) -> None:
+    """Close our end of a failed ngrok's log pipe; nothing will revive it."""
+    if getattr(proc, "collector_fd", None) is not None:
+        from ..logcap import release_collector
+
+        release_collector(proc)
 
 
 #: For a machine where ngrok IS installed but did not give us a tunnel. The
@@ -367,6 +429,13 @@ class TunnelSupervisor:
         Returns ``(url, changed)`` — ``changed`` is True when the public URL is
         different from before, which means previously shared links are dead.
         """
+        process = getattr(self.tunnel, "process", None)
+        if process is not None:
+            # ngrok's log collector, restarted if it died: without a reader
+            # ngrok would block on its log, and without ours it would SIGPIPE.
+            from ..logcap import revive_collector
+
+            revive_collector(process)
         if self.tunnel is not None and self.tunnel.alive():
             return self.public_url, False
 
