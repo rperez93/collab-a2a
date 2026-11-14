@@ -435,6 +435,10 @@ class Conversation:
             # A wrong seq used to throw the whole paid turn away and back off.
             # Keep the question, but unanchored: guessing an anchor could show
             # the human one peer's text and route the answer to another.
+
+
+            # A wrong seq used to throw the whole paid turn away and back off;
+            # the question is still worth routing, so keep it unanchored.
             for escalation in result["escalations"]:
                 if escalation["seq"] not in valid_seqs:
                     escalation["seq"] = 0

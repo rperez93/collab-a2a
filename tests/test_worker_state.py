@@ -454,3 +454,29 @@ def test_under_collab_no_worker_the_cli_posts_directly(tmp_path, monkeypatch):
     assert store.enabled()
     monkeypatch.setenv('COLLAB_NO_WORKER', '1')
     assert not store.enabled(), 'no listener will run it, so nothing may be queued'
+
+
+def test_reply_awaiting_human_tells_the_asking_peer_and_keeps_the_decision(tmp_path, monkeypatch):
+    import argparse
+    from collab.config import SessionProfile
+    from collab.client import onboard
+    from collab.client.inbox import Inbox
+    from collab.protocol import Envelope
+    profile = SessionProfile(session_id='test', url='http://hub.invalid', name='alice',
+                             host_name='bob', token='t', home=str(tmp_path), room='general')
+    monkeypatch.setattr(cli, '_require_own_profile', lambda a: profile)
+    monkeypatch.setattr(onboard, 'ensure_daemon', lambda p, **kw: None)
+    inbox = Inbox(profile.dir)
+    inbox.record(Envelope(kind='chat', sender='bob', to='alice', text='May I merge?', seq=7))
+    inbox.close()
+    store = worker.Store(profile.dir)
+    store.configure({'agent': 'claude', 'scope': 'Coordinate'})
+    snap = store.snapshot()
+    store.commit_turn(expected_cursor=snap['cursor'], cursor=7, summary='', replies=[],
+                      escalations=[{'reason': 'decision', 'question': 'Bob asks to merge', 'seq': 7}])
+    decision_id = store.pending()[0]['id']
+    args = argparse.Namespace(worker_action='reply', decision_id=decision_id,
+                              text='My human is deciding.', awaiting_human=True)
+    assert cli.cmd_worker(args) == 0
+    assert [(r['to'], r['text']) for r in store.outbox()] == [('bob', 'My human is deciding.')]
+    assert store.pending()[0]['awaiting_human']

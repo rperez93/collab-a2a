@@ -94,7 +94,7 @@ async def test_peer_conversation_and_decision_return_flow_without_main_reading(c
         assert state.snapshot()["cursor"] == 2
         assert service.daemon.inbox.unread_count() == 2
         notice = worker_notices.claim(service.root)
-        assert notice and "May Bob" not in notice["text"]
+        assert notice and "May Bob" in notice["text"]
         worker_notices.commit(service.root, notice["token"])
         incoming(service, 3, "Question")
         await service.turn()  # a pending decision must not stop other work
@@ -264,7 +264,7 @@ async def test_daemon_wakes_for_worker_decisions_even_with_old_inbox_notice(conv
     await daemon._waking
     assert calls[0][0] is None
     assert "collab worker pending" in calls[0][1]
-    assert "Private question" not in calls[0][1]
+    assert "Private question" in calls[0][1]
     assert worker_notices.claim(service.root) is None
 
 
@@ -652,6 +652,10 @@ async def test_a_rate_limited_provider_waits_and_an_auth_failure_escalates_once(
 
 @pytest.mark.asyncio
 async def test_an_escalation_naming_a_message_outside_the_turn_keeps_its_question(conversation, tmp_path, monkeypatch):
+
+
+async def test_an_escalation_with_a_wrong_seq_is_kept_not_thrown_away(conversation, tmp_path, monkeypatch):
+    """The whole paid turn used to be discarded and backed off for one bad reference."""
     configure(conversation, tmp_path)
     async def run(*args, **kwargs):
         return {"summary": "", "replies": [], "escalations": [
@@ -674,3 +678,7 @@ def test_provider_backoff_table():
     assert provider_backoff("model", 5, base) == 3600.0
     assert provider_backoff("network", 3600, base) == base, "a stated wait is ignored for network"
     assert provider_backoff("other", 3600, base) == base, "and for other"
+
+
+    assert [(p["seq"], p["question"]) for p in store.pending()] == [(0, "Which branch?")]
+    assert not store.status()["error"]
