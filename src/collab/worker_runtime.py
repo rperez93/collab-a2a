@@ -289,7 +289,8 @@ async def _reap(proc: asyncio.subprocess.Process) -> None:
 
 
 async def _exchange(args: list[str], data: bytes, scratch: Path, env: dict[str, str],
-                    timeout: float, result_path: Path | None, on_output=None) -> bytes:
+                    timeout: float, result_path: Path | None, on_output=None,
+                    *, track_worker: bool = False) -> bytes:
     spawn = asyncio.create_task(asyncio.create_subprocess_exec(
         *args, cwd=scratch, env=env, start_new_session=True,
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
@@ -308,7 +309,7 @@ async def _exchange(args: list[str], data: bytes, scratch: Path, env: dict[str, 
         raise WorkerRuntimeError("Worker executable could not start; check its installation") from exc
 
     from .resources import register_worker, unregister_worker
-    resource_stamp = register_worker(proc.pid)
+    resource_stamp = register_worker(proc.pid) if track_worker else None
     consumed = 0
 
     async def read(stream: asyncio.StreamReader, keep: bool) -> bytes:
@@ -366,7 +367,8 @@ async def _exchange(args: list[str], data: bytes, scratch: Path, env: dict[str, 
         try:
             await _reap(proc)
         finally:
-            unregister_worker(resource_stamp)
+            if resource_stamp is not None:
+                unregister_worker(resource_stamp)
 
 
 def _decode(agent: str, output: bytes, result_path: Path | None) -> dict:
@@ -471,5 +473,5 @@ async def run_turn(agent: str, model: str, payload: dict, directory: Path, *,
                     on_usage(figures)
         # A provider can report billed usage and then exit unsuccessfully.
         # Observe its bounded envelope before validating exit/result status.
-        output = await _exchange(args, data, scratch, env, timeout, result_path, on_output=observe)
+        output = await _exchange(args, data, scratch, env, timeout, result_path, on_output=observe, track_worker=True)
         return _decode(decoder, output, result_path)

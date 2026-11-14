@@ -945,14 +945,28 @@ class Daemon:
         worker_usage = metrics(self.profile.dir)
         if worker_usage is not None:
             figures = {**figures, "worker": worker_usage}
-        from ..resources import Sampler, collect
-        sampler = getattr(self, '_resource_sampler', None)
-        if sampler is None:
-            sampler = self._resource_sampler = Sampler()
+        from ..resources import Sampler, collect, PUBLISH_WAIT_SECONDS
         try:
-            figures['resources'] = await asyncio.to_thread(collect, self.profile, sampler)
-        except (OSError, ValueError):
-            # Observability must not suppress token/quota reports.
+            def collect_once():
+                # Construction reads boot identity too; keep it off the event
+                # loop and inside the same retained task as the sample.
+                sampler = getattr(self, '_resource_sampler', None)
+                if sampler is None:
+                    sampler = self._resource_sampler = Sampler()
+                return collect(self.profile, sampler)
+            sampling = getattr(self, '_resource_task', None)
+            if sampling is None or sampling.done():
+                if sampling is not None and not sampling.cancelled():
+                    sampling.exception()  # retrieve a late failure after a timeout
+                sampling = self._resource_task = asyncio.create_task(
+                    asyncio.to_thread(collect_once))
+            # Cancelling to_thread cannot stop a blocked OS read. Keep that
+            # one task until it finishes instead of accumulating threads.
+            figures['resources'] = await asyncio.wait_for(
+                asyncio.shield(sampling), timeout=PUBLISH_WAIT_SECONDS)
+        except Exception:
+            # Observability must not suppress token/quota reports. Cancellation
+            # is a BaseException and continues to stop the enclosing task.
             figures['resources'] = None
         if not share_stats_enabled():
             return

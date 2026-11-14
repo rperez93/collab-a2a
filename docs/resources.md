@@ -45,11 +45,14 @@ data remains explicit.
 
 ## Bounded collection
 
-One sample visits at most 128 processes and 64 thread child lists per process,
-with an overall 1,024-read / 2 MB text budget. Partial traversal makes affected
+One sample has a 100 ms cooperative time budget and visits at most 128 processes and 64 thread child lists per process,
+with an overall 1,024-read / 2 MB text budget. Machine pressure is read first,
+so a large process tree cannot consume the budget before warnings are sampled. Partial traversal makes affected
 aggregates unknown. The 15-second cache includes ownership lookup, avoiding a
-new scan for every three-second heartbeat. Collection does not start a model or
-shell process. Non-Linux metrics remain unknown; no expensive `ps` fallback is
+new scan for every three-second heartbeat. A single OS read cannot be interrupted by that cooperative budget. Publication
+waits at most 250 ms; a blocked read retains its one collector task, so later
+heartbeats cannot accumulate threads and still publish token/quota figures.
+Collection does not start a model or shell process. Non-Linux metrics remain unknown; no expensive `ps` fallback is
 spawned per process.
 
 The live own-daemon-root check on Linux observed one process using 47,017,984
@@ -60,6 +63,15 @@ files. This was a quiet single-process sample, not a busy-tree scaling claim.
 A sandbox with a different PID/boot view correctly returned unknown for the
 same external root; that result is not a performance measurement.
 
+A later check after migration and the time-budget corrections sampled the own
+listener's two-process subtree: 205,807,616 bytes aggregate RSS, with zero CPU/IO
+deltas over a 250 ms interval. Twenty-five forced samples took 0.0180 s wall
+and 0.0174 s process CPU, with 42 reads/3,690 characters per sample; the measuring
+Python process peaked at 14,212 KiB RSS. This external-root check aggregates
+children and cannot access the listener's in-process worker registry, so it is
+not evidence of daemon-exclusive memory or per-role live publication.
+
+
 ## Heavy-job coordination
 
 Run full suites with the repository virtualenv's interpreter:
@@ -69,8 +81,17 @@ Run full suites with the repository virtualenv's interpreter:
 ```
 
 The runner holds `/tmp/collab-suite.lock`, lowers CPU priority by 10 nice levels,
-sets an absolute source path and opts out of automatic conversation workers.
-Its pytest child inherits the lock descriptor: killing the wrapper does not
+sets an absolute source path and supplies a temporary `COLLAB_CONFIG` containing
+`worker_auto_start=false`. Because pytest fixtures can replace that config,
+the runner also requires the runtime `COLLAB_NO_WORKER=1` guard from PR #100.
+It probes that guard in isolated state without starting a listener or model;
+unsupported builds refuse to start the suite. Tests that deliberately remove
+the guard must isolate every provider call. The scratch config alone is not
+claimed to disable every test worker.
+Lock waiting has a 900-second deadline (`--lock-timeout SECONDS`, at most one
+hour) and reports the holder PID where procfs exposes it. Existing readable
+locks can be acquired without write permission. On Linux, available `ionice`
+runs pytest at idle IO priority. Its pytest child inherits the lock descriptor: killing the wrapper does not
 release the lock while that child runs. It does not change the user's persistent
 worker settings. It interoperates with the session's direct command:
 
@@ -101,3 +122,11 @@ capture, use the capture clock minus sixty seconds. For a pressure warning,
 set machine available memory to 512 MiB and add `low_memory` to warnings. These
 are synthetic illustrations, never measured session statistics. Regenerate
 images only after R5/R12 renderers are integrated.
+
+## Per-role advisory warnings
+
+The formatter warns above 1 GiB RSS, above 100% CPU (one core) or above
+10 MiB/s storage reads or writes for each displayed role. These fixed advisory
+thresholds are not limits and do not terminate work. Agent, work and proxy rows
+are labeled shared estimates: two participants may share a coding process or
+proxy, and their rows must not be summed as exclusive machine consumption.

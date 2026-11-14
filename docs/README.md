@@ -21,6 +21,7 @@ the reference pages as you need them.
 | [v2 migration](v2.md) | Compatibility boundary and release changes. |
 | [Participant panel](watch-panel.md) | Keyboard/mouse disclosure and screenshots. |
 | [Telemetry](telemetry.md) | Provider sources, scope and cost estimation. |
+| [Resources](resources.md) | Process RSS, CPU, IO, pressure warnings and coordinated heavy tests. |
 | [Settings](settings.md) | CLI, interactive editor and reload behavior. |
 | [Issue validation](issue-validation.md) | Reproductions and fixes for the open issues. |
 

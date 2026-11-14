@@ -19,6 +19,8 @@ MAX_THREADS = 64
 MAX_READ = 65536
 INTERVAL = 15.0
 STALE_AFTER = 45.0
+SAMPLE_SECONDS = 0.1
+PUBLISH_WAIT_SECONDS = 0.25
 
 
 def _number(value):
@@ -63,6 +65,7 @@ class Sampler:
         self.bytes_left = 2_000_000
         self.proc = proc
         self.max_processes = max_processes
+        self.deadline = None
         self.previous = {}
         self.previous_at = None
         self.cached = None
@@ -75,6 +78,8 @@ class Sampler:
             self.boot = ''
 
     def read(self, path):
+        if self.deadline is not None and time.monotonic() >= self.deadline:
+            raise ValueError('resource sample time budget exhausted')
         if self.reads_left <= 0 or self.bytes_left <= 0:
             raise ValueError('resource sample budget exhausted')
         self.reads_left -= 1
@@ -166,6 +171,10 @@ class Sampler:
                 and 0 <= clock - self.cached_at < INTERVAL):
             return self.cached
         self.reads_left, self.bytes_left = 1024, 2_000_000
+        self.deadline = time.monotonic() + SAMPLE_SECONDS
+        # Pressure is most important when a large process tree exhausts the
+        # traversal budget. Reserve its two reads before walking that tree.
+        machine = self.machine()
         groups = {role: [] for role in ROLES}
         complete = {role: roots.get(role) is not None for role in ROLES}
         if roots.get('agent') is not None:
@@ -246,8 +255,9 @@ class Sampler:
             roles[role] = values
         self.previous, self.previous_at = current, clock
         self.cached_at = clock
-        self.cached = {'observed_at': now, 'source': 'linux-procfs', 'roles': roles,
-                       'machine': self.machine()}
+        self.cached = {'observed_at': now,
+                       'source': 'linux-procfs' if self.proc.is_dir() else 'unknown',
+                       'roles': roles, 'machine': machine}
         return self.cached
 
 
@@ -360,7 +370,15 @@ def format_lines(value, *, detailed=False, now=None):
         if detailed:
             line += (f" · IO read {amount(row.get('read_bps'), 1024, ' KiB/s')}"
                      f" write {amount(row.get('write_bps'), 1024, ' KiB/s')}")
+        if role in ('agent', 'work', 'proxy'):
+            line += ' (shared estimate; do not sum across participants)'
         result.append(line)
+        if row.get('rss_bytes') is not None and row['rss_bytes'] > 1024**3:
+            result.append(f'WARNING: {role} RSS exceeds 1 GiB')
+        if row.get('cpu_pct') is not None and row['cpu_pct'] > 100:
+            result.append(f'WARNING: {role} uses more than one CPU core')
+        if any(row.get(key) is not None and row[key] > 10 * 1024**2 for key in ('read_bps', 'write_bps')):
+            result.append(f'WARNING: {role} storage IO exceeds 10 MiB/s')
     machine = data['machine']
     result.append(f"machine: available {amount(machine.get('memory_available_bytes'), 1024**3, ' GiB')}"
                   f" · load/core {amount(machine.get('load_per_cpu'))}")
