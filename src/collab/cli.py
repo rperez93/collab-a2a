@@ -285,6 +285,15 @@ def _skill_list_notice() -> None:
                   "(never their text); `collab config share_skill_list false` stops it"))
 
 
+def _name_source_note() -> None:
+    """Point at a legacy shared name, which no longer names this agent (R21)."""
+    from .config import load_machine_config, setting_source
+    if setting_source("display_name") == "legacy":
+        legacy = str(load_machine_config().get("display_name"))
+        print(dim(f"  the machine file still names every agent here {said(legacy)!r}; it no longer "
+                  f"applies. `collab config display_name {said(legacy)}` adopts it for this agent"))
+
+
 def _monitor_hint(profile: SessionProfile, status: dict[str, Any]) -> None:
     """Tell the agent to arm a watcher NOW, and to keep it armed.
 
@@ -727,6 +736,7 @@ def cmd_host(args: argparse.Namespace) -> int:
         )
 
     ok(f"session {c(cfg.session_id, '36')} starting as {c(name, '1')}")
+    _name_source_note()
 
     # Wait for the hub to answer, and for the tunnel URL to be published.
     deadline = time.time() + 45
@@ -1349,6 +1359,7 @@ def cmd_join(args: argparse.Namespace) -> int:
               "accept or decline it locally. Joining does not authorize execution.")
     if status.get('remote_goal_refusal'):
         warn(status['remote_goal_refusal'])
+    _name_source_note()
     if _is_listening(profile, status):
         ok("listening")
     elif not args.no_daemon:
@@ -6070,9 +6081,14 @@ def cmd_config(args: argparse.Namespace) -> int:
     and none of them changed; this is the index they never had.
     """
     editing = getattr(args, "edit", False)
+    from . import config as config_module
+    # R21: agent-scoped keys are written to this agent's own file unless the
+    # person asks for the shared machine default on purpose.
+    config_module.WRITE_MACHINE["on"] = bool(getattr(args, "machine", False))
+    config_module.WRITE_MACHINE["key"] = getattr(args, "key", None)
     if getattr(args, "tui", False):
-        if args.key or args.value is not None or args.unset or args.json or editing:
-            fail("--tui cannot be combined with a key, value, --unset, --edit or --json")
+        if args.key or args.value is not None or args.unset or args.json or editing or getattr(args, "machine", False):
+            fail("--tui cannot be combined with a key, value, --unset, --edit, --json or --machine")
             return 2
         from .client.settings_tui import run
         return run(on_change=lambda name: _settle_in_the_session(name, args))
@@ -6087,7 +6103,10 @@ def cmd_config(args: argparse.Namespace) -> int:
     if not args.key:
         if args.json:
             print(json.dumps({s.name: {"value": s.read(), "default": s.default,
-                                       "about": s.about} for s in known},
+                                       "about": s.about,
+                                       "scope": "agent" if config_module.agent_scoped(s.name) else "machine",
+                                       "source": config_module.setting_source(s.name)}
+                              for s in known},
                              indent=2))
             return 0
         heading("settings")
@@ -6096,11 +6115,21 @@ def cmd_config(args: argparse.Namespace) -> int:
             line = f"  {item.name:<24}{_shown(value)}"
             if value != item.default:
                 line += dim(f"   (default {_shown(item.default)})")
+            source = config_module.setting_source(item.name)
+            if source == "legacy":
+                line += dim("   [machine file has a legacy value it no longer applies]")
+            elif config_module.agent_scoped(item.name) and source == "machine":
+                line += dim("   [shared by every agent here]")
+            elif source == "agent":
+                line += dim("   [this agent]")
             print(line)
             print(dim(f"      {item.about}"))
         print()
         _say_if_a_retired_key_is_still_there()
-        print(dim(f"  they live in {global_config_path()}"))
+        print(dim(f"  machine-wide settings live in {global_config_path()}"))
+        if (own := config_module.agent_config_path()) is not None:
+            print(dim(f"  this agent's own (names, workers, reporting…) in {own}"))
+            print(dim("  --machine sets an agent setting as the shared default instead"))
         print(dim("  collab config <key> <value>   set one"))
         print(dim("  collab config <key> --unset   put it back to its default"))
         print(dim("  collab config <key> --edit    edit interactively; text can use an external editor"))
@@ -6120,7 +6149,15 @@ def cmd_config(args: argparse.Namespace) -> int:
             fail("--unset takes no value")
             return 2
         unset_setting(item.name)
-        ok(f"{item.name} is back to its default, {_shown(item.default)}")
+        source = config_module.setting_source(item.name)
+        if getattr(args, "machine", False) and source == "agent":
+            ok(f"shared default for {item.name} cleared; this agent still uses its own, "
+               f"{_shown(item.read())}")
+        elif source == "machine":
+            ok(f"{item.name} now follows the shared value every agent here uses, "
+               f"{_shown(item.read())} (`--unset --machine` clears that)")
+        else:
+            ok(f"{item.name} is back to its default, {_shown(item.default)}")
         return _settle_in_the_session(item.name, args)
 
     if editing:
@@ -6173,10 +6210,15 @@ def cmd_config(args: argparse.Namespace) -> int:
 
     try:
         item.write(item.parse(args.value))
+        # An explicit set pins this agent's own value even when it equals
+        # what it inherited, so a later shared change does not move it.
+        config_module.pin_agent_value(item.name, config_module.load_config().get(item.name))
     except ValueError as exc:
         fail(f"{item.name}: {exc}")
         return 2
-    ok(f"{item.name} is now {c(_shown(item.read()), '1')}")
+    where = ("" if not config_module.agent_scoped(item.name) or getattr(args, "machine", False)
+             or config_module.agent_config_path() is None else " for this agent")
+    ok(f"{item.name} is now {c(_shown(item.read()), '1')}{where}")
     return _settle_in_the_session(item.name, args)
 
 
@@ -8274,6 +8316,7 @@ def build_parser() -> argparse.ArgumentParser:
   collab config KEY                     show one setting and its actions
   collab config KEY VALUE               set directly
   collab config KEY --unset             restore the default
+  collab config KEY VALUE --machine     set an agent setting as everyone's default
   collab config KEY --edit              edit interactively (terminal required)
   collab config --tui                   browse/edit; r resets to default
   collab config editor nano             choose vim, nvim, nano, or a command
@@ -8292,6 +8335,8 @@ Esc cancels a draft, q quits. Editor commands run without a shell.""")
     cf.add_argument("--edit", action="store_true", help="edit a setting interactively; offer an external editor for text")
     cf.add_argument("--json", action="store_true")
     cf.add_argument("--tui", action="store_true", help="interactive keyboard/mouse settings editor")
+    cf.add_argument("--machine", action="store_true",
+                    help="write an agent-scoped setting to the shared machine file (every agent here)")
     cf.set_defaults(func=cmd_config)
 
     col = sub.add_parser("color", help="show or set the colour others see you in")

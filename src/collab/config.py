@@ -111,6 +111,11 @@ def _stable_agent_session() -> bool:
 
 
 def bind_home(home: Path | str, cwd: Path | None = None) -> bool:
+    _AGENT_PATH.clear()  # the agent settings file follows the new selection at once
+    return _bind_home(home, cwd)
+
+
+def _bind_home(home: Path | str, cwd: Path | None = None) -> bool:
     """Remember an explicit selection for this stable agent session only.
 
     Called by foreground selection commands, never by profile persistence:
@@ -415,8 +420,8 @@ _CACHE: dict[str, Any] = {}
 STAMP_SETTLES = 1.5
 
 
-def load_config() -> dict[str, Any]:
-    """The global config, re-read WHEN THE FILE CHANGES and not before.
+def _load_file(p: Path, _CACHE: dict[str, Any]) -> dict[str, Any]:
+    """One config file, re-read WHEN THE FILE CHANGES and not before.
 
     Both halves matter. With no cache the viewer reads the whole file four
     times a frame — theme, colour, name — which at 4 fps is sixteen reads a
@@ -463,7 +468,6 @@ def load_config() -> dict[str, Any]:
     settles, and only that read is believed. One extra read per write, and the
     entry becomes trustworthy at exactly the moment the stamp does.
     """
-    p = global_config_path()
     try:
         st = p.stat()
         stamp = (str(p.resolve()), st.st_mtime, st.st_size, getattr(st, "st_mtime_ns", None), getattr(st, "st_ino", None))
@@ -486,19 +490,221 @@ def load_config() -> dict[str, Any]:
     return data
 
 
-def save_config(cfg: dict[str, Any]) -> None:
-    p = global_config_path()
+#: Settings that describe ONE agent — who it is, how it reports, how its worker
+#: behaves — and so must not leak to every agent of the same person (R21).
+#: Everything else is the person's and the machine's: shared on purpose.
+AGENT_KEYS = frozenset({
+    "display_name", "color", "share_stats", "share_skill_list", "stats_command",
+    "stats_interval", "stats_auto_setup", "follow_agent",
+    "remind_every", "remind_host", "remind_guest",
+    "compact", "compact_at", "compact_when", "new", "new_at", "new_when",
+    "new_consensus", "new_consensus_minutes",
+    "attention_settle", "attention_gap",
+    "task_auto_pickup", "task_pickup_idle_delay", "task_pickup_repeat",
+    "delegation_max_children", "delegation_reserve_pct", "delegation_cost_per_child_pct",
+})
+
+
+#: Agent settings that are an agent's IDENTITY: never inherited from the machine
+#: file, where one agent's name once named every agent (R21). A legacy value
+#: there is shown with a hint to adopt it, and --machine cannot set them.
+IDENTITY_KEYS = frozenset({"display_name", "color", "stats_command", "stats_auto_setup"})
+
+
+def agent_scoped(key: str) -> bool:
+    return key in AGENT_KEYS or key.startswith("worker_")
+
+
+_AGENT_CACHE: dict[str, Any] = {}
+AGENT_SETTINGS = "agent-settings.json"
+_AGENT_PATH: dict[tuple, tuple[Path | None, float]] = {}
+#: Set by `collab config KEY --machine`: write THAT agent-scoped key to the
+#: shared file (only that one; this agent's other overrides never move there).
+WRITE_MACHINE: dict[str, Any] = {"on": False, "key": None}
+
+
+def agent_config_path() -> Path | None:
+    """This agent's own settings file, INSIDE its collab state directory.
+
+    Inside, not beside: a `--home .collab-me` or a legacy `<repo>/.collab`
+    has the repository as its parent, and a named profile created after a
+    collision shares its parent with the first agent. The state directory is
+    the one thing that is this agent's alone (and is git-ignored).
+    """
+    env = (os.environ.get("COLLAB_AGENT_CONFIG"), os.environ.get("COLLAB_HOME"),
+           os.environ.get("COLLAB_STATE_DIR"), str(Path.cwd()),
+           *(os.environ.get(k) for k in AGENT_SESSION_KEYS))
+    cached = _AGENT_PATH.get(env)
+    # Re-resolved every few seconds: `--home`/bind_home can select another
+    # profile during a process's life, and the file must follow the selection.
+    if cached is None or time.monotonic() - cached[1] > 2.0:
+        if env[0]:
+            path: Path | None = Path(env[0])
+        elif env[1]:
+            path = Path(env[1]).expanduser() / AGENT_SETTINGS
+        else:
+            try:
+                path = collab_home() / AGENT_SETTINGS  # the selected home, not the default
+            except Exception:  # no workspace or agent identity: machine file only
+                path = None
+        _AGENT_PATH.clear()
+        _AGENT_PATH[env] = cached = (path, time.monotonic())
+    return cached[0]
+
+
+def load_machine_config() -> dict[str, Any]:
+    return _load_file(global_config_path(), _CACHE)
+
+
+def load_agent_config() -> dict[str, Any]:
+    path = agent_config_path()
+    return _load_file(path, _AGENT_CACHE) if path is not None else {}
+
+
+def setting_source(key: str) -> str:
+    """Where a setting's value comes from: agent, machine, legacy or default.
+
+    "legacy" is an identity key found only in the machine file: shown, not used.
+    """
+    if agent_scoped(key) and key in load_agent_config():
+        return "agent"
+    if key in load_machine_config():
+        return "legacy" if key in IDENTITY_KEYS else "machine"
+    return "default"
+
+
+class ConfigView(dict):
+    """The merged settings, remembering what was read and for which identity.
+
+    save_config diffs a view against its OWN baseline, so a setter that read
+    under one agent home and saves after another was selected (cache expired
+    or not) writes only what it changed, never the old home's private values.
+    """
+    __slots__ = ("baseline",)
+
+
+def load_config() -> dict[str, Any]:
+    """The settings in force for THIS agent: its own file over the machine's.
+
+    Only agent-scoped keys are taken from the agent's file; a machine-wide key
+    there is ignored, so one agent cannot change another's theme or tunnel.
+    A fresh copy every time: setters edit what they get and hand it to
+    save_config, and editing the cached dict made every such write a no-op.
+    """
+    import copy
+    machine = load_machine_config()
+    agent = load_agent_config()
+    merged = {k: v for k, v in machine.items() if k not in IDENTITY_KEYS}
+    merged.update({k: v for k, v in agent.items() if agent_scoped(k)})
+    view = ConfigView(copy.deepcopy(merged))
+    view.baseline = copy.deepcopy(merged)
+    return view
+
+
+def _write_json(p: Path, data: dict[str, Any]) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     from .atomic import scratch, discard
     tmp = scratch(p)
     try:
-        tmp.write_text(json.dumps(cfg, indent=2) + "\n")
+        tmp.write_text(json.dumps(data, indent=2) + "\n")
         os.replace(tmp, p)
     finally:
         discard(tmp)
-    # So a writer never has to wait for their own change to "age": inside the
-    # same second the stamp might not have moved yet.
+
+
+def _read_raw(p: Path | None) -> dict[str, Any]:
+    if p is None:
+        return {}
+    try:
+        data = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_config(cfg: dict[str, Any]) -> None:
+    """Write what changed against what is on disk, each key to its own file.
+
+    Callers pass the whole merged config with their change in it; only the
+    keys that differ are written, agent-scoped ones to this agent's file
+    (unless --machine), so agent values never spill into the shared file.
+    Removing an agent-scoped key removes THIS agent's value only: the shared
+    default other agents use is changed only with --machine.
+    """
+    import fcntl
+    if WRITE_MACHINE["on"] and WRITE_MACHINE.get("key") in IDENTITY_KEYS:
+        raise ValueError(f"{WRITE_MACHINE['key']} is each agent's own and has no shared default")
+    # The caller edited the view it READ, possibly under an earlier selection:
+    # only the keys it changed relative to that view are its change. They are
+    # applied to the identity selected NOW, and nothing else of the old view
+    # (another home's private overrides) is ever carried across.
+    seen = cfg.baseline if isinstance(cfg, ConfigView) else load_config()
+    changed = {k for k in set(cfg) | set(seen)
+               if (k in cfg) != (k in seen) or (k in cfg and cfg[k] != seen[k])}
+    if WRITE_MACHINE["on"] and WRITE_MACHINE.get("key"):
+        changed.add(WRITE_MACHINE["key"])
+    _AGENT_PATH.clear()  # a write resolves the selected identity fresh, never from a cache
+    machine_path, agent_path = global_config_path(), agent_config_path()
+    machine_path.parent.mkdir(parents=True, exist_ok=True)
+    # Two agents read-modify-writing the shared file must not lose each other's change.
+    lock = open(machine_path.with_name(machine_path.name + ".lock"), "a")
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    try:
+        _save_locked(cfg, machine_path, agent_path, changed)
+    finally:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        lock.close()
     _CACHE.clear()
+    _AGENT_CACHE.clear()
+
+
+def _save_locked(cfg: dict[str, Any], machine_path: Path, agent_path: Path | None,
+                 changed: set[str]) -> None:
+    machine, agent = _read_raw(machine_path), _read_raw(agent_path)
+    current = {k: v for k, v in machine.items() if k not in IDENTITY_KEYS}
+    current.update({k: v for k, v in agent.items() if agent_scoped(k)})
+    changed_machine = changed_agent = False
+    machine_key = WRITE_MACHINE.get("key") if WRITE_MACHINE["on"] else None
+    for key in changed:
+        if WRITE_MACHINE["on"] and agent_scoped(key) and key != machine_key:
+            continue  # --machine names one key; the rest of this agent's stay put
+        to_agent = agent_scoped(key) and not WRITE_MACHINE["on"]
+        # Compared with the layer being written: --machine must set the shared
+        # value even when it equals this agent's own override.
+        base = machine if (WRITE_MACHINE["on"] and agent_scoped(key)) else current
+        if key in cfg and key in base and cfg[key] == base[key]:
+            continue
+        if key not in cfg and key not in base:
+            continue
+        if to_agent and agent_path is None:
+            raise ValueError(f"cannot tell which agent `{key}` belongs to here; select this "
+                             "agent's state with --home, or use --machine for the shared default")
+        if key in cfg:
+            (agent if to_agent else machine)[key] = cfg[key]
+        elif to_agent:
+            if key not in agent:
+                continue  # nothing of this agent's to remove; the shared value stays
+            agent.pop(key)
+        else:
+            machine.pop(key, None)
+        changed_agent |= to_agent
+        changed_machine |= not to_agent
+    if changed_machine:
+        _write_json(machine_path, machine)
+    if changed_agent and agent_path is not None:
+        _write_json(agent_path, agent)
+
+
+def pin_agent_value(key: str, value: Any) -> None:
+    """Give this agent its own value even when it equals the inherited one."""
+    path = agent_config_path()
+    if path is None or not agent_scoped(key) or WRITE_MACHINE["on"]:
+        return
+    agent = _read_raw(path)
+    if agent.get(key) != value or key not in agent:
+        agent[key] = value
+        _write_json(path, agent)
+        _AGENT_CACHE.clear()
 
 
 def _git_user_name() -> str | None:
@@ -2220,13 +2426,13 @@ def settings() -> tuple[Setting, ...]:
         # its own answers to the name in its identity file, which this cannot
         # set and `collab name` can — so reporting the effective name here
         # would have shown a value that setting this key did not change.
-        Setting("display_name", "the name others see you as, machine-wide "
-                                "(`collab name` sets it for one agent)",
+        Setting("display_name", "the name others see this agent as "
+                                "(`--machine` sets everyone's default)",
                 _name_fallback(), str,
                 lambda: load_config().get("display_name") or _name_fallback(),
                 lambda v: set_default_name(v)),
-        Setting("color", "the colour others see you in, machine-wide "
-                         "(`collab color` sets it for one agent)",
+        Setting("color", "the colour others see this agent in "
+                         "(`--machine` sets everyone's default)",
                 None, str,
                 lambda: load_config().get("color"),
                 _write_color),

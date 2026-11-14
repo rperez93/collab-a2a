@@ -40,11 +40,13 @@ def test_config_partial_edit_keeps_last_valid_and_path_isolated(tmp_path, monkey
     monkeypatch.setenv('COLLAB_CONFIG', str(path))
     config.save_config({'worker_timeout': 7})
     assert runtime_settings.get('worker_timeout') == 7
-    path.write_text('{')
+    agent_file = config.agent_config_path()  # worker_timeout is this agent's (R21)
+    agent_file.write_text('{')
     assert runtime_settings.get('worker_timeout') == 7
-    path.write_text('{"worker_timeout": 9}')
+    agent_file.write_text('{"worker_timeout": 9}')
     assert runtime_settings.get('worker_timeout') == 9
     monkeypatch.setenv('COLLAB_CONFIG', str(tmp_path / 'another.json'))
+    monkeypatch.setenv('COLLAB_AGENT_CONFIG', str(tmp_path / 'another-agent.json'))
     assert runtime_settings.get('worker_timeout') == 60
 
 

@@ -61,8 +61,8 @@ the project. A session belongs to a repository; a theme does not.
 
 | setting | what it is | change it when |
 |---|---|---|
-| `display_name` | the name others see you as, machine-wide | the user says what they want to be called |
-| `color` | the colour others see you in, machine-wide | they ask for a specific colour |
+| `display_name` | the name others see this agent as (agent setting) | the user says what they want to be called |
+| `color` | the colour others see this agent in (agent setting) | they ask for a specific colour |
 | `editor` | terminal editor command; empty follows VISUAL, EDITOR, then vi | they prefer vim, nvim, nano or another terminal editor for text settings |
 | `theme` | how `collab watch` lays the conversation out | they say the transcript is hard to read |
 | `fold` | how many lines of a long message show before «show more», whichever theme is on; `auto` gives the decision back to the theme and `0` never folds | they say long messages are cut off, or that the transcript is one wall of text — `collab fold <n>`, `collab fold off` and `collab fold auto` write the same key |
@@ -140,11 +140,13 @@ the project. A session belongs to a repository; a theme does not.
 | `delegation_reserve_pct` | percentage points reserved in every applicable quota window; default `20` | preserve room for ongoing work |
 | `delegation_cost_per_child_pct` | calibrated percentage points per child; default `0` means uncalibrated | use measured comparable tasks, never invent a quota-to-child conversion |
 
-`display_name` and `color` here are the **machine-wide** defaults. An agent
-has an external state namespace of its own; named profiles such as
-`.collab-alice` live inside that namespace. It has its own name and colour, and those are set by `collab name` and
-`collab color` rather than by this. If the user has two agents in one repo, use
-those two commands instead, or you will change the wrong one.
+Settings are **agent** or **machine** scoped. Agent settings (`display_name`,
+`color`, `share_*`, reporting, reminders, every `worker_*`) are written to this
+agent's own file, so changing one never changes another agent of the same user;
+`--machine` sets the shared default for all of them on purpose. Machine settings
+(tunnel domain, theme, `watch_*`, editor, rules, thresholds, prices) are shared.
+`collab config` marks each value `[this agent]` or `[shared by every agent here]`.
+`collab name` and `collab color` still rename the agent in an open session.
 
 
 ## When a change takes effect: now
