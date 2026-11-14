@@ -25,6 +25,14 @@ stale_after: 2026-10-01T00:00:00Z
 
 ## Active conversation ownership (later than the pin)
 
+Later still (R3): automatic setup now picks the worker provider of the coding
+agent running collab (Claude Code → Claude/Haiku 5.5, Codex → Codex/Luna) and
+none for an unrecognised host, so the Codex/Luna default and "provider and host
+are independent" below describe 2.1.x only; an explicit `worker start` may still
+choose another provider. While the worker is enabled, the main agent's `send`,
+proposals, votes, task/project comments and file sends are queued through it.
+`COLLAB_NO_WORKER=1` gives a session no automatic worker.
+
 Later than the pin: 2.1.0 enables a scoped Codex/Luna worker during host/join
 setup. `collab worker start` customizes its provider and scope; `worker off` is
 preserved across reconnects. `worker_auto_start=false` opts out of setup. Worker provider and main coding host are independent. The worker
