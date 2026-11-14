@@ -549,9 +549,32 @@ restart anything long-lived, since it is still running the old code:
 .venv/bin/collab daemon stop && .venv/bin/collab daemon start
 ```
 
-If you are the host and the update touched the server, restart the hub too
-(`.venv/bin/collab host`). Tell the user their session link changes if they were
-on a free tunnel.
+If you are the host and the update touched the server, coordinate the interruption
+with the session's participants. From that host's selected participant home,
+stop your own hub with `.venv/bin/collab kill`, then restart the saved session
+with `.venv/bin/collab host --resume <session-id>`. Resume alone does not stop
+the running hub. Share the newly printed invite link even with a reserved domain:
+resume rotates the invite, while existing participant tokens remain valid.
+
+A shared proxy is a separate long-lived process: restarting one hub does not
+update it. Coordinate with the other local hosts before restarting shared
+infrastructure; do not stop
+their processes as part of updating one session. An unreserved tunnel may return
+on another address, requiring the host to share the current link again.
+
+### Shared public hosting
+
+New hosts use one machine proxy and publish
+`https://<domain>/s/<session-id>#<invite>`. Keep the whole path when sharing or
+joining. The reserved-domain default is `collab config ngrok_domain <hostname>`;
+`collab config proxy off` or `collab host --tunnel own` selects a per-hub tunnel.
+`--no-tunnel` remains local-only. Different participant homes share the proxy
+when they share the machine peer registry.
+
+Before migrating an existing reserved domain, coordinate stopping its owning
+per-hub tunnel through the normal session lifecycle. The proxy will not take
+that tunnel away from its owner. See [proxy hosting](docs/proxy-hosting.md) for
+legacy links, process ownership and error logs.
 
 ## 10. If something is wrong
 

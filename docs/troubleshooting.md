@@ -40,6 +40,30 @@ invalidates a link you already shared.
 The session, its history, and every issued token survive a tunnel restart; only
 the public address changes.
 
+## Shared proxy hosting fails, or a routed URL returns 404
+
+Keep `/s/<session-id>` in the link returned by `collab url`. Removing it selects
+the proxy's primary legacy session, not the session you intended. A stopped
+primary returns 404 even when other routed sessions are running. An unknown or
+stopped routed session also returns 404; confirm the intended hub is running.
+
+If hosting reports `ERR_NGROK_334`, the requested endpoint is already occupied.
+Coordinate with that tunnel's owner before migrating it; starting more hubs or
+killing processes by name does not resolve ownership. The hub remains available
+locally. If a running proxy uses a different domain, select that existing domain
+or explicitly choose `collab host --tunnel own` with an available endpoint.
+
+Read the log path printed by the host diagnostic. Shared provider failures use
+`proxy-ngrok.log` in the machine peer registry; proxy startup failures use
+`proxy/proxy.log` there. Per-hub tunnel failures use the session's `ngrok.log`.
+The peer registry can be isolated with `COLLAB_PEERS_DIR`.
+
+Stopping one hub intentionally leaves the shared proxy serving the others.
+The proxy exits after 60 seconds without live host records. A running hub checks
+for proxy failure on its tunnel-watch cycle and can restart it; a reserved
+domain keeps the same public base if the provider can reacquire it. For migration
+and configuration examples, see [proxy hosting](proxy-hosting.md).
+
 ## Someone I did not invite has the link
 
 The invite is the only credential for joining, so a link that has been forwarded,

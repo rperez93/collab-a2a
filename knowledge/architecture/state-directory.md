@@ -32,6 +32,18 @@ or `--home` still selects a legacy or custom directory; defaults do not adopt
 another agent's state. No new repo-local state directory is required.
 
 
+## Shared proxy state (later than the pin)
+
+The shared machine proxy stores its state and lifetime lock beneath `proxy/`
+in the peer registry selected by `COLLAB_PEERS_DIR`. Its process log is
+`proxy/proxy.log`; the provider log is `proxy-ngrok.log` in the registry root.
+This state belongs to the shared proxy rather than any one participant home.
+Each hub records its own prefixed public URL with `tunnel=proxy`, and records
+no owned tunnel PID. Stopping that hub therefore does not stop the shared
+proxy. The primary session mapping survives proxy restarts and is not reassigned
+when its hub disappears. These observations describe the newer proxy implementation;
+the historical measurement and verification pin below are unchanged.
+
 # Where it is
 
 Session state is **per repository**: a `.collab/` directory at the git top
