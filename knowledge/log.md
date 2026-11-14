@@ -122,3 +122,9 @@ polling is cancellable and bounded. The pin remains unchanged.
   turn, and the hub publishes `main_model`, `worker_model` and
   `model_changed_at` beside `model_observed_at`, with null for unknown. Pin
   unchanged.
+
+
+- **Update (later than the pin)**: Conversation-worker provider failures are now
+  classified (rate limit, auth, model, network, other) with per-class back-off,
+  a one-hour cap on stated waits, and one decision per worker configuration for
+  auth or model errors. No pin or verified stamp changed.

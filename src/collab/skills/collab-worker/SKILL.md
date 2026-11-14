@@ -44,10 +44,11 @@ A worker reply that promises to get back to a peer without escalating is turned
 into a pending decision, so the question still reaches the main agent.
 `--no-daemon` prepares the worker but does not run it. Provider failures remain
 visible in `collab worker status`; there is no automatic provider fallback.
-A failed provider exit is classified: a rate limit waits for the provider's
-stated retry time (capped at one hour) and network errors back off as usual,
-while an authentication or model error stops retrying and raises one pending
-decision per worker configuration until the login or model is fixed.
+A failed provider exit is classified: a rate limit waits for the stated retry
+time (15 minutes to one hour); network and other failures use the normal delay
+and ignore stated waits; an authentication or model error stops retrying and
+raises one decision per worker configuration, re-armed once answered. A
+decision anchored outside its turn is kept unanchored.
 
 Peers interact with one participant. The worker speaks in that participant's
 voice without introducing itself as a worker or referring peers to a separate
