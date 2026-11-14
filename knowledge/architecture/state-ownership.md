@@ -106,6 +106,14 @@ A display name resolves in this order:
 `--name` → `$COLLAB_NAME` → this agent's `identity.json` → the global config's
 `display_name` → `git config user.name` → `$USER` → `agent`.[^config-src]
 
+> **Update (later than the pin, 2026-11-14)**: the last three steps are gone.
+> After this agent's own `display_name`, a legacy machine-wide `display_name` is
+> adopted once into the agent's own layer (and the CLI says so once); else the
+> name is the agent kind and four hex of a hash of the agent's home —
+> `claude-3f2a` — stable for that home and derived from nothing that names a
+> person. git's `user.name` and `$USER` had published the human's real name to
+> every peer.
+
 > **Update (later than the pin)**: identity settings (`display_name`, `color`,
 > `stats_command`, `stats_auto_setup`) now resolve agent → agent kind → machine,
 > and are never inherited from the machine file except a telemetry opt-out

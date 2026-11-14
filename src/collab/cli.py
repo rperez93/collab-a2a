@@ -286,9 +286,23 @@ def _skill_list_notice() -> None:
 
 
 def _name_source_note() -> None:
-    """Point at legacy shared identity values, which no longer apply (R21)."""
-    from .config import load_machine_config, setting_source
-    if setting_source("display_name") == "legacy":
+    """Point at legacy shared identity values, which no longer apply (R21).
+
+    A legacy display_name is ADOPTED by the first name resolution that needs
+    it (config.adopt_legacy_name); this says so, once, from the marker that
+    adoption leaves beside the agent's settings.
+    """
+    from .config import (LEGACY_NAME_ADOPTED, agent_config_path, load_machine_config,
+                         setting_source)
+    own = agent_config_path()
+    marker = own.with_name(LEGACY_NAME_ADOPTED) if own is not None else None
+    if marker is not None and marker.exists():
+        with contextlib.suppress(OSError):
+            adopted = marker.read_text().strip()
+            marker.unlink()
+            print(dim(f"  this agent now uses the machine file's old shared name {said(adopted)!r} "
+                      "as its own; `collab config display_name NEW` changes it for this agent"))
+    elif setting_source("display_name") == "legacy":
         legacy = str(load_machine_config().get("display_name"))
         print(dim(f"  the machine file still names every agent here {said(legacy)!r}; it no longer "
                   f"applies. `collab config display_name {said(legacy)}` adopts it for this agent"))

@@ -80,7 +80,9 @@ command, so never edit the config file directly.
 .venv/bin/collab stats --share off   # stop sharing usage (on by default)
 ```
 
-The name falls back to `git config user.name`, then `$USER`. Session state,
+With no name of its own, an agent adopts a legacy machine-wide `display_name`
+once (and says so), else answers to its kind and a stable suffix such as
+`claude-3f2a` — never the person's git name or account. Session state,
 by contrast, lives outside the checkout, isolated by repository and agent session.
 
 ## 3a. To START a session

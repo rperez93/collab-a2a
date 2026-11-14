@@ -188,7 +188,6 @@ def test_the_two_ways_of_setting_a_colour_publish_the_same_thing(session):
 
 
 def test_config_display_name_renames_in_the_open_session(session, monkeypatch):
-    monkeypatch.setattr(config, "_git_user_name", lambda: None)
     assert cli.main(["config", "display_name", "Rafael Two"]) == 0
     assert session.renamed == ["rafael-two"]
     assert SessionProfile.current().name == "rafael-two"

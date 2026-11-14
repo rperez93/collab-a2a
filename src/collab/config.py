@@ -815,17 +815,6 @@ def pin_agent_value(key: str, value: Any) -> None:
     _AGENT_CACHE.clear()
 
 
-def _git_user_name() -> str | None:
-    try:
-        out = subprocess.run(
-            ["git", "config", "user.name"],
-            capture_output=True, text=True, timeout=2, check=False,
-        ).stdout.strip()
-        return out or None
-    except (OSError, subprocess.SubprocessError):
-        return None
-
-
 def _slug(name: str) -> str:
     cleaned = "".join(c if (c.isalnum() or c in "-_") else "-" for c in name.strip())
     return cleaned.strip("-").lower() or "agent"
@@ -846,19 +835,77 @@ def _agent_name() -> str:
         return ""
 
 
+#: Marker, in this agent's state, that a legacy machine-wide display_name was
+#: adopted for it — so the CLI says so exactly once.
+LEGACY_NAME_ADOPTED = "legacy-name-adopted"
+
+
+def adopt_legacy_name() -> str | None:
+    """Give this agent the machine file's legacy display_name, once.
+
+    Since agent settings (R21) a `display_name` in the machine-wide file names
+    no agent at all — it is an identity, and one agent's name once named every
+    agent. An agent that had been relying on it then fell through to a name
+    derived from the PERSON: a host printed «starting as rafael-perez», which
+    in a remote session publishes the human's real name to every peer. So an
+    agent with no name of its own takes the legacy one into ITS layer, the
+    first time it needs a name, and a marker beside its settings lets the CLI
+    say so once. Returns the adopted name, or None when nothing was adopted.
+    """
+    if setting_source("display_name") != "legacy":
+        return None
+    own = agent_config_path()
+    if own is None:
+        return None
+    legacy = str(load_machine_config().get("display_name") or "").strip()
+    if not legacy:
+        return None
+    pin_agent_value("display_name", legacy)
+    try:
+        own.parent.mkdir(parents=True, exist_ok=True)
+        own.with_name(LEGACY_NAME_ADOPTED).write_text(legacy)
+    except OSError:
+        pass
+    return legacy
+
+
+def default_name() -> str:
+    """A name that says which KIND of agent this is and nothing about anybody.
+
+    The fallback used to be git's `user.name`, then `$USER` — the person's
+    real name or their account, published to every peer of every session. It
+    is now the agent kind and four hex of a hash of this agent's home: «claude-
+    3f2a», «codex-91c0». Stable for as long as the home is, so an agent keeps
+    its name across restarts and resumes; different for two agents of one kind
+    in two homes; and derived from nothing a peer could read a person out of.
+    """
+    import hashlib
+
+    kind = current_kind().split("-")[0] or "agent"
+    try:
+        home = str(collab_home().resolve())
+    except Exception:                                     # noqa: BLE001
+        return kind
+    return f"{kind}-{hashlib.sha256(home.encode()).hexdigest()[:4]}"
+
+
 def resolve_name(explicit: str | None = None) -> str:
-    """--name > $COLLAB_NAME > this agent's identity > global config > git > $USER."""
+    """--name > $COLLAB_NAME > this agent's identity > its own setting >
+    a legacy machine name, adopted > a non-identifying default.
+
+    Never git's `user.name` or the OS account: see `default_name`."""
     for candidate in (
         explicit,
         os.environ.get("COLLAB_NAME"),
         _agent_name(),
         load_config().get("display_name"),
-        _git_user_name(),
-        os.environ.get("USER") or os.environ.get("USERNAME"),
     ):
         if candidate and str(candidate).strip():
             return _slug(str(candidate))
-    return "agent"
+    adopted = adopt_legacy_name()
+    if adopted:
+        return _slug(adopted)
+    return _slug(default_name())
 
 
 #: Sharing usage is on by default: the whole point is that an agent can weigh
@@ -2497,22 +2544,18 @@ def _shown_learnings_dir() -> str:
 def _name_fallback() -> str:
     """What `resolve_name` lands on with nothing in the config or the identity.
 
-    The listing has to show a default that is true HERE — «git `user.name`,
-    else `$USER`» is a rule, and a rule is not something somebody can compare
-    against the value beside it.
+    The listing has to show a default that is true HERE, not a rule — and the
+    rule is now `default_name`: the agent kind and a stable suffix, never a
+    person's name.
     """
-    for candidate in (_git_user_name(),
-                      os.environ.get("USER") or os.environ.get("USERNAME")):
-        if candidate and str(candidate).strip():
-            return _slug(str(candidate))
-    return "agent"
+    return _slug(default_name())
 
 
 def settings() -> tuple[Setting, ...]:
     """Every global setting, in the order somebody would want to read them.
 
     A function and not a constant: two of the defaults are computed — the name
-    falls back to git's, and the theme list depends on what is in the themes
+    falls back to `default_name`, and the theme list depends on what is in the themes
     folder — and a constant would have frozen both at import.
     """
     return (
