@@ -274,7 +274,9 @@ async def test_a_worker_turn_leaves_one_line_with_figures_and_no_content(
     lines = text.splitlines()
     assert len(lines) == 1
     row = json.loads(lines[0])
-    assert row["event"] == "turn" and row["outcome"] == "ok"
+    assert row["event"] == "turn" and row["phase"] == "committed"
+    assert row["outcome"] == "no-op", "a call that produced nothing to send"
+    assert row["reply_count"] == 0 and row["escalation_count"] == 0
     assert row["trigger"] == {"chat": 2}
     assert row["tokens_in"] == 1200 and row["tokens_out"] == 80
     assert row["cost_usd"] == pytest.approx(0.0123)
@@ -287,7 +289,8 @@ async def test_a_worker_turn_leaves_one_line_with_figures_and_no_content(
 async def test_a_failed_worker_turn_logs_its_class_of_failure(
         conversation, tmp_path, monkeypatch):
     """A failure is the line somebody opens this file for. It carries the
-    failure's class, as `collab worker status` does — not provider output."""
+    exception's class and whether the provider failed or answered badly —
+    never the message, which for a provider can carry the prompt or a URL."""
     from collab.worker_runtime import WorkerRuntimeError
 
     service = conversation
@@ -300,7 +303,8 @@ async def test_a_failed_worker_turn_logs_its_class_of_failure(
     monkeypatch.setattr("collab.worker_runtime.run_turn", provider)
     await service.turn()
     row = json.loads((tmp_path / "worker.log").read_text().splitlines()[-1])
-    assert row["outcome"] == "error" and row["error"] == "Worker timed out"
+    assert row["outcome"] == "failed" and row["error"] == "WorkerRuntimeError"
+    assert row["phase"] == "launched"
 
     _incoming(service, 2, "Question")
 
@@ -312,7 +316,7 @@ async def test_a_failed_worker_turn_logs_its_class_of_failure(
     await service.turn()
     rows = [json.loads(line) for line in
             (tmp_path / "worker.log").read_text().splitlines()]
-    assert rows[-1]["error"] == "KeyError"
+    assert rows[-1]["error"] == "KeyError" and rows[-1]["outcome"] == "failed"
     assert "private detail" not in (tmp_path / "worker.log").read_text()
 
 
@@ -324,3 +328,137 @@ async def test_a_poll_with_nothing_to_say_writes_no_line(conversation, tmp_path)
     _configure(service, tmp_path)
     await service.turn()
     assert not (tmp_path / "worker.log").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_produced_a_reply_is_output_with_its_counts(
+        conversation, tmp_path, monkeypatch):
+    """`output` is a call that produced something to send; the counts say how
+    much, and the text of it stays in `worker.db`."""
+    service = conversation
+    _configure(service, tmp_path)
+    _incoming(service, 1, "Question")
+
+    async def provider(*args, **kwargs):
+        return {"summary": "s", "escalations": [
+                    {"seq": 1, "reason": "decision", "question": "MAY BOB CHANGE IT"}],
+                "replies": [{"text": "THE ANSWER IS 42", "to": "bob", "room": ""}]}
+
+    monkeypatch.setattr("collab.worker_runtime.run_turn", provider)
+    await service.turn()
+    text = (tmp_path / "worker.log").read_text()
+    row = json.loads(text.splitlines()[-1])
+    assert (row["phase"], row["outcome"]) == ("committed", "output")
+    assert row["reply_count"] == 1 and row["escalation_count"] == 1
+    assert "42" not in text and "MAY BOB" not in text
+
+
+@pytest.mark.asyncio
+async def test_an_answer_that_fails_validation_is_invalid_not_failed(
+        conversation, tmp_path, monkeypatch):
+    """The provider answered, and collab refused the answer — a different
+    problem from a provider that did not answer, and the audit counts it apart."""
+    from collab.worker_runtime import WorkerRuntimeError
+
+    service = conversation
+    _configure(service, tmp_path)
+    _incoming(service, 1, "Question")
+
+    async def unknown_recipient(*args, **kwargs):
+        return {"summary": "s", "escalations": [],
+                "replies": [{"text": "hi", "to": "nobody-here", "room": ""}]}
+
+    monkeypatch.setattr("collab.worker_runtime.run_turn", unknown_recipient)
+    await service.turn()
+    row = json.loads((tmp_path / "worker.log").read_text().splitlines()[-1])
+    assert (row["outcome"], row["error"]) == ("invalid", "ValueError")
+
+    async def bad_json(*args, **kwargs):
+        raise WorkerRuntimeError("Worker did not return valid JSON")
+
+    monkeypatch.setattr("collab.worker_runtime.run_turn", bad_json)
+    service.next_at = 0
+    await service.turn()
+    row = json.loads((tmp_path / "worker.log").read_text().splitlines()[-1])
+    assert row["outcome"] == "invalid" and row["phase"] == "launched"
+
+
+@pytest.mark.asyncio
+async def test_a_turn_whose_generation_moved_is_cancelled(conversation, tmp_path,
+                                                          monkeypatch):
+    """Turned off or reconfigured mid-turn: the provider was paid for and its
+    result thrown away. That is `cancelled`, not a quiet `no-op`."""
+    from collab import worker
+
+    service = conversation
+    _configure(service, tmp_path)
+    _incoming(service, 1, "Question")
+
+    async def provider(*args, **kwargs):
+        worker.Store(service.root).configure({
+            "agent": "command", "scope": "A different scope.",
+            "command": [sys.executable, "-c", "print('{}')"]})
+        return {"summary": "s", "replies": [], "escalations": []}
+
+    monkeypatch.setattr("collab.worker_runtime.run_turn", provider)
+    await service.turn()
+    row = json.loads((tmp_path / "worker.log").read_text().splitlines()[-1])
+    assert (row["phase"], row["outcome"]) == ("launched", "cancelled")
+
+
+@pytest.mark.asyncio
+async def test_a_counted_turn_that_called_no_model_is_skipped_local(
+        conversation, tmp_path, monkeypatch):
+    """`worker.db` counts a turn when the cursor moves past events the worker
+    does not answer, with no model call. Logged as `skipped-local` so a count
+    of turns can be told from a count of calls."""
+    from collab.protocol import Envelope
+
+    service = conversation
+    _configure(service, tmp_path)
+    calls = []
+
+    async def provider(*args, **kwargs):
+        calls.append(1)
+        return {"summary": "s", "replies": [], "escalations": []}
+
+    monkeypatch.setattr("collab.worker_runtime.run_turn", provider)
+    service.daemon.inbox.record(Envelope(seq=1, kind="chat", sender="alice",
+                                         sender_id="p_a", text="my own message"))
+    await service.turn()
+    assert not calls
+    row = json.loads((tmp_path / "worker.log").read_text().splitlines()[-1])
+    assert (row["phase"], row["outcome"]) == ("committed", "skipped-local")
+    assert "my own" not in (tmp_path / "worker.log").read_text()
+
+
+@pytest.mark.asyncio
+async def test_every_attempt_writes_exactly_one_line(conversation, tmp_path,
+                                                     monkeypatch):
+    """One line per attempt, however it ends — a failure in the delivery
+    after a committed turn must not log the same attempt a second time."""
+    service = conversation
+    _configure(service, tmp_path)
+    _incoming(service, 1, "Question")
+
+    async def provider(*args, **kwargs):
+        return {"summary": "s", "escalations": [],
+                "replies": [{"text": "x", "to": "bob", "room": ""}]}
+
+    async def broken_flush(*args, **kwargs):
+        raise RuntimeError("delivery failed")
+
+    monkeypatch.setattr("collab.worker_runtime.run_turn", provider)
+    first = service._flush
+    calls = {"n": 0}
+
+    async def flush(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise RuntimeError("delivery failed")
+        return await first(*args, **kwargs)
+
+    monkeypatch.setattr(service, "_flush", flush)
+    await service.turn()
+    rows = (tmp_path / "worker.log").read_text().splitlines()
+    assert len(rows) == 1 and json.loads(rows[0])["outcome"] == "output"

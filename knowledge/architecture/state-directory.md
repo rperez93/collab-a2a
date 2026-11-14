@@ -114,7 +114,7 @@ held at `23db6d0`.
 | `wake/remind-now` | A marker `collab remind now` leaves for the daemon. Consumed when the reminder reaches a route, not when something asks whether one is due. |
 | `wake/reminder.txt` | The reminder as a delivery that can only carry a pointer needs it. One fixed name, unlike a batch's: every reminder is the same standing instructions and the newest copy is always the right one. |
 | `statusline-last.json` | The last status line that could be built, with its timestamp and colour mode, so a status file mid-rewrite does not blank the segment for a redraw. Sixty seconds. |
-| `worker.log` | Later than the pin. One JSON line per conversation-worker model turn — trigger counts, model, tokens, cost, outcome, failure class, duration — and no message text or names. |
+| `worker.log` | Later than the pin. One JSON line per conversation-worker attempt — phase, outcome, trigger counts, model, tokens, cost, reply and escalation counts, failure class, duration — and no message text, names or provider error text. |
 | `diagnostics/YYYY-MM-DD.jsonl` | On by default since 1.40.0. Events only — never message text, names, invites, addresses, or paths under the reader's home. Every record carries the pid that wrote it. Written by a thread off a bounded queue, so a caller never waits for this disk. Kept seven days. See [the trust model](/operating/security-model.md). |
 
 Every log in the session directory — `daemon.log`, `hub.log`, `ngrok.log` and
