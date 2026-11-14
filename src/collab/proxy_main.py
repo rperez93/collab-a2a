@@ -50,8 +50,11 @@ def _stop_orphaned_ngrok(previous: proxy.ProxyState) -> bool:
     stamp = exclusive.decode(previous.ngrok_stamp)
     if not stamp or stamp.pid != previous.ngrok_pid or not stamp.alive():
         return False
-    if os.getpgid(stamp.pid) != stamp.pid:
-        return False            # not the session leader we started; leave it
+    try:
+        if os.getpgid(stamp.pid) != stamp.pid:
+            return False        # not the session leader we started; leave it
+    except ProcessLookupError:
+        return True             # it exited between the stamp check and here
     for sig in (signal.SIGTERM, signal.SIGKILL):
         with contextlib.suppress(ProcessLookupError):
             os.killpg(stamp.pid, sig)
@@ -64,6 +67,52 @@ def _stop_orphaned_ngrok(previous: proxy.ProxyState) -> bool:
     return not stamp.alive()
 
 
+def descriptor_budget() -> int:
+    """Raise the soft descriptor limit to the hard one, and return how many
+    connections the door may admit.
+
+    Each proxied request costs two descriptors — the client's and the
+    upstream's — so at the common soft default of 1,024 about 500 held
+    requests exhausted the process long before limit_concurrency=2000 could
+    engage. What followed was a busy accept loop at a full core and 56 MB of
+    EMFILE log in ten seconds (review of #119). Admit at most half the real
+    limit, less a margin for logs, the lock and the tunnel.
+    """
+    import resource
+
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    want = hard if hard != resource.RLIM_INFINITY else max(soft, 65536)
+    with contextlib.suppress(ValueError, OSError):
+        resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+        soft = want
+    return max(64, soft // 2 - 64)
+
+
+class _OnceEvery(logging.Filter):
+    """Let one record per message through every `seconds`; count the rest.
+
+    For uvicorn's accept-loop errors: under descriptor exhaustion it logged the
+    same line 129,086 times in ten seconds."""
+
+    def __init__(self, seconds: float = 10.0) -> None:
+        super().__init__()
+        self.seconds = seconds
+        self._last: dict[str, float] = {}
+        self._held: dict[str, int] = {}
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        key = record.getMessage()[:120]
+        now = time.monotonic()
+        if now - self._last.get(key, float("-inf")) < self.seconds:
+            self._held[key] = self._held.get(key, 0) + 1
+            return False
+        held = self._held.pop(key, 0)
+        if held:
+            record.msg = f"{record.msg} (and {held} more like it)"
+        self._last[key] = now
+        return True
+
+
 def lock_root() -> "os.PathLike[str]":
     root = proxy.state_dir() / "proxy"
     root.mkdir(parents=True, exist_ok=True)
@@ -72,10 +121,16 @@ def lock_root() -> "os.PathLike[str]":
 
 async def _supervise(server, supervisor, routes: proxy.Routes,
                      state: proxy.ProxyState, idle_exit: float) -> None:
+    """Idle is looked at every second, the tunnel every CHECK_SECONDS.
+
+    ONE CADENCE FOR BOTH made the idle exit late by up to two tunnel checks —
+    30 s with a tunnel, whatever `--idle-exit` said."""
     idle_since: float | None = None
+    tunnel_due = time.monotonic() + CHECK_SECONDS
     while not server.should_exit:
-        await asyncio.sleep(CHECK_SECONDS if supervisor else 1.0)
-        if supervisor is not None:
+        await asyncio.sleep(1.0)
+        if supervisor is not None and time.monotonic() >= tunnel_due:
+            tunnel_due = time.monotonic() + CHECK_SECONDS
             url, _changed = await asyncio.to_thread(supervisor.ensure)
             pid_before = state.ngrok_pid
             _record_ngrok(state, supervisor)
@@ -144,11 +199,12 @@ def main(argv: list[str] | None = None) -> int:
 
     config = uvicorn.Config(proxy.build_app(routes), host="127.0.0.1", port=port,
                             log_level="warning", lifespan="on",
-                            # A ceiling on concurrent connections at the door,
-                            # far above sessions × participants × feeds, so a
-                            # flood is refused with 503 instead of exhausting
-                            # file descriptors.
-                            limit_concurrency=2000)
+                            # A ceiling at the door derived from the real
+                            # descriptor limit, so a flood is refused with 503
+                            # before the process runs out of descriptors.
+                            limit_concurrency=descriptor_budget())
+    for name in ("uvicorn.error", "uvicorn", "asyncio"):
+        logging.getLogger(name).addFilter(_OnceEvery())
     server = uvicorn.Server(config)
 
     async def run() -> None:

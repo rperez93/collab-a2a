@@ -115,7 +115,15 @@ async def zipped(request):
     data = gzip.compress(b"x" * 10000)
     return Response(data, headers={"content-encoding": "gzip"})
 
-app = Starlette(routes=[Route("/ext/events", events), Route("/zipped", zipped),
+async def forever(request):
+    async def gen():
+        while True:
+            yield b"data: tick\n\n"
+            await asyncio.sleep(0.5)
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+app = Starlette(routes=[Route("/ext/events", events), Route("/ext/forever", forever),
+                        Route("/zipped", zipped),
                         Route("/{p:path}", echo, methods=["GET", "POST"])])
 uvicorn.run(app, host="127.0.0.1", port=int(sys.argv[1]), log_level="warning")
 '''
@@ -297,7 +305,10 @@ def test_many_open_feeds_do_not_starve_an_ordinary_request(proxied):
     try:
         for _ in range(110):
             s = socket.create_connection(("127.0.0.1", int(base.rsplit(":", 1)[1])))
-            s.sendall(b"GET /s/s_one/ext/events HTTP/1.1\r\nHost: x\r\n\r\n")
+            # A feed that NEVER ends: one that closed after a second let the
+            # request simply wait its turn, and the test passed with httpx's
+            # default pool of 100 restored.
+            s.sendall(b"GET /s/s_one/ext/forever HTTP/1.1\r\nHost: x\r\n\r\n")
             held.append(s)
         time.sleep(0.5)
         started = time.monotonic()
@@ -338,3 +349,122 @@ def test_a_clean_exit_leaves_no_pids_behind(proxied, registry):
     assert proc.wait(timeout=15) == 0
     left = proxy.ProxyState.load()
     assert (left.pid, left.ngrok_pid, left.stamp, left.ngrok_stamp) == (0, 0, "", "")
+
+
+# ── in-process proxy, for the timing of a stalled body ───────────────────────
+
+@pytest.fixture
+def inproc(registry, upstream, monkeypatch):
+    """The proxy app in this process, so BODY_IDLE and BODY_GRACE can be set
+    to fractions of a second instead of half a minute."""
+    import threading
+
+    import uvicorn
+
+    monkeypatch.setattr(proxy, "BODY_IDLE", 1.0)
+    monkeypatch.setattr(proxy, "BODY_GRACE", 1.0)
+    monkeypatch.setattr(proxy, "BODY_MIN_RATE", 1000.0)
+    _announce("s_one", upstream)
+    port = _free_port()
+    server = uvicorn.Server(uvicorn.Config(proxy.build_app(proxy.Routes(ttl=0)),
+                                           host="127.0.0.1", port=port,
+                                           log_level="warning", lifespan="on"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    _wait_port(port)
+    try:
+        yield port
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)
+
+
+def _post_head(port: int, length: int) -> socket.socket:
+    s = socket.create_connection(("127.0.0.1", port))
+    s.sendall(f"POST /s/s_one/a2a HTTP/1.1\r\nHost: x\r\nContent-Length: {length}"
+              "\r\nConnection: close\r\n\r\n".encode())
+    return s
+
+
+def test_a_body_that_stops_arriving_is_cut_with_408(inproc):
+    s = _post_head(inproc, 1000)
+    s.sendall(b"x" * 10)
+    s.settimeout(5)
+    assert b" 408 " in s.recv(200)
+
+
+def test_a_body_dripping_below_the_minimum_rate_is_cut_with_408(inproc):
+    """One byte just inside BODY_IDLE reset the idle timer for ever."""
+    s = _post_head(inproc, 1000)
+    s.settimeout(0.05)
+    started = time.monotonic()
+    head = b""
+    while time.monotonic() - started < 6 and not head:
+        s.sendall(b"x")
+        try:
+            head = s.recv(200)
+        except socket.timeout:
+            time.sleep(0.3)
+    assert b" 408 " in head
+
+
+def test_a_stamped_process_that_is_not_a_group_leader_is_left_alone(registry):
+    """The recorded ngrok was started in its own session; anything else with
+    that stamp is not ours to signal as a group."""
+    from collab import proxy_main
+    from collab.client import exclusive
+
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        state = proxy.ProxyState(ngrok_pid=child.pid,
+                                 ngrok_stamp=exclusive.stamp_for(child.pid).encode())
+        assert proxy_main._stop_orphaned_ngrok(state) is False
+        assert child.poll() is None
+    finally:
+        child.kill()
+        child.wait()
+
+
+def _fake_ngrok(tmp_path) -> Path:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    exe = bin_dir / "ngrok"
+    exe.write_text('#!/bin/sh\necho \'t=1 lvl=info msg="started tunnel" url=https://fake.ngrok.app\'\n'
+                   "exec sleep 300\n")
+    exe.chmod(0o755)
+    return bin_dir
+
+
+def test_the_proxy_stops_an_orphan_at_start_and_clears_its_own_on_exit(registry, upstream, tmp_path):
+    """End to end through `collab.proxy_main`: a stamped orphan from a proxy
+    that died hard is ended at start; the ngrok this proxy starts is recorded
+    while it runs and is gone, with its record, after a clean exit."""
+    from collab.client import exclusive
+
+    orphan = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                              start_new_session=True)
+    proxy.ProxyState(ngrok_pid=orphan.pid,
+                     ngrok_stamp=exclusive.stamp_for(orphan.pid).encode()).save()
+    _announce("s_one", upstream)
+    port = _free_port()
+    env = {**os.environ, "PYTHONPATH": SRC, "COLLAB_PEERS_DIR": str(registry),
+           "COLLAB_CONFIG": str(tmp_path / "cfg.json"),
+           "PATH": f"{_fake_ngrok(tmp_path)}:{os.environ['PATH']}"}
+    proc = subprocess.Popen([sys.executable, "-m", "collab.proxy_main", "--port", str(port),
+                             "--idle-exit", "2"], env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    try:
+        _wait_port(port, deadline=30)
+        assert orphan.wait(timeout=10) is not None, "the orphan was not stopped"
+        running = proxy.ProxyState.load()
+        assert running.ngrok_pid > 0 and running.ngrok_stamp
+        ngrok = exclusive.decode(running.ngrok_stamp)
+        peers.withdraw("s_one", pid=os.getpid())
+        assert proc.wait(timeout=30) == 0
+        left = proxy.ProxyState.load()
+        assert (left.ngrok_pid, left.ngrok_stamp) == (0, "")
+        assert not ngrok.alive(), "the proxy left its own ngrok running"
+    finally:
+        for p in (orphan, proc):
+            if p.poll() is None:
+                p.kill()
