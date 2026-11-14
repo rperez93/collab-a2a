@@ -42,6 +42,17 @@ repeating, and the worker figures show `awaiting_human` to everyone.
 `--no-daemon` prepares the worker but does not run it. Provider failures remain
 visible in `collab worker status`; there is no automatic provider fallback.
 
+Provider failures are classified. A rate limit waits for the provider's
+stated retry time, at least 15 minutes and at most one hour, and status shows
+`(rate limit)`. Network and other failures use the normal retry delay; a wait
+stated in their output is ignored, since provider output can echo peer text.
+An authentication or model error stops retrying (it rechecks hourly) and
+raises one pending decision per worker configuration; answering it re-arms
+it, and a turn launched under an older configuration never raises one. A
+decision the model anchors to a message outside its turn is kept unanchored
+rather than failing the turn.
+
+
 After joining or hosting, customize its provider and scope for the user's task:
 
 ```bash

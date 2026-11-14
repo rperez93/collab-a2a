@@ -622,7 +622,7 @@ async def test_an_escalation_with_a_wrong_seq_is_kept_not_thrown_away(conversati
     incoming(conversation, 1, "Question")
     await conversation.turn()
     store = worker.Store(conversation.root)
-    assert [(p["seq"], p["question"]) for p in store.pending()] == [(1, "Which branch?")], "the only message in the turn"
+    assert [(p["seq"], p["question"]) for p in store.pending()] == [(0, "Which branch?")], "an out-of-turn reference stays unanchored"
     assert not store.status()["error"]
 
 
@@ -791,3 +791,14 @@ async def test_a_private_question_carrying_a_room_does_not_open_that_room(conver
         conversation.daemon._http = client
         await conversation.turn()
     assert sent == [], "a DM that carried room=general stays private"
+
+
+def test_provider_backoff_table():
+    from collab.client.worker_service import provider_backoff
+    base = 30.0
+    assert provider_backoff("rate_limit", 0, base) == 900.0
+    assert provider_backoff("rate_limit", 3600, base) == 3600.0
+    assert provider_backoff("auth", 0, base) == 3600.0
+    assert provider_backoff("model", 5, base) == 3600.0
+    assert provider_backoff("network", 3600, base) == base, "a stated wait is ignored for network"
+    assert provider_backoff("other", 3600, base) == base, "and for other"

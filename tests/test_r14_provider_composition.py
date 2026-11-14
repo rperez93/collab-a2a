@@ -36,7 +36,8 @@ async def test_typed_failure_leaves_one_opaque_attempt_with_only_reported_usage(
     else:
         assert 'tokens_in' not in row and 'cost_usd' not in row
     assert 'tokens_out' not in row
-    assert conversation.next_at>=began+(900 if kind=='rate_limit' else 3600 if kind in ('auth','model') else 120)
+    from collab.runtime_settings import get as setting
+    assert conversation.next_at>=began+(900 if kind=='rate_limit' else 3600 if kind in ('auth','model') else setting('worker_retry_delay'))
 
 
 @pytest.mark.asyncio
