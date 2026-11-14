@@ -337,6 +337,23 @@ def test_a_legacy_machine_probe_is_noticed_once(tmp_path, monkeypatch):
     assert cli._legacy_probe_note() is None, "once per agent"
 
 
+def test_host_and_join_print_the_legacy_probe_notice_once(tmp_path, monkeypatch, capsys):
+    """K7: host and join reach the notice through `_name_source_note`. Testing
+    only the helper let that caller lose its print, and the person whose probe
+    stopped reporting heard nothing at the moment they joined."""
+    from collab import cli
+    monkeypatch.setenv("COLLAB_HOME", str(tmp_path / "home"))
+    config._AGENT_PATH.clear()
+    config.global_config_path().parent.mkdir(parents=True, exist_ok=True)
+    config.global_config_path().write_text(json.dumps({"stats_command": "gemini-usage --json"}))
+    config._CACHE.clear()
+    cli._name_source_note()
+    first = capsys.readouterr().out
+    assert "no longer reports" in first and "gemini-usage --json" in first
+    cli._name_source_note()
+    assert "no longer reports" not in capsys.readouterr().out, "once per agent at host and join"
+
+
 def test_two_writers_never_lose_each_others_change(tmp_path):
     """M19: concurrent read-modify-write of the shared file keeps both keys."""
     import threading
