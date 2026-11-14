@@ -65,8 +65,8 @@ publication id, both hashes, time) sits beside it; `uninstall-shared` removes
 only directories carrying it. `--strong` is refused for installs for now (no
 hub-verified gesture covers an install yet), never downgraded to the ordinary
 consent; the review file is deleted once its skill is installed. Only `SKILL.md`
-is installed; files it refers to
-are not.
+and the supporting files published with it are installed; with files, the hash
+to approve is the bundle's manifest hash, which covers every file.
 
 ## Skill lists and consented requests
 
