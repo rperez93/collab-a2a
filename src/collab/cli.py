@@ -273,7 +273,8 @@ def _require_own_profile(args: argparse.Namespace) -> SessionProfile:
 
 
 def _client(profile: SessionProfile) -> HubClient:
-    return HubClient(profile.url, profile.token)
+    from .routes import options
+    return HubClient(profile.url, profile.token, **options(profile))
 
 
 def _skill_list_notice() -> None:
@@ -282,6 +283,56 @@ def _skill_list_notice() -> None:
     if get("share_skill_list"):
         print(dim("  sharing your installed skill names and one-line descriptions with this session "
                   "(never their text); `collab config share_skill_list false` stops it"))
+
+
+def _name_source_note() -> None:
+    """Point at legacy shared identity values, which no longer apply (R21).
+
+    A legacy display_name is ADOPTED by the first name resolution that needs
+    it (config.adopt_legacy_name); this says so, once, from the marker that
+    adoption leaves beside the agent's settings.
+    """
+    from .config import (LEGACY_NAME_ADOPTED, agent_config_path, load_machine_config,
+                         setting_source)
+    own = agent_config_path()
+    marker = own.with_name(LEGACY_NAME_ADOPTED) if own is not None else None
+    if marker is not None and marker.exists():
+        with contextlib.suppress(OSError):
+            adopted = marker.read_text().strip()
+            marker.unlink()
+            print(dim(f"  this agent now uses the machine file's old shared name {said(adopted)!r} "
+                      "as its own; `collab config display_name NEW` changes it for this agent"))
+    elif setting_source("display_name") == "legacy":
+        legacy = str(load_machine_config().get("display_name"))
+        print(dim(f"  the machine file still names every agent here {said(legacy)!r}; it no longer "
+                  f"applies. `collab config display_name {said(legacy)}` adopts it for this agent"))
+    if (note := _legacy_probe_note()) is not None:
+        print(dim("  " + note))
+
+
+def _legacy_probe_note(*, once: bool = True) -> str | None:
+    """A non-empty machine stats_command stopped applying (R21): say so once.
+
+    A custom probe (say, a Gemini adapter) silently going quiet after an
+    upgrade is the kind of breakage nobody notices; the marker in this agent's
+    state keeps the notice to one per agent.
+    """
+    from . import config as config_module
+    if config_module.setting_source("stats_command") != "legacy":
+        return None
+    own = config_module.agent_config_path()
+    marker = own.with_name("legacy-probe-noticed") if own is not None else None
+    if once and marker is not None and marker.exists():
+        return None
+    if marker is not None:
+        with contextlib.suppress(OSError):
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.touch()
+    probe = str(config_module.load_machine_config().get("stats_command"))
+    return (f"the machine file's stats_command {said(probe)!r} no longer reports for this agent, and "
+            f"automatic telemetry setup waits until you choose: `collab config stats_command "
+            f"{shlex.quote(probe)}` keeps it for this agent (or `--kind` for this agent kind); "
+            f"`collab config stats_command ''` turns reporting off")
 
 
 def _monitor_hint(profile: SessionProfile, status: dict[str, Any]) -> None:
@@ -696,7 +747,7 @@ def cmd_host(args: argparse.Namespace) -> int:
                     "brought back with `collab host --resume`")
             print(f"       {dim(note)}")
 
-    env = {**os.environ, "COLLAB_HOME": cfg.home}
+    env = {**os.environ, "COLLAB_HOME": cfg.home, **config_module_kind_env()}
     if args.no_tunnel:
         env["COLLAB_NO_TUNNEL"] = "1"
 
@@ -719,6 +770,7 @@ def cmd_host(args: argparse.Namespace) -> int:
         )
 
     ok(f"session {c(cfg.session_id, '36')} starting as {c(name, '1')}")
+    _name_source_note()
 
     # Wait for the hub to answer, and for the tunnel URL to be published.
     deadline = time.time() + 45
@@ -750,7 +802,7 @@ def cmd_host(args: argparse.Namespace) -> int:
     # The host is participant #0: it joins its own session and comes up
     # listening, so it is live before anyone else connects.
     profile = SessionProfile(
-        session_id=cfg.session_id, url=cfg.public_url or cfg.local_url,
+        session_id=cfg.session_id, url=cfg.local_url,
         name=cfg.host_name, host_name=cfg.host_name, token=cfg.host_token,
         is_host=True, room=DEFAULT_ROOM, home=cfg.home,
         working_path=cfg.working_path,
@@ -773,7 +825,8 @@ def cmd_host(args: argparse.Namespace) -> int:
     try:
         peers.announce(
             session_id=cfg.session_id, name=cfg.host_name, role="host",
-            url=profile.url, repo=str(repo_for_home(cfg.home)), home=cfg.home,
+            url=cfg.public_url or cfg.local_url, local_url=cfg.local_url,
+            repo=str(repo_for_home(cfg.home)), home=cfg.home,
             invite=cfg.invite, host_name=cfg.host_name, pid=cfg.pid or None,
         )
     except OSError:
@@ -798,6 +851,10 @@ def cmd_host(args: argparse.Namespace) -> int:
         warn("the daemon did not report live yet; check `collab status`")
 
     heading("Share this one line with the other person")
+    # TLS discovery is written during app startup, after the first config
+    # read but before health succeeds. Print the current certificate/port,
+    # rather than a public-only line captured while that listener was starting.
+    cfg = HubConfig.load(cfg.session_id, cfg.home) or cfg
     print("  " + c(join_line(cfg), "1;32"))
     if not cfg.public_url:
         print(dim(f"  (local only — LAN address is http://{local_ip()}:{cfg.port})"))
@@ -1328,6 +1385,8 @@ def cmd_join(args: argparse.Namespace) -> int:
     _take_lock(profile, role="host" if profile.is_host else "guest")
     ok(f"joined {c(profile.session_id, '36')} as {c(profile.name, '1')}"
        f" (host: {profile.host_name})")
+    ok(f"using route {profile.url}")
+    _name_source_note()
     if _is_listening(profile, status):
         ok("listening")
     elif not args.no_daemon:
@@ -1387,19 +1446,16 @@ def cmd_send(args: argparse.Namespace) -> int:
     from .worker import Store
     store = Store(profile.dir)
     if store.enabled():
-        if args.to:
-            # A direct post failed at once on an unknown name; a queued one
-            # would retry forever. Ask the hub first; offline still queues.
-            try:
-                with _client(profile) as client:
-                    names = {p.get("name") for p in client.participants().get("participants", [])}
-                if names and args.to not in names:
-                    fail(f"no participant named {args.to!r} in this session")
-                    return 1
-            except HubError:
-                pass
+        target_id = ""
         try:
-            record_id = store.send(text, to=args.to or "",
+            if args.to:
+                with _client(profile) as client:
+                    target_id = client.resolve_recipient(args.to)
+        except HubError as exc:
+            fail(str(exc))
+            return 1
+        try:
+            record_id = store.send(text, to=args.to or "", to_id=target_id,
                                    room="" if args.to else (args.room or profile.room or ""),
                                    thread=args.thread or "")
         except ValueError as exc:
@@ -3311,7 +3367,12 @@ def cmd_resume(args: argparse.Namespace) -> int:
             and recorded_owner.pid not in lockfile.ancestry()):
         blocking_pid = recorded_owner.pid
     if blocking_pid is not None:
-        fail(f"{lock.describe()} belongs to another live agent (blocking owner PID {blocking_pid}); refusing to take its identity; use --home for a deliberate second identity")
+        # WHAT TO DO, not only what is wrong: the person reading this has two
+        # ways forward and both are named — end the agent that holds the
+        # identity, or take a second identity on purpose.
+        fail(f"{lock.describe()} belongs to another live agent (blocking owner PID {blocking_pid}); "
+             f"refusing to take its identity. Close that agent's terminal (PID {blocking_pid}), "
+             "or use --home for a deliberate second identity")
         return 1
     original = Path.cwd()
     old_home = os.environ.get("COLLAB_HOME")
@@ -3334,13 +3395,21 @@ def cmd_resume(args: argparse.Namespace) -> int:
         # without credentials before making an authenticated request.
         from .client.daemon import saved_hub_address
         from .client.hub_client import HubClient
+        from . import routes
         address = saved_hub_address(profile, prefer_local=True) or profile.url
         try:
-            with HubClient(address) as probe:
-                health = probe.health()
-            if health.get("session_id") != profile.session_id:
-                fail("saved address answers for a different session; refusing to resume")
-                return 1
+            if routes.load(profile):
+                # Reuse the daemon's credential-free, pinned-TLS selection and
+                # bounded public fallback for a saved multi-route session.
+                address = routes.for_resume(profile)
+                if not address:
+                    raise HubError("no trusted reachable route serves the saved session")
+            else:
+                with HubClient(address) as probe:
+                    health = probe.health()
+                if health.get("session_id") != profile.session_id:
+                    fail("saved address answers for a different session; refusing to resume")
+                    return 1
             profile.url = address
             with _client(profile) as client:
                 snapshot = client.snapshot()
@@ -3684,7 +3753,8 @@ def cmd_file(args: argparse.Namespace) -> int:
                 if getattr(profile, "dir", None) and Store(profile.dir).enabled():
                     # R3: the worker is this participant's one voice while it is on.
                     record_id = Store(profile.dir).queue_file(
-                        path, to=args.to or "", room="" if args.to else (args.room or profile.room or "general"))
+                        path, to=args.to or "", to_id=client.resolve_recipient(args.to) if args.to else "",
+                        room="" if args.to else (args.room or profile.room or "general"))
                     try:
                         onboard.ensure_daemon(profile, wait=False)
                     except (OSError, RuntimeError, HubError):
@@ -3715,21 +3785,33 @@ def cmd_file(args: argparse.Namespace) -> int:
                 return 0
 
             if args.action == "list":
-                files = client.list_files()
+                show_all = bool(getattr(args, "all", False))
+                listing = client.file_listing(include_ended=show_all)
+                files = listing.get("files") or []
+                # A hub too old to report ended files sends no count, and
+                # ignores `all`: say so rather than imply nothing ended.
+                ended = listing.get("ended")
+                if show_all and ended is None:
+                    warn("this hub cannot list ended files (it predates `--all`); "
+                         "showing only the files still on it")
                 if args.json:
                     print(json.dumps(files, indent=2))
                     return 0
                 if not files:
                     print(dim("  no files waiting"))
-                    return 0
                 for f in files:
                     # The name, sender, recipient and room all come from the
                     # hub and are printed straight to the terminal, so they are
                     # scrubbed of control characters first. See protocol.scrub.
                     who = (f"→ {scrub(str(f['recipient']))}" if f["recipient"]
                            else f"#{scrub(str(f['room']))}")
+                    state = scrub(str(f.get("state", "available")))[:20]
+                    gone = "" if state == "available" else dim(f"  [{state}]")
                     print(f"  {f['id']}  {scrub(str(f['name']))}  "
-                          f"{_file_size(f['size'])}  from {scrub(str(f['sender']))} {who}")
+                          f"{_file_size(f['size'])}  from {scrub(str(f['sender']))} {who}{gone}")
+                if isinstance(ended, int) and ended > 0 and not show_all:
+                    print(dim(f"  {ended} more ended (collected, expired or withdrawn) — "
+                              "`collab file list --all` shows them"))
                 return 0
 
             if args.action == "get":
@@ -4974,6 +5056,9 @@ def cmd_check(args: argparse.Namespace) -> int:
         return 1
 
     results = _checks(profile)
+    # Every run while un-adopted: a loop must keep seeing why telemetry is off.
+    if (note := _legacy_probe_note(once=False)) is not None:
+        results.append({"check": "settings", "verdict": CHECK_WARN, "detail": note, "fix": ""})
     worst = (CHECK_FAIL if any(r["verdict"] == CHECK_FAIL for r in results)
              else CHECK_WARN if any(r["verdict"] == CHECK_WARN for r in results)
              else CHECK_OK)
@@ -6023,6 +6108,26 @@ def _shown(value: Any) -> str:
     return str(value)
 
 
+def config_module_kind_env() -> dict[str, str]:
+    """Spawned daemons and hubs must resolve the same agent kind as this CLI."""
+    from .config import current_kind
+    kind = current_kind()
+    return {"COLLAB_AGENT_KIND": kind} if kind else {}
+
+
+def _layer_note(name: str) -> str:
+    """Which layer a setting comes from, and an explicit empty said as such."""
+    from . import config as config_module
+    value, layer = config_module.resolve(name)
+    note = {"agent": "this agent", "kind": f"agent kind {config_module.current_kind() or '?'}",
+            "machine": ("shared by every agent here" if config_module.agent_scoped(name) else "machine"),
+            "legacy": "machine file has a legacy value it no longer applies",
+            "default": "default"}[layer]
+    if layer in ("agent", "kind", "machine") and value in ("", None):
+        note += ": disabled (explicit empty)"
+    return note
+
+
 def _say_if_a_retired_key_is_still_there() -> None:
     """One line for a key that was renamed, if the file still holds it.
 
@@ -6042,6 +6147,16 @@ def _say_if_a_retired_key_is_still_there() -> None:
 
 
 def cmd_config(args: argparse.Namespace) -> int:
+    """See `_cmd_config`; the write-layer flags never outlive one command."""
+    from . import config as config_module
+    try:
+        return _cmd_config(args)
+    finally:
+        config_module.WRITE_MACHINE.update(on=False, key=None)
+        config_module.WRITE_KIND.update(on=False, key=None, kind=None)
+
+
+def _cmd_config(args: argparse.Namespace) -> int:
     """Every global setting in one place — see them, and change them.
 
     The settings arrived one command at a time and there was no way to ask what
@@ -6051,9 +6166,27 @@ def cmd_config(args: argparse.Namespace) -> int:
     and none of them changed; this is the index they never had.
     """
     editing = getattr(args, "edit", False)
+    from . import config as config_module
+    # R21: agent-scoped keys are written to this agent's own file unless the
+    # person asks for the shared machine default on purpose.
+    config_module.WRITE_MACHINE["on"] = bool(getattr(args, "machine", False))
+    config_module.WRITE_MACHINE["key"] = getattr(args, "key", None)
+    kind = getattr(args, "kind", None)
+    if kind is not None and getattr(args, "machine", False):
+        fail("--kind and --machine choose different layers; use one")
+        return 2
+    if kind is not None and args.key and not config_module.agent_scoped(args.key):
+        fail(f"{args.key} belongs to the machine, not to an agent kind; drop --kind")
+        return 2
+    if kind is not None and args.key in ("display_name", "color"):
+        # Identity is per agent: a kind-wide name renamed every agent of that kind.
+        fail(f"{args.key} is this agent's identity and cannot be shared by a kind; drop --kind")
+        return 2
+    config_module.WRITE_KIND.update(on=kind is not None, key=getattr(args, "key", None),
+                                    kind=(kind or config_module.current_kind()) if kind is not None else None)
     if getattr(args, "tui", False):
-        if args.key or args.value is not None or args.unset or args.json or editing:
-            fail("--tui cannot be combined with a key, value, --unset, --edit or --json")
+        if args.key or args.value is not None or args.unset or args.json or editing or getattr(args, "machine", False):
+            fail("--tui cannot be combined with a key, value, --unset, --edit, --json or --machine")
             return 2
         from .client.settings_tui import run
         return run(on_change=lambda name: _settle_in_the_session(name, args))
@@ -6068,7 +6201,10 @@ def cmd_config(args: argparse.Namespace) -> int:
     if not args.key:
         if args.json:
             print(json.dumps({s.name: {"value": s.read(), "default": s.default,
-                                       "about": s.about} for s in known},
+                                       "about": s.about,
+                                       "scope": "agent" if config_module.agent_scoped(s.name) else "machine",
+                                       "source": config_module.setting_source(s.name)}
+                              for s in known},
                              indent=2))
             return 0
         heading("settings")
@@ -6077,11 +6213,15 @@ def cmd_config(args: argparse.Namespace) -> int:
             line = f"  {item.name:<24}{_shown(value)}"
             if value != item.default:
                 line += dim(f"   (default {_shown(item.default)})")
+            line += dim(f"   [{_layer_note(item.name)}]")
             print(line)
             print(dim(f"      {item.about}"))
         print()
         _say_if_a_retired_key_is_still_there()
-        print(dim(f"  they live in {global_config_path()}"))
+        print(dim(f"  machine-wide settings live in {global_config_path()}"))
+        if (own := config_module.agent_config_path()) is not None:
+            print(dim(f"  this agent's own (names, workers, reporting…) in {own}"))
+            print(dim("  --machine sets an agent setting as the shared default instead"))
         print(dim("  collab config <key> <value>   set one"))
         print(dim("  collab config <key> --unset   put it back to its default"))
         print(dim("  collab config <key> --edit    edit interactively; text can use an external editor"))
@@ -6101,7 +6241,15 @@ def cmd_config(args: argparse.Namespace) -> int:
             fail("--unset takes no value")
             return 2
         unset_setting(item.name)
-        ok(f"{item.name} is back to its default, {_shown(item.default)}")
+        source = config_module.setting_source(item.name)
+        if getattr(args, "machine", False) and source == "agent":
+            ok(f"shared default for {item.name} cleared; this agent still uses its own, "
+               f"{_shown(item.read())}")
+        elif source == "machine":
+            ok(f"{item.name} now follows the shared value every agent here uses, "
+               f"{_shown(item.read())} (`--unset --machine` clears that)")
+        else:
+            ok(f"{item.name} is back to its default, {_shown(item.default)}")
         return _settle_in_the_session(item.name, args)
 
     if editing:
@@ -6141,6 +6289,7 @@ def cmd_config(args: argparse.Namespace) -> int:
     if args.value is None:
         # Bare, on its own line, so `$(collab config theme)` is worth writing.
         print(_shown(item.read()))
+        print(dim(f"  from: {_layer_note(item.name)}"))
         print(dim(f"  {item.about}"))
         print(dim(f"  default {_shown(item.default)}"))
         print(dim(f"  collab config {item.name} <value>   set directly"))
@@ -6154,10 +6303,26 @@ def cmd_config(args: argparse.Namespace) -> int:
 
     try:
         item.write(item.parse(args.value))
+        # An explicit set pins this agent's own value even when it equals
+        # what it inherited, so a later shared change does not move it.
+        if not config_module.WRITE_KIND["on"]:
+            config_module.pin_agent_value(item.name, config_module.load_config().get(item.name))
     except ValueError as exc:
         fail(f"{item.name}: {exc}")
         return 2
-    ok(f"{item.name} is now {c(_shown(item.read()), '1')}")
+    written = item.parse(args.value)
+    if getattr(args, "machine", False):
+        ok(f"{item.name} set to {c(_shown(written), '1')} for every agent here")
+    elif config_module.WRITE_KIND["on"]:
+        ok(f"{item.name} set to {c(_shown(written), '1')} for every "
+           f"{config_module.WRITE_KIND['kind']} conversation on this machine")
+    else:
+        where = ("" if not config_module.agent_scoped(item.name)
+                 or config_module.agent_config_path() is None else " for this agent")
+        ok(f"{item.name} is now {c(_shown(item.read()), '1')}{where}")
+    if (getattr(args, "machine", False) or config_module.WRITE_KIND["on"]) and item.read() != written:
+        print(dim(f"  this agent still uses its own {_shown(item.read())} "
+                  f"(`collab config {item.name} --unset` follows the new value)"))
     return _settle_in_the_session(item.name, args)
 
 
@@ -6254,6 +6419,13 @@ def cmd_worker(args: argparse.Namespace) -> int:
                 try:
                     with _client(profile) as client:
                         for record in queued:
+                            if record.get("to") and not record.get("to_id"):
+                                try:
+                                    observed_id = client.resolve_recipient(record["to"])
+                                except HubError:
+                                    observed_id = ""
+                                store.quarantine_target(record["id"], current_id=observed_id)
+                                raise HubError("legacy targeted delivery was quarantined for explicit recipient reconfirmation")
                             if record.get("kind") == "file":
                                 import hashlib
                                 stash = Path(record["stash"])
@@ -6261,7 +6433,7 @@ def cmd_worker(args: argparse.Namespace) -> int:
                                     raise HubError(f"queued file {record.get('name')!r} changed since it "
                                                    "was queued; not sending different bytes")
                                 client.upload_file(stash, to=record.get("to") or None,
-                                                   room=None if record.get("to") else (record.get("room") or None),
+                                                   to_id=record.get("to_id") or None, room=None if record.get("to") else (record.get("room") or None),
                                                    delivery=record["id"])
                                 store.acknowledge(record["id"])
                                 continue
@@ -6271,8 +6443,11 @@ def cmd_worker(args: argparse.Namespace) -> int:
                                     "text": record["text"], "collab_worker_delivery": record["id"]})
                                 store.acknowledge(record["id"])
                                 continue
+                            if record.get("decision_delivery") and not (record.get("to_id") or (
+                                    record.get("decision_public") and not record.get("to") and record.get("room"))):
+                                raise HubError("decision reply has no bound participant ID; queued text was not sent")
                             client.send(Envelope(kind=KIND_CHAT, text=record["text"], sender=profile.name,
-                                                 to=record.get("to") or None,
+                                                 to=record.get("to") or None, to_id=record.get("to_id") or None,
                                                  room=None if record.get("to") else (record.get("room") or None),
                                                  thread=record.get("thread") or None,
                                                  body={**(record.get("body") or {}),
@@ -6288,8 +6463,13 @@ def cmd_worker(args: argparse.Namespace) -> int:
             store.off()
             ok("collaboration worker disabled; pending decisions and replies are preserved")
         elif args.worker_action == "reply" and getattr(args, "awaiting_human", False):
+            local_recovery = next((row.get("local_only", False) for row in store.pending()
+                                   if row["id"] == args.decision_id), False)
             to, room = _decision_source(profile, store, args.decision_id)
             record = store.await_human(args.decision_id, args.text, to=to, room=room)
+            if local_recovery:
+                ok("local recovery waits on your human; no peer or model was notified")
+                return 0
             onboard.ensure_daemon(profile, wait=False)
             ok("decision kept open while your human decides"
                + (f"; the peer is told: {record}" if record else ""))
@@ -6316,13 +6496,20 @@ def cmd_worker(args: argparse.Namespace) -> int:
                 return 2
             store.answer(args.decision_id, args.text, verbatim=verbatim, notify_to=to, notify_room=room)
             # Queued: the durable outbox delivers it; nothing was sent yet.
-            ok(f"queued for {('@' + said(to)) if to else ('#' + said(room))} verbatim" if verbatim
-               else "decision queued for the collaboration worker")
+            if record.get("local_only"):
+                ok("recovery noted locally; the quarantined answer remains held and was not sent")
+            else:
+                ok(f"queued for {('@' + said(to)) if to else ('#' + said(room))} verbatim" if verbatim
+                   else "decision queued for the collaboration worker")
         elif args.worker_action == "context":
             store.context(args.text)
             ok("context queued for the collaboration worker")
         elif args.worker_action == "send":
-            record_id = store.send(args.text, to=args.to, room=args.room or '')
+            target_id = ""
+            if args.to:
+                with _client(profile) as client:
+                    target_id = client.resolve_recipient(args.to)
+            record_id = store.send(args.text, to=args.to, to_id=target_id, room=args.room or '')
             onboard.ensure_daemon(profile)
             ok(f"message queued for worker delivery: {record_id}")
             print("  `collab worker status` shows pending delivery and retry errors")
@@ -7004,7 +7191,7 @@ def cmd_logs(args: argparse.Namespace) -> int:
             print("  " + line)
     print()
 
-    for name in ("daemon.log", "hub.log"):
+    for name in ("daemon.log", "hub.log", "worker.log"):
         path = root / name
         tail = _tail(path, lines)
         if tail is None:
@@ -7019,7 +7206,7 @@ def cmd_logs(args: argparse.Namespace) -> int:
         # for the UTC day, so a follow started in the evening was watching a
         # file that stopped being written at midnight and went silent for the
         # rest of the night without saying so.
-        _follow([root / "daemon.log", root / "hub.log"],
+        _follow([root / "daemon.log", root / "hub.log", root / "worker.log"],
                 rolling=lambda: diag.path_for(root))
     return 0
 
@@ -7143,6 +7330,16 @@ def _follow(paths: list[Path], *, rolling=None) -> None:
                     if first_pass:
                         fh.seek(0, os.SEEK_END)
                     handles[path] = fh
+                # TRIMMED UNDER US: the logs are capped in place by copy and
+                # truncate (collab.logcap), so a file shorter than where this
+                # follow had read to is one that was rotated, and everything in
+                # it now is new. Without this the follow sat past the end and
+                # printed nothing for the rest of the session.
+                try:
+                    if os.fstat(fh.fileno()).st_size < fh.tell():
+                        fh.seek(0)
+                except OSError:
+                    pass
                 while line := fh.readline():
                     print(f"  {dim(path.name)} {line.rstrip()}")
                     wrote = True
@@ -7224,7 +7421,7 @@ def _skill_requests(client, profile) -> list[dict[str, Any]]:
     for env in events:
         reply = (env.body or {}).get("skill_response")
         if mine(env, "sender", "sender_id") and isinstance(reply, dict) and reply.get("state") in SKILL_STATES:
-            states[(str(reply.get("id")), env.to)] = reply["state"]
+            states[(str(reply.get("id")), env.to_id)] = reply["state"]
     from datetime import datetime, timezone
     from .skill_sharing import NAME_RE
     found, seen = [], set()
@@ -7240,7 +7437,7 @@ def _skill_requests(client, profile) -> list[dict[str, Any]]:
                 or not isinstance(skill, str) or not NAME_RE.fullmatch(skill)
                 or not isinstance(args, str)):
             continue
-        key = (request_id, env.sender)
+        key = (request_id, env.sender_id)
         if key in seen:
             continue
         seen.add(key)
@@ -7252,7 +7449,7 @@ def _skill_requests(client, profile) -> list[dict[str, Any]]:
         state = states.get(key, "pending")
         if state == "pending" and age > SKILL_REQUEST_TTL:
             state = "expired"
-        found.append({"id": request_id, "from": env.sender, "skill": skill,
+        found.append({"id": request_id, "from": env.sender, "from_id": env.sender_id, "skill": skill,
                       "args": args[:4000], "seq": env.seq, "state": state})
     return found
 
@@ -7352,6 +7549,8 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
                 raise ValueError("only an accepted request can be reported done")
             if args.action in ("accept", "decline") and match["state"] != "pending":
                 raise ValueError(f"request {args.target} is already {match['state']}")
+            if not match.get("from_id"):
+                raise ValueError("request has no verified requester identity; ask the peer to resend")
             if args.action == "accept" and not _human_consents(match, args):
                 return 1
             state = {"accept": "accepted", "decline": "declined", "done": "done"}[args.action]
@@ -7359,7 +7558,7 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
                      "declined": f"declined your request to run `{match['skill']}`",
                      "done": f"ran `{match['skill']}`"}[state]
             client.send(Envelope(kind=KIND_CHAT, text=words + (f": {rest}" if rest else "."),
-                                 sender=profile.name, to=match["from"],
+                                 sender=profile.name, to=match["from"], to_id=match["from_id"],
                                  body={"skill_response": {"id": match["id"], "state": state,
                                                           "text": rest[:4000]}}))
             ok(f"{state}: {said(match['id'])}")
@@ -8106,6 +8305,8 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--output", "-o", help="directory to save into (default: here)")
     f.add_argument("--keep", action="store_true",
                    help="do not confirm receipt, so the host keeps its copy")
+    f.add_argument("--all", action="store_true",
+                   help="list: include files that already ended (collected, expired, withdrawn)")
     f.add_argument("--json", action="store_true")
     add_session_flag(f)
     f.set_defaults(func=cmd_file)
@@ -8167,6 +8368,9 @@ def build_parser() -> argparse.ArgumentParser:
   collab config KEY                     show one setting and its actions
   collab config KEY VALUE               set directly
   collab config KEY --unset             restore the default
+  collab config KEY VALUE --machine     set an agent setting as everyone's default
+  collab config KEY VALUE --kind [KIND] keep it for every conversation of one agent kind
+                                        (not display_name or color: identity is per agent)
   collab config KEY --edit              edit interactively (terminal required)
   collab config --tui                   browse/edit; r resets to default
   collab config editor nano             choose vim, nvim, nano, or a command
@@ -8185,6 +8389,11 @@ Esc cancels a draft, q quits. Editor commands run without a shell.""")
     cf.add_argument("--edit", action="store_true", help="edit a setting interactively; offer an external editor for text")
     cf.add_argument("--json", action="store_true")
     cf.add_argument("--tui", action="store_true", help="interactive keyboard/mouse settings editor")
+    cf.add_argument("--machine", action="store_true",
+                    help="write an agent-scoped setting to the shared machine file (every agent here)")
+    cf.add_argument("--kind", nargs="?", const="", metavar="KIND",
+                    help="write an agent setting for every conversation of one agent kind "
+                         "(default: the one running this command, e.g. claude-code or codex)")
     cf.set_defaults(func=cmd_config)
 
     col = sub.add_parser("color", help="show or set the colour others see you in")

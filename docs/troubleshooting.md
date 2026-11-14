@@ -134,7 +134,10 @@ error code and reason. The session is still reachable on this machine.
 
 ## ngrok was not found
 
-Without ngrok, a session is reachable on your machine and local network only.
+Without ngrok, a session stays on your machine unless the host explicitly
+binds a reachable private interface. Automatic pinned LAN selection also needs
+that address in authenticated host metadata; a join link alone does not supply
+that authority. See [local route authentication](local-routes.md).
 
 - Install [ngrok](https://ngrok.com/download) and run `collab host` again, or
 - Tunnel the printed local port yourself with another tool and share that
@@ -523,7 +526,7 @@ For any other detected agent, «your quota is unknown — …» in `collab check
 the expected answer, not a fault: collab has no local source it can read.
 Explicit `stats_command`, including an empty string, takes precedence. Unset it
 to restore automatic routing. `stats_auto_setup false` disables auto setup and
-polling; `share_stats off` stops main and worker publication. An existing daemon
+polling (machine-wide when set with `--machine`); `share_stats off` stops main and worker publication. An existing daemon
 keeps its loaded code until restarted after an upgrade. A hub must also run the
 new version to receive the atomic metadata-update fix.
 

@@ -31,7 +31,7 @@ def test_only_the_server_clock_can_change_without_invalidating_the_tag(client, h
     assert second.status_code == 304 and second.content == b""
     assert second.headers["etag"] == tag
     assert second.headers["cache-control"] == "private, no-cache"
-    assert set(second.headers["vary"].split(", ")) == {"Authorization", "Accept-Encoding"}
+    assert set(second.headers["vary"].split(", ")) == {"Authorization", "Accept-Encoding", "Collab-Roster-Clocks"}
     unconditional = client.get(f"{EXT_PREFIX}/participants", headers=host_headers)
     assert unconditional.status_code == 200
     assert unconditional.json()["server_time"] >= first.json()["server_time"]

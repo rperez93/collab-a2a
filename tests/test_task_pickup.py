@@ -321,3 +321,113 @@ def test_completion_offer_requires_known_fresh_available_work(tmp_path, monkeypa
                                       'state': 'TASK_STATE_WORKING'})
         path.write_text(json.dumps(snapshot))
     assert pickup.completion_offer(tmp_path, 'finished') is None
+
+
+# --- the ledger under contention ----------------------------------------------------
+#
+# Measured on this machine, the competing-consumers test above, its process
+# niced to 19 under 28 busy loops with a 10 µs switch interval: 12 lost
+# doorbells in 6,000 runs with no wait on the ledger (both claimants
+# empty-handed), 0 in 3,000 with `COMMIT_WAIT`. At ordinary load, 0 in 200
+# either way — which is why it only ever failed inside a loaded full suite. The tests below make the same contention deterministic.
+
+class _Holder:
+    """A third connection holding the ledger's SHARED lock — a reader, or a
+    claimant on its way to being refused — until told to let go."""
+
+    def __init__(self, root):
+        import sqlite3
+        import threading
+
+        self._go, self._held, self._done = threading.Event(), threading.Event(), threading.Event()
+        self._thread = threading.Thread(target=self._run, args=(root, sqlite3), daemon=True)
+        self._thread.start()
+        assert self._held.wait(5)
+
+    def _run(self, root, sqlite3):
+        db = sqlite3.connect(root/'task-pickup-notices.db', isolation_level=None)
+        db.execute('BEGIN')
+        db.execute('SELECT * FROM notice').fetchall()
+        self._held.set()
+        self._go.wait(30)
+        db.execute('COMMIT')
+        db.close()
+        self._done.set()
+
+    def release(self, after=0.0):
+        import threading
+
+        threading.Timer(after, self._go.set).start()
+
+    def join(self):
+        assert self._done.wait(10)
+
+
+def _ledger(root):
+    with pickup._db(root):
+        pass
+
+
+def test_a_brief_reader_on_the_ledger_does_not_lose_the_doorbell(tmp_path):
+    """A COMMIT needs the exclusive lock, and with no wait at all it failed the
+    instant any other connection held a shared one — the other claimant's own
+    read on its way to being refused among them — so the one claimant entitled
+    to the notice came back empty too, and nobody was woken."""
+    seed(tmp_path)
+    _ledger(tmp_path)
+    holder = _Holder(tmp_path)
+    holder.release(after=0.01)   # well inside COMMIT_WAIT, and not zero
+    began = time.monotonic()
+    notice = pickup.claim(tmp_path, now=1000)
+    holder.join()
+    assert notice, "the doorbell survived a brief reader"
+    assert time.monotonic() - began < pickup.COMMIT_WAIT + 0.5
+
+
+def test_two_claimants_and_a_reader_still_ring_once(tmp_path):
+    """The flaky race, made deterministic: two claimants contend while a third
+    connection holds the ledger. Exactly one notice, never none."""
+    seed(tmp_path)
+    _ledger(tmp_path)
+    holder = _Holder(tmp_path)
+    holder.release(after=0.01)   # well inside COMMIT_WAIT, and not zero
+    with ThreadPoolExecutor(2) as pool:
+        notices = list(pool.map(lambda _: pickup.claim(tmp_path, now=1000, lease=2), range(2)))
+    holder.join()
+    assert sum(bool(n) for n in notices) == 1, notices
+
+
+def test_a_ledger_held_forever_costs_one_bounded_wait_not_ten_seconds(tmp_path):
+    """A reader that never lets go. The heartbeat — on the daemon's event loop
+    — must not spend SQLite's ten-second default on it: one `COMMIT_WAIT`, then
+    the opportunity is left to the next check."""
+    seed(tmp_path)
+    _ledger(tmp_path)
+    holder = _Holder(tmp_path)
+    try:
+        began = time.monotonic()
+        assert pickup.claim(tmp_path, now=1000) is None
+        took = time.monotonic() - began
+        assert took < pickup.COMMIT_WAIT + 0.2, f"{took:.2f} s"
+    finally:
+        holder.release()
+        holder.join()
+
+
+def test_a_competing_writer_is_refused_at_once_not_after_the_commit_wait(tmp_path, monkeypatch):
+    """The commit's wait must be set AFTER the write lock is taken: a claimant
+    that finds another holding it is refused at once — that one is ringing,
+    and this runs on the daemon's event loop — and only a commit waits."""
+    import sqlite3
+    monkeypatch.setattr(pickup, 'COMMIT_WAIT', 2.0)
+    seed(tmp_path)
+    first = pickup.claim(tmp_path, now=1000)
+    db = sqlite3.connect(tmp_path/'task-pickup-notices.db')
+    try:
+        db.execute('BEGIN IMMEDIATE')
+        began = time.monotonic()
+        assert pickup.claim(tmp_path, now=1001) is None
+        assert pickup.commit(tmp_path, first['token'], now=1001) is False
+        assert time.monotonic() - began < 0.5
+    finally:
+        db.rollback(); db.close()

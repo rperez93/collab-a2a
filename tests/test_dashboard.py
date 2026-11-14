@@ -84,7 +84,7 @@ def test_hostile_reset_values_cannot_crash_any_roster_view():
     for value in ("\u00b2", "9" * 30, "99999999999999"):
         _short_reset(value)
         quota_summary({"quotas": {"5h": {"used_pct": 10, "resets_at": value}}}, with_resets=True)
-    assert "999%" in quota_summary({"quotas": {"5h": {"used_pct": 1e308}}})
+    assert quota_summary({"quotas": {"5h": {"used_pct": 1e308}}}) == "", "an impossible figure is unknown"
 
 
 def test_an_old_quota_is_marked_and_peer_text_is_escaped(capsys, tmp_path, monkeypatch):
@@ -169,7 +169,12 @@ async def test_a_roster_read_cues_the_skill_list_refresh(tmp_path):
     paths = DaemonPaths(tmp_path)
     paths.root.mkdir(parents=True, exist_ok=True)
     cued = []
-    fake = SimpleNamespace(profile=SimpleNamespace(url="http://hub", token="t"), paths=paths,
+    from collab.config import SessionProfile
+    # Route generations read the profile's private route state before a roster
+    # request. A URL/token-only stand-in hid that real profile contract.
+    profile = SessionProfile("s_dashboard", "http://hub", "alice", "host", "t",
+                             home=str(tmp_path / "home"))
+    fake = SimpleNamespace(profile=profile, paths=paths,
                            snapshot={}, _adopt_identity=lambda: None,
                            _maybe_refresh_skills=lambda client: cued.append(client))
     roster = {"participants": [{"id": "p1", "skills_count": 2}]}

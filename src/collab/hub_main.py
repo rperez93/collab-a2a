@@ -16,8 +16,8 @@ from pathlib import Path
 
 import uvicorn
 
-from . import __version__, diagnostics, owner as ownership, peers
-from .client.daemon_files import setup_logging
+from . import __version__, diagnostics, logcap, owner as ownership, peers
+from .client.daemon_files import DaemonPaths, capture_logging_into, setup_logging
 from .config import follow_agent_enabled
 from .server.app import create_app
 from .server.session import HubConfig, update_fields
@@ -181,6 +181,15 @@ def main() -> int:
         return 1
 
     cfg.pid = os.getpid()
+    # BOTH of the files this process and its children write to, capped while
+    # they run. `ngrok.log` had no cap at all — ngrok's stdout, appended to for
+    # as long as the tunnel stays up, 224 KB in a live session's first hour —
+    # and `hub.log` was capped only when the next hub was spawned. The same
+    # directory `collab host` and the daemon's restart open `hub.log` in.
+    logcap.watch(DaemonPaths(cfg.dir).root / "hub.log", cfg.dir / "ngrok.log")
+    # Capped at write time as well; see daemon_main. ngrok's own output never
+    # reaches `ngrok.log` but through a capped collector (server/tunnel.py).
+    capture_logging_into(DaemonPaths(cfg.dir).root / "hub.log")
     # The SAME directory the daemon writes into, and one file per day shared
     # between them — a fault is nearly always a conversation between the two
     # processes, and two files would have to be interleaved by hand before
@@ -227,6 +236,8 @@ def main() -> int:
         session_id=cfg.session_id,
         host_name=cfg.host_name,
         public_url=cfg.public_url or cfg.local_url,
+        local_url=cfg.local_url,
+        local_tls_config=cfg,
         title=cfg.title,
         supervisor=supervisor,
         on_url_change=on_url,
@@ -234,7 +245,12 @@ def main() -> int:
     registry = RegistryHeartbeat(cfg)
     registry.start()
     try:
-        uvicorn.run(app, host=cfg.bind, port=cfg.port, log_level="warning", access_log=False)
+        # `log_config=None`: uvicorn's default config gives its loggers their
+        # own stderr handlers, which write the log file directly and around
+        # the write-time cap. Without one they propagate to the root logger,
+        # which is behind the queue and the capped handler.
+        uvicorn.run(app, host=cfg.bind, port=cfg.port, log_level="warning",
+                    access_log=False, log_config=None)
     except BaseException as exc:            # noqa: BLE001
         # Re-raised immediately: this changes nothing about how the hub dies,
         # it only leaves a line saying that it died rather than was stopped.

@@ -1,5 +1,16 @@
 # Bundle Update Log
 
+## 2026-11-14 (default name)
+* **Update (later than the pin)**: Recorded in [state ownership](architecture/state-ownership.md) that the default display name no longer comes from git's `user.name` or `$USER` — a legacy machine name is adopted once, else the agent kind and a stable suffix. The pin and verification stamps are unchanged.
+
+## 2026-11-14 (R20 first pass)
+* **Update (later than the pin)**: Recorded in [the command surface](operating/cli-surface.md) the commands and flags merged after 2.1.2 — `dashboard`, `config --machine/--kind`, `ngrok_domain`, `resume --keep` and the takeover refusal, `worker reply` answer modes, `watch --panel`, `file list --all` — recorded at `main` df2e2b8 — and that the shared-machine proxy is not yet started by any command. The pin and verification stamps are unchanged.
+
+## 2026-11-14 (identity authorization)
+* **Update (later than the pin)**: Recorded stable-ID reply routing and
+  fail-closed historical authorization in [the envelope page](architecture/envelope.md).
+  The pin and verification stamps are unchanged.
+
 ## 2026-11-14 (R9)
 * **Update (later than the pin)**: Recorded immediate join offers and the
   finished-task hint in [the command surface](operating/cli-surface.md).
@@ -18,8 +29,20 @@
 * **Update (later than the pin)**: Recorded the shared skill list and consented skill requests (`collab skills peers|ask|requests|accept|decline|done`) in [the CLI surface](operating/cli-surface.md). The pin and verification stamps are unchanged.
 
 ## 2026-11-13
+* **Update (later than the pin):** Recorded conditional roster pace observations
+  in [batches](collaboration/batches.md), including freshness recovery and
+  compatibility for clients that do not negotiate clock headers.
 * **Update (later than the pin)**: Added elapsed time and a rate-based ETA to [batches](collaboration/batches.md), measured from a new `tasks.completed_at` recorded in [the task board](collaboration/task-board.md). The pin and verification stamps are unchanged.
 * **Update (later than the pin)**: Recorded R8 saved host/guest sessions and explicit resume with original working paths. Historical pin and verification stamps are unchanged.
+* **Update (later than the pin)**: Recorded original-URL-first joining,
+  authenticated local TLS metadata, private registry trust and reconnect
+  provenance in the existing client-daemon page. No pin or verification stamp
+  changed.
+
+## 2026-11-13 (logs)
+* **Update (later than the pin)**: The 10 MB log cap is applied at write time, not only by the watcher; ngrok's output reaches its log through a bounded collector process. Recorded in [the state directory](architecture/state-directory.md).
+* **Correction (later than the pin)**: [The state directory](architecture/state-directory.md)'s `hub.log` row still described the pinned two-megabyte roll at open; it now says what the pin held and what replaced it, and the note below the table gives the watcher's real bound — measured, after an adversarial review found the first version over budget under a flood.
+* **Update (later than the pin)**: Recorded in [the state directory](architecture/state-directory.md) that every session log is capped at 10 MB with its rotated generation while its writer runs, by copy and truncate, and that `worker.log` holds one content-free line per worker attempt. The pin and verification stamps are unchanged.
 
 ## 2026-09-20
 * **Update (2.1.1, later than the pin)**: Recorded shared participant identity and internal decision routing in the wake page; the bundle pin is unchanged.
@@ -139,3 +162,8 @@ polling is cancellable and bounded. The pin remains unchanged.
   classified (rate limit, auth, model, network, other) with per-class back-off,
   a one-hour cap on stated waits, and one decision per worker configuration for
   auth or model errors. No pin or verified stamp changed.
+
+- **Update (later than the pin)**: settings resolve per agent, agent kind and
+  machine (R21); identity settings are no longer inherited from the machine
+  file, except a telemetry opt-out, which stays machine-wide. Recorded in
+  architecture/state-ownership.md. No pin or verified stamp changed.

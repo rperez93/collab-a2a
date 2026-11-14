@@ -14,6 +14,14 @@ import pytest
 
 
 @pytest.mark.skipif(not shutil.which("tmux"), reason="tmux is not installed")
+
+def saved(config_path):
+    """Both layers as the program reads them (R21): the machine file, then the
+    agent's own file, which is where worker settings are written."""
+    data = json.loads(config_path.read_text()) if config_path.exists() else {}
+    agent = Path(os.environ["COLLAB_AGENT_CONFIG"])
+    return {**data, **(json.loads(agent.read_text()) if agent.exists() else {})}
+
 def test_real_settings_panel_searches_edits_and_saves_by_mouse(tmp_path):
     config_path = tmp_path / "config.json"
     config_path.write_text("{}")
@@ -51,10 +59,10 @@ def test_real_settings_panel_searches_edits_and_saves_by_mouse(tmp_path):
         call("send-keys", "C-u")
         call("send-keys", "-l", "90")
         expect("90")
-        assert json.loads(config_path.read_text()) == {}, "typing must not save"
+        assert saved(config_path) == {}, "typing must not save"
         call("send-keys", "-l", "\x1b[<0;3;2M\x1b[<0;3;2m")
         expect("Saved worker_timeout.")
-        assert json.loads(config_path.read_text())["worker_timeout"] == 90
+        assert saved(config_path)["worker_timeout"] == 90
         # Keyboard reset stages a confirmation; the mouse cancels it without
         # changing the saved setting. Both controls run through ncurses.
         call("send-keys", "r")
@@ -62,7 +70,7 @@ def test_real_settings_panel_searches_edits_and_saves_by_mouse(tmp_path):
         column = text.splitlines()[1].index("[Cancel Esc]") + 1
         call("send-keys", "-l", f"\x1b[<0;{column};2M\x1b[<0;{column};2m")
         expect("Draft discarded.")
-        assert json.loads(config_path.read_text())["worker_timeout"] == 90
+        assert saved(config_path)["worker_timeout"] == 90
     finally:
         subprocess.run(command + ["kill-server"], env=env, capture_output=True, timeout=5)
 
@@ -126,16 +134,16 @@ def test_real_terminal_editors_return_to_the_settings_interface(tmp_path, interf
             call('send-keys', 'C-o', 'Enter', 'C-x')
         if interface == 'tui':
             expect('Editor closed')
-            assert 'worker_instructions' not in json.loads(config_path.read_text())
+            assert 'worker_instructions' not in saved(config_path)
             call('send-keys', 'Enter')
         expect('Saved worker_instructions')
-        assert json.loads(config_path.read_text())['worker_instructions'] == 'First instruction.\nSecond instruction.\n'
+        assert saved(config_path)['worker_instructions'] == 'First instruction.\nSecond instruction.\n'
         if interface == 'tui':
             # The restored curses loop must still accept reset and its confirmation.
             call('send-keys', 'r')
             expect('Confirm Enter')
             call('send-keys', 'Enter')
             expect('using its default')
-            assert 'worker_instructions' not in json.loads(config_path.read_text())
+            assert 'worker_instructions' not in saved(config_path)
     finally:
         subprocess.run(command + ['kill-server'], env=env, capture_output=True, timeout=5)

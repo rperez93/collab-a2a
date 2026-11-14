@@ -72,7 +72,8 @@ Use `collab-tasks` for tasks/projects/batches; `collab-activity` for current fil
 ownership; `collab-telemetry` for separate main/worker figures; `collab-capacity`
 for calibrated native-child estimates; and `collab-share-skills` to inspect
 explicitly published capabilities. Native coding subagents and conversation
-workers are separate, and unknown quota is not spare capacity.
+workers are separate. Up to two teammates is the default when independent work
+exists; beyond that, unknown quota is not spare capacity.
 
 ## Closing the session, or leaving it
 

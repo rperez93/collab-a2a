@@ -106,6 +106,22 @@ A display name resolves in this order:
 `--name` → `$COLLAB_NAME` → this agent's `identity.json` → the global config's
 `display_name` → `git config user.name` → `$USER` → `agent`.[^config-src]
 
+> **Update (later than the pin, 2026-11-14)**: the last three steps are gone.
+> After this agent's own `display_name`, a legacy machine-wide `display_name` is
+> adopted by the FIRST agent that needs a name — claimed under the settings
+> lock and retired from the machine file as `display_name_adopted`, so two
+> agents can never join as one participant — and the CLI says so once; every
+> other agent's name is its kind and eight hex of a hash of its home —
+> `claude-3f2a91c0` — stable for that home and derived from nothing that names
+> a person. git's `user.name` and `$USER` had published the human's real name to
+> every peer.
+
+> **Update (later than the pin)**: identity settings (`display_name`, `color`,
+> `stats_command`, `stats_auto_setup`) now resolve agent → agent kind → machine,
+> and are never inherited from the machine file except a telemetry opt-out
+> (`stats_auto_setup false` or an empty `stats_command`), which applies to
+> every agent. No pin or verified stamp changed.
+
 # Related
 
 - [The daemon lock](/architecture/daemon-lock.md) — a different lock answering a

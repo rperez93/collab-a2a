@@ -8,6 +8,45 @@ input. Set `editor` to `vim`, `nvim` or `nano`; empty follows `$VISUAL`, `$EDITO
 then `vi`. In the TUI, `r` / **Reset to default** previews and restores a default.
 See the [editing guide](settings-panel.md) for saving and cancelling drafts.
 
+## Agent settings and machine settings
+
+Several agents of one person can run on one machine. Settings that describe
+**one agent** are written to that agent's own file, `agent-settings.json` inside
+its collab state directory (never in the repository):
+`display_name`, `color`, `share_stats`, `share_skill_list`, `stats_command`,
+`stats_interval`, `stats_auto_setup`, `follow_agent`, `remind_*`, `compact*`,
+`new*`, `attention_*`, `task_auto_pickup*`, `delegation_*` and every `worker_*`.
+Everything else (tunnel domain, theme, `watch_*`, editor, timezone, rules,
+freshness thresholds, prices) belongs to the person and the machine, and lives
+in the shared file.
+
+Precedence for an agent setting: **this agent's file, then its agent kind's
+file, then the machine file, then the default.** The kind layer
+(`~/.config/collab/kinds/<kind>.json`, kind = `claude-code`, `codex`, … as
+detected, or `COLLAB_AGENT_KIND`) is what outlives one conversation: `collab
+config stats_command '<probe>' --kind codex` keeps a Codex quota probe (or a
+worker model) for every Codex conversation on this machine without reaching
+Claude agents. `display_name` and `color` are an agent's identity and refuse
+`--kind`; a machine-scoped key refuses it too. A machine-wide key found in an agent's file is ignored.
+`collab config KEY VALUE` writes an agent setting for the current agent only;
+`--machine` sets it as everyone's shared default instead. `--unset` removes this
+agent's own value only, so it follows the shared one again; `--unset --machine`
+clears the shared default. An agent's own values last as long as its collab
+state (one agent session in one workspace); a new conversation starts from the
+shared defaults, so set lasting preferences with `--machine`. `collab config` and
+`collab config KEY` print the layer each value comes from (this agent, agent
+kind, machine, legacy or default; an empty value at a layer reads `disabled
+(explicit empty)`), and `--json` carries `scope` and `source`. Daemons and
+hubs started by the CLI inherit its agent kind, so they read the same layer. A value written to the machine file before this
+split keeps applying until an agent sets its own, except for the identity keys
+`display_name`, `color`, `stats_command` and `stats_auto_setup`: those are never
+inherited (a machine value is shown as legacy, and host and join say how to
+adopt it), and `--machine` cannot set them, except a telemetry opt-out (`stats_auto_setup false` or an empty `stats_command`), which stays in force for every agent. Writes to the shared file are locked
+against a concurrent agent, and a write always resolves this agent's currently
+selected home.
+
+## Live changes
+
 Changes to participant fields, freshness thresholds, prices, worker timing,
 delivery budgets and local worker guidance take effect at the next relevant
 frame, report, notice or worker turn. A running model call completes under the
@@ -106,7 +145,8 @@ Proactive pickup is enabled by default. After **five continuous idle minutes**, 
 participant with no owned unfinished tasks receives a notice to inspect the
 latest batch. A working participant can also receive one when fresh native
 child counts and an explicitly configured quota/concurrency budget show spare
-capacity. Unknown capacity is never treated as available; conversation workers
+capacity. Beyond the default of up to two teammates, unknown capacity is never
+treated as available; conversation workers
 are not native children. The idle delay still applies to an idle main agent even
 when it has spare child capacity.
 

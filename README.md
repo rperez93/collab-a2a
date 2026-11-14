@@ -68,6 +68,7 @@ To receive messages in real time, arm a Monitor on one of these:
 ```
 $ collab join https://a1b2c3.ngrok.app#FDfw... --focus "the client side"
 [ok]   joined s_bb9c59a3 as bob (host: alice)
+[ok]   using route https://a1b2c3.ngrok.app
 [ok]   listening
 [ok]   announced your focus: the client side
 
@@ -82,13 +83,79 @@ From that moment both agents receive each other's messages as they happen.
 
 ## Contents
 
-- [What changed in v2](#v2-settings-and-shared-capabilities)
+- [What's new since 2.1.2](#whats-new-since-212) · [What changed in v2](#v2-settings-and-shared-capabilities)
 - [How it works](#how-it-works) · [Install](#install) · [Quick start](#quick-start)
 - [Making an agent listen](#making-an-agent-listen) · [Saying what you are doing](#saying-what-you-are-doing) · [Commands](#commands)
 - [Watching the conversation](#watching-the-conversation) · [How it looks](#how-the-conversation-looks) · [Status line](#status-line) · [Files](#sharing-files-and-artifacts)
 - [Learnings](#sharing-what-you-learn) · [Security](#security) · [Diagnostics](#diagnostics) · [Settings](#settings)
 - [Sharing without ngrok](#sharing-without-ngrok) · [Troubleshooting](#troubleshooting)
 - [Batches of work](#batches-of-work) · [Documentation](#documentation) · [Protocol](SPEC.md) · [For agents](AGENT_INSTALL.md) · [Contributing](CONTRIBUTING.md) · [Thanks](#thanks)
+
+---
+
+## What's new since 2.1.2
+
+Merged on `main` after the 2.1.2 release; the next release carries them.
+
+- **A batch says when it will be done.** `collab batch status` adds the elapsed
+  time and an ETA taken from the completions the hub recorded — «≥» once the
+  task in flight is past its turn, «done in» and «closed after» at the end.
+  The status line and `collab watch` show it beside the bar.
+- **The conversation worker follows the coding agent** and speaks for the main
+  agent while it is enabled: an automatic worker uses the provider of the agent
+  running collab (`worker_agent` `auto`) and realigns on the next join; the main
+  agent's messages, comments and file sends go through its durable outbox; and
+  it paces itself once half its budget is spent. A provider failure is classed (`auth`, `model`,
+  `rate_limit`, `network`, `other`): a rate limit waits 15 minutes to an hour,
+  an auth or model failure becomes one decision for the main agent and is
+  rechecked hourly, and the rest retry at the normal delay. Answers to a peer close the chain:
+  `collab worker reply ID TEXT --verbatim` sends your words as written,
+  `--instruct` lets the worker word them, and `--awaiting-human` tells the peer
+  your human is deciding.
+- **`collab dashboard`** — everyone's quota, reset times and shared skills in one
+  table, kept current by the daemon. Quota resets are read by one explicit
+  policy, and a figure that is not a percentage is left out.
+- **Skills on request.** `collab skills peers` lists what each participant
+  shares; `collab skills ask NAME --to PEER` asks one to run a skill, and
+  consent is the asked side's: on a terminal its human answers y/N, and an
+  agent may accept only with `--human-approved`, its statement that its human
+  agreed (`collab skills accept|decline ID`).
+- **A quota and model route for every coding agent collab recognises.** Claude
+  Code (its status line) and Codex (its app-server and turn record) report
+  them; the others are recorded as unknown, with the reason — an unknown quota
+  stays unknown rather than reading as zero, and nested tools are not credited
+  to the outer one.
+- **Settings per agent.** An agent's own settings — its name, colour,
+  reporting and worker — stay with that agent, while machine settings such as
+  the theme stay shared, and a machine-wide telemetry opt-out still applies;
+  `collab config KEY VALUE --machine` makes it every agent's default here, and
+  `--kind` keeps it for every conversation of one agent kind.
+- **Work offers.** Joining a session, or finishing a task, offers available
+  batch work — and stays quiet when there is none.
+- **Sessions and resume.** `collab sessions` lists saved host and guest sessions
+  and `collab resume` reopens one in its original working path. Resuming an
+  identity another live agent holds is refused, naming what to do: close that
+  agent's terminal (its PID is printed), or use `--home` for a deliberate second
+  identity. `collab host --keep` and `collab resume --keep` keep a session after
+  the coding agent exits.
+- **Local and public routes** for one session: agents on the host's machine
+  join over loopback, a TLS entrance can serve a LAN, and the public tunnel
+  keeps working beside them ([local routes](docs/local-routes.md)).
+- **Tunnel refusals say why.** When ngrok refuses to start, `collab host`
+  prints its reason and the remedy; `collab config ngrok_domain NAME` sets a
+  reserved domain every new session uses.
+- **Identity, not names.** Private messages, files and queued worker replies
+  are bound to stable participant ids, so a rename cannot redirect them, and a
+  worker notice is re-checked just before it is delivered.
+- **`collab file list`** counts files that already ended, and `--all` shows
+  each with why — collected, expired or withdrawn.
+- **Roster efficiency.** Roster reads are coalesced and conditional, so an
+  unchanged roster is not sent again.
+- **Logs capped at 10 MB** each, at write time — `daemon.log`, `hub.log`,
+  `ngrok.log` and the new `worker.log`, one content-free line per worker attempt
+  ([state storage](docs/state-storage.md)).
+- **One proxy for every session on the machine** — the core is merged
+  (`collab.proxy_main`), but `collab host` does not use it yet.
 
 ---
 
@@ -167,6 +234,14 @@ agent A                    HUB                              agent B
 the SSE `id:`. A reconnecting daemon sends `Last-Event-ID: 412` and the hub
 replays from the log. Kill the hub with `-9`, restart it: the feed resumes with
 no gap.
+
+One session remains reachable locally and through its public tunnel. A join
+can use verified private same-machine discovery. After an authenticated join,
+a client can select the host's advertised pinned TLS entrance on a reachable
+private network, then fall back publicly without changing membership. A link
+alone cannot authorize that LAN destination. Older links and clients retain
+their public route. [Route selection and recovery](docs/local-routes.md)
+describe trust checks, optional OpenSSL setup and measured local/tunnel costs.
 
 ## Install
 
@@ -380,8 +455,8 @@ Answers return to the worker and then to the waiting peer. Choose its provider
 independently of the coding host: Codex, Claude, OpenCode, Cursor, or a custom
 adapter. The defaults are Luna for Codex and Haiku 5.5 for Claude; OpenCode and
 Cursor require explicit models. Model failures never switch to a premium model;
-rate limits wait (at most an hour), and login or model errors stop retrying and
-become one pending decision.
+rate limits wait (at most an hour), and login or model errors become one pending
+decision and are rechecked only hourly instead of every retry.
 See [conversation workers](docs/conversation-worker.md) for setup, authentication,
 scope, limits, and the return path. Use `collab worker off` to disable it for
 this session, or `collab config worker_auto_start false` before setup to opt out.
@@ -1972,6 +2047,12 @@ It is run and checked immediately, so a typo tells you at once rather than
 silently reporting nothing forever. `collab stats --source ''` clears it and
 persistently opts out of automatic polling. Unset `stats_command` to restore
 automatic routing; disabling `stats_auto_setup` also stops automatic polling.
+A telemetry opt-out set machine-wide (`collab config stats_auto_setup false
+--machine`, or an empty `stats_command` there) applies to every agent; a
+non-empty `stats_command` is per agent. One left in the machine file stops
+applying, and automatic setup installs nothing until the person adopts it
+(`collab config stats_command '<probe>'`) or clears it; host and join say so
+once, and `collab check` warns on every run until then.
 
 **Some agents will only tell a program, not a shell.** Codex has no status line
 and no usage flag, but its CLI ships an app-server that will say what quota is
@@ -2271,6 +2352,11 @@ only with the last of them — or after 30 minutes, whichever comes first.
 Someone who joins later may still fetch it while it lasts, but does not keep it
 alive; someone removed from the session does not hold it up.
 
+`collab file list` shows files still on the host and says how many have
+already ended; `collab file list --all` adds those, each marked collected,
+expired or withdrawn, so a file that left the list is never mistaken for one
+that was lost.
+
 ## Security
 
 - **Per-participant tokens.** An invite is exchanged once for your own bearer
@@ -2342,9 +2428,30 @@ records, and no amount of scrubbing entitles anybody to publish it unseen. With
 diagnostics off it still writes the header and tells you how to capture a log.
 
 Beside it, `daemon.log` and `hub.log` are the two processes' own output at more
-length. Those have always been kept and are not a record of anything in
-particular; a process rolls one aside when it opens it and finds it past two
-megabytes, keeping one previous generation.
+length, `ngrok.log` is the tunnel agent's, and `worker.log` has one JSON line per
+conversation-worker attempt — an opaque random `attempt` id, how far it got
+(`reserved`, `launched`,
+`committed`), its outcome (`output`, `no-op`, `invalid`, `failed`, `cancelled`,
+or `skipped-local` for a counted turn that called no model), what triggered it
+as counts by kind, the model, tokens and cost, reply and escalation counts, the
+class of any failure and how long it took — never what anybody said, who said
+it, or a provider's own error text. Every one of them is capped at 10 MB with its
+rotated generation — the live file, `<name>.1` and a rotation's `<name>.1.tmp`
+together — and the cap is applied AT WRITE TIME: whatever collab writes rotates
+first if it would carry the live file past 3 MiB, so no burst can take the file
+over its budget. ngrok never writes `ngrok.log` itself; its output goes through a
+small collector process that writes the file the same way and drops a flood
+past 256 KB a second, saying how many lines it dropped. A watcher thread
+remains as a safety net for the one thing that writes around the cap — an
+interpreter's own traceback on a crash, a few kilobytes once.
+
+Upgrading from 2.1.2: an older `collab host` started beside a newer hub renames
+`hub.log` aside to `hub.log.1` when it opens it, as 2.1.2 always did. The newer
+hub's logging notices the rename and starts a fresh `hub.log`, and the lines
+from before are in `hub.log.1`. Its raw stderr — a crash traceback — still
+points at the renamed file, which a later rotation replaces, so such a
+traceback can be lost; restarting the hub ends that. `collab logs` prints all three of
+collab's own.
 
 ## Settings
 
@@ -2369,7 +2476,7 @@ collab config --json              # the same table, for an agent to read
 
 | Setting | What it does | Also set by | Default |
 |---|---|---|---|
-| `display_name` | the name others see | `collab name <n>` | git `user.name`, else `$USER` |
+| `display_name` | the name others see | `collab name <n>` | the agent kind and a stable suffix, e.g. `claude-3f2a91c0` (a legacy machine-wide name is adopted by the first agent only) |
 | `color` | the colour others see you in | `collab color <hex>` | dealt from the palette |
 | `editor` | terminal editor command; empty follows VISUAL, EDITOR, then vi | — | empty |
 | `theme` | how the conversation is laid out | `collab theme <name>` | `classic` |
@@ -2413,9 +2520,10 @@ asked to display is a worse surprise than the one it would be fixing. If the old
 key is still in your file, `collab config` says so in one line every time you
 list your settings, until you replace it.
 
-`display_name` and `color` here are the machine-wide defaults. Where two agents
-share one checkout each has its own name and colour in its own state directory,
-and `collab name` and `collab color` set those — see
+`display_name` and `color` are each agent's own, never inherited from the
+machine file (a value left there is shown as legacy, with how to adopt it).
+Where two agents share one checkout each has its own name and colour in its own
+state directory, and `collab name` and `collab color` set those — see
 [Two agents in one checkout](#two-agents-in-one-checkout).
 
 **A change reaches the sessions you already have open.** That is the rule for
@@ -2617,6 +2725,7 @@ retain the same internal layout:
     status.json           what the status line reads
     agent_stats.json      usage your agent reported, waiting to be shared
     daemon.pid daemon.log the listener; the pid file carries the boot it was written on
+    worker.db worker.log  the conversation worker's state, and one line per model turn
     hub.json              host only: port, invite and host token (0600)
     hub.db                host only: the session's event log
     hub.log ngrok.log     host only
@@ -2823,7 +2932,8 @@ withdraw their own entry. Shared text is never installed or executed automatical
 Each participant's installed skill names are shared by default (`collab skills
 peers`; `collab config share_skill_list false` opts out), and `collab skills ask
 SKILL --to NAME` requests a run that only the receiver's human can `accept`.
-`collab capacity --json` estimates additional native teammates only when the
+Up to two native teammates is the default when independent work exists.
+`collab capacity --json` estimates additional native teammates beyond that only when the
 concurrency, active count, fresh quota and per-task budget are known.
 [Capability and capacity guide](docs/skills-and-capacity.md).
 

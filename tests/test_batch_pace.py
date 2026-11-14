@@ -504,3 +504,37 @@ def test_a_far_off_eta_names_the_day_and_an_absurd_one_names_no_time():
     assert _around(30) == ""
     far = _around(30 * 3600)
     assert far.startswith(" (around ") and len(far.split()) == 3
+
+
+def test_active_roster_validates_pace_clocks_until_overdue_or_progress_changes(
+        client, session, host_headers, clock):
+    """Actual store-derived pace must save the board without freezing the estimate."""
+    from collab import roster_clocks
+    _post(client, host_headers, "batch", {"action": "start", "name": "conditional pace"})
+    tasks = [_post(client, host_headers, "tasks",
+                   {"action": "propose", "title": f"clock {i}"})["task"] for i in range(4)]
+    clock.now += 600
+    _post(client, host_headers, "tasks", {"action": "complete", "id": tasks[0]["id"]})
+    clock.now += 600
+    _post(client, host_headers, "tasks", {"action": "complete", "id": tasks[1]["id"]})
+    clock.now += 100
+    path = "/ext/collab/v1/participants"
+    headers = {**host_headers, roster_clocks.OFFER: "1"}
+    first = client.get(path, headers=headers)
+    headers["If-None-Match"] = first.headers["etag"]
+    clock.now += 100
+    second = client.get(path, headers=headers)
+    assert second.status_code == 304 and second.content == b""
+    assert roster_clocks.read_clocks(second.headers)["pace"] == _figures(client, host_headers)["pace"]
+    clock.now += 500
+    overdue = client.get(path, headers=headers)
+    assert overdue.status_code == 200 and overdue.json()["batch"]["pace"]["overdue"]
+    headers["If-None-Match"] = overdue.headers["etag"]
+    clock.now += 100
+    again = client.get(path, headers=headers)
+    assert again.status_code == 304
+    observed = roster_clocks.read_clocks(again.headers)
+    assert observed["pace"] == _figures(client, host_headers)["pace"]
+    assert observed["pace"]["per_task"] > overdue.json()["batch"]["pace"]["per_task"]
+    _post(client, host_headers, "tasks", {"action": "complete", "id": tasks[2]["id"]})
+    assert client.get(path, headers=headers).status_code == 200

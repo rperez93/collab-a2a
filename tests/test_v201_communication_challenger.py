@@ -99,7 +99,7 @@ async def test_two_native_workers_relay_main_handoff_and_decision_then_go_quiet(
                 worker.Store(service.root).configure({"agent": provider, "model": "test/model",
                     "scope": "Agree on the API using acceptance-test evidence, no repeated debate."})
             store = worker.Store(alice.root)
-            delivery_id = store.send("The tests pass. Please verify the API choice.", to="bob")
+            delivery_id = store.send("The tests pass. Please verify the API choice.", to="bob", to_id=joined.json()["id"])
             assert worker.Store(alice.root).outbox()[0]["id"] == delivery_id
             await Conversation(alice.daemon).turn()  # restart after main send
             assert not store.outbox() and store.status().get("attempts_total", 0) == 0
@@ -149,7 +149,7 @@ async def test_main_delivery_survives_restart_and_model_budget_backoff(tmp_path)
             generation = store.snapshot()["generation"]
             assert store.reserve_turn(expected_generation=generation, limit=1) == 0
             assert store.reserve_turn(expected_generation=generation, limit=1) > time.time()
-            delivery = store.send("Proceed with the verified fix.", to="bob")
+            delivery = store.send("Proceed with the verified fix.", to="bob", to_id="p_bob")
             await service.tick()
             await service.task
             assert store.outbox()[0]["id"] == delivery
@@ -184,7 +184,7 @@ async def test_delivery_deadline_cancels_a_hub_that_never_acknowledges(tmp_path,
         service = make_service(tmp_path / "alice", "http://hub", "alice", "test", http)
         store = worker.Store(service.root)
         store.configure({"agent": "codex", "scope": "Coordinate"})
-        delivery_id = store.send("handoff", to="bob")
+        delivery_id = store.send("handoff", to="bob", to_id="p_bob")
         started = time.monotonic()
         cpu_started = time.process_time()
         try:
@@ -202,7 +202,7 @@ async def test_delivery_deadline_cancels_a_hub_that_never_acknowledges(tmp_path,
 def test_main_send_requires_an_enabled_worker_and_explicit_safe_address(tmp_path):
     store = worker.Store(tmp_path)
     with pytest.raises(ValueError, match="start the worker"):
-        store.send("handoff", to="bob")
+        store.send("handoff", to="bob", to_id="p_bob")
     store.configure({"agent": "codex", "scope": "Coordinate"})
     for recipient in ("", " ", "bob\0", "b" * 201):
         with pytest.raises(ValueError):
@@ -210,7 +210,7 @@ def test_main_send_requires_an_enabled_worker_and_explicit_safe_address(tmp_path
     assert not store.outbox()
     store.off()
     with pytest.raises(ValueError, match="start the worker"):
-        store.send("handoff", to="bob")
+        store.send("handoff", to="bob", to_id="p_bob")
 
 
 @pytest.mark.asyncio
@@ -266,7 +266,7 @@ async def test_delivery_does_not_buffer_a_flooding_acknowledgement(tmp_path, rec
         service = make_service(tmp_path / "alice", "http://hub", "alice", "test", http)
         store = worker.Store(service.root)
         store.configure({"agent": "codex", "scope": "Coordinate"})
-        store.send("handoff", to="bob")
+        store.send("handoff", to="bob", to_id="p_bob")
         tracemalloc.start()
         started = time.process_time()
         try:

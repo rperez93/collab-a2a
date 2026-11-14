@@ -16,6 +16,17 @@ from ..columns import clip, width as columns
 from ..setting_edit import MAX_DRAFT, edit_text, editor_draft, shown
 
 
+def _layer(name: str) -> str:
+    """Where the selected setting's value comes from (R21): this agent, its
+    kind, the machine, a legacy machine value no longer applied, or the
+    default — the answer `collab config KEY` prints, here beside the value."""
+    try:
+        from ..config import setting_source
+        return setting_source(name)
+    except Exception:                                         # noqa: BLE001
+        return "unknown"
+
+
 def _safe(text: Any) -> str:
     # Config strings can be shell snippets. Their control bytes must never
     # become terminal controls or make the displayed value disagree with it.
@@ -54,11 +65,15 @@ class SettingsEditor:
         return next((item for item in self.entries if item.name == self.selected), None)
 
     def refresh(self, *, force: bool = False) -> None:
-        try:
-            stat = config.global_config_path().stat()
-            stamp = (stat.st_ino, stat.st_mtime_ns, stat.st_size)
-        except OSError:
-            stamp = None
+        # Both layers (R21): a change to this agent's own file is a change too.
+        stamp = []
+        for path in (config.global_config_path(), config.agent_config_path()):
+            try:
+                stat = path.stat() if path is not None else None
+                stamp.append((stat.st_ino, stat.st_mtime_ns, stat.st_size) if stat else None)
+            except OSError:
+                stamp.append(None)
+        stamp = tuple(stamp)
         if not force and stamp == self._stamp:
             return
         self._stamp = stamp
@@ -394,7 +409,11 @@ class SettingsEditor:
                 put(row, line.ljust(width - 1), curses.color_pair(tui.C_SELECTION) | curses.A_BOLD
                     if item.name == self.selected else curses.color_pair(tui.C_TEXT))
             if self.item:
-                put(height - 6, self.selected, curses.A_BOLD)
+                # THE LAYER FIRST, on the setting's own heading: appended to the
+                # reset line, a long default clipped it off for six settings at
+                # 52 columns, and the reset line has to keep its own words at 38.
+                # The name is the highlighted row above, so it can lose columns.
+                put(height - 6, f"set by: {_layer(self.item.name)} · {self.selected}", curses.A_BOLD)
                 about = edit_lines(self.item.about, 0, width - 2)[0]
                 for i, line in enumerate(about[:2], height - 5):
                     put(i, line)

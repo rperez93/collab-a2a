@@ -7,6 +7,7 @@ pitfalls and keeps a multi-line message as a single frame.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -17,6 +18,12 @@ from websockets.asyncio.server import ServerConnection, serve
 from ..protocol import Envelope
 
 logger = logging.getLogger(__name__)
+# Eight participants with four local viewers each fit without retaining an
+# unbounded fan-out set. A slow local viewer must not hold an SSE route change
+# after the event has already been committed to the replay cursor.
+MAX_CLIENTS = 32
+SEND_SECONDS = 1.0
+CLOSE_SECONDS = 1.0
 
 
 class Bridge:
@@ -30,7 +37,8 @@ class Bridge:
         self._server: Any = None
 
     async def start(self) -> int:
-        self._server = await serve(self._handle, self.host, self.requested_port)
+        self._server = await serve(self._handle, self.host, self.requested_port,
+            max_size=1024, max_queue=4, write_limit=64 * 1024, close_timeout=CLOSE_SECONDS)
         # port 0 means "pick one"; report back what we actually got so the CLI
         # can print a Monitor line that works.
         sockets = getattr(self._server, "sockets", None) or []
@@ -45,11 +53,16 @@ class Bridge:
                 await self._server.wait_closed()
 
     async def _handle(self, ws: ServerConnection) -> None:
+        if len(self._clients) >= MAX_CLIENTS:
+            await ws.close(code=1013, reason="local viewer limit reached")
+            return
         self._clients.add(ws)
         try:
-            # Nothing is expected from the viewer; hold the socket until it goes.
+            # This is receive-only for the viewer. One unexpected message
+            # ends intake rather than burning CPU on a flooding local peer.
             async for _ in ws:
-                pass
+                await ws.close(code=1008, reason="the event feed is receive-only")
+                break
         except Exception:
             pass
         finally:
@@ -59,14 +72,21 @@ class Bridge:
         if not self._clients:
             return
         payload = json.dumps(env.to_dict(), ensure_ascii=False)
-        dead = []
-        for ws in list(self._clients):
+        async def send(ws):
             try:
-                await ws.send(payload)
+                await asyncio.wait_for(ws.send(payload), timeout=SEND_SECONDS)
             except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self._clients.discard(ws)
+                self._clients.discard(ws)
+                try:
+                    await asyncio.wait_for(ws.close(code=1013, reason="local viewer is too slow"),
+                                           timeout=CLOSE_SECONDS)
+                except Exception:
+                    transport = getattr(ws, "transport", None)
+                    if transport is not None:
+                        transport.abort()
+        # Parallel, bounded fan-out makes one slow viewer cost one deadline,
+        # rather than one deadline for every subscriber in sequence.
+        await asyncio.gather(*(send(ws) for ws in list(self._clients)))
 
     @property
     def clients(self) -> int:

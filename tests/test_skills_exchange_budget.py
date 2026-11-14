@@ -69,3 +69,15 @@ async def test_a_real_trickling_skill_response_has_a_whole_exchange_deadline(tmp
         server.close()
         await server.wait_closed()
     assert not daemon.paths.skills.exists() and daemon._skills_retry_at > time.time()
+
+
+@pytest.mark.asyncio
+async def test_a_deeply_nested_skill_list_backs_off(tmp_path):
+    """A hostile hub's nesting raised RecursionError past the handler and skipped the backoff."""
+    body = b'[' * 200000 + b']' * 200000
+    daemon = instance(tmp_path)
+    async def transport(request):
+        return httpx.Response(200, headers={'content-length': str(len(body))}, content=body)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        await daemon._fetch_skills(client, ('nested',))
+    assert daemon._skills_retry_at > time.time() and not daemon.paths.skills.exists()

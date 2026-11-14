@@ -50,7 +50,10 @@ The controls stay visible while scrolling. These choices affect only this viewer
 Save defaults with `collab config watch_participant_details true` and
 `collab config watch_participant_fields context,quota,cost,subagents,worker`.
 The ordered fields are `model`, `context`, `quota`, `cost`, `subagents`, `worker`
-and `location`. A saved change reaches an open pane immediately and replaces
+and `location`. `location` also says how many skills the participant shares;
+an expanded worker says how many model calls its budget has left once it is
+pacing itself, and «waiting on their human» while a question it asked is with
+them. A saved change reaches an open pane immediately and replaces
 its temporary field and disclosure choices. Expanded rows wrap to the pane
 width; scroll to reach the remaining rows in a narrow tmux panel.
 

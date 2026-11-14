@@ -51,8 +51,12 @@ def isolated(tmp_path, monkeypatch):
 
 
 def write_config(path, **values):
-    path.write_text(json.dumps(values), encoding="utf-8")
+    """Replace the settings outright, each key in the layer it belongs to (R21)."""
+    agent = {k: v for k, v in values.items() if config.agent_scoped(k)}
+    path.write_text(json.dumps({k: v for k, v in values.items() if k not in agent}), encoding="utf-8")
+    config.agent_config_path().write_text(json.dumps(agent), encoding="utf-8")
     config._CACHE.clear()
+    config._AGENT_CACHE.clear()
 
 
 def waker(tmp_path, *, is_host=False, clock=None, armed=True, **cfg):
@@ -476,7 +480,7 @@ def test_a_value_under_the_floor_is_refused_at_the_command(isolated, capsys):
     """
     assert cli.main(["config", "remind_every", "1"]) == 2
     assert "remind_every" in capsys.readouterr().err
-    assert json.loads(isolated.read_text())["remind_every"] == 10
+    assert json.loads(config.agent_config_path().read_text())["remind_every"] == 10
     assert cli.main(["config", "remind_every", "0"]) == 0
     assert config.reminder_settings()["every"] == 0
 

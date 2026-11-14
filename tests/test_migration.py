@@ -126,8 +126,9 @@ def test_the_history_is_all_still_there(old_db):
 def test_old_direct_messages_stay_private(old_db):
     """Events carried names only; visibility now compares ids.
 
-    Without backfilling them, a message addressed to someone becomes visible
-    to nobody — or, worse, to everybody.
+    Names alone cannot establish who originally held a recycled label. Keep
+    the private record for explicit host recovery, never grant today's holder
+    access or turn an unresolved recipient into a public message.
     """
     store = Store(old_db)
     try:
@@ -135,8 +136,9 @@ def test_old_direct_messages_stay_private(old_db):
         jarvis_sees = [e.text for e in store.since(0, viewer=people["jarvis"])]
         cortana_sees = [e.text for e in store.since(0, viewer=people["cortana"])]
 
-        assert "m2" in jarvis_sees, "the sender sees their own direct message"
-        assert "m2" in cortana_sees, "and so does the recipient"
+        assert "m2" not in jarvis_sees, "a current sender label is not historical proof"
+        assert "m2" not in cortana_sees, "a current recipient label is not historical proof"
+        assert "m2" in [e.text for e in store.history(limit=100)], "private content is retained for explicit host recovery"
 
         store.add_participant("dave", "ccc")
         dave = next(p for p in store.participants() if p.name == "dave")

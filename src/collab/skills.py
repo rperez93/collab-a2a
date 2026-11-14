@@ -233,7 +233,8 @@ with `worker reply` at useful boundaries. Context is not a send guarantee.
 Without a worker, read `recv` at those boundaries. Updates need no acknowledgements.
 
 Use the task board for ownership and acceptance evidence; complete only after
-validation. Unknown/stale quotas are not spare capacity, shared account windows
+validation. Up to two native teammates is the default when independent work
+exists; beyond that, unknown/stale quotas are not spare capacity, shared account windows
 must not be summed, and conversation workers are not native coding children.
 `{executable} --help` lists commands; `{executable} rules` prints the briefing.
 {END}"""

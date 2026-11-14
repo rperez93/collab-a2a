@@ -12,7 +12,9 @@ ${XDG_STATE_HOME:-~/.local/state}/collab/
         agent.lock
         sessions/<collab session id>/
           profile.json
+          routes.json
           worker.db
+          worker.log
 ```
 
 The workspace is the Git checkout root, or the current folder when there is no
@@ -35,11 +37,46 @@ The existing session subdirectory separates hub rooms within that participant's
 state. Detached listeners and viewers receive the exact `COLLAB_HOME`, and
 `workspace.json` preserves the actual working folder for commands and discovery.
 
+`routes.json` records original URL authority, candidates and the local TLS
+certificate, with no bearer or invite. Hosted sessions keep a private
+`local-tls.key` and public `local-tls.crt` beside `hub.json`, both mode 0600.
+Nonregular or oversized records are refused without blocking or replacing them.
+A sidecar preserves compatibility for older readers of `profile.json`.
+
 When enabled, `worker.db` holds that participant's worker configuration, cursor,
 summary, main-agent context and answers, pending decisions, and durable outgoing
 replies. It is separate from the main inbox's read cursor. Model turns use
 private temporary directories outside the repository; durable worker state
 remains with this agent and session.
+
+`worker.log` records one JSON line per worker attempt: an opaque `attempt` id
+(twelve random hex characters, minted when the attempt is reserved), its `phase`
+(`reserved`, `launched`, `committed`), its `outcome` (`output`, `no-op`,
+`invalid` when the provider's answer failed validation, `failed`, `cancelled`
+when the worker was turned off or reconfigured mid-turn, `skipped-local` for a
+counted turn that called no model), the trigger as counts by event kind, the
+provider and model, tokens and cost where the provider reports them,
+`reply_count` and `escalation_count` (the model's escalations, unrouted
+deferrals and skill requests together), the exception class of any failure as
+`error_class` with the provider failure's `kind` and `decision: true` when it
+was put to the main agent, and
+the duration. It never holds message text, names or provider output. Lines are
+written by a background thread off a bounded queue, so a worker turn never
+waits on the disk; code reading the file back in the same process calls
+`collab.logcap.flush()` first. Like `daemon.log`, `hub.log` and
+`ngrok.log`, it is capped at 10 MB including its rotated `worker.log.1`.
+
+The cap is a maximum, not an eventual figure: every write collab makes to a log
+rotates first if it would carry the live file past 3 MiB, and refuses — and
+counts — a write that could not be made without passing the budget. The live
+file, `.1` and a rotation's `.1.tmp` together stay under 9.8 MB. ngrok's output
+reaches `ngrok.log` through a collector process (`python -m collab.logpipe`)
+that writes under the same cap, holds at most 16 KiB of a line, writes at most
+256 KB a second, and ends when ngrok does. The one writer left outside the cap is
+a process's own stderr — an interpreter traceback on a crash; warnings and
+uncaught thread exceptions are routed through the capped logging — and a watcher
+thread in the daemon and the hub, looking once a second, trims it if it ever
+matters; for that path alone the overshoot is what arrives within one second.
 
 ## Existing sessions and explicit homes
 

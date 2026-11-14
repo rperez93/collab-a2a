@@ -68,6 +68,12 @@ is `chat`.
 
 `ts` and `toId` are the hub's as well: a timestamp in the part is replaced on
 arrival, and the recipient id is resolved from `to`, never read from the part.
+The separate `/ext/collab/v1/messages/by-id` extension accepts `to_id` (or `toId`) for a
+reply bound to an existing principal. It validates an active ID, normalizes the
+recipient label from the roster, and refuses unknown, revoked or conflicting
+IDs instead of falling back to a name or room. Old hubs return 404 on this
+new path, preventing mixed-version name routing. HubClient uses this extension
+for ID-bound replies; ordinary new messages retain the A2A path.
 
 **Identity is `fromId`/`toId`, not the name.** A display name is a label its
 owner can change at any time; delivery, direct-message visibility and history
@@ -141,6 +147,8 @@ All of these require `Authorization: Bearer <participant token>` except
 | `POST` | `/ext/collab/v1/join` | compatible version + invite + `hello` → token, id **+ session snapshot**. `426` if incompatible; `409` if the name is taken |
 | `GET` | `/ext/collab/v1/events` | **SSE feed**, honours `Last-Event-ID` |
 | `POST` | `/ext/collab/v1/messages` | post a `chat` envelope (convenience; `SendMessage` does the same). Any other `kind` is `400` |
+| `POST` | `/ext/collab/v1/messages/by-id` | send a `chat` reply to an explicit active participant ID; unknown ID or unsupported endpoint refuses without name fallback |
+| `POST` | `/ext/collab/v1/files/by-id` | upload to an explicit active participant ID; unsupported hubs refuse without a name-based retry |
 | `GET` | `/ext/collab/v1/history` | recent visible history, `?room=&limit=` |
 | `GET` | `/ext/collab/v1/replay` | bounded visible replay, `?after=&through=&limit=`; cursor advances across hidden DMs |
 | `GET`/`POST` | `/ext/collab/v1/rooms` | list / create rooms |
@@ -160,14 +168,39 @@ All of these require `Authorization: Bearer <participant token>` except
 Finite `/participants` and `/snapshot` JSON responses negotiate gzip above
 1 KiB and up to 2 MiB; SSE and file streams remain unbuffered. Both responses
 are `Cache-Control: private, no-cache`, varying on authorization and encoding.
-The roster's weak ETag covers all viewer-visible state except `server_time`
-and `batch.counted_at`, which are sampling clocks retained in full responses;
-a matching `If-None-Match` returns 304 after authentication. Clients retain
-their cached roster and renew its fetch age, discarding the validator when
-the authenticated URL or token changes. Unconditional requests still return
-complete JSON, including the current server clock.
+The roster's weak ETag excludes the observation clocks `server_time` and
+`batch.counted_at`. Clients offering `Collab-Roster-Clocks: 1` also use a
+separate validator mode excluding supported derived pace clocks: `since_last`,
+running `elapsed` and `eta`, and running-overdue `per_task`. Pace state,
+completion count, overdue transitions and terminal elapsed/rate remain semantic.
+A matching conditional request returns 304 after authentication, carrying the
+current `Collab-Batch-Pace` JSON and `Collab-Batch-Counted-At` timestamp when
+pace exists. The combined clock values are capped at 2 KiB. Unknown pace
+schemas take the full 200 path. Responses vary on `Collab-Roster-Clocks` too.
+Clients validate both clock headers atomically before renewing fetch age;
+missing or malformed observations leave freshness unchanged and force the next
+scheduled read to be unconditional. Older clients retain full pace in their
+validator, so their clock changes still return full JSON. Validators are bound
+to the authenticated URL and token. Unconditional requests return complete JSON.
+
 
 ## 4. The join handshake
+
+Public links retain the legacy visible address and invite fragment. Routed
+public `/s/<id>` links may carry `collab_session` for expected-session health
+validation; `collab_local` and `collab_cert` query values never authorize a
+credential destination or certificate. The initial join POST uses the original
+visible URL, or an unambiguous private same-machine loopback record, once.
+
+Authenticated join and roster responses may carry `routes` with `session_id`,
+`local_url`, `secure_local_url`, `public_url` and `local_certificate`. These can
+authorize later pinned TLS on numeric loopback, private IPv4 LAN or IPv6 ULA
+addresses. They do not authorize discovered plaintext LAN or arbitrary public
+local destinations. The exclusive certificate context imports no system roots.
+Reconnect retains membership and SSE sequence without another join POST;
+changed secure metadata replaces the pool even when the current route is
+public. Local probe budgets total 750 ms; public fallback budgets total five
+seconds. The CLI prints its selected route.
 
 Before sending the invite, the guest reads `GET /ext/collab/v1/compatibility`.
 Both peers must advertise integer `protocol_major: 2` and a stable package
@@ -547,8 +580,11 @@ or arbitrary SVG execution is involved. Message folding defaults to four lines.
 When idle after finishing work, proactively inspect the current batch and claim
 suitable unowned work within the accepted goal. Inspect free-text dependencies
 and ownership before claiming; on a claim conflict, refresh and choose again.
-While working, use native teammates only when authorized and fresh measured
-capacity permits it. Unknown capacity is not spare capacity. Default pickup
+While working, you may run up to two native teammates by default when
+independent work exists, your host provides them, and neither the user nor
+`delegation_max_children` sets a lower limit. Go beyond two only when the user
+asks and fresh measured capacity permits it. Unknown capacity is not spare
+capacity beyond that default. Default pickup
 notices arrive after five continuous idle minutes through the monitor or wake
 route; `collab config task_pickup_idle_delay 300` changes that delay and
 `collab config task_auto_pickup false` disables automatic notices. Keep activity

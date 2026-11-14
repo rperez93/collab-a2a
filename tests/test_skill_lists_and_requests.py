@@ -44,11 +44,19 @@ def test_only_the_human_can_consent_a_worker_always_escalates_a_request():
 
 
 class Hub:
-    def __init__(self, history):
+    def __init__(self, history, *, stamp=True):
         self.history_events, self.sent = history, []
+        self.stamp = stamp
     def __enter__(self): return self
     def __exit__(self, *exc): return False
-    def history(self, limit=50): return self.history_events
+    def history(self, limit=50):
+        # Production history is stamped by authenticated hub principals. These
+        # fixtures use fixed synthetic IDs; name recycling has actual API tests.
+        if self.stamp:
+            for env in self.history_events:
+                env.sender_id = env.sender_id or "p_" + env.sender
+                env.to_id = env.to_id or ("p_" + env.to if env.to else "")
+        return self.history_events
     def send(self, env):
         env.seq = 100 + len(self.sent)
         env.sender = self.as_name
@@ -57,7 +65,7 @@ class Hub:
 
 
 def run(monkeypatch, hub, action, target=None, rest=(), to=None, name='alice', approved=True):
-    profile = SimpleNamespace(name=name, participant_id='')
+    profile = SimpleNamespace(name=name, participant_id='p_' + name)
     monkeypatch.setattr(cli, '_require_profile', lambda a: profile)
     monkeypatch.setattr(cli, '_require_own_profile', lambda a: profile)
     monkeypatch.setattr(cli, '_client', lambda p: hub)
@@ -263,3 +271,11 @@ def test_an_unreadable_request_time_counts_as_expired():
     hub = Hub([Envelope(kind='chat', sender='alice', to='bob', seq=1, text='x', ts='not-a-time',
                         body={'skill_request': {'id': 'sr_00000000cccc', 'skill': 'review'}})])
     assert cli._skill_requests(hub, SimpleNamespace(name='bob', participant_id=''))[0]['state'] == 'expired'
+
+
+def test_a_legacy_request_without_a_verified_requester_cannot_receive_sensitive_reply(monkeypatch):
+    """No identity evidence means refusal before consent or reply delivery."""
+    hub = Hub([Envelope(kind='chat', sender='alice', to='bob', seq=1,
+                       body={'skill_request': {'id':'sr_abcdefabcdef','skill':'review'}})], stamp=False)
+    assert run(monkeypatch, hub, 'decline', 'sr_abcdefabcdef', name='bob') == 1
+    assert hub.sent == []

@@ -19,7 +19,13 @@ You need the following:
 - Git.
 - Optional: [ngrok](https://ngrok.com/download), if you want to share a session
   with someone on another network.
-  Without it, a session is reachable on your machine and local network only.
+  Without it, a session stays on your machine unless the host explicitly binds
+  a reachable private interface.
+- Optional: OpenSSL, to create the session certificate. Automatic secure LAN
+  selection requires a reachable private address exposed with `collab host --bind`
+  and supplied by authenticated host metadata; a join link alone cannot authorize
+  it. The default loopback entrance stays on the host machine. Hosting preserves
+  the public route if local TLS is unavailable. See [local and public routes](local-routes.md).
 
 ### Supported platforms
 
@@ -117,8 +123,11 @@ The host runs the hub.
    collab join https://a1b2c3.ngrok.app#FDfwPVPWMibkxPjq_ctcQMsZmqtMU4j1DxCK
    ```
 
-   The part after `#` is a one-time invite code.
+   The part after `#` is the invite code.
    It travels in the URL fragment, so it stays out of server and proxy logs.
+   The first join uses this visible address or verified same-machine discovery;
+   authenticated metadata can then select secure local transport. The join
+   output prints the selected route.
 
 To keep the same public address across tunnel restarts, pin a reserved ngrok
 domain:
@@ -211,8 +220,11 @@ animation, dimmed PNG/JPEG backgrounds and reduced motion are described in
 When idle after finishing work, proactively inspect the current batch and claim
 suitable unowned work within the accepted goal. Inspect free-text dependencies
 and ownership before claiming; on a claim conflict, refresh and choose again.
-While working, use native teammates only when authorized and fresh measured
-capacity permits it. Unknown capacity is not spare capacity. Default pickup
+While working, you may run up to two native teammates by default when
+independent work exists, your host provides them, and neither the user nor
+`delegation_max_children` sets a lower limit. Go beyond two only when the user
+asks and fresh measured capacity permits it. Unknown capacity is not spare
+capacity beyond that default. Default pickup
 notices arrive after five continuous idle minutes through the monitor or wake
 route; `collab config task_pickup_idle_delay 300` changes that delay and
 `collab config task_auto_pickup false` disables automatic notices. Keep activity

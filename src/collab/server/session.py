@@ -6,6 +6,7 @@ import contextlib
 import json
 import os
 import secrets
+import shlex
 from dataclasses import asdict, dataclass
 from typing import Any
 from pathlib import Path
@@ -72,6 +73,9 @@ class HubConfig:
     pid_stamp: str = ""
     tunnel_stamp: str = ""
     working_path: str = ""
+    #: Optional pinned-certificate entrance; HTTP/tunnel routes remain usable
+    #: when local TLS setup is unavailable. Written only by the serving hub.
+    secure_port: int = 0
 
     def __post_init__(self) -> None:
         if not self.home:
@@ -108,6 +112,16 @@ class HubConfig:
         if ":" in host and not host.startswith("["):
             host = f"[{host}]"
         return f"http://{host}:{self.port}"
+
+    @property
+    def secure_local_url(self) -> str:
+        if not self.secure_port:
+            return ""
+        from urllib.parse import urlsplit
+        host = urlsplit(self.local_url).hostname
+        if ":" in host:
+            host = f"[{host}]"
+        return f"https://{host}:{self.secure_port}"
 
     def save(self) -> None:
         """Write it whole, or not at all.
@@ -458,4 +472,20 @@ def _daemon_pid(cfg: HubConfig) -> Stamp:
 def join_line(cfg: HubConfig) -> str:
     """The single line a host hands to someone else."""
     base = cfg.public_url or cfg.local_url
-    return f"collab join {base}#{cfg.invite}"
+    if base == cfg.local_url:
+        # Preserve the exact legacy local-only line, including its fragment.
+        return f"collab join {base}#{cfg.invite}"
+    if base != cfg.local_url:
+        from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+        parsed = urlsplit(base)
+        query = [(key, value) for key, value in parse_qsl(parsed.query)
+                 if key not in {"collab_session", "collab_local", "collab_cert"}]
+        # Ordinary links keep their short legacy spelling. Routed public
+        # paths carry only the expected session id for pre-credential health
+        # checking; local destinations/certificates arrive after the join.
+        if parsed.path.rstrip("/").endswith("/s/" + cfg.session_id):
+            query.append(("collab_session", cfg.session_id))
+        base = urlunsplit((parsed.scheme, parsed.netloc, parsed.path,
+                          urlencode(query), ""))
+    link = f"{base}#{cfg.invite}"
+    return "collab join " + (shlex.quote(link) if "?" in base else link)

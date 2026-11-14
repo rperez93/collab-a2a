@@ -12,6 +12,8 @@ import hashlib
 import json
 from typing import Any
 
+from collab import roster_clocks
+
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -48,49 +50,53 @@ def _encoding_qualities(value: str) -> dict[str, float]:
     return qualities
 
 
-def _roster_parts(payload: dict[str, Any]) -> tuple[list[bytes], str]:
-    """Encode each value once, sharing its bytes between the body and weak tag.
+def _roster_parts(payload: dict[str, Any], *, clocks: bool = False) -> tuple[list[bytes], str]:
+    """Encode each value once; omit only supported observation clocks from the tag.
 
-    Two observation clocks advance even when the room stands still:
-    server_time and batch.counted_at. A started or even CLOSED batch therefore
-    defeated the old validator on every read. Exclude exactly those clocks
-    from the semantic digest, while retaining both in the JSON response.
-
-    Encoding a second whole canonical payload cost another large serialization
-    on the hub event loop. Hash sorted field/value chunks as they are encoded,
-    then reuse those same chunks for the wire body. Only the small batch clock
-    field is spliced back before that object's final brace; no regex searches,
-    recursive clock-name filtering, or second whole-payload buffer is needed.
+    The opt-in clock mode transports authoritative pace in bounded headers on
+    304 responses. Its separate digest domain prevents legacy clients reusing
+    a validator whose omitted pace they cannot refresh. Traversal stops after
+    the three protocol objects: clock-shaped names inside user data remain
+    ordinary state, and large task values are encoded only once.
     """
     encoder = json.JSONEncoder(ensure_ascii=False, allow_nan=False,
                                separators=(",", ":"), sort_keys=True)
-    digest = hashlib.sha256(b"{")
-    parts = [b"{"]
-    semantic_fields = 0
-    for key, value in sorted(payload.items()):
-        prefix = encoder.encode(key).encode("utf-8") + b":"
-        if len(parts) > 1:
-            parts.append(b",")
-        parts.append(prefix)
-        if key == "batch" and isinstance(value, dict) and "counted_at" in value:
-            batch = {name: field for name, field in value.items() if name != "counted_at"}
-            encoded = encoder.encode(batch).encode("utf-8")
-            parts.extend((encoded[:-1], b"," if batch else b"",
-                          b'"counted_at":', encoder.encode(value["counted_at"]).encode("utf-8"),
-                          b"}"))
-        else:
-            encoded = encoder.encode(value).encode("utf-8")
-            parts.append(encoded)
-        if key != "server_time":
-            if semantic_fields:
-                digest.update(b",")
-            digest.update(prefix)
-            digest.update(encoded)
-            semantic_fields += 1
-        # The batch's clockless bytes are not kept beside its wire slice.
-        del encoded
-    parts.append(b"}")
-    digest.update(b"}")
+    batch = payload.get("batch")
+    pace = batch.get("pace") if isinstance(batch, dict) else None
+    supported = clocks and roster_clocks.clock_headers(batch) is not None
+    ignored = {("server_time",), ("batch", "counted_at")}
+    if supported:
+        ignored.add(("batch", "pace", "since_last"))
+        if pace["state"] == "running":
+            ignored.update(("batch", "pace", key) for key in ("elapsed", "eta"))
+            if pace["overdue"]:
+                ignored.add(("batch", "pace", "per_task"))
+
+    def fields(obj, path=()):
+        wire, semantic = [b"{"], [b"{"]
+        for key, value in sorted(obj.items()):
+            prefix = encoder.encode(key).encode("utf-8") + b":"
+            here = (*path, key)
+            if here in (("batch",), ("batch", "pace")) and isinstance(value, dict):
+                encoded, hashed = fields(value, here)
+            else:
+                encoded = [encoder.encode(value).encode("utf-8")]
+                hashed = encoded
+            if len(wire) > 1:
+                wire.append(b",")
+            wire.extend((prefix, *encoded))
+            if here not in ignored:
+                if len(semantic) > 1:
+                    semantic.append(b",")
+                semantic.extend((prefix, *hashed))
+        wire.append(b"}")
+        semantic.append(b"}")
+        return wire, semantic
+
+    parts, semantic = fields(payload)
+    digest = hashlib.sha256(b"roster-clocks-v1:" if clocks else b"")
+    for part in semantic:
+        digest.update(part)
     return parts, 'W/"' + digest.hexdigest() + '"'
 
 
@@ -106,21 +112,26 @@ def roster_response(payload: dict[str, Any], request: Request, *,
     and gzip and identity use different bytes for the same state.
     """
     headers = {"Cache-Control": "private, no-cache",
-               "Vary": "Authorization, Accept-Encoding"}
+               "Vary": "Authorization, Accept-Encoding, Collab-Roster-Clocks"}
     qualities = _encoding_qualities(request.headers.get("accept-encoding", ""))
     gzip_quality = qualities.get("gzip", qualities.get("*", 0.0))
     identity_quality = qualities.get("identity", 0.0 if qualities.get("*") == 0 else 1.0)
     if gzip_quality <= 0 and identity_quality <= 0:
         return Response(status_code=406, headers=headers)
     if conditional:
-        parts, tag = _roster_parts(payload)
+        clocks = request.headers.get(roster_clocks.OFFER) == "1"
+        parts, tag = _roster_parts(payload, clocks=clocks)
         headers["ETag"] = tag
         # If-None-Match uses weak comparison for GET. Each tag is a digest,
         # so commas cannot occur within it and a list is safe to split here.
         offered = request.headers.get("if-none-match", "")
         if any(part.strip() == "*" or part.strip().removeprefix("W/") == tag[2:]
                for part in offered.split(",")):
-            return Response(status_code=304, headers=headers)
+            clock_values = roster_clocks.clock_headers(payload.get("batch")) if clocks else None
+            has_pace = isinstance(payload.get("batch"), dict) and payload["batch"].get("pace") is not None
+            # Unsupported future/malformed pace needs its full JSON body.
+            if not clocks or not has_pace or clock_values is not None:
+                return Response(status_code=304, headers={**headers, **(clock_values or {})})
         response = Response(b"".join(parts), media_type="application/json", headers=headers)
         del parts
     else:

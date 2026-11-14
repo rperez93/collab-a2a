@@ -95,7 +95,11 @@ class CollabAgentExecutor(AgentExecutor):
                 raise InvalidParamsError(message=reason)
         env.sender_id = sender_id
         if env.to:
-            env.to_id = self.hub.store.resolve_name(env.to) or ""
+            target_id = self.hub.store.resolve_name(env.to)
+            target = self.hub.store.participant_by_id(target_id) if target_id else None
+            if target is None or target.revoked:
+                raise InvalidParamsError(message="no active target participant")
+            env.to, env.to_id = target.name, target.id
         try:
             env = await self.hub.publish(env)
         except MessageRefused as exc:

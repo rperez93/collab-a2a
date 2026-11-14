@@ -10,6 +10,12 @@
 Instructions for a coding agent. Run these in order. No prose, no options you
 do not need.
 
+Keep supplied join links whole, including the invite fragment and any expected
+session-id hint. Query destinations/certificates do not authorize credentials:
+join through the original visible address or verified private local discovery.
+The authenticated response can then establish local TLS for later traffic.
+See [local routes](docs/local-routes.md).
+
 ## 0. Rule
 
 Never `pip install` into the system Python — use `pipx`, `uv tool`, or a
@@ -74,7 +80,10 @@ command, so never edit the config file directly.
 .venv/bin/collab stats --share off   # stop sharing usage (on by default)
 ```
 
-The name falls back to `git config user.name`, then `$USER`. Session state,
+With no name of its own, the first agent on the machine adopts a legacy
+machine-wide `display_name` (and says so; it is then retired from the machine
+file), and every other agent answers to its kind and a stable suffix such as
+`claude-3f2a91c0` — never the person's git name or account. Session state,
 by contrast, lives outside the checkout, isolated by repository and agent session.
 
 ## 3a. To START a session
@@ -600,6 +609,12 @@ it, nearest first; otherwise the quota is «nested tools; cannot attribute».
 A stale inherited marker therefore reads as unknown – the accepted cost.
 Explicit sources and cleared sources take precedence. `stats_auto_setup false` disables
 future automatic setup and automatic polling, without removing existing hooks.
+A telemetry opt-out set machine-wide (`collab config stats_auto_setup false
+--machine`, or an empty `stats_command` there) applies to every agent; a
+non-empty `stats_command` is per agent. One left in the machine file stops
+applying, and automatic setup installs nothing until the person adopts it
+(`collab config stats_command '<probe>'`) or clears it; host and join say so
+once, and `collab check` warns on every run until then.
 Main and worker usage remain separate; native worker usage continues to collect.
 Roster/activity refresh and chat delivery do not wait for slow usage commands.
 The roster refreshes every three seconds and becomes unknown after 30 seconds
@@ -610,8 +625,11 @@ for controls, source limits and diagnosis.
 When idle after finishing work, proactively inspect the current batch and claim
 suitable unowned work within the accepted goal. Inspect free-text dependencies
 and ownership before claiming; on a claim conflict, refresh and choose again.
-While working, use native teammates only when authorized and fresh measured
-capacity permits it. Unknown capacity is not spare capacity. Default pickup
+While working, you may run up to two native teammates by default when
+independent work exists, your host provides them, and neither the user nor
+`delegation_max_children` sets a lower limit. Go beyond two only when the user
+asks and fresh measured capacity permits it. Unknown capacity is not spare
+capacity beyond that default. Default pickup
 notices arrive after five continuous idle minutes through the monitor or wake
 route; `collab config task_pickup_idle_delay 300` changes that delay and
 `collab config task_auto_pickup false` disables automatic notices. Keep activity

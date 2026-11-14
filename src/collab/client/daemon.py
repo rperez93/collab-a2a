@@ -25,9 +25,9 @@ import httpx
 from httpx_sse import aconnect_sse
 
 from .. import (__version__, activity as act, diagnostics, lockfile,
-               owner as ownership, peers, wake)
+               owner as ownership, peers, roster_clocks, wake)
 from ..batch import DELTA_SHOWN_FOR
-from ..config import (SessionProfile, follow_agent_enabled, repo_for_home,
+from ..config import (current_kind, SessionProfile, follow_agent_enabled, repo_for_home,
                       share_stats_enabled, stats_source)
 from ..compatibility import request_headers, check_host
 from ..protocol import (EXT_PREFIX, KIND_CHAT, KIND_HELLO, KIND_PRESENCE, KIND_ACTIVITY,
@@ -41,6 +41,7 @@ from . import exclusive
 # importing this module to do it cost them httpx, websockets and asyncio for
 # the async class below. The names stay importable from here so nothing that
 # already reads them off `client.daemon` has to move.
+from .daemon_files import open_log
 from .daemon_files import (DEAD_AFTER, POLL_FILE, STALE_AFTER,  # noqa: F401
                            DaemonPaths, _alive, _started_at,
                            effective_state, is_running, last_poll, polled,
@@ -1698,6 +1699,11 @@ class Daemon:
 
         before = self.waker.last_delivery
         try:
+            # Revalidated here, not only at claim: an answer may land between
+            # the claim and this task running. A stale notice is dropped and
+            # the next tick claims whatever is true then.
+            if not worker_notices.still_current(self.profile.dir, notice["token"]):
+                return
             await self._wake(None, notice["text"])
             if self.waker.last_delivery > before:
                 worker_notices.commit(self.profile.dir, notice["token"])
@@ -2629,6 +2635,8 @@ class Daemon:
 
     async def _fetch_snapshot(self, client: httpx.AsyncClient) -> None:
         try:
+            from .. import routes
+            generation = routes.generation(self.profile)
             # Validators belong to one authenticated URL, never to a different
             # route/session after reconnect. An older hub simply omits ETag and
             # continues serving ordinary full responses.
@@ -2638,15 +2646,38 @@ class Daemon:
             r = await client.get(
                 f"{self.profile.url}{EXT_PREFIX}/participants",
                 headers=request_headers(self.profile.token,
-                                        {"If-None-Match": etag} if etag else None),
+                                        {roster_clocks.OFFER: "1", **({"If-None-Match": etag} if etag else {})}),
                 timeout=10.0,
             )
+            if generation != routes.generation(self.profile):
+                return
             if r.status_code == 200 or (r.status_code == 304 and etag and self.snapshot):
+                if r.status_code == 304:
+                    batch = self.snapshot.get("batch")
+                    if isinstance(batch, dict) and batch.get("pace") is not None:
+                        observed = roster_clocks.read_clocks(r.headers)
+                        if observed is None:
+                            # A stripping proxy or old hub must not renew a
+                            # cached ETA over an old observation. Force the
+                            # next scheduled read to recover with full JSON.
+                            self._snapshot_etag = None
+                            self._snapshot_error = "conditional roster omitted valid pace clocks"
+                            return
+                        self.snapshot["batch"] = {**batch, **observed}
                 self._snapshot_error = ""
                 if r.status_code == 200:
                     self.snapshot = r.json()
                     self._snapshot_target = target
                     self._snapshot_etag = r.headers.get("etag")
+                    metadata = self.snapshot.get("routes")
+                    if metadata is not None:
+                        routes.remember(self.profile, metadata,
+                                        original_url=self.profile.url,
+                                        expected=(generation[0], generation[1]))
+                        if routes.generation(self.profile)[2:] != generation[2:]:
+                            changed = getattr(self, "_route_changed", None)
+                            if changed is not None:
+                                changed.set()
                     self._adopt_identity()
                 # The viewer reads this instead of the network, so it keeps
                 # working while the hub is briefly unreachable.
@@ -2744,7 +2775,8 @@ class Daemon:
                 tmp.replace(self.paths.skills)
                 if "participants" in data:
                     self._skills_etag = new_etag  # only once the cache it validates exists
-        except (httpx.HTTPError, ValueError, OSError):
+        except (httpx.HTTPError, ValueError, OSError, RecursionError):
+            # RecursionError: a hostile hub's deeply nested JSON must back off too.
             Daemon._skill_refresh_failed(self)
             return
         self._skills_backoff, self._skills_retry_at = 0.0, 0.0
@@ -2794,7 +2826,7 @@ class Daemon:
             self.profile.save(make_current=False)
 
     def _hub_address(self) -> str:
-        return saved_hub_address(self.profile)
+        return saved_hub_address(self.profile, prefer_local=True)
 
     def _revive_hub_if_host(self) -> None:
         """Restart our own hub if it died — same session, same tokens.
@@ -2817,13 +2849,20 @@ class Daemon:
             return  # still alive; this is a network problem, not a dead hub
 
         logger.warning("hub process %s is gone; restarting it", cfg.pid)
-        log = (self.paths.root / "hub.log").open("a")
-        subprocess.Popen(
-            [sys.executable, "-m", "collab.hub_main", cfg.session_id],
-            stdout=log, stderr=log, stdin=subprocess.DEVNULL,
-            start_new_session=True,
-            env={**os.environ, "COLLAB_HOME": cfg.home},
-        )
+        # THE LOG OPENER, closed once the child has it: a bare `open("a")` here
+        # leaked one descriptor per restart into this long-lived process. Not
+        # trimmed HERE — this runs on the event loop, and a trim is a copy of
+        # up to a generation — but by this daemon's own `logcap` watcher
+        # thread, which on a host watches `hub.log` (see daemon_main), so a hub
+        # that dies before its own watcher starts is still capped.
+        with open_log(self.paths.root / "hub.log", trim=False) as log:
+            subprocess.Popen(
+                [sys.executable, "-m", "collab.hub_main", cfg.session_id],
+                stdout=log, stderr=log, stdin=subprocess.DEVNULL,
+                start_new_session=True,
+                env={**os.environ, "COLLAB_HOME": cfg.home,
+                     **({"COLLAB_AGENT_KIND": k} if (k := current_kind()) else {})},
+            )
 
     # --- the feed --------------------------------------------------------------
 
@@ -2964,48 +3003,71 @@ class Daemon:
 
     async def _connect_forever(self) -> None:
         backoff = BACKOFF_START
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=READ_TIMEOUT)) as client:
-            self._http = None
-            while not self._stop.is_set():
-                try:
+        self._http = None
+        while not self._stop.is_set():
+            try:
+                from .. import routes
+                selected = await routes.select(self.profile)
+                if not selected:
+                    raise RuntimeError("no authenticated session route is reachable")
+                if selected != self.profile.url:
+                    self.profile.url = selected
+                    self.profile.save(make_current=False)
+                # Each reconnect builds a new pool. A certificate change must
+                # never reuse connections authenticated with the previous pin.
+                async with httpx.AsyncClient(
+                        timeout=httpx.Timeout(10.0, read=READ_TIMEOUT),
+                        limits=httpx.Limits(max_connections=8, max_keepalive_connections=2),
+                        **routes.options(self.profile)) as client:
                     # Persisted v1 profiles skip /join entirely. Check the
                     # running host before heartbeat/worker code can use a token.
                     await check_host(client, self.profile.url)
                     self._http = client
+                    self._route_changed = asyncio.Event()
                     await self._refresh_snapshot(client)
-                    await self._stream_once(client)
+                    stream = asyncio.create_task(self._stream_once(client))
+                    changed = asyncio.create_task(self._route_changed.wait())
+                    try:
+                        await asyncio.wait({stream, changed}, return_when=asyncio.FIRST_COMPLETED)
+                        if self._route_changed.is_set():
+                            raise RuntimeError("the local route certificate changed")
+                        await stream
+                    finally:
+                        stream.cancel()
+                        changed.cancel()
+                        await asyncio.gather(stream, changed, return_exceptions=True)
                     self._http = None
                     backoff = BACKOFF_START
-                except asyncio.CancelledError:
-                    self._http = None
-                    raise
-                except Exception as exc:  # any drop is a reconnect, not a crash
-                    self._http = None
-                    self.state = "reconnecting"
-                    self.connected_since = None
-                    self.failures += 1
-                    # REVIVE FIRST, THEN FOLLOW. Reviving writes the new
-                    # address into hub.json; reading it beforehand meant the
-                    # host published the pre-move address on the very cycle
-                    # that moved it, and needed another failed cycle — up to
-                    # BACKOFF_CAP plus jitter — to catch up with itself.
-                    self._revive_hub_if_host()
-                    self._follow_url_change()
-                    self.write_status()
-                    logger.warning("feed dropped (%s); retrying in %.1fs", exc, backoff)
-                    # THE EXCEPTION'S TYPE, NOT ITS TEXT. An httpx error's
-                    # message carries the URL it was talking to, which is the
-                    # host's tunnel address — the one thing a public bug report
-                    # must not contain. `_safe` would strip it; not passing it
-                    # is better than relying on that.
-                    diagnostics.log("feed_dropped", why=type(exc).__name__,
-                                    failures=self.failures,
-                                    retry_in=round(backoff, 1))
-                    # Jitter keeps several agents from stampeding a restarted hub.
-                    delay = backoff * (0.5 + random.random())
-                    with contextlib.suppress(asyncio.TimeoutError):
-                        await asyncio.wait_for(self._stop.wait(), timeout=delay)
-                    backoff = min(backoff * 2, BACKOFF_CAP)
+            except asyncio.CancelledError:
+                self._http = None
+                raise
+            except Exception as exc:  # any drop is a reconnect, not a crash
+                self._http = None
+                self.state = "reconnecting"
+                self.connected_since = None
+                self.failures += 1
+                # REVIVE FIRST, THEN FOLLOW. Reviving writes the new
+                # address into hub.json; reading it beforehand meant the
+                # host published the pre-move address on the very cycle
+                # that moved it, and needed another failed cycle — up to
+                # BACKOFF_CAP plus jitter — to catch up with itself.
+                self._revive_hub_if_host()
+                self._follow_url_change()
+                self.write_status()
+                logger.warning("feed dropped (%s); retrying in %.1fs", exc, backoff)
+                # THE EXCEPTION'S TYPE, NOT ITS TEXT. An httpx error's
+                # message carries the URL it was talking to, which is the
+                # host's tunnel address — the one thing a public bug report
+                # must not contain. `_safe` would strip it; not passing it
+                # is better than relying on that.
+                diagnostics.log("feed_dropped", why=type(exc).__name__,
+                                failures=self.failures,
+                                retry_in=round(backoff, 1))
+                # Jitter keeps several agents from stampeding a restarted hub.
+                delay = backoff * (0.5 + random.random())
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(self._stop.wait(), timeout=delay)
+                backoff = min(backoff * 2, BACKOFF_CAP)
 
     async def _stream_once(self, client: httpx.AsyncClient) -> None:
         resume = self.inbox.last_seq()
@@ -3065,10 +3127,30 @@ class Daemon:
                     self._note_task_boundary(env)
                     self._note_fresh_session(env)
                     self.waker.note(env, own_name=self.profile.name)
-                    await self.bridge.broadcast(env)
-                    if env.kind in REFRESHES_THE_SNAPSHOT:
-                        self._request_snapshot(client)
-                    self.write_status()
+                    delivery = asyncio.create_task(self.bridge.broadcast(env))
+                    try:
+                        # record() already advanced the replay cursor. Finish
+                        # this bounded local delivery before a route change
+                        # closes the old feed, or reconnect skips the event
+                        # that the bridge never received. Shutdown can cancel
+                        # the stream AGAIN while its reconnect gather waits;
+                        # a single second shield would abandon delivery then.
+                        interrupted = False
+                        while not delivery.done():
+                            try:
+                                await asyncio.shield(delivery)
+                            except asyncio.CancelledError:
+                                interrupted = True
+                        # A cancelled/failed delivery is terminal too. Read its
+                        # result before propagating caller cancellation so the
+                        # retry loop cannot spin on a cancelled child task.
+                        delivery.result()
+                        if interrupted:
+                            raise asyncio.CancelledError
+                    finally:
+                        if env.kind in REFRESHES_THE_SNAPSHOT:
+                            self._request_snapshot(client)
+                        self.write_status()
 
 
 async def run_daemon(profile: SessionProfile, *, bridge_port: int = 0) -> None:
@@ -3139,8 +3221,9 @@ def saved_hub_address(profile: SessionProfile, *, prefer_local: bool = False) ->
     local user can compute ours. What actually holds is that the registry is
     the user's own private directory (`announce` keeps it 0700) and that
     nothing but a loopback address is ever adopted from it. On a shared
-    COLLAB_PEERS_DIR the first of those is gone, and the second is all that
-    stands between a planted record and this agent's token.
+    COLLAB_PEERS_DIR that ownership premise is gone. Such a registry may
+    describe peers, but private_records refuses automatic credential
+    routing through it; loopback syntax alone is not enough.
 
     AND IT ONLY RUNS AFTER A RECONNECT HAS FAILED. A feed that is up is
     never interrupted to go reading files, so a remote guest talking happily
@@ -3153,8 +3236,10 @@ def saved_hub_address(profile: SessionProfile, *, prefer_local: bool = False) ->
         # A hub.json with no port yet — written but not started — composes
         # to `http://:0`, which is truthy and would be saved over a working
         # address. An address with no host in it is not an address.
-        mine = (cfg.local_url if prefer_local and _is_loopback(cfg.local_url)
-                else (cfg.public_url or cfg.local_url))
+        # A host's tunnel can flap while its own listener remains live.
+        # Returning the public URL here undid local selection on every
+        # reconnect, flipping the saved profile between local/public.
+        mine = cfg.local_url if prefer_local else (cfg.public_url or cfg.local_url)
         return mine if _has_host(mine) else ""
 
     here, user = peers.machine_id(), peers.current_user()
@@ -3164,14 +3249,14 @@ def saved_hub_address(profile: SessionProfile, *, prefer_local: bool = False) ->
     # no sign that it had chosen — and it prunes dead records as a side
     # effect, which is not a thing to do from inside a reconnect loop while
     # everybody else's daemon is reconnecting too.
-    for peer in peers.live_records(profile.session_id):
+    from ..routes import private_records
+    for peer in private_records(profile.session_id):
         if (peer.role != "host"
                 or peer.machine_id != here or peer.user != user):
             continue
-        # Liveness is not checked here: `discover` already drops records
-        # whose process is gone, and for a HOST record that process is the
-        # hub itself — a host announces its hub's pid, not its own. A second
-        # check here would read as the guard and never fire.
+        # private_records already checked process liveness without pruning
+        # another participant's record. A host announces the hub pid, so
+        # that check names the serving process rather than the agent.
         found.append(peer)
 
     # AMBIGUITY IS NOT AN ANSWER. A session directory copied into another
