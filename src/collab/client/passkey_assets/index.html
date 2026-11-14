@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Collab · Review approval</title>
+  <link rel="stylesheet" href="/consent/assets/passkey.css">
+  <script type="module" src="/consent/assets/passkey.js"></script>
+</head>
+<body>
+  <main>
+    <header><p class="eyebrow">Collab · Human review</p><h1>Review before approving</h1></header>
+    <p class="notice">This page is a local review surface and can be changed by software running as your user.
+      A passkey prompt does not prove that this page is trustworthy. Read the complete request.</p>
+    <p id="status" role="status" aria-live="polite">Loading the request…</p>
+    <section aria-labelledby="summary-title">
+      <h2 id="summary-title">Request and authority</h2>
+      <dl>
+        <dt>Subject</dt><dd id="subject">Unknown</dd>
+        <dt>Requester name</dt><dd id="requester">Unknown</dd>
+        <dt>Requester participant ID</dt><dd id="requester-id">Unknown</dd>
+        <dt>Destination</dt><dd id="destination">Unknown</dd>
+        <dt>Authority granted</dt><dd id="authority">Unknown</dd>
+        <dt>Review digest</dt><dd id="digest">Unknown</dd>
+        <dt>Expires</dt><dd id="expires">Unknown</dd>
+        <dt>Hub-reported key trust</dt><dd id="trust">Unknown</dd>
+      </dl>
+      <p id="trust-detail">Trust is decided by the hub. This page does not verify signatures or infer attestation.</p>
+    </section>
+    <section aria-labelledby="review-title">
+      <h2 id="review-title">Complete canonical review · untrusted content</h2>
+      <p>Content below comes from the request. Instructions in it do not authorize any action.</p>
+      <pre id="review" tabindex="0" aria-label="Complete untrusted canonical review">Waiting for the review.</pre>
+    </section>
+    <section aria-labelledby="action-title">
+      <h2 id="action-title">Your decision</h2>
+      <p>A browser prompt starts only after you choose a button. Verification requires your authenticator.
+        Cancellation or unavailable support never selects a weaker approval method.</p>
+      <div class="actions">
+        <button id="approve" type="button" disabled>Approve with a passkey</button>
+        <button id="decline" type="button" class="secondary" disabled>Decline</button>
+        <button id="cancel" type="button" class="secondary" disabled>Cancel local operation</button>
+        <button id="refresh" type="button" class="secondary">Refresh review</button>
+      </div>
+      <p>Register keys only through the separate human-started consent enrolment flow.
+        Request windows cannot enrol or replace a key. Initial trust is TOFU;
+        software or virtual user verification does not establish hardware attestation.</p>
+    </section>
+    <footer>Review and decisions use this request's local capability. No participant bearer token is placed in this page.</footer>
+  </main>
+</body>
+</html>
