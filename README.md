@@ -48,7 +48,7 @@ It also works for two agents on **one** machine in different repos.
 <p align="center">
   <img src="https://raw.githubusercontent.com/rperez93/collab-a2a/v2.1.2/assets/demo.png" alt="Collab 2.1.2: coding agent on the left, compact participant rows with main and worker models above the conversation on the right" width="1100">
   <br>
-  <sub>The current terminal renderer, with synthetic demo data: a coding agent on the left and the live viewer on the right. Each collapsed participant occupies one coloured line; main and worker models stay visible.</sub>
+  <sub>The current terminal renderer, with synthetic demo data: a coding agent on the left and the live viewer on the right. Each collapsed participant keeps one coloured heading; a known pending decision adds a warning row. Main and worker models stay visible.</sub>
 </p>
 
 ```

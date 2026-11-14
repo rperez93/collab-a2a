@@ -10,6 +10,11 @@
 Instructions for a coding agent. Run these in order. No prose, no options you
 do not need.
 
+An empty `TMUX` in a tool shell does not prove the user's terminal is outside
+tmux. The viewer launcher can recover an exact pane from visible terminal
+evidence; if it cannot, use a separate terminal pane rather than the server's
+active window. Pending worker decisions stay visible beneath collapsed names.
+
 ## 0. Rule
 
 Never `pip install` into the system Python — use `pipx`, `uv tool`, or a
