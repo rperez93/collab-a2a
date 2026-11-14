@@ -29,6 +29,13 @@ logger = logging.getLogger("collab.proxy")
 CHECK_SECONDS = 15.0
 
 
+def _record_ngrok(state: proxy.ProxyState, supervisor) -> None:
+    """The ngrok pid we started, with its stamp; 0 when we reuse another's."""
+    pid = supervisor.own_pid() if supervisor is not None else 0
+    state.ngrok_pid = pid
+    state.ngrok_stamp = exclusive.stamp(pid) if pid else ""
+
+
 def lock_root() -> "os.PathLike[str]":
     root = proxy.state_dir() / "proxy"
     root.mkdir(parents=True, exist_ok=True)
@@ -42,7 +49,9 @@ async def _supervise(server, supervisor, routes: proxy.Routes,
         await asyncio.sleep(CHECK_SECONDS if supervisor else 1.0)
         if supervisor is not None:
             url, _changed = await asyncio.to_thread(supervisor.ensure)
-            if url != state.public_url:
+            pid_before = state.ngrok_pid
+            _record_ngrok(state, supervisor)
+            if url != state.public_url or state.ngrok_pid != pid_before:
                 state.public_url = url
                 state.save()
                 logger.warning("public address is now %s", url or "(none)")
@@ -95,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
         if supervisor.last_error:
             logger.warning("tunnel did not start: %s", supervisor.last_error)
     state.public_url = supervisor.public_url if supervisor else ""
+    _record_ngrok(state, supervisor)
     state.save()
 
     config = uvicorn.Config(proxy.build_app(routes), host="127.0.0.1", port=port,
@@ -119,6 +129,7 @@ def main(argv: list[str] | None = None) -> int:
         # Leave a state that says nobody is serving, rather than a pid that the
         # next boot may hand to an unrelated process.
         state.pid, state.public_url, state.stamp = 0, "", ""
+        state.ngrok_pid, state.ngrok_stamp = 0, ""
         with contextlib.suppress(OSError):
             state.save()
         lock.release()
