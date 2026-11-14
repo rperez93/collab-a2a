@@ -6449,8 +6449,13 @@ def cmd_worker(args: argparse.Namespace) -> int:
             store.off()
             ok("collaboration worker disabled; pending decisions and replies are preserved")
         elif args.worker_action == "reply" and getattr(args, "awaiting_human", False):
+            local_recovery = next((row.get("local_only", False) for row in store.pending()
+                                   if row["id"] == args.decision_id), False)
             to, room = _decision_source(profile, store, args.decision_id)
             record = store.await_human(args.decision_id, args.text, to=to, room=room)
+            if local_recovery:
+                ok("local recovery waits on your human; no peer or model was notified")
+                return 0
             onboard.ensure_daemon(profile, wait=False)
             ok("decision kept open while your human decides"
                + (f"; the peer is told: {record}" if record else ""))
@@ -6477,8 +6482,11 @@ def cmd_worker(args: argparse.Namespace) -> int:
                 return 2
             store.answer(args.decision_id, args.text, verbatim=verbatim, notify_to=to, notify_room=room)
             # Queued: the durable outbox delivers it; nothing was sent yet.
-            ok(f"queued for {('@' + said(to)) if to else ('#' + said(room))} verbatim" if verbatim
-               else "decision queued for the collaboration worker")
+            if record.get("local_only"):
+                ok("recovery noted locally; the quarantined answer remains held and was not sent")
+            else:
+                ok(f"queued for {('@' + said(to)) if to else ('#' + said(room))} verbatim" if verbatim
+                   else "decision queued for the collaboration worker")
         elif args.worker_action == "context":
             store.context(args.text)
             ok("context queued for the collaboration worker")
