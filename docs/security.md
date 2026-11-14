@@ -294,6 +294,12 @@ Be clear-eyed about the limits.
 - **The local user.**
   collab runs commands you configure and reads files you own.
   It does not sandbox you from your own machine.
+  This includes strong approval: anything running as you on the hub machine —
+  your own agent among them — can already rewrite the hub's key records or its
+  code silently. The hub-machine reset of the host's approval keys lowers the
+  effort of replacing a host key, not the bar, and it is the loud route: a
+  «reset» alarm to the whole session, then an «enrolled» alarm, then a
+  10-minute cooling-off before the new key can approve anything.
 
 ## Reducing your exposure
 
