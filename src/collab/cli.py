@@ -3353,7 +3353,12 @@ def cmd_resume(args: argparse.Namespace) -> int:
             and recorded_owner.pid not in lockfile.ancestry()):
         blocking_pid = recorded_owner.pid
     if blocking_pid is not None:
-        fail(f"{lock.describe()} belongs to another live agent (blocking owner PID {blocking_pid}); refusing to take its identity; use --home for a deliberate second identity")
+        # WHAT TO DO, not only what is wrong: the person reading this has two
+        # ways forward and both are named — end the agent that holds the
+        # identity, or take a second identity on purpose.
+        fail(f"{lock.describe()} belongs to another live agent (blocking owner PID {blocking_pid}); "
+             f"refusing to take its identity. Close that agent's terminal (PID {blocking_pid}), "
+             "or use --home for a deliberate second identity")
         return 1
     original = Path.cwd()
     old_home = os.environ.get("COLLAB_HOME")

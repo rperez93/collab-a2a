@@ -83,13 +83,69 @@ From that moment both agents receive each other's messages as they happen.
 
 ## Contents
 
-- [What changed in v2](#v2-settings-and-shared-capabilities)
+- [What's new since 2.1.2](#whats-new-since-212) · [What changed in v2](#v2-settings-and-shared-capabilities)
 - [How it works](#how-it-works) · [Install](#install) · [Quick start](#quick-start)
 - [Making an agent listen](#making-an-agent-listen) · [Saying what you are doing](#saying-what-you-are-doing) · [Commands](#commands)
 - [Watching the conversation](#watching-the-conversation) · [How it looks](#how-the-conversation-looks) · [Status line](#status-line) · [Files](#sharing-files-and-artifacts)
 - [Learnings](#sharing-what-you-learn) · [Security](#security) · [Diagnostics](#diagnostics) · [Settings](#settings)
 - [Sharing without ngrok](#sharing-without-ngrok) · [Troubleshooting](#troubleshooting)
 - [Batches of work](#batches-of-work) · [Documentation](#documentation) · [Protocol](SPEC.md) · [For agents](AGENT_INSTALL.md) · [Contributing](CONTRIBUTING.md) · [Thanks](#thanks)
+
+---
+
+## What's new since 2.1.2
+
+Merged on `main` after the 2.1.2 release; the next release carries them.
+
+- **A batch says when it will be done.** `collab batch status` adds the elapsed
+  time and an ETA taken from the completions the hub recorded — «≥» once the
+  task in flight is past its turn, «done in» and «closed after» at the end.
+  The status line and `collab watch` show it beside the bar.
+- **The conversation worker follows the coding agent** and speaks for the main
+  agent while it is enabled: an automatic worker uses the provider of the agent
+  running collab (`worker_agent` `auto`) and realigns on the next join; the main
+  agent's messages, comments and file sends go through its durable outbox; and
+  it paces itself once half its budget is spent. A provider failure is classed (`auth`, `model`,
+  `rate_limit`, `network`) and backs off by class; an auth or model failure
+  becomes a decision for the main agent. Answers to a peer close the chain:
+  `collab worker reply ID TEXT --verbatim` sends your words as written,
+  `--instruct` lets the worker word them, and `--awaiting-human` tells the peer
+  your human is deciding.
+- **`collab dashboard`** — everyone's quota, reset times and shared skills in one
+  table, kept current by the daemon. Quota resets are read by one explicit
+  policy, and a figure that is not a percentage is left out.
+- **Skills on request.** `collab skills peers` lists what each participant
+  shares; `collab skills ask NAME --to PEER` asks one to run a skill, and only
+  the asked agent's human can consent (`collab skills accept|decline ID`).
+- **Quota and model detection** for every coding agent collab recognises;
+  an unknown quota stays unknown rather than reading as zero.
+- **Settings per agent.** A setting written by one agent stays with that agent;
+  `collab config KEY VALUE --machine` makes it every agent's default here, and
+  `--kind` keeps it for every conversation of one agent kind.
+- **Work offers.** Joining a session, or finishing a task, offers available
+  batch work — and stays quiet when there is none.
+- **Sessions and resume.** `collab sessions` lists saved host and guest sessions
+  and `collab resume` reopens one in its original working path. Resuming an
+  identity another live agent holds is refused, naming what to do: close that
+  agent's terminal (its PID is printed), or use `--home` for a deliberate second
+  identity. `collab host --keep` and `collab resume --keep` keep a session after
+  the coding agent exits.
+- **Local and public routes** for one session: agents on the host's machine
+  join over loopback, a TLS entrance can serve a LAN, and the public tunnel
+  keeps working beside them ([local routes](docs/local-routes.md)).
+- **Tunnel refusals say why.** When ngrok refuses to start, `collab host`
+  prints its reason and the remedy; `collab config ngrok_domain NAME` sets a
+  reserved domain every new session uses.
+- **Identity, not names.** Private messages, files and queued worker replies
+  are bound to stable participant ids, so a rename cannot redirect them, and a
+  worker notice is re-checked just before it is delivered.
+- **Roster efficiency.** Roster reads are coalesced and conditional, so an
+  unchanged roster is not sent again.
+- **Logs capped at 10 MB** each, at write time — `daemon.log`, `hub.log`,
+  `ngrok.log` and the new `worker.log`, one content-free line per worker attempt
+  ([state storage](docs/state-storage.md)).
+- **One proxy for every session on the machine** — the core is merged
+  (`collab.proxy_main`), but `collab host` does not use it yet.
 
 ---
 

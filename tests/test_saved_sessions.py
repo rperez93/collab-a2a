@@ -389,6 +389,7 @@ def test_resume_names_first_live_pid_in_legacy_owner_chain(saved, monkeypatch, c
     assert cli.main(['resume', profile.session_id, '--no-daemon']) == 1
     output = capsys.readouterr()
     assert f'blocking owner PID {live_a}' in output.out + output.err
+    assert f"Close that agent's terminal (PID {live_a}), or use --home" in output.out + output.err
     assert (home / 'agent.lock').read_bytes() == before
 
 

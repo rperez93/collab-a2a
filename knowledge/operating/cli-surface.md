@@ -276,3 +276,26 @@ enablement and repeated notices. Agents inspect dependencies and claim work;
 the daemon never reserves it. See the current settings guide for delivery gates.
 
 > Later than the bundle pin: saved guest/host listing and explicit path-preserving resume were added by R8; historical verification stamps remain unchanged.
+
+### Later than the pin — merged after 2.1.2 (R20 first pass, 2026-11-14)
+
+Recorded from the parser on `main` at 9938993; nothing here carries a
+`verified` stamp, and docs/cli-reference.md is the regenerated, flag-by-flag
+list.
+
+- `collab dashboard [--json]` — every participant's quota, reset times and
+  shared skills, from figures the daemon keeps current.
+- `collab config KEY VALUE --machine` writes an agent-scoped setting as every
+  agent's default on this machine; `--kind [KIND]` keeps it for every
+  conversation of one agent kind. Without either, an agent's setting is its own.
+- `collab config ngrok_domain NAME` — a reserved ngrok domain new sessions use;
+  `collab host` prints ngrok's own refusal and its remedy when the tunnel fails.
+- `collab resume --keep` keeps a resumed session after the coding agent exits,
+  as `collab host --keep` does. Resuming an identity another live agent holds
+  is refused with the blocking PID and two ways forward: close that agent's
+  terminal, or `--home` for a deliberate second identity.
+- `collab worker reply ID TEXT --verbatim | --instruct | --awaiting-human`.
+- `collab watch --panel [auto|tmux|ghostty|iterm2]` opens the viewer in a
+  terminal split.
+- The shared-machine proxy (`python -m collab.proxy_main`) exists but no
+  command starts it yet.

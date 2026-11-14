@@ -18,7 +18,9 @@ the reference pages as you need them.
 | [Security](security.md) | The trust model, and what the tool does and does not protect against. |
 | [Local and public routes](local-routes.md) | Local preference, pinned LAN TLS, public fallback and route recovery. |
 | [Troubleshooting](troubleshooting.md) | Common problems and how to resolve them. |
-
+| [Conversation worker](conversation-worker.md) | The worker that answers peers while the coding agent works, its providers, failures and the chain back to the main agent. |
+| [State storage](state-storage.md) | Where collab keeps each agent's private state, the worker's files and the capped logs. |
+| [Theme engine](theme-engine.md) | Themes, backgrounds and how the viewer draws them. |
 | [v2 migration](v2.md) | Compatibility boundary and release changes. |
 | [Participant panel](watch-panel.md) | Keyboard/mouse disclosure and screenshots. |
 | [Telemetry](telemetry.md) | Provider sources, scope and cost estimation. |
