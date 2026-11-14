@@ -1692,6 +1692,12 @@ class Store:
             row = self._db.execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
         return dict(row) if row else None
 
+    def ended_file_parties(self) -> list[tuple[str | None, str]]:
+        """(recipient, sender) of every file that ended: enough to count what a viewer may see."""
+        with self._lock:
+            return [tuple(r) for r in self._db.execute(
+                "SELECT recipient, sender FROM files WHERE state != 'available'").fetchall()]
+
     def files(self, *, viewer: str | None = None, include_gone: bool = False) -> list[dict[str, Any]]:
         sql = "SELECT * FROM files"
         if not include_gone:
