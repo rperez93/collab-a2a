@@ -418,10 +418,12 @@ class HubClient:
 
     def upload_file(self, path: Path, *, to: str | None = None,
                     room: str | None = None, keep: bool | None = None,
-                    source: str = "") -> dict[str, Any]:
+                    source: str = "", delivery: str | None = None) -> dict[str, Any]:
         import httpx
 
         params: dict[str, Any] = {}
+        if delivery:
+            params["delivery"] = delivery  # a retried delivery is stored once
         if to:
             params["to"] = to
         if room:

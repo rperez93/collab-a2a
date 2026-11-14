@@ -260,7 +260,9 @@ class Conversation:
             # A daemon told to have no worker runs no model, whatever worker.db
             # says (the variable is inherited through spawn). Anything already
             # queued is still delivered: stranding it would lose messages.
-            if (self.daemon._http is not None and (self.delivery is None or self.delivery.done())
+            # `worker off` holds its queue, so only an enabled worker's is sent.
+            if ((cfg or {}).get("enabled") and self.daemon._http is not None
+                    and (self.delivery is None or self.delivery.done())
                     and any(r.get("retry_at", 0) <= time.time() for r in store.outbox())):
                 self.delivery = asyncio.create_task(self._flush_outbox_only(store, generation))
             return
@@ -420,6 +422,7 @@ class Conversation:
         except (OSError, ValueError):
             return 422, ""
         params = {k: message[k] for k in ("to", "room") if message.get(k)}
+        params["delivery"] = message["id"]  # the durable outbox key survives either drain
         if keep is not None: params["keep"] = "true" if keep else "false"
         if source: params["source"] = source
         status = None

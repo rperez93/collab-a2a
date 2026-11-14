@@ -34,6 +34,7 @@ def test_ordered_worker_upload_preserves_explicit_retention_and_source(tmp_path,
     args=cli.build_parser().parse_args(['file','send',str(path),'--to','bob','--source','https://example.test/review',*flags])
     assert cli.cmd_file(args)==0
     assert len(box.outbox())==2
+    delivery = next(row['id'] for row in box.outbox() if row.get('kind') == 'file')
     async def flush():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=session['app'])) as http:
             service=Conversation(SimpleNamespace(profile=profile,_http=http))
@@ -48,6 +49,10 @@ def test_ordered_worker_upload_preserves_explicit_retention_and_source(tmp_path,
     assert record['name']==name
     assert bool(record['kept']) is expected_keep
     assert record['source']=='https://example.test/review'
+    import hashlib
+    expected = 'f_' + hashlib.sha256(f'{profile.participant_id}|{delivery}'.encode()).hexdigest()[:20]
+    assert record['id'] == expected, 'both drains must propagate the durable delivery key'
+
 
 
 @pytest.mark.parametrize('shape',['old','malformed','flood','silent'])

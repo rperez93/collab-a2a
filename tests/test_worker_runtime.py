@@ -421,3 +421,12 @@ def test_a_new_configuration_may_escalate_the_same_failure_again(tmp_path):
     store.escalate_once("provider-auth", "fix login", expected_generation=g1)   # stale turn: ignored
     store.escalate_once("provider-auth", "fix login", expected_generation=g2)
     assert sorted(p["once"] for p in store.pending()) == [f"provider-auth@{g1}", f"provider-auth@{g2}"]
+
+def test_a_new_question_from_a_peer_already_waiting_is_still_routed():
+    from collab.worker_runtime import unrouted_deferrals
+    selected = [{"seq": 7, "sender": "bob", "text": "Which branch?", "room": "general"},
+                {"seq": 9, "sender": "bob", "text": "And who reviews it?", "room": "general"}]
+    result = {"escalations": [], "replies": [
+        {"to": "bob", "room": "general", "text": "I'll check and get back to you."}]}
+    added = unrouted_deferrals(result, selected, pending=[{"seq": 7}])
+    assert [a["seq"] for a in added] == [9], "the pending decision covers seq 7 only"

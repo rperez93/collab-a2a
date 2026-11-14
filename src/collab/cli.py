@@ -3803,6 +3803,10 @@ def cmd_file(args: argparse.Namespace) -> int:
                         onboard.ensure_daemon(profile, wait=False)
                     except (OSError, RuntimeError, HubError):
                         pass
+                    if args.json:
+                        print(json.dumps({"queued": True, "outbox_id": record_id, "name": path.name,
+                                          "size": size}, indent=2))
+                        return 0
                     ok(f"{said(path.name)} queued for delivery by your worker: {record_id}")
                     print(dim("  `collab worker status` shows it until it is delivered"))
                     return 0

@@ -689,3 +689,32 @@ async def test_remote_offer_is_excluded_from_worker_model_input(conversation, tm
     assert len(calls) == 1
     assert 'UNAPPROVED_SENTINEL' not in json.dumps(calls[0])
     assert calls[0]['events'][0]['text'] == 'Ordinary coordination'
+
+@pytest.mark.asyncio
+async def test_daemon_upload_sends_the_delivery_key_refuses_changed_bytes_and_has_a_deadline(conversation, tmp_path):
+    import asyncio
+    import hashlib
+    import httpx
+    stash = tmp_path / "s.bin"
+    stash.write_bytes(b"abc")
+    sent = []
+    async def transport(request):
+        sent.append(dict(request.url.params))
+        return httpx.Response(200, json={"kept": False})
+    message = {"id": "o_9", "stash": str(stash), "name": "s.bin", "to": "bob",
+               "sha256": hashlib.sha256(b"abc").hexdigest()}
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as http:
+        conversation.daemon._http = http
+        assert await conversation._upload(message, timeout=5) == (200, "")
+        assert sent[0]["delivery"] == "o_9"
+        stash.write_bytes(b"changed")
+        assert await conversation._upload(message, timeout=5) == (422, "")
+        assert len(sent) == 1
+    stash.write_bytes(b"abc")
+    async def slow(request):
+        await asyncio.sleep(10)
+        return httpx.Response(200)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(slow)) as http:
+        conversation.daemon._http = http
+        with pytest.raises(asyncio.TimeoutError):
+            await conversation._upload(message, timeout=0.05)
