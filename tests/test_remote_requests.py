@@ -351,3 +351,12 @@ def test_revocation_and_refusal_audit_explain_non_delivery(offered, monkeypatch)
         rows = db.execute("SELECT event,details FROM events WHERE event IN ('revocation_requested','offer_refused')").fetchall()
     assert [(r[0], json.loads(r[1])['reason']) for r in rows] == [
         ('revocation_requested', 'local_decline'), ('offer_refused', 'sender_queue_full')]
+
+
+def test_grant_from_before_explicit_destination_scope_is_invalidated(offered):
+    inbox, offer, _ = offered
+    approve(inbox, offer)
+    with sqlite3.connect(inbox.path) as db:
+        db.execute('UPDATE offers SET approval_version=1 WHERE id=?', (offer['id'],))
+    assert claim(inbox) is None
+    assert inbox.list(now=102)[0]['state'] == 'failed'
