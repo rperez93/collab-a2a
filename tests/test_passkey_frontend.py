@@ -391,14 +391,12 @@ async def test_expiry_during_credential_validation_refuses_forwarding(subject, m
 
 
 @pytest.mark.parametrize("algorithm", [-7, -257, -8, True, None, "-7"])
-def test_exported_registration_evidence_accepts_only_the_agreed_spki_algorithms(algorithm):
-    """The future separate enrolment helper cannot silently admit another key type."""
+def test_request_window_credential_parser_cannot_collect_registration_evidence(algorithm):
+    """Only the separate human-started enrol service may handle a created key."""
     value = credential("enrol")
     value["response"]["publicKeyAlgorithm"] = algorithm
-    if type(algorithm) is int and algorithm in (-7,-257):
-        assert module._credential(value,"enrol") == value
-    else:
-        with pytest.raises(ValueError): module._credential(value,"enrol")
+    with pytest.raises(ValueError):
+        module._credential(value,"enrol")
 
 
 @pytest.mark.parametrize("who", ["label-only", module.Requester("", "name"), module.Requester("p_1", "x"*257)])

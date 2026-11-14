@@ -175,3 +175,31 @@ assert.match(s.elements.status.textContent,/cannot approve operations/);
 assert.match(s.elements.credential.textContent,new RegExp('^'+STATE+':'));
 assert.equal(s.elements.create.disabled,true);assert.equal(s.elements.prove.disabled,true);
 '''.replace("STATE", repr(state)))
+
+
+@pytest.mark.parametrize("algorithm", [-8, -35])
+def test_unagreed_created_key_algorithm_never_reads_the_public_key_or_submits(tmp_path, algorithm):
+    run_js(tmp_path, f'''
+const key=makeKey();key.response.getPublicKeyAlgorithm=()=>{algorithm};
+key.response.getPublicKey=()=>assert.fail('unsupported key exported');
+assert.throws(()=>enrol.createdKey(key),/unsupported/);
+''')
+
+
+@pytest.mark.parametrize("algorithm", [-8, -35])
+def test_unagreed_offered_algorithm_never_opens_an_authenticator(tmp_path, algorithm):
+    run_js(tmp_path, f'''
+const s=setup();s.options.publicKey.pubKeyCredParams=[{{type:'public-key',alg:{algorithm}}}];
+await s.app.load();await s.app.create();
+assert.equal(s.prompts.length,0);assert.equal(finishCalls(s).length,0);
+''')
+
+
+@pytest.mark.parametrize("skew", [-5, 5])
+def test_full_duration_hub_challenge_allows_small_clock_skew(tmp_path, skew):
+    run_js(tmp_path, f'''
+const s=setup();s.options.expires_at=1700000000+120+{skew};
+await s.app.load();await s.app.create();
+assert.equal(s.prompts.length,1);assert.equal(s.prompts[0][0],'create');
+assert.ok(s.prompts[0][1].publicKey.timeout<=120000);
+''')
