@@ -406,6 +406,11 @@ class Conversation:
                     if message.get("to_id"):
                         payload["to_id"] = message["to_id"]
                         route = "messages/by-id"
+                if message.get("recipient_id"):
+                    if message.get("kind") in ("file", "comment"):
+                        raise ValueError("remote offer cannot use file or comment delivery")
+                    route = "remote-messages"
+                    payload["body"]["collab_expected_recipient_id"] = message["recipient_id"]
                 async def acknowledge():
                     async with self.daemon._http.stream(
                         "POST", f"{self.daemon.profile.url}{EXT_PREFIX}/{route}",
@@ -413,7 +418,7 @@ class Conversation:
                         json=payload, timeout=timeout) as response:
                         if (400 <= response.status_code < 500
                                 and response.status_code not in (401, 408, 425, 429)
-                                and not (route == "messages/by-id" and response.status_code == 404)):
+                                and not (route in ("messages/by-id", "remote-messages") and response.status_code == 404)):
                             store.reject(message["id"], reason=f"hub answered {response.status_code}")
                             return
                         response.raise_for_status()
@@ -659,7 +664,10 @@ class Conversation:
             events = self.daemon.inbox.after(snapshot["cursor"], limit=setting("worker_page_size"))
             selected = []
             size = 0
+            from ..remote_requests import OFFER_PREFIX
             for event in events:
+                if event.text.startswith(OFFER_PREFIX):
+                    continue  # separate human consent, never model conversation input
                 own = (event.sender_id == self.daemon.profile.participant_id
                        if event.sender_id and self.daemon.profile.participant_id
                        else event.sender == self.daemon.profile.name)
