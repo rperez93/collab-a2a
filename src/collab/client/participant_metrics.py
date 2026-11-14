@@ -71,14 +71,25 @@ def _budget_line(worker: dict[str, Any]) -> list[str]:
     left = worker.get("budget_remaining")
     if not isinstance(left, int) or isinstance(left, bool) or left < 0:
         return []
-    line = f"worker budget {left} call{'' if left == 1 else 's'} left"
+    # BOUNDED ON THE WAY OUT: these are a peer's figures, and `10**60` calls
+    # drew sixty-one digits, a reset at `1e308` about three hundred.
+    shown = f"≥{_CAP}" if left >= _CAP else str(left)
+    line = f"worker budget {shown} call{'' if left == 1 else 's'} left"
     reset = _number(worker.get("budget_reset_at"))
     if reset is not None:
         import time
 
-        minutes = max(0, int((reset - time.time()) // 60))
-        line += f" · resets in {minutes}m" if minutes < 120 else f" · resets in {minutes // 60}h"
+        seconds = reset - time.time()
+        if seconds > 86400:
+            line += " · resets in >1d"
+        else:
+            minutes = max(0, int(seconds // 60))
+            line += f" · resets in {minutes}m" if minutes < 120 else f" · resets in {minutes // 60}h"
     return [line]
+
+
+#: The largest count drawn as a number; past it, «≥1000».
+_CAP = 1000
 
 
 def metric_lines(person: dict[str, Any], fields: list[str] | tuple[str, ...],
@@ -167,7 +178,10 @@ def metric_lines(person: dict[str, Any], fields: list[str] | tuple[str, ...],
             # Only a count: the names are `collab skills peers`' business.
             skills = person.get("skills_count")
             if isinstance(skills, int) and not isinstance(skills, bool) and skills >= 0:
-                line += f" · {skills} skill{'' if skills == 1 else 's'} shared"
+                # A peer's figure, so bounded on the way OUT: `10**60` drew
+                # sixty-one digits into everybody's panel.
+                shown = f"≥{_CAP}" if skills >= _CAP else str(skills)
+                line += f" · {shown} skill{'' if skills == 1 else 's'} shared"
         if line:
             group = "context" if field == "context" else field
             if group in ("context", "cost", "model") and group + "_observed_at" in stats:
