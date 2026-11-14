@@ -106,8 +106,11 @@ by their recorded identity when finished. Do not kill processes by name.
 ## Integration status
 
 The resource collector, numeric stats schema and worker PID registration are
-implemented. Proxy identity integration and R5/R12 human-facing renderers must
-be verified on the combined build before claiming end-to-end availability.
+implemented. Expanded R5 participant cards consume the shared formatter in the
+saved/usage views and preserve all roles, unknowns and warnings at narrow widths.
+This UI integration depends on both the R5 card layout and R16 resource schema;
+it should land with those changes. Same-commit live proxy and coding-host
+acceptance still must be verified before claiming end-to-end availability.
 Until the host understands this nested schema, an older hub can drop it and the
 viewer must display unknown. The active shared hub has not been upgraded by
 this worktree.

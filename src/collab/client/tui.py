@@ -1925,6 +1925,20 @@ def _participant_card(person: dict[str, Any], width: int, *, who: str,
                 add(title, heading=True)
             for part in packed(facts, usable):
                 add(part)
+    # Process resources belong to the existing usage view. Identity-only and
+    # explicitly hidden fields must not acquire telemetry merely by expanding
+    # a card. Formatting uses the roster snapshot; collection stays in the
+    # daemon and the existing five-second cache clock ages these observations.
+    if any(field in participant_metrics.RESOURCE_FIELDS for field in fields):
+        from ..resources import format_lines
+        stats = person.get("stats")
+        stats = stats if isinstance(stats, dict) else {}
+        add("RESOURCES", heading=True)
+        for line in format_lines(stats.get("resources"), detailed=True):
+            warning = line.startswith("WARNING:")
+            for part in _wrap(line, usable):
+                rows.append(Row(indent + part, C_WARN if warning else C_TEXT,
+                                curses.A_BOLD if warning else 0, participant=ident))
     if not main and not worker:
         add("fields hidden")
     rows.extend(Row("", C_DIM, participant=ident) for _ in range(theme["roster_spacing"]))

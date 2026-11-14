@@ -67,6 +67,12 @@ and `location`. A saved change reaches an open pane immediately and replaces
 its temporary field and disclosure choices. Expanded rows wrap to the pane
 width; scroll to reach the remaining rows in a narrow tmux panel.
 
+Expanded cards also show process resources when at least one usage field is
+selected. All process roles retain CPU, RSS and storage IO, with shared-estimate
+caveats and pressure warnings wrapped to the pane width. Identity-only and
+hidden-field views omit this section. Missing or stale samples say «unknown»;
+the viewer reads the existing snapshot and adds no resource polling.
+
 Unknown measurements say «unknown». Zero appears only when reported as zero.
 Quota percentages are usage, not remaining allowance. Cost rows distinguish
 estimated and reported amounts and name their scope; an absent kind or scope
