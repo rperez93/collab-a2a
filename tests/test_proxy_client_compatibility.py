@@ -20,9 +20,12 @@ from collab.server.tunnel import free_port
 
 
 CLIENT = r'''
-import json, sys
+import asyncio, contextlib, hashlib, json, sys
+from pathlib import Path
 import collab
 from collab.client.hub_client import HubClient
+from collab.client.daemon import Daemon
+from collab.config import SessionProfile
 from collab.protocol import Envelope
 args = json.load(sys.stdin)
 if args['legacy']:
@@ -34,7 +37,51 @@ with HubClient(args['base']) as client:
     assert client.snapshot()['session_id'] == 's_test'
     client.send(Envelope(kind='chat', text='proxy compatibility marker', room='general'))
     assert any(event.text == 'proxy compatibility marker' for event in client.history())
-print(json.dumps({'version': collab.__version__, 'joined': True, 'round_trip': True}))
+    payload = b'\x00proxy file\xff' * 4096
+    upload = Path('source.bin')
+    upload.write_bytes(payload)
+    record = client.upload_file(upload, room='general')
+    assert any(item['id'] == record['id'] for item in client.list_files())
+    downloaded, digest = client.download_file(record['id'], Path('downloads'))
+    assert downloaded.read_bytes() == payload
+    assert digest == record['sha256'] == hashlib.sha256(payload).hexdigest()
+    client.delete_file(record['id'])
+
+    async def stream_check():
+        import httpx
+        profile = SessionProfile(session_id='s_test', url=args['base'], name='compat-client',
+                                 host_name='alice', token=client.token, home=str(Path('state').resolve()))
+        profile.save()
+        daemon = Daemon(profile)
+        # Exercise the released SSE reader and Inbox, not background providers.
+        # Snapshot fetching is already verified above; never schedule model work.
+        daemon._schedule_refresh = lambda *a, **kw: None
+        daemon._request_snapshot = lambda *a, **kw: None
+        async with httpx.AsyncClient(timeout=5) as http:
+            task = asyncio.create_task(daemon._stream_once(http))
+            try:
+                async def received():
+                    # Wait for replay of an event that existed before connecting.
+                    # Headers alone do not prove the replay boundary was captured.
+                    while not any(event.text == 'proxy compatibility marker' for event in daemon.inbox.all_events()):
+                        if task.done():
+                            await task
+                            raise AssertionError('stream ended before connecting')
+                        await asyncio.sleep(.01)
+                    await asyncio.to_thread(client.send, Envelope(kind='chat', text='live stream marker', room='general'))
+                    while not any(event.text == 'live stream marker' for event in daemon.inbox.all_events()):
+                        if task.done():
+                            await task
+                            raise AssertionError('stream ended before delivery')
+                        await asyncio.sleep(.01)
+                await asyncio.wait_for(received(), timeout=10)
+            finally:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+    asyncio.run(stream_check())
+print(json.dumps({'version': collab.__version__, 'joined': True, 'round_trip': True,
+                  'file_bytes': len(payload), 'live_stream': True}))
 '''
 
 
@@ -83,7 +130,9 @@ def test_client_join_and_message_round_trip(route, legacy, proxy_server, live_se
                             input=json.dumps({'base': base, 'invite': live_server['invite'], 'legacy': legacy}),
                             text=True, capture_output=True, timeout=20)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)['round_trip'] is True
+    report = json.loads(result.stdout)
+    assert report['round_trip'] is True and report['live_stream'] is True
+    assert report['file_bytes'] > 0
 
 
 def test_unknown_routed_session_never_falls_back_to_primary(proxy_server, live_server):
