@@ -132,12 +132,15 @@ def pending_count_readonly(root) -> int:
         # timeout=0: never wait on a writer; a busy database just skips the banner.
         db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=0)
         try:
-            rows = db.execute("SELECT data FROM records WHERE kind='escalation'").fetchall()
+            rows = db.execute("SELECT data FROM records WHERE kind IN ('escalation','quarantine')").fetchall()
         finally:
             db.close()
     except sqlite3.Error:
         return 0
-    return sum(1 for (data,) in rows if not json.loads(data).get("awaiting_human"))
+    records = [json.loads(data) for (data,) in rows]
+    return sum(1 for data in records if not data.get("awaiting_human")
+               and not data.get("recovery_resolved")
+               and not str(data.get("once", "")).startswith("quarantine:"))
 
 
 def _drop_stash(row) -> None:
@@ -188,6 +191,21 @@ class Store:
     def _records(db, kind):
         return [{"id": row["id"], **json.loads(row["data"]), "created_at": row["created_at"]}
                 for row in db.execute("SELECT * FROM records WHERE kind=? ORDER BY created_at,id", (kind,))]
+
+    @classmethod
+    def _pending(cls, db):
+        # Reuse the held record as its recovery notice. A separate escalation
+        # could exceed MAX_PENDING and roll the quarantine transaction back.
+        # No private text or source metadata belongs in this projection.
+        held = [{"id": row["id"], "reason": "blocker", "seq": 0,
+                 "once": f"quarantine:{row['id']}", "local_only": True,
+                 "awaiting_human": bool(row.get("awaiting_human")),
+                 "awaiting_since": row.get("awaiting_since"),
+                 "question": f"Answer {row['id']} is held locally because its original recipient cannot be safely routed. Review the original answer locally and explicitly resend only after confirming the intended participant.",
+                 "created_at": row["created_at"]}
+                for row in cls._records(db, "quarantine") if not row.get("recovery_resolved")]
+        return [row for row in cls._records(db, "escalation")
+                if not str(row.get("once", "")).startswith("quarantine:")] + held
 
     @staticmethod
     def _add(db, kind, data):
@@ -291,7 +309,8 @@ class Store:
             state = self._state(db)
             outbox = self._records(db, "outbox")
             return {**state, "enabled": bool((state["config"] or {}).get("enabled")),
-                    "pending": self._records(db, "escalation"),
+                    "pending": self._pending(db),
+                    "held_answer_count": db.execute("SELECT COUNT(*) FROM records WHERE kind='quarantine'").fetchone()[0],
                     "outbox_count": len(outbox),
                     "outbox": [{"id": r["id"], "kind": r.get("kind", "chat"),
                                 "to": r.get("to", r.get("subject_id", "")), "room": r.get("room", ""),
@@ -433,7 +452,25 @@ class Store:
 
     def pending(self) -> list[dict[str, Any]]:
         with self._db() as db:
-            return self._records(db, "escalation")
+            return self._pending(db)
+
+    @staticmethod
+    def _hold_answer(db, row, reason):
+        data = {key: value for key, value in row.items() if key not in ("id", "created_at")}
+        db.execute("UPDATE records SET kind='quarantine',data=? WHERE id=? AND kind='answer'",
+                   (json.dumps({**data, "quarantined_at": time.time(), "reason": reason[:200]}), row["id"]))
+
+    def quarantine_answers(self, record_ids, *, reason, expected_generation=None, expected_turn=None):
+        """Set aside only the named private inputs, without allocating recovery rows."""
+        wanted = set(record_ids)
+        with self._db() as db:
+            state = self._state(db)
+            if ((expected_generation is not None and state["generation"] != expected_generation)
+                    or (expected_turn is not None and state["turn"] != expected_turn)):
+                return
+            for row in self._records(db, "answer"):
+                if row["id"] in wanted:
+                    self._hold_answer(db, row, reason)
 
     def answer(self, escalation_id: str, text: str, *, verbatim: bool | None = None,
                notify_to: str = "", notify_room: str = "") -> None:
@@ -444,8 +481,18 @@ class Store:
         with self._db() as db:
             row = db.execute("SELECT data FROM records WHERE id=? AND kind='escalation'", (escalation_id,)).fetchone()
             if row is None:
+                held = db.execute("SELECT data FROM records WHERE id=? AND kind='quarantine'", (escalation_id,)).fetchone()
+                if held is not None:
+                    if verbatim:
+                        raise ValueError("a quarantined answer cannot be forwarded; review its recipient locally")
+                    data = json.loads(held[0])
+                    data.update(recovery_resolved=True, recovery_note=text)
+                    db.execute("UPDATE records SET data=? WHERE id=?", (json.dumps(data), escalation_id))
+                    return
                 raise ValueError(f"no pending worker decision {escalation_id}")
             prompt = json.loads(row[0])
+            if str(prompt.get("once", "")).startswith("quarantine:"):
+                raise ValueError("this local recovery cannot become a model answer")
             if verbatim is None:
                 verbatim = bool(prompt.get("awaiting_human"))
             if verbatim and not (prompt.get("notify_to") or prompt.get("notify_room")):
@@ -495,15 +542,7 @@ class Store:
                                (json.dumps(data), row["id"]))
                     repaired += 1
                     continue
-                db.execute("UPDATE records SET kind='quarantine', data=? WHERE id=? AND kind='answer'",
-                           (json.dumps({**data, "quarantined_at": time.time(),
-                                        "reason": "no unambiguous original sender"}), row["id"]))
-                once = f"quarantine:{row['id']}"
-                if not any(r.get("once") == once for r in self._records(db, "escalation")):
-                    self._add(db, "escalation", {"reason": "blocker", "seq": 0, "once": once, "question": (
-                        f"Your answer {row['id']} was queued before this upgrade and its original asker "
-                        f"cannot be verified, so it was set aside, not sent: {str(row.get('text', ''))[:300]!r}. "
-                        "If it still matters, send it yourself with `collab worker send --to NAME`.")})
+                self._hold_answer(db, row, "no unambiguous original sender")
                 quarantined += 1
         return {"repaired": repaired, "quarantined": quarantined}
 
@@ -518,6 +557,13 @@ class Store:
         with self._db() as db:
             row = db.execute("SELECT data FROM records WHERE id=? AND kind='escalation'", (escalation_id,)).fetchone()
             if row is None:
+                held = db.execute("SELECT data FROM records WHERE id=? AND kind='quarantine'", (escalation_id,)).fetchone()
+                if held is not None:
+                    data = json.loads(held[0])
+                    if not data.get("awaiting_human") and not data.get("recovery_resolved"):
+                        data.update(awaiting_human=True, awaiting_since=time.time(), local_wait_note=note)
+                        db.execute("UPDATE records SET data=? WHERE id=?", (json.dumps(data), escalation_id))
+                    return ""  # Local review has no peer or model notification.
                 raise ValueError(f"no pending worker decision {escalation_id}")
             data = json.loads(row[0])
             if data.get("awaiting_human"):

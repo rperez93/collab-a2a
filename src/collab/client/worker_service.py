@@ -498,6 +498,56 @@ class Conversation:
                      retry_at=min((r.get("retry_at", 0) for r in pending), default=0),
                      running=False, expected_generation=generation)
 
+    def _answer_inputs(self, store, rows, names, identities, snapshot):
+        """Resolve answer presentation from its principal, retaining safe stale aliases.
+
+        The maps are one pre-provider roster observation. A reused old label
+        is a rejected alias, never authority to substitute its new holder.
+        """
+        accepted, aliases, blocked, held = [], {}, {}, []
+        for row in rows:
+            prompt = row.get("prompt") or {}
+            if prompt.get("seq", 0) <= 0:
+                accepted.append(self._source(row))
+                continue
+            source = prompt.get("decision_source") or {}
+            ident, old = source.get("sender_id"), source.get("sender")
+            current = identities.get(ident, set())
+            persisted = self._persisted_source(prompt["seq"])
+            if (not ident or not old or len(current) > 1
+                    or (persisted and persisted.get("sender_id") != ident)
+                    or (current and len(names.get(next(iter(current)), set())) != 1)
+                    or (identities and not current)):
+                held.append(row["id"])
+                continue
+            label = next(iter(current)) if current else old
+            normalized = self._source(row)
+            normalized["prompt"] = {**prompt, "decision_source": {**source, "sender": label}}
+            normalized["source"] = {**(normalized.get("source") or {}), "seq": prompt["seq"],
+                "sender": label, "sender_id": ident, "room": source.get("room") or "",
+                "broadcast": source.get("broadcast") is True}
+            accepted.append(normalized)
+            aliases.setdefault(label, set()).add(ident)
+            if old == label or not names.get(old) or names.get(old) == {ident}:
+                aliases.setdefault(old, set()).add(ident)
+            else:
+                blocked.setdefault(old, set()).add(row["id"])
+        ambiguous = {label for label, principals in aliases.items() if len(principals) > 1}
+        held.extend(row["id"] for row in accepted
+                    if (row.get("prompt", {}).get("decision_source") or {}).get("sender") in ambiguous)
+        if held:
+            store.quarantine_answers(held, reason="original peer has no unambiguous current identity",
+                                     expected_generation=snapshot["generation"], expected_turn=snapshot["turn"])
+        return [row for row in accepted if row["id"] not in held], aliases, blocked
+
+    def _hold_model_answers(self, store, record_ids, snapshot, logged):
+        """No output, summary or cursor from a turn containing rejected private input survives."""
+        store.quarantine_answers(record_ids, reason="model reply cannot be bound to the original asker",
+                                 expected_generation=snapshot["generation"], expected_turn=snapshot["turn"])
+        self._log_turn(logged, "invalid", error="UnroutableAnswer")
+        store.health(error="A human answer is held for local recipient review", running=False,
+                     retry_at=self.next_at, expected_generation=snapshot["generation"])
+
     async def turn(self) -> None:
         store = worker.Store(self.root)
         snapshot = store.snapshot()
@@ -507,6 +557,12 @@ class Conversation:
         logged = None
         try:
             await self._flush(store, snapshot["generation"])
+            names, identities = {}, {}
+            for person in self.daemon.snapshot.get("participants", []):
+                name, ident = person.get("name"), person.get("id")
+                if name and ident:
+                    names.setdefault(name, set()).add(ident)
+                    identities.setdefault(ident, set()).add(name)
             events = self.daemon.inbox.after(snapshot["cursor"], limit=setting("worker_page_size"))
             selected = []
             size = 0
@@ -522,6 +578,9 @@ class Conversation:
                              "sender": event.sender, "room": event.room or "",
                              "to": event.to or "", "text": event.text or "",
                              "body_excerpt": excerpt, "body_truncated": excerpt != body}
+                current = identities.get(event.sender_id, set())
+                if len(current) == 1 and len(names.get(next(iter(current)), set())) == 1:
+                    candidate["sender"] = next(iter(current))
                 candidate_size = len(json.dumps(candidate, ensure_ascii=False).encode())
                 if candidate_size > MAX_EVENTS_BYTES and not selected:
                     # An old/oversized event cannot permanently block newer
@@ -561,7 +620,14 @@ class Conversation:
                 store.repair_legacy_answers(self._persisted_source)
                 snapshot = store.snapshot()
             contexts = _page(snapshot["context"])
-            answers = _page([self._source(row) for row in snapshot["answers"]])
+            old_recovery = [row["id"] for row in snapshot["answers"]
+                            if str((row.get("prompt") or {}).get("once", "")).startswith("quarantine:")]
+            if old_recovery:
+                store.quarantine_answers(old_recovery, reason="local recovery is not peer reply authority")
+                snapshot = store.snapshot()
+            normalized, answer_aliases, blocked_aliases = self._answer_inputs(
+                store, snapshot["answers"], names, identities, snapshot)
+            answers = _page(normalized)
             if any(answer.get("prompt", {}).get("seq", 0) > 0
                    and not (answer.get("prompt", {}).get("decision_source") or {}).get("sender_id")
                    for answer in answers):
@@ -590,7 +656,7 @@ class Conversation:
                 "retained_main_context": snapshot.get("retained_context", []),
                 "main_activity": _excerpt(json.dumps(activity.read_local(self.daemon.profile), ensure_ascii=False), 4000),
                 "events": selected,
-                "pending": _page([self._source(row) for row in store.pending()], budget=12_000),
+                "pending": _page([self._source(row) for row in store.pending() if not row.get("local_only")], budget=12_000),
                 "board": _page([{"id": t.get("id", ""), "title": str(t.get("title", ""))[:160],
                                  "owner": t.get("owner") or "", "state": t.get("state", "")}
                                 for t in (self.daemon.snapshot.get("tasks") or [])[:40]
@@ -648,22 +714,30 @@ class Conversation:
             store.health(running=True, expected_generation=snapshot["generation"])
             # Freeze the principal mapping before the awaited model call. A
             # rename while it runs must not redirect its queued private text.
-            prompt_targets = {}
+            prompt_targets = {name: set(values) for name, values in names.items()}
             prompt_sequences = {}
-            for person in self.daemon.snapshot.get("participants", []):
-                if person.get("name") and person.get("id"):
-                    prompt_targets.setdefault(person["name"], set()).add(person["id"])
-            selected_seqs = {entry["seq"] for entry in selected}
+            selected_names = {entry["seq"]: entry["sender"] for entry in selected}
             for event in events:
-                if event.seq in selected_seqs:
-                    prompt_targets.setdefault(event.sender, set()).add(getattr(event, "sender_id", "") or "")
-                    prompt_sequences.setdefault(event.sender, set()).add(event.seq)
+                if event.seq in selected_names:
+                    label = selected_names[event.seq]
+                    prompt_targets.setdefault(label, set()).add(getattr(event, "sender_id", "") or "")
+                    prompt_sequences.setdefault(label, set()).add(event.seq)
             for answer in answers:
                 if answer.get("prompt", {}).get("seq", 0) <= 0:
                     continue  # Internal guidance is context, never recipient evidence.
                 source = answer.get("prompt", {}).get("decision_source") or {}
                 prompt_targets.setdefault(source.get("sender", ""), set()).add(source.get("sender_id") or "")
                 prompt_sequences.setdefault(source.get("sender", ""), set()).add(answer.get("prompt", {}).get("seq", 0))
+            active_answers = {answer["id"] for answer in answers if answer.get("prompt", {}).get("seq", 0) > 0}
+            active_ids = {(answer.get("prompt", {}).get("decision_source") or {}).get("sender_id")
+                          for answer in answers if answer["id"] in active_answers}
+            for alias, principals in answer_aliases.items():
+                values = principals & active_ids
+                if values:
+                    prompt_targets.setdefault(alias, set()).update(values)
+                    for answer in answers:
+                        if (answer.get("prompt", {}).get("decision_source") or {}).get("sender_id") in values:
+                            prompt_sequences.setdefault(alias, set()).add(answer["prompt"].get("seq", 0))
             model = (setting(f"worker_{cfg['agent']}_model") if cfg.get("model_default")
                      else cfg.get("model", ""))
             usage = logged["usage"]
@@ -678,6 +752,7 @@ class Conversation:
                 cfg["agent"], model, payload, self.root / "worker-runtime",
                 command=cfg.get("command") or None, timeout=setting("worker_timeout"), on_usage=on_usage)
             known = set(prompt_targets)
+            known.update(blocked_aliases)
             known.update(e["sender"] for e in selected)
             known.update(a["source"]["sender"] for a in answers if "source" in a)
             valid_seqs = {0, *(e["seq"] for e in selected),
@@ -689,24 +764,36 @@ class Conversation:
                 if escalation["seq"] not in valid_seqs:
                     escalation["seq"] = 0
             for reply in result["replies"]:
+                rejected = blocked_aliases.get(reply["to"], set()) & active_answers
+                if rejected:
+                    self._hold_model_answers(store, rejected, snapshot, logged)
+                    return
                 if reply["to"] and reply["to"] not in known:
+                    if active_answers:
+                        self._hold_model_answers(store, active_answers, snapshot, logged)
+                        return
                     raise ValueError("worker proposed an unknown recipient")
                 rooms = set(self.daemon.snapshot.get("rooms", []))
                 rooms.update(e["room"] for e in selected)
                 rooms.update(a["source"]["room"] for a in answers if "source" in a)
                 rooms.add("general")
                 if reply["room"] and reply["room"] not in rooms:
+                    if active_answers:
+                        candidates = prompt_targets.get(reply.get("to"), set())
+                        affected = {answer["id"] for answer in answers if answer["id"] in active_answers
+                                    and (answer["prompt"].get("decision_source") or {}).get("sender_id") in candidates}
+                        self._hold_model_answers(store, affected or active_answers, snapshot, logged)
+                        return
                     raise ValueError("worker proposed an unknown room")
             pending_now = [{**row, "sender": (self._source(row).get("source") or {}).get("sender", "")}
-                           for row in store.pending()]
+                           for row in store.pending() if not row.get("local_only")]
             # An open question is the main agent's: the worker may answer its
             # asker, never repeat it to anyone else (a room, another peer).
             # Compared by participant id: a rename must neither let an open
             # question through to someone else nor block its own asker.
-            ids = {p.get("name"): p.get("id") for p in self.daemon.snapshot.get("participants", [])
-                   if p.get("name") and p.get("id")}
             def who(name):
-                return ids.get(name) or ("name:" + (name or ""))
+                candidates = prompt_targets.get(name, set())
+                return next(iter(candidates)) if len(candidates) == 1 else ("name:" + (name or ""))
             asker_ids = {}
             for row in pending_now:
                 source = (self._source(row).get("source") or {})
@@ -741,6 +828,9 @@ class Conversation:
             for reply in result["replies"]:
                 candidates = prompt_targets.get(reply.get("to"), set())
                 if len(candidates) != 1 or not next(iter(candidates), ""):
+                    if active_answers:
+                        self._hold_model_answers(store, active_answers, snapshot, logged)
+                        return
                     raise ValueError("worker reply has no unique original peer identity")
                 sequences = prompt_sequences.get(reply.get("to"), set())
                 reply.update(to_id=next(iter(candidates)), decision_delivery=True,
@@ -751,21 +841,26 @@ class Conversation:
                 # original event identity, not the current roster's name map.
                 # Missing or conflicting provenance leaves answers durable;
                 # refusing this turn is safer than guessing which peer owns it.
-                targets = {}
+                targets = set()
                 source_rooms = {}
                 for answer in peer_answers:
                     source = answer.get("prompt", {}).get("decision_source") or {}
                     name, ident = source.get("sender"), source.get("sender_id")
                     if not name or not ident:
                         raise ValueError("human answer has no verified original peer identity")
-                    targets.setdefault(name, set()).add(ident)
-                    source_rooms.setdefault(name, set()).add(source.get("room") or "")
+                    targets.add(ident)
+                    source_rooms.setdefault(ident, set()).add(source.get("room") or "")
                 for reply in result["replies"]:
-                    candidates = targets.get(reply.get("to"), set())
-                    if (len(candidates) != 1 or (reply.get("room")
-                            and reply["room"] not in source_rooms.get(reply.get("to"), set()))):
-                        raise ValueError("human answer reply has ambiguous or unrelated routing")
-                    reply.update(to_id=next(iter(candidates)), decision_delivery=True)
+                    ident = reply.get("to_id")
+                    if (ident not in targets or (reply.get("room")
+                            and reply["room"] not in source_rooms.get(ident, set()))):
+                        affected = {answer["id"] for answer in peer_answers
+                                    if (answer["prompt"].get("decision_source") or {}).get("sender_id") == ident}
+                        self._hold_model_answers(store, affected or active_answers, snapshot, logged)
+                        return
+                    sequences = {answer["prompt"]["seq"] for answer in peer_answers
+                                 if (answer["prompt"].get("decision_source") or {}).get("sender_id") == ident}
+                    reply["source_seq"] = next(iter(sequences)) if len(sequences) == 1 else 0
             # What the turn puts in front of the main agent: the model's
             # escalations, the deferrals it left unrouted, and every skill
             # request — the ledger's `escalation_count` counts all three.
