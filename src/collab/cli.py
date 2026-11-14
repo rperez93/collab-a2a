@@ -285,11 +285,12 @@ def _skill_list_notice() -> None:
 
 
 def _name_source_note() -> None:
-    """Say when the name came from the machine file every agent here shares (R21)."""
-    from .config import setting_source
-    if setting_source("display_name") == "machine":
-        print(dim("  that name comes from the machine-wide setting every agent here shares; "
-                  "`collab config display_name NAME` gives this agent its own"))
+    """Point at a legacy shared name, which no longer names this agent (R21)."""
+    from .config import load_machine_config, setting_source
+    if setting_source("display_name") == "legacy":
+        legacy = str(load_machine_config().get("display_name"))
+        print(dim(f"  the machine file still names every agent here {said(legacy)!r}; it no longer "
+                  f"applies. `collab config display_name {said(legacy)}` adopts it for this agent"))
 
 
 def _monitor_hint(profile: SessionProfile, status: dict[str, Any]) -> None:
@@ -5752,7 +5753,9 @@ def cmd_config(args: argparse.Namespace) -> int:
             if value != item.default:
                 line += dim(f"   (default {_shown(item.default)})")
             source = config_module.setting_source(item.name)
-            if config_module.agent_scoped(item.name) and source == "machine":
+            if source == "legacy":
+                line += dim("   [machine file has a legacy value it no longer applies]")
+            elif config_module.agent_scoped(item.name) and source == "machine":
                 line += dim("   [shared by every agent here]")
             elif source == "agent":
                 line += dim("   [this agent]")
@@ -5783,7 +5786,11 @@ def cmd_config(args: argparse.Namespace) -> int:
             fail("--unset takes no value")
             return 2
         unset_setting(item.name)
-        if config_module.setting_source(item.name) == "machine":
+        source = config_module.setting_source(item.name)
+        if getattr(args, "machine", False) and source == "agent":
+            ok(f"shared default for {item.name} cleared; this agent still uses its own, "
+               f"{_shown(item.read())}")
+        elif source == "machine":
             ok(f"{item.name} now follows the shared value every agent here uses, "
                f"{_shown(item.read())} (`--unset --machine` clears that)")
         else:

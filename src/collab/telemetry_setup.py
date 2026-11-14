@@ -11,7 +11,7 @@ from pathlib import Path
 import shlex
 import time
 
-from .config import load_config, share_stats_enabled, stats_source, collab_executable
+from .config import load_agent_config, load_config, share_stats_enabled, stats_source, collab_executable
 from .runtime_settings import get
 
 
@@ -37,7 +37,8 @@ def ensure(profile) -> None:
     if provider not in ('codex', 'claude-code'):
         return
     thread = (os.environ.get('CODEX_THREAD_ID') or os.environ.get('CODEX_SESSION_ID') or '') if provider == 'codex' else ''
-    explicit = 'stats_command' in load_config()
+    from .config import load_agent_config
+    explicit = 'stats_command' in load_agent_config()  # this agent's own choice (R21)
     if (previous.get('provider') == provider and previous.get('thread_id', '') == thread
             and previous.get('explicit') == explicit and not previous.get('error')):
         return
@@ -46,7 +47,7 @@ def ensure(profile) -> None:
     try:
         if provider == 'codex':
             value['thread_id'] = os.environ.get('CODEX_THREAD_ID') or os.environ.get('CODEX_SESSION_ID') or ''
-        elif 'stats_command' not in load_config():
+        elif 'stats_command' not in load_agent_config():
             from .statusline.install import install_claude_code, status_claude_code
             if not status_claude_code()['installed']:
                 # A shared hook must resolve its own calling process. Pinning
@@ -63,7 +64,7 @@ def source(profile) -> tuple[str, int, dict]:
     command, interval = stats_source()
     env = {**os.environ, 'COLLAB_HOME': str(profile.home)}
     # Presence of an empty key is an explicit clear, not permission to rearm.
-    if 'stats_command' in load_config() or not get('stats_auto_setup'):
+    if 'stats_command' in load_agent_config() or not get('stats_auto_setup'):
         return command, interval, env
     cfg = state(profile)
     if cfg.get('provider') == 'codex' and cfg.get('thread_id'):

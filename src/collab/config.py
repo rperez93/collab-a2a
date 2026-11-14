@@ -505,6 +505,12 @@ AGENT_KEYS = frozenset({
 })
 
 
+#: Agent settings that are an agent's IDENTITY: never inherited from the machine
+#: file, where one agent's name once named every agent (R21). A legacy value
+#: there is shown with a hint to adopt it, and --machine cannot set them.
+IDENTITY_KEYS = frozenset({"display_name", "color", "stats_command", "stats_auto_setup"})
+
+
 def agent_scoped(key: str) -> bool:
     return key in AGENT_KEYS or key.startswith("worker_")
 
@@ -556,10 +562,15 @@ def load_agent_config() -> dict[str, Any]:
 
 
 def setting_source(key: str) -> str:
-    """Where a setting's value comes from: agent, machine or default."""
+    """Where a setting's value comes from: agent, machine, legacy or default.
+
+    "legacy" is an identity key found only in the machine file: shown, not used.
+    """
     if agent_scoped(key) and key in load_agent_config():
         return "agent"
-    return "machine" if key in load_machine_config() else "default"
+    if key in load_machine_config():
+        return "legacy" if key in IDENTITY_KEYS else "machine"
+    return "default"
 
 
 def load_config() -> dict[str, Any]:
@@ -573,7 +584,8 @@ def load_config() -> dict[str, Any]:
     import copy
     machine = load_machine_config()
     agent = load_agent_config()
-    merged = {**machine, **{k: v for k, v in agent.items() if agent_scoped(k)}}
+    merged = {k: v for k, v in machine.items() if k not in IDENTITY_KEYS}
+    merged.update({k: v for k, v in agent.items() if agent_scoped(k)})
     return copy.deepcopy(merged)
 
 
@@ -607,9 +619,28 @@ def save_config(cfg: dict[str, Any]) -> None:
     Removing an agent-scoped key removes THIS agent's value only: the shared
     default other agents use is changed only with --machine.
     """
+    import fcntl
+    if WRITE_MACHINE["on"] and WRITE_MACHINE.get("key") in IDENTITY_KEYS:
+        raise ValueError(f"{WRITE_MACHINE['key']} is each agent's own and has no shared default")
+    _AGENT_PATH.clear()  # a write resolves the selected identity fresh, never from a cache
     machine_path, agent_path = global_config_path(), agent_config_path()
+    machine_path.parent.mkdir(parents=True, exist_ok=True)
+    # Two agents read-modify-writing the shared file must not lose each other's change.
+    lock = open(machine_path.with_name(machine_path.name + ".lock"), "a")
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    try:
+        _save_locked(cfg, machine_path, agent_path)
+    finally:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        lock.close()
+    _CACHE.clear()
+    _AGENT_CACHE.clear()
+
+
+def _save_locked(cfg: dict[str, Any], machine_path: Path, agent_path: Path | None) -> None:
     machine, agent = _read_raw(machine_path), _read_raw(agent_path)
-    current = {**machine, **{k: v for k, v in agent.items() if agent_scoped(k)}}
+    current = {k: v for k, v in machine.items() if k not in IDENTITY_KEYS}
+    current.update({k: v for k, v in agent.items() if agent_scoped(k)})
     changed_machine = changed_agent = False
     machine_key = WRITE_MACHINE.get("key") if WRITE_MACHINE["on"] else None
     for key in set(cfg) | set(current):
@@ -640,10 +671,6 @@ def save_config(cfg: dict[str, Any]) -> None:
         _write_json(machine_path, machine)
     if changed_agent and agent_path is not None:
         _write_json(agent_path, agent)
-    # So a writer never has to wait for their own change to "age": inside the
-    # same second the stamp might not have moved yet.
-    _CACHE.clear()
-    _AGENT_CACHE.clear()
 
 
 def pin_agent_value(key: str, value: Any) -> None:
