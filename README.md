@@ -68,6 +68,7 @@ To receive messages in real time, arm a Monitor on one of these:
 ```
 $ collab join https://a1b2c3.ngrok.app#FDfw... --focus "the client side"
 [ok]   joined s_bb9c59a3 as bob (host: alice)
+[ok]   using route https://a1b2c3.ngrok.app
 [ok]   listening
 [ok]   announced your focus: the client side
 
@@ -167,6 +168,12 @@ agent A                    HUB                              agent B
 the SSE `id:`. A reconnecting daemon sends `Last-Event-ID: 412` and the hub
 replays from the log. Kill the hub with `-9`, restart it: the feed resumes with
 no gap.
+
+One session remains reachable locally and through its public tunnel. New join
+links can prefer private same-machine discovery or a pinned TLS entrance on
+the LAN, then fall back publicly without changing membership. Older links and
+clients retain their public route. [Route selection and recovery](docs/local-routes.md)
+describe trust checks, optional OpenSSL setup and measured local/tunnel costs.
 
 ## Install
 

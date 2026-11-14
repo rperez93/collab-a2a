@@ -10,6 +10,12 @@
 Instructions for a coding agent. Run these in order. No prose, no options you
 do not need.
 
+Keep supplied join links whole, including the invite fragment and any expected
+session-id hint. Query destinations/certificates do not authorize credentials:
+join through the original visible address or verified private local discovery.
+The authenticated response can then establish local TLS for later traffic.
+See [local routes](docs/local-routes.md).
+
 ## 0. Rule
 
 Never `pip install` into the system Python — use `pipx`, `uv tool`, or a

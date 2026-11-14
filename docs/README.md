@@ -16,6 +16,7 @@ the reference pages as you need them.
 | [Concepts](concepts.md) | The hub, the daemon, sessions, the roster, activity, the task board, batches of work, learnings, and the wake. |
 | [CLI reference](cli-reference.md) | Every command and flag, generated from the parser. |
 | [Security](security.md) | The trust model, and what the tool does and does not protect against. |
+| [Local and public routes](local-routes.md) | Local preference, pinned LAN TLS, public fallback and route recovery. |
 | [Troubleshooting](troubleshooting.md) | Common problems and how to resolve them. |
 
 | [v2 migration](v2.md) | Compatibility boundary and release changes. |

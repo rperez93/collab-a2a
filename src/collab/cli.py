@@ -273,7 +273,8 @@ def _require_own_profile(args: argparse.Namespace) -> SessionProfile:
 
 
 def _client(profile: SessionProfile) -> HubClient:
-    return HubClient(profile.url, profile.token)
+    from .routes import options
+    return HubClient(profile.url, profile.token, **options(profile))
 
 
 def _skill_list_notice() -> None:
@@ -750,7 +751,7 @@ def cmd_host(args: argparse.Namespace) -> int:
     # The host is participant #0: it joins its own session and comes up
     # listening, so it is live before anyone else connects.
     profile = SessionProfile(
-        session_id=cfg.session_id, url=cfg.public_url or cfg.local_url,
+        session_id=cfg.session_id, url=cfg.local_url,
         name=cfg.host_name, host_name=cfg.host_name, token=cfg.host_token,
         is_host=True, room=DEFAULT_ROOM, home=cfg.home,
         working_path=cfg.working_path,
@@ -773,7 +774,8 @@ def cmd_host(args: argparse.Namespace) -> int:
     try:
         peers.announce(
             session_id=cfg.session_id, name=cfg.host_name, role="host",
-            url=profile.url, repo=str(repo_for_home(cfg.home)), home=cfg.home,
+            url=cfg.public_url or cfg.local_url, local_url=cfg.local_url,
+            repo=str(repo_for_home(cfg.home)), home=cfg.home,
             invite=cfg.invite, host_name=cfg.host_name, pid=cfg.pid or None,
         )
     except OSError:
@@ -798,6 +800,10 @@ def cmd_host(args: argparse.Namespace) -> int:
         warn("the daemon did not report live yet; check `collab status`")
 
     heading("Share this one line with the other person")
+    # TLS discovery is written during app startup, after the first config
+    # read but before health succeeds. Print the current certificate/port,
+    # rather than a public-only line captured while that listener was starting.
+    cfg = HubConfig.load(cfg.session_id, cfg.home) or cfg
     print("  " + c(join_line(cfg), "1;32"))
     if not cfg.public_url:
         print(dim(f"  (local only — LAN address is http://{local_ip()}:{cfg.port})"))
@@ -1328,6 +1334,7 @@ def cmd_join(args: argparse.Namespace) -> int:
     _take_lock(profile, role="host" if profile.is_host else "guest")
     ok(f"joined {c(profile.session_id, '36')} as {c(profile.name, '1')}"
        f" (host: {profile.host_name})")
+    ok(f"using route {profile.url}")
     if _is_listening(profile, status):
         ok("listening")
     elif not args.no_daemon:

@@ -159,6 +159,18 @@ line shows; the gap is the budget for how often other people's messages start a
 turn, and the standing reminder — which borrows the same delivery — does not
 pay into it.
 
+# Local and public routes
+
+Later than the pin: the original visible URL or verified private loopback
+record receives the initial join. Query destinations/certificates cannot
+authorize credentials. Authenticated metadata can establish numeric private
+LAN/loopback TLS afterward. A bounded `routes.json` preserves original URL
+authority and certificates; reconnect retains identity and SSE cursor, and
+changed secure metadata closes the old pool even from the public route.
+Local/public probe phases share 750 ms/five-second budgets. Shared or writable
+peer registries remain discovery-only for automatic credential routing.
+The bundle pin and verification stamps are unchanged.
+
 # When it is not running
 
 `collab check` says so, and says what to do. Run against a live session with

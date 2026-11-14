@@ -140,11 +140,16 @@ def join_session(
     Returns ``(profile, snapshot, daemon_status)``.
     """
     base, invite = split_join_url(url)
+    from .. import routes
+    original = base
+    base, hinted = routes.join_route(url, original, invite)
     hello = ctx.gather(focus, cwd=cwd)
     wanted = resolve_name(name)
 
     with HubClient(base) as client:
         result = client.join(invite, wanted, hello)
+    if hinted and result.get("session_id") != hinted["session_id"]:
+        raise HubError("the join response belongs to a different session")
 
     profile = SessionProfile(
         session_id=result["session_id"],
@@ -160,6 +165,15 @@ def join_session(
     profile.save()
     if not follow:
         ownership.keep(profile.dir)
+    # Preserve the user's original route separately from the route selected
+    # here. A discovered localhost address must never become the legacy trust
+    # fallback after its TLS pin disappears or changes.
+    metadata = result.get("routes") or {"session_id": profile.session_id, "public_url": original}
+    routes.remember(profile, metadata, original_url=original)
+    selected = routes.after_join(profile)
+    if selected and selected != profile.url:
+        profile.url = selected
+        profile.save(make_current=False)
     from ..worker import Store
     Store(profile.dir).ensure_default()
     from ..telemetry_setup import ensure

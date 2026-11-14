@@ -34,13 +34,13 @@ class HubError(RuntimeError):
 
 class HubClient:
     def __init__(self, base_url: str, token: str | None = None,
-                 *, timeout: float = DEFAULT_TIMEOUT) -> None:
+                 *, timeout: float = DEFAULT_TIMEOUT, verify=True) -> None:
         self.base_url = base_url.rstrip("/")
         self.token = token
         self._verified_url: str | None = None
         import httpx
 
-        self._client = httpx.Client(timeout=timeout, follow_redirects=True)
+        self._client = httpx.Client(timeout=timeout, follow_redirects=True, verify=verify)
 
     def close(self) -> None:
         self._client.close()

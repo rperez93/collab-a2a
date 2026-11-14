@@ -169,6 +169,22 @@ complete JSON, including the current server clock.
 
 ## 4. The join handshake
 
+Public links retain the legacy visible address and invite fragment. Routed
+public `/s/<id>` links may carry `collab_session` for expected-session health
+validation; `collab_local` and `collab_cert` query values never authorize a
+credential destination or certificate. The initial join POST uses the original
+visible URL, or an unambiguous private same-machine loopback record, once.
+
+Authenticated join and roster responses may carry `routes` with `session_id`,
+`local_url`, `secure_local_url`, `public_url` and `local_certificate`. These can
+authorize later pinned TLS on numeric loopback, private IPv4 LAN or IPv6 ULA
+addresses. They do not authorize discovered plaintext LAN or arbitrary public
+local destinations. The exclusive certificate context imports no system roots.
+Reconnect retains membership and SSE sequence without another join POST;
+changed secure metadata replaces the pool even when the current route is
+public. Local probe budgets total 750 ms; public fallback budgets total five
+seconds. The CLI prints its selected route.
+
 Before sending the invite, the guest reads `GET /ext/collab/v1/compatibility`.
 Both peers must advertise integer `protocol_major: 2` and a stable package
 `version` at least `2.0.0` within major 2. Missing fields, malformed versions,
