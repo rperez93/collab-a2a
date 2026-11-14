@@ -155,7 +155,7 @@ def test_cli_retention_policy_and_old_host_warning(tmp_path, monkeypatch, capsys
     assert 'Warning' not in output.out
     assert cli.main(['file', 'send', str(path), '--temporary', '--json']) == 0
     assert calls[-1]['keep'] is False
-    assert not capsys.readouterr().err
+    assert 'did not confirm' in capsys.readouterr().err, 'old host omitted even the requested temporary acknowledgement'
     assert cli._file_retention_status({'kept': True, 'state': 'withdrawn'}) == 'no longer on host'
 
 
