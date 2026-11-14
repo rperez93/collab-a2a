@@ -90,6 +90,26 @@ def _config(config: dict[str, Any], *, allow_empty_model: bool = False) -> dict[
     return result
 
 
+def pending_count_readonly(root) -> int:
+    """Decisions waiting on the main agent, read without creating or locking.
+
+    For the banner on every collab command: a read-only SQLite open, so a
+    status line or hook calling collab never creates or write-locks worker.db.
+    """
+    path = Path(root) / "worker.db"
+    if not path.exists():
+        return 0
+    try:
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=0.2)
+        try:
+            rows = db.execute("SELECT data FROM records WHERE kind='escalation'").fetchall()
+        finally:
+            db.close()
+    except sqlite3.Error:
+        return 0
+    return sum(1 for (data,) in rows if not json.loads(data).get("awaiting_human"))
+
+
 def _drop_stash(row) -> None:
     """Delete a queued file's private copy once its record is gone."""
     if row is None:
@@ -392,14 +412,22 @@ class Store:
         with self._db() as db:
             return self._records(db, "escalation")
 
-    def answer(self, escalation_id: str, text: str) -> None:
+    def answer(self, escalation_id: str, text: str, *, verbatim: bool | None = None,
+               notify_to: str = "", notify_room: str = "") -> None:
+        """Close a decision. verbatim sends TEXT to the asking peer as written;
+        otherwise the worker gets it as an instruction and words the reply.
+        None means verbatim for a decision waiting on the human, else instruct."""
         text = _text(text, "answer")
         with self._db() as db:
             row = db.execute("SELECT data FROM records WHERE id=? AND kind='escalation'", (escalation_id,)).fetchone()
             if row is None:
                 raise ValueError(f"no pending worker decision {escalation_id}")
             prompt = json.loads(row[0])
-            if prompt.get("awaiting_human") and (prompt.get("notify_to") or prompt.get("notify_room")):
+            if verbatim is None:
+                verbatim = bool(prompt.get("awaiting_human"))
+            if verbatim and not (prompt.get("notify_to") or prompt.get("notify_room")):
+                prompt["notify_to"], prompt["notify_room"] = notify_to, notify_room
+            if verbatim and (prompt.get("notify_to") or prompt.get("notify_room")):
                 # The human's final answer goes to the waiting peer VERBATIM and
                 # at once: through a model turn it was paraphrased, and after the
                 # hourly cap it waited up to an hour. The worker learns it as context.
@@ -408,9 +436,8 @@ class Store:
                                          "room": prompt.get("notify_room", "")})
                 self._add(db, "context", {"text": _text(
                     f"Answered for the main agent to {prompt.get('notify_to') or prompt.get('notify_room')}"
-                    f" (already sent, do not repeat): {text[:2000]}", "context")})
+                    f" (already queued, do not repeat): {text[:2000]}", "context")})
                 return
-            prompt = prompt
             # Reuse the decision id; consuming the answer in a committed turn
             # is the only operation that removes the coding agent's response.
             db.execute("UPDATE records SET kind='answer',data=? WHERE id=?",

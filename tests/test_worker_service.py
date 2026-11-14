@@ -611,6 +611,7 @@ async def test_a_rate_limited_provider_waits_and_an_auth_failure_escalates_once(
 
 
 @pytest.mark.asyncio
+
 async def test_an_escalation_with_a_wrong_seq_is_kept_not_thrown_away(conversation, tmp_path, monkeypatch):
     """The whole paid turn used to be discarded and backed off for one bad reference."""
     configure(conversation, tmp_path)
@@ -718,3 +719,31 @@ async def test_daemon_upload_sends_the_delivery_key_refuses_changed_bytes_and_ha
         conversation.daemon._http = http
         with pytest.raises(asyncio.TimeoutError):
             await conversation._upload(message, timeout=0.05)
+
+@pytest.mark.asyncio
+async def test_the_leak_guard_compares_participant_ids_across_a_rename(conversation, tmp_path, monkeypatch):
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    conversation.daemon.inbox.record(Envelope(seq=1, kind="chat", sender="bob", sender_id="p_b",
+                                              text="May we drop the legacy API in 3.0?"))
+    snap = store.snapshot()
+    store.commit_turn(expected_cursor=snap["cursor"], cursor=1, summary="", replies=[],
+                      escalations=[{"reason": "decision", "seq": 1,
+                                    "question": "Bob asks: may we drop the legacy API in 3.0?"}])
+    # bob renamed to robert; a carol joined under the old name 'bob'
+    conversation.daemon.snapshot["participants"] = [{"name": "robert", "id": "p_b"},
+                                                    {"name": "bob", "id": "p_c"}, {"name": "alice", "id": "p_a"}]
+    incoming(conversation, 2, "any news?")
+    async def run(*args, **kwargs):
+        return {"summary": "", "escalations": [], "replies": [
+            {"text": "Bob asks: may we drop the legacy API in 3.0? still open", "to": "robert", "room": ""},
+            {"text": "Bob asks: may we drop the legacy API in 3.0? still open", "to": "bob", "room": ""}]}
+    monkeypatch.setattr("collab.worker_runtime.run_turn", run)
+    sent = []
+    async def transport(request):
+        sent.append(json.loads(request.content)["to"])
+        return httpx.Response(200, json={"seq": 3})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        conversation.daemon._http = client
+        await conversation.turn()
+    assert sent == ["robert"], "the asker under its new name only; never the new holder of the old name"
