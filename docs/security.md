@@ -235,12 +235,14 @@ Be clear-eyed about the limits.
   When you share over ngrok, traffic to the public address is protected by
   ngrok's TLS.
   Automatic LAN selection uses a local TLS entrance with an exclusive session
-  certificate; untrusted plaintext hints cannot receive credentials. Explicit
+  certificate learned through the authenticated original connection; query
+  destinations/certificates cannot receive the initial invite. Explicit
   legacy HTTP links retain their existing network trust. See
   [local route authentication](local-routes.md).
 - **A malicious hub is still a party to the conversation.**
-  The client validates URLs, filenames, and payloads from a hub, and refuses to
-  send its token to a non-loopback address it found in a file.
+  The client validates URLs, filenames, and payloads from a hub. Private peer
+  files can authorize loopback only; authenticated hub metadata can authorize
+  pinned private LAN TLS, with no plaintext LAN substitution.
   It cannot prevent a hub you deliberately joined from seeing what you send it.
 - **Denial of service by an admitted participant.**
   Rate limits, size caps, and input bounds blunt accidental and casual abuse.

@@ -5,6 +5,9 @@ The host itself uses loopback. Another agent on the same machine can select
 loopback from an unambiguous host record in the current user's private peer
 registry. Machine/user labels alone do not authorize that choice: ownership,
 directory privacy and record write permissions are checked too.
+Discovery examines at most 1,024 directory entries before filtering file
+names, with at most 16 KiB read from each eligible regular record. Shared or
+writable registries remain discovery-only for automatic credential routing.
 
 For automatic LAN selection, hosting also starts a TLS entrance to the
 existing listener. OpenSSL generates a private per-session certificate/key
@@ -13,26 +16,43 @@ room, store or membership. If TLS setup is unavailable, the public route
 remains usable and the host log explains the failure. An untrusted plaintext
 LAN address is never silently substituted.
 
-Public join lines carry nonsecret query hints for the session, local HTTPS
-address and public certificate. The invite stays in the `#fragment`, outside
-HTTP request lines. The whole link is shell-quoted. Older clients discard the
-query and still join through the original public address. Legacy
-`http://host:port#invite` and per-session ngrok links remain accepted; local-only
-join lines retain their existing spelling.
+Public join lines keep the short legacy form
+`collab join https://host#invite`. Routed public paths such as `/s/<id>` may
+include a small `collab_session` query hint, with the full link quoted for the
+shell. The invite stays in the `#fragment`, outside HTTP request lines.
+Older query-bearing links remain accepted, but `collab_local` and `collab_cert`
+never choose a destination or establish certificate authority.
 
-New clients probe local routes with a 750 ms total deadline. Every connection
-trusts only the certificate supplied in the user-provided link or learned
-through the current trusted hub connection. No system CA roots are added to
-that local context. A wrong certificate fails before any invite or bearer is
-sent; relaying opaque TLS does not reveal credentials. A discovered HTTP URL
-never inherits the original user's authority. Hinted links check the expected
-session before the join POST, and an uncertain POST is never retried elsewhere.
+The client submits the join once through the original visible address, unless
+an unambiguous private same-machine record authorizes a loopback route.
+When a session id is known, health must name that session before any invite
+is submitted. An uncertain join POST is never retried at another address.
+The CLI prints the selected route after joining.
 
-Bounded `routes.json` metadata preserves the original user URL independently
+Only the authenticated join response or a later authenticated roster can
+supply the local TLS entrance and certificate for subsequent traffic. Secure
+candidates use numeric loopback, RFC 1918 LAN or IPv6 ULA addresses; DNS and
+arbitrary public destinations are excluded. Every local TLS connection trusts
+only the supplied session certificate, without system CA roots. A wrong
+certificate fails before bearer submission; relaying opaque TLS does not
+reveal credentials. An explicitly supplied legacy HTTP address retains its
+existing trust, while discovered plaintext LAN addresses are never adopted.
+
+Local probes share one 750 ms budget. All public fallback probes share one
+five-second budget, divided so the original URL still gets a chance after a
+silent newly advertised address. Thus reconnect has at most 5.75 seconds of
+network probe budgets, rather than a separate full deadline per candidate.
+An expected-session health preflight on a hinted join has its own five-second
+bound; ordinary short legacy links need no additional session-id health read.
+
+Bounded `routes.json` metadata (at most 16 KiB) preserves the original user URL independently
 of the selected URL. Reconnect prefers private same-machine discovery, then
 pinned TLS, then a reachable public route, retaining participant id, token and
-SSE cursor. Certificate changes close the old pool and restart the feed with
-that cursor. Late responses from old URL/token/certificate generations cannot
+SSE cursor. Even a legacy profile without a route sidecar checks the expected
+health session id before exposing its daemon bearer. Certificate changes close the old pool and restart the feed with
+that cursor, including a new secure entrance learned while using the public
+route. A host always recovers through its own HTTP listener, rather than
+flipping its profile back to the public tunnel. Late responses from old URL/token/certificate generations cannot
 overwrite current routes or snapshots.
 
 A surviving route can advertise a new tunnel URL; private local discovery can
@@ -58,4 +78,13 @@ bytes were 92,016 / 92,016 / 92,019; TLS changes the route, not the payload.
 The test process peaked at 43,172 KiB RSS. A separate 400-silent-socket test
 held the 256-connection cap, used 0.170 CPU seconds and peaked at 108,776 KiB
 RSS. Unsafe certificate-file probes finished in about 2 ms and 22 MiB RSS.
-These are measured scenarios, not latency or unlimited-capacity guarantees.
+These latency observations predate the original-first join change and measure
+transport only. They do not establish cross-host acceptance of the current
+integrated build.
+
+The local WebSocket bridge admits at most 32 viewers and sends to them in
+parallel with one-second send and close deadlines. When a route changes after
+an event is recorded, its bounded local delivery completes before cancellation
+advances to the next feed. The saved SSE cursor therefore cannot skip an event
+that was committed but never forwarded to the viewer. A 32-silent-viewer test
+used about 0.001 CPU seconds, 0.041 seconds wall time and 26 MiB peak RSS.

@@ -328,8 +328,8 @@ async def test_silent_handshakes_share_the_connection_cap_and_shutdown_reaps_the
             await close_writer(writer)
 
 
-def test_hinted_public_join_line_carries_a_pinned_https_route_and_preserves_legacy_local_line(tmp_path, context):
-    """The certificate is nonsecret; the unchanged fragment remains the invite for old clients."""
+def test_public_join_line_is_short_and_does_not_put_destination_authority_in_queries(tmp_path, context):
+    """The unchanged visible address/fragment is enough; TLS metadata arrives after joining."""
     cfg = HubConfig(session_id="s", host_name="h", port=12345, bind="127.0.0.1",
         invite="same-invite", host_token="host-token", home=str(tmp_path))
     assert join_line(cfg) == "collab join http://127.0.0.1:12345#same-invite"
@@ -342,8 +342,11 @@ def test_hinted_public_join_line_carries_a_pinned_https_route_and_preserves_lega
     parsed = urlsplit(words[2])
     query = parse_qs(parsed.query)
     assert parsed.fragment == "same-invite"
-    assert query["collab_local"] == ["https://127.0.0.1:54321"]
-    assert base64.urlsafe_b64decode(query["collab_cert"][0]).decode() == tls.read_certificate(tmp_path)
+    assert query == {}
+    assert join_line(cfg) == "collab join https://public.example/session#same-invite"
+    cfg.public_url = "https://public.example/s/s"
+    parsed = urlsplit(shlex.split(join_line(cfg))[2])
+    assert parse_qs(parsed.query) == {"collab_session": ["s"]}
 
 
 def test_app_publishes_only_its_live_tls_entrance_and_cleans_up_saved_port(tmp_path):
@@ -359,6 +362,7 @@ def test_app_publishes_only_its_live_tls_entrance_and_cleans_up_saved_port(tmp_p
                      local_url=cfg.local_url, local_tls_config=cfg)
     with TestClient(app):
         loaded = HubConfig.load("s", tmp_path)
+        assert app.state.local_tls._socket.getsockname()[0] == cfg.bind
         routes = app.state.routes()
         assert loaded.secure_port > 0
         assert routes["secure_local_url"] == loaded.secure_local_url
