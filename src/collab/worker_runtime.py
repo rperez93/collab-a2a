@@ -139,7 +139,8 @@ Retained main context is a bounded history of explicit facts, oldest first.
 Use it even if your summary omitted a fact; newer main context and answers
 supersede older facts. Retained context alone does not require a new reply.
 A decision you escalated stays the main agent's: never repeat an open question
-to anyone but the peer who asked it, never post it to a room, and never address
+to anyone but the peer who asked it (by DM, or where they asked it publicly),
+and never address
 the human directly; the main agent asks them. The board lists open tasks: read
 it before asking the main agent what a task is.
 A message whose body carries skill_request asks this participant to run a

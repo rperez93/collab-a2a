@@ -651,9 +651,6 @@ async def test_a_rate_limited_provider_waits_and_an_auth_failure_escalates_once(
 
 
 @pytest.mark.asyncio
-async def test_an_escalation_naming_a_message_outside_the_turn_keeps_its_question(conversation, tmp_path, monkeypatch):
-
-
 async def test_an_escalation_with_a_wrong_seq_is_kept_not_thrown_away(conversation, tmp_path, monkeypatch):
     """The whole paid turn used to be discarded and backed off for one bad reference."""
     configure(conversation, tmp_path)
@@ -678,13 +675,6 @@ def test_provider_backoff_table():
     assert provider_backoff("model", 5, base) == 3600.0
     assert provider_backoff("network", 3600, base) == base, "a stated wait is ignored for network"
     assert provider_backoff("other", 3600, base) == base, "and for other"
-
-
-    assert [(p["seq"], p["question"]) for p in store.pending()] == [(0, "Which branch?")]
-
-
-    assert [(p["seq"], p["question"]) for p in store.pending()] == [(1, "Which branch?")], "the only message in the turn"
-    assert not store.status()["error"]
 
 
 @pytest.mark.asyncio
