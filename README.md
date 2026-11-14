@@ -2337,9 +2337,12 @@ diagnostics off it still writes the header and tells you how to capture a log.
 
 Beside it, `daemon.log` and `hub.log` are the two processes' own output at more
 length, `ngrok.log` is the tunnel agent's, and `worker.log` has one JSON line per
-conversation-worker model turn — what triggered it (counts by kind), the model,
-tokens and cost, the outcome, any class of failure, and how long it took, never
-what anybody said or who said it. Every one of them is capped at 10 MB with its
+conversation-worker attempt — how far it got (`reserved`, `launched`,
+`committed`), its outcome (`output`, `no-op`, `invalid`, `failed`, `cancelled`,
+or `skipped-local` for a counted turn that called no model), what triggered it
+as counts by kind, the model, tokens and cost, reply and escalation counts, the
+class of any failure and how long it took — never what anybody said, who said
+it, or a provider's own error text. Every one of them is capped at 10 MB with its
 rotated generation, while the process writing it runs: past 4 MiB the tail is
 copied to `<name>.1` and the file is truncated in place, so a process holding it
 open goes on writing into the live one. `collab logs` prints all three of

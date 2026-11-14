@@ -42,11 +42,14 @@ replies. It is separate from the main inbox's read cursor. Model turns use
 private temporary directories outside the repository; durable worker state
 remains with this agent and session.
 
-`worker.log` records one JSON line per model turn: the trigger as counts by
-event kind, the provider and model, tokens and cost where the provider reports
-them, replies and escalations as counts, the outcome (`ok`, `superseded`,
-`cancelled`, `error`), the class of any failure, and the duration. It never
-holds message text, names or provider output. Like `daemon.log`, `hub.log` and
+`worker.log` records one JSON line per worker attempt: its `phase`
+(`reserved`, `launched`, `committed`), its `outcome` (`output`, `no-op`,
+`invalid` when the provider's answer failed validation, `failed`, `cancelled`
+when the worker was turned off or reconfigured mid-turn, `skipped-local` for a
+counted turn that called no model), the trigger as counts by event kind, the
+provider and model, tokens and cost where the provider reports them,
+`reply_count` and `escalation_count`, the exception class of any failure, and
+the duration. It never holds message text, names or provider output. Like `daemon.log`, `hub.log` and
 `ngrok.log`, it is capped at 10 MB including its rotated `worker.log.1`.
 
 ## Existing sessions and explicit homes

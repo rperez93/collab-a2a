@@ -8,7 +8,7 @@
 * **Update (later than the pin)**: Recorded R8 saved host/guest sessions and explicit resume with original working paths. Historical pin and verification stamps are unchanged.
 
 ## 2026-11-13 (logs)
-* **Update (later than the pin)**: Recorded in [the state directory](architecture/state-directory.md) that every session log is capped at 10 MB with its rotated generation while its writer runs, by copy and truncate, and that `worker.log` holds one content-free line per worker model turn. The pin and verification stamps are unchanged.
+* **Update (later than the pin)**: Recorded in [the state directory](architecture/state-directory.md) that every session log is capped at 10 MB with its rotated generation while its writer runs, by copy and truncate, and that `worker.log` holds one content-free line per worker attempt. The pin and verification stamps are unchanged.
 
 ## 2026-09-20
 * **Update (2.1.1, later than the pin)**: Recorded shared participant identity and internal decision routing in the wake page; the bundle pin is unchanged.
