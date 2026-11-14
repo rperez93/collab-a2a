@@ -3498,7 +3498,29 @@ def _file_size(size: int) -> str:
     return f"{size} B" if size < 1024 else f"{size / 1024:.0f} KB"
 
 
+def _file_retention_status(record: dict[str, Any]) -> str:
+    if record.get("state", "available") != "available":
+        return "no longer on host"
+    if record.get('kept'):
+        return 'kept until withdrawal'
+    expires = record.get('expires_at')
+    if expires is None:
+        return 'temporary; expiry not reported by host'
+    try:
+        when = datetime.fromtimestamp(float(expires), reading_timezone()).isoformat(timespec='seconds')
+    except (ValueError, TypeError, OverflowError, OSError):
+        return 'temporary; invalid expiry reported by host'
+    return 'expires ' + when
+
+
 def cmd_file(args: argparse.Namespace) -> int:
+    from .file_retention import durable_source, keep_document
+    if args.action != 'send' and (getattr(args, 'temporary', False) or getattr(args, 'source', '')):
+        fail('--temporary and --source apply to file send')
+        return 2
+    if args.action != 'list' and getattr(args, 'all', False):
+        fail('--all applies to file list')
+        return 2
     # Sending is under our name, and fetching deletes the host's copy in it.
     profile = (_require_profile(args) if args.action == "list"
                else _require_own_profile(args))
@@ -3514,14 +3536,28 @@ def cmd_file(args: argparse.Namespace) -> int:
                     fail(f"{path.name} is {size / 1024 / 1024:.1f}MB — the limit is "
                          f"{MAX_FILE_BYTES // 1024 // 1024}MB")
                     return 1
-                record = client.upload_file(path, to=args.to, room=args.room)
+                keep = (False if getattr(args, 'temporary', False) else
+                        bool(args.keep or keep_document(path.name)))
+                try:
+                    source = durable_source(getattr(args, 'source', '') or '')
+                except ValueError as exc:
+                    fail(str(exc))
+                    return 2
+                record = client.upload_file(path, to=args.to, room=args.room, keep=keep, source=source)
+                if (keep and not record.get('kept')) or (source and record.get('source') != source):
+                    print('Warning: host did not confirm durable retention/source; keep your original. '
+                          'This upload may still expire or be deleted on receipt.', file=sys.stderr)
                 if args.json:
                     print(json.dumps(record, indent=2))
                     return 0
                 target = f"@{args.to}" if args.to else f"#{args.room or profile.room}"
                 ok(f"shared {said(record['name'])} ({_file_size(size)}) with {target}")
                 print(f"       {dim('they fetch it with: collab file get ' + record['id'])}")
-                if args.to:
+                print(f"       owner: {scrub(str(record.get('owner', record.get('sender', 'you'))))}; "
+                      f"{_file_retention_status(record)}")
+                if record.get('kept'):
+                    print(f"       {dim('withdraw explicitly with: collab file rm ' + record['id'])}")
+                elif args.to:
                     print(f"       {dim('it is deleted from the host once they confirm receipt')}")
                 else:
                     # A room file waits for everyone who is here now, then goes;
@@ -3533,7 +3569,8 @@ def cmd_file(args: argparse.Namespace) -> int:
                 return 0
 
             if args.action == "list":
-                files = client.list_files()
+                files = (client.list_files(include_gone=True) if getattr(args, 'all', False)
+                         else client.list_files())
                 if args.json:
                     print(json.dumps(files, indent=2))
                     return 0
@@ -3547,7 +3584,10 @@ def cmd_file(args: argparse.Namespace) -> int:
                     who = (f"→ {scrub(str(f['recipient']))}" if f["recipient"]
                            else f"#{scrub(str(f['room']))}")
                     print(f"  {f['id']}  {scrub(str(f['name']))}  "
-                          f"{_file_size(f['size'])}  from {scrub(str(f['sender']))} {who}")
+                          f"{_file_size(f['size'])}  owner {scrub(str(f.get('owner', f['sender'])))} {who}  "
+                          f"{scrub(str(f.get('state', 'available')))}; {_file_retention_status(f)}")
+                    if f.get('source'):
+                        print(f"       durable copy: {scrub(str(f['source']))}")
                 return 0
 
             if args.action == "get":
@@ -3567,7 +3607,9 @@ def cmd_file(args: argparse.Namespace) -> int:
                     return 0
                 ok(f"saved {path} ({_file_size(path.stat().st_size)}, checksum verified)")
                 if args.keep:
-                    if record and not record["recipient"]:
+                    if record and record.get('kept'):
+                        ok('retained on host until explicit withdrawal; receipt not confirmed')
+                    elif record and not record["recipient"]:
                         minutes = ROOM_FILE_TTL_SECONDS // 60
                         warn(f"--keep: not confirming receipt (the room's copy lasts "
                              f"{minutes} minutes from when it was sent)")
@@ -7787,8 +7829,13 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--to", help="share privately with one participant")
     f.add_argument("--room")
     f.add_argument("--output", "-o", help="directory to save into (default: here)")
-    f.add_argument("--keep", action="store_true",
-                   help="do not confirm receipt, so the host keeps its copy")
+    retention = f.add_mutually_exclusive_group()
+    retention.add_argument("--keep", action="store_true",
+                           help="send: retain until withdrawal; get: do not confirm receipt")
+    retention.add_argument("--temporary", action="store_true",
+                           help="send: expire/delete on receipt even for documents")
+    f.add_argument("--source", help="send: HTTPS URL of the durable original (never fetched)")
+    f.add_argument("--all", action="store_true", help="list: include expired/collected/withdrawn records")
     f.add_argument("--json", action="store_true")
     add_session_flag(f)
     f.set_defaults(func=cmd_file)

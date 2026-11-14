@@ -328,6 +328,12 @@ class Store:
         written off.
         """
         now = time.time()
+        file_columns = self._columns("files")
+        for column, declaration in (("kept", "INTEGER NOT NULL DEFAULT 0"),
+                                    ("source", "TEXT NOT NULL DEFAULT ''"),
+                                    ("sender_id", "TEXT"), ("recipient_id", "TEXT")):
+            if column not in file_columns:
+                self._db.execute(f"ALTER TABLE files ADD COLUMN {column} {declaration}")
 
         # Identity used to be the display name. Give everyone an id, and record
         # the name they hold so references to it still resolve.
@@ -492,6 +498,14 @@ class Store:
                 " SELECT f.id, n.participant_id, f.acked_at"
                 " FROM files f JOIN participant_names n ON n.name = f.acked_by"
                 " WHERE f.acked_by IS NOT NULL")
+
+        # Bind a legacy name only when its surviving claim predates upload.
+        # A later claim is ambiguous; never hand old private content to it.
+        for label in ('sender', 'recipient'):
+            if label + '_id' not in file_columns:
+                self._db.execute(
+                    f"UPDATE files SET {label}_id=(SELECT participant_id FROM participant_names "
+                    f"WHERE name=files.{label} AND claimed_at <= files.created_at)")
 
     def publish_skill(self, owner_id: str, data: dict[str, Any]) -> dict[str, Any]:
         from ..skill_sharing import (MAX_OWNER_BYTES, MAX_PER_OWNER,
@@ -1541,7 +1555,9 @@ class Store:
 
     def add_file(self, file_id: str, *, name: str, size: int, sha256: str, sender: str,
                  recipient: str | None, room: str | None,
-                 audience: Iterable[str] = ()) -> dict[str, Any]:
+                 audience: Iterable[str] = (), kept: bool = False,
+                 source: str = "", sender_id: str | None = None,
+                 recipient_id: str | None = None) -> dict[str, Any]:
         """Record an upload, and for a room file, who it is waiting for.
 
         ``audience`` is the participant ids the file is held for — the people in
@@ -1549,12 +1565,14 @@ class Store:
         computed at ack time because the question is «who was there when it was
         sent», and the roster keeps changing after that.
         """
+        sender_id = sender_id or self.resolve_name(sender)
+        recipient_id = recipient_id or (self.resolve_name(recipient) if recipient else None)
         now = time.time()
         with self._lock:
             self._db.execute(
-                "INSERT INTO files (id,name,size,sha256,sender,recipient,room,created_at)"
-                " VALUES (?,?,?,?,?,?,?,?)",
-                (file_id, name, size, sha256, sender, recipient, room, now),
+                "INSERT INTO files (id,name,size,sha256,sender,recipient,room,created_at,kept,source,sender_id,recipient_id)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (file_id, name, size, sha256, sender, recipient, room, now, int(kept), source, sender_id, recipient_id),
             )
             self._db.executemany(
                 "INSERT OR IGNORE INTO file_collections (file_id, participant_id)"
@@ -1575,6 +1593,9 @@ class Store:
         """
         now = time.time()
         with self._lock:
+            file = self._db.execute("SELECT state FROM files WHERE id=?", (file_id,)).fetchone()
+            if file is None or file['state'] != 'available':
+                return False
             already = self._db.execute(
                 "SELECT collected_at FROM file_collections"
                 " WHERE file_id=? AND participant_id=?", (file_id, participant_id),
@@ -1644,7 +1665,7 @@ class Store:
         with self._lock:
             rows = self._db.execute(
                 "SELECT f.* FROM files f"
-                " WHERE f.state='available' AND f.recipient IS NULL"
+                " WHERE f.state='available' AND f.kept=0 AND f.recipient IS NULL"
                 " AND EXISTS (SELECT 1 FROM file_collections c"
                 "             WHERE c.file_id=f.id AND c.collected_at IS NOT NULL)"
                 " AND NOT EXISTS (SELECT 1 FROM file_collections c"
@@ -1676,7 +1697,7 @@ class Store:
     def mark_file(self, file_id: str, state: str, *, acked_by: str | None = None) -> None:
         with self._lock:
             self._db.execute(
-                "UPDATE files SET state=?, acked_at=?, acked_by=? WHERE id=?",
+                "UPDATE files SET state=?, acked_at=?, acked_by=? WHERE id=? AND state='available'",
                 (state, time.time() if acked_by else None, acked_by, file_id),
             )
             self._db.commit()
@@ -1693,7 +1714,7 @@ class Store:
         room_cutoff = now - (ttl_seconds if room_ttl_seconds is None else room_ttl_seconds)
         with self._lock:
             rows = self._db.execute(
-                "SELECT * FROM files WHERE state='available' AND ("
+                "SELECT * FROM files WHERE state='available' AND kept=0 AND ("
                 " (recipient IS NOT NULL AND created_at < ?)"
                 " OR (recipient IS NULL AND created_at < ?))",
                 (direct_cutoff, room_cutoff),
