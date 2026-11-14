@@ -46,7 +46,8 @@ collab working "<current work>"
 Delegate independent work when it helps the outcome. By default you may run up
 to two native teammates in parallel when independent, bounded work exists, for
 example one building and one reviewing. That needs a host that provides
-teammates, and no lower limit from the user or `delegation_max_children`. With
+teammates, and no lower limit from the user or `delegation_max_children`
+(0, the default, means no limit is set). With
 nothing independent to hand out, run none: maximizing concurrency is not the
 objective. The two-teammate default does not depend on a capacity estimate;
 `collab capacity` answers only whether more than two fit. Go beyond two only
