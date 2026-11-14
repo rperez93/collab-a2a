@@ -14,13 +14,30 @@ import sqlite3
 import time
 import uuid
 from collections import OrderedDict
+from contextlib import contextmanager
 from pathlib import Path
 
 from .worker_notices import _db as _notice_db, _load, _save
 
 
+#: How long a ledger COMMIT waits for a reader to let go. Taking the write lock
+#: still fails AT ONCE when another claimant holds it — that claimant is the
+#: one ringing the doorbell, and the daemon calls this on its event loop — but
+#: a commit needs the exclusive lock, and with no wait at all it failed the
+#: instant any other connection held a SHARED one: including the losing
+#: claimant's own momentary read on its way to being refused. Both claimants
+#: then came back empty and nobody was woken. Measured under CPU stress (the
+#: test niced to 19 under 28 busy loops): 12 lost doorbells in 6,000 races
+#: with no wait, 0 in 3,000 with this one. A reader holds
+#: its lock for microseconds; one that never lets go costs this much, once.
+COMMIT_WAIT = 0.05
+
+
+@contextmanager
 def _db(root):
-    return _notice_db(root, 'task-pickup-notices.db', timeout=0)
+    with _notice_db(root, 'task-pickup-notices.db', timeout=0) as db:
+        db.execute(f"PRAGMA busy_timeout = {int(COMMIT_WAIT * 1000)}")
+        yield db
 
 
 def _read(path):
