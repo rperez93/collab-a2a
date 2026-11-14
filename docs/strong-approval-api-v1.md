@@ -140,6 +140,12 @@ key is known. `enrol/finish` requires the ID, SPKI and possession proof for
 both methods; Hello has no exemption from proof or ownership. Expiry is
 an integer Unix-second instant. The hub clock is authoritative. Challenges
 expire at `now >= expires_at`, 120 seconds after issuance, and are single-use.
+For an approval, fetch the challenge only after the human explicitly chooses
+Approve in the owned review window. Time spent reading the review must not
+consume the authenticator's challenge budget. This does not extend the stored
+request's expiry: a request that expired while being reviewed must be prepared
+and reviewed again. Enrollment and key-possession have their own separate
+ceremonies and do not constitute approval of an operation.
 
 Proposed limits: 64 KiB canonical review, 128 KiB request body, 4 KiB DER SPKI,
 4 KiB decoded signature, 8 KiB decoded client data, 8 KiB decoded authenticator
@@ -190,6 +196,15 @@ reported separately by capability discovery.
   and returns `{api_version, request_id, challenge_id, credential_id, method,
   challenge, expires_at, digest, rp_id?, origin?}`. The request is frozen to
   the reviewed operation; a changed operation requires a new request/challenge.
+  Before requesting a signature, the trusted dispatcher/adapter must compare
+  the returned request ID, credential ID, method and digest with the exact
+  request and enrolled credential selected for the displayed canonical review.
+  For passkeys it must also match the owned localhost origin and `rp_id`.
+  It must validate the challenge as canonical base64url of exactly 32 bytes,
+  require an integer expiry and a nonempty challenge ID, and bound the gesture
+  by the remaining challenge lifetime. A mismatch, expired challenge or failed
+  fetch produces no signature, approval POST or weaker fallback. The hub still
+  revalidates all authority and expiry; these local checks do not replace it.
 * `POST /requests/{request_id}/approve` accepts `{challenge_id,
   credential_id, proof}`. The hub verifies and atomically consumes the challenge
   before issuing `{api_version, request_id, state:"approved", receipt}`.
