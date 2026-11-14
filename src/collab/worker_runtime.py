@@ -167,13 +167,13 @@ def unrouted_deferrals(result: dict, selected: list[dict], pending: list[dict],
     A peer the turn escalated about, or one already waiting on a pending
     decision, has had its question routed; only the silent promise is repaired.
     """
-    by_seq = {e["seq"]: e for e in selected}
-    # Routed already: an escalation this turn about this peer, or a pending one.
+    # Routed already: the message itself has an escalation this turn or a
+    # pending one. By message, not by peer: a peer already waiting on one
+    # decision may ask a NEW question, and that one must be routed too.
     waiting = {row.get("seq") for row in pending} | {e["seq"] for e in result["escalations"]}
-    routed_to = {by_seq[s]["sender"] for s in waiting if s in by_seq}
     added = []
     for reply in result["replies"]:
-        if not DEFERRAL.search(reply["text"]) or reply["to"] in routed_to:
+        if not DEFERRAL.search(reply["text"]):
             continue
         # A peer whose question the main agent answered this turn is being
         # given that answer, however the worker words it; a decision about

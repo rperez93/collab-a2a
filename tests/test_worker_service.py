@@ -583,3 +583,30 @@ async def test_under_collab_no_worker_queued_messages_are_still_delivered(conver
         await conversation.tick()
         await asyncio.wait_for(conversation.delivery, 2)
     assert sent == ["ship it"] and calls == [], "delivered, but no model call"
+
+
+@pytest.mark.asyncio
+async def test_daemon_upload_sends_the_delivery_key_refuses_changed_bytes_and_has_a_deadline(conversation, tmp_path):
+    import asyncio
+    import hashlib
+    stash = tmp_path / "s.bin"
+    stash.write_bytes(b"abc")
+    sent = []
+    class Http:
+        async def post(self, url, **kw):
+            sent.append(kw["params"])
+            return SimpleNamespace(status_code=200)
+    conversation.daemon._http = Http()
+    message = {"id": "o_9", "stash": str(stash), "name": "s.bin", "to": "bob",
+               "sha256": hashlib.sha256(b"abc").hexdigest()}
+    assert await conversation._upload(message, timeout=5) == 200
+    assert sent[0]["delivery"] == "o_9"
+    stash.write_bytes(b"changed")
+    assert await conversation._upload(message, timeout=5) == 422 and len(sent) == 1
+    stash.write_bytes(b"abc")
+    class Slow:
+        async def post(self, url, **kw):
+            await asyncio.sleep(10)
+    conversation.daemon._http = Slow()
+    with pytest.raises(asyncio.TimeoutError):
+        await conversation._upload(message, timeout=0.05)

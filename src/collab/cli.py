@@ -3423,6 +3423,10 @@ def cmd_file(args: argparse.Namespace) -> int:
                         onboard.ensure_daemon(profile, wait=False)
                     except (OSError, RuntimeError, HubError):
                         pass
+                    if args.json:
+                        print(json.dumps({"queued": True, "outbox_id": record_id, "name": path.name,
+                                          "size": size}, indent=2))
+                        return 0
                     ok(f"{said(path.name)} queued for delivery by your worker: {record_id}")
                     print(dim("  `collab worker status` shows it until it is delivered"))
                     return 0
@@ -5936,8 +5940,14 @@ def cmd_worker(args: argparse.Namespace) -> int:
                     with _client(profile) as client:
                         for record in queued:
                             if record.get("kind") == "file":
-                                client.upload_file(Path(record["stash"]), to=record.get("to") or None,
-                                                   room=None if record.get("to") else (record.get("room") or None))
+                                import hashlib
+                                stash = Path(record["stash"])
+                                if hashlib.sha256(stash.read_bytes()).hexdigest() != record.get("sha256"):
+                                    raise HubError(f"queued file {record.get('name')!r} changed since it "
+                                                   "was queued; not sending different bytes")
+                                client.upload_file(stash, to=record.get("to") or None,
+                                                   room=None if record.get("to") else (record.get("room") or None),
+                                                   delivery=record["id"])
                                 store.acknowledge(record["id"])
                                 continue
                             if record.get("kind") == "comment":
