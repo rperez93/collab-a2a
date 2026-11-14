@@ -434,7 +434,8 @@ class Conversation:
                     raise ValueError("worker proposed an unknown room")
             escalations = result["escalations"] + worker_runtime.unrouted_deferrals(
                 result, selected, store.pending(),
-                answered={a["source"]["sender"] for a in answers if a.get("source", {}).get("sender")})
+                answered={a["source"]["sender"]: int(a["source"].get("seq") or 0)
+                          for a in answers if a.get("source", {}).get("sender")})
             committed = store.commit_turn(
                 expected_cursor=snapshot["cursor"], cursor=cursor,
                 summary=result["summary"], replies=result["replies"],

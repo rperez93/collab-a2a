@@ -144,3 +144,27 @@ def test_worker_off_sends_its_queue_with_the_delivery_key_and_checks_bytes(tmp_p
     except Exception:
         pass
     assert calls == [], "changed bytes are never sent"
+
+
+
+def test_a_queued_file_send_reports_json(tmp_path, monkeypatch, capsys):
+    """M23: collab file send --json while the worker is on prints the queued record."""
+    import argparse
+    import json
+    from types import SimpleNamespace
+    from collab import cli, worker
+    monkeypatch.delenv("COLLAB_NO_WORKER", raising=False)  # conftest sets it; the worker must be on
+    path = tmp_path / "a.txt"
+    path.write_text("hi")
+    worker.Store(tmp_path).configure({"agent": "claude", "scope": "Coordinate", "enabled": True})
+    profile = SimpleNamespace(dir=tmp_path, name="me", room="general", session_id="s")
+    class Hub:
+        def __enter__(self): return self
+        def __exit__(self, *e): return False
+    monkeypatch.setattr(cli, "_require_profile", lambda a: profile)
+    monkeypatch.setattr(cli, "_client", lambda p: Hub())
+    monkeypatch.setattr(cli.onboard, "ensure_daemon", lambda *a, **k: None)
+    args = argparse.Namespace(action="send", target=str(path), to=None, room=None, json=True)
+    assert cli.cmd_file(args) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["queued"] and out["outbox_id"] and out["name"] == "a.txt"

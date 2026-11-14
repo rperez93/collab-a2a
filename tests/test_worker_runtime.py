@@ -339,10 +339,10 @@ def test_relaying_the_main_answer_and_quoting_other_dms_are_not_repaired():
     selected = [{"seq": 2, "sender": "carol", "to": "alice", "room": "", "text": "private to alice"}]
     answer = "Hold tight, I'll get back to you after the deploy."
     relayed = {"replies": [{"text": answer, "to": "bob", "room": ""}], "escalations": []}
-    assert unrouted_deferrals(relayed, selected, pending=[], answered={"bob"}) == []
+    assert unrouted_deferrals(relayed, selected, pending=[], answered={"bob": 1}) == []
     paraphrased = {"replies": [{"text": "Hold tight — the deploy answer is coming.", "to": "bob", "room": ""}],
                    "escalations": []}
-    assert unrouted_deferrals(paraphrased, selected, pending=[], answered={"bob"}) == []
+    assert unrouted_deferrals(paraphrased, selected, pending=[], answered={"bob": 1}) == []
     # bob's DM thread has no message this turn; carol's private DM must not be quoted
     stray = {"replies": [{"text": "Stand by, I'll check and confirm.", "to": "bob", "room": ""}],
              "escalations": []}
@@ -375,3 +375,14 @@ def test_a_new_question_from_a_peer_already_waiting_is_still_routed():
         {"to": "bob", "room": "general", "text": "I'll check and get back to you."}]}
     added = unrouted_deferrals(result, selected, pending=[{"seq": 7}])
     assert [a["seq"] for a in added] == [9], "the pending decision covers seq 7 only"
+
+
+
+def test_the_answered_exemption_does_not_cover_a_newer_follow_up():
+    """M7: bob's answered question is exempt; his newer follow-up is routed."""
+    from collab.worker_runtime import unrouted_deferrals
+    selected = [{"seq": 12, "sender": "bob", "to": "", "room": "general", "text": "Also, who reviews it?"}]
+    result = {"escalations": [], "replies": [
+        {"to": "bob", "room": "general", "text": "I'll get back to you on that."}]}
+    assert unrouted_deferrals(result, selected, pending=[], answered={"bob": 12}) == []
+    assert [a["seq"] for a in unrouted_deferrals(result, selected, pending=[], answered={"bob": 5})] == [12]

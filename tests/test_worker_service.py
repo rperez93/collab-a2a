@@ -610,3 +610,18 @@ async def test_daemon_upload_sends_the_delivery_key_refuses_changed_bytes_and_ha
     conversation.daemon._http = Slow()
     with pytest.raises(asyncio.TimeoutError):
         await conversation._upload(message, timeout=0.05)
+
+
+
+@pytest.mark.asyncio
+async def test_no_worker_daemon_holds_a_queue_that_worker_off_holds(conversation, tmp_path, monkeypatch):
+    """M21: under COLLAB_NO_WORKER, a disabled worker's outbox is not flushed."""
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    store.send("held", to="bob")
+    cfg = store.configuration()
+    store.configure({**cfg, "enabled": False})
+    monkeypatch.setenv("COLLAB_NO_WORKER", "1")
+    conversation.daemon._http = object()
+    await conversation.tick()
+    assert conversation.delivery is None
