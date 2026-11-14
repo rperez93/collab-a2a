@@ -428,7 +428,8 @@ class HubClient:
 
     def upload_file(self, path: Path, *, to: str | None = None,
                     room: str | None = None, delivery: str | None = None,
-                    to_id: str | None = None) -> dict[str, Any]:
+                    to_id: str | None = None, keep: bool | None = None,
+                    source: str = "") -> dict[str, Any]:
         import httpx
 
         params: dict[str, Any] = {}
@@ -440,6 +441,10 @@ class HubClient:
             params["to"] = to
         if room:
             params["room"] = room
+        if keep is not None:
+            params["keep"] = "true" if keep else "false"
+        if source:
+            params["source"] = source
         with path.open("rb") as fh:
             files = {"file": (path.name, fh, "application/octet-stream")}
             try:

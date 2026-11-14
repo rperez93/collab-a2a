@@ -359,6 +359,14 @@ class Store:
             if field not in columns:
                 self._db.execute(f"ALTER TABLE task_prs ADD COLUMN {field} REAL")
         now = time.time()
+        # Retention (#135). Only these two: the file's sender and recipient ids
+        # have their own migration below, from authenticated events, and adding
+        # those columns here first would skip it.
+        file_columns = self._columns("files")
+        for column, declaration in (("kept", "INTEGER NOT NULL DEFAULT 0"),
+                                    ("source", "TEXT NOT NULL DEFAULT ''")):
+            if column not in file_columns:
+                self._db.execute(f"ALTER TABLE files ADD COLUMN {column} {declaration}")
 
         # Identity used to be the display name. Give everyone an id, and record
         # the name they hold so references to it still resolve.
@@ -1732,7 +1740,8 @@ class Store:
 
     def add_file(self, file_id: str, *, name: str, size: int, sha256: str, sender: str,
                  recipient: str | None, room: str | None,
-                 audience: Iterable[str] = (), sender_id: str | None = None,
+                 audience: Iterable[str] = (), kept: bool = False,
+                 source: str = "", sender_id: str | None = None,
                  recipient_id: str | None = None) -> dict[str, Any]:
         """Record an upload, and for a room file, who it is waiting for.
 
@@ -1745,9 +1754,9 @@ class Store:
         with self._lock:
             try:
                 self._db.execute(
-                    "INSERT INTO files (id,name,size,sha256,sender,recipient,room,created_at,sender_id,recipient_id)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    (file_id, name, size, sha256, sender, recipient, room, now, sender_id, recipient_id),
+                    "INSERT INTO files (id,name,size,sha256,sender,recipient,room,created_at,kept,source,sender_id,recipient_id)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (file_id, name, size, sha256, sender, recipient, room, now, int(kept), source, sender_id, recipient_id),
                 )
             except sqlite3.IntegrityError:
                 self._db.rollback()  # a concurrent retry of the same delivery won
@@ -1771,6 +1780,9 @@ class Store:
         """
         now = time.time()
         with self._lock:
+            file = self._db.execute("SELECT state FROM files WHERE id=?", (file_id,)).fetchone()
+            if file is None or file['state'] != 'available':
+                return False
             already = self._db.execute(
                 "SELECT collected_at FROM file_collections"
                 " WHERE file_id=? AND participant_id=?", (file_id, participant_id),
@@ -1840,7 +1852,7 @@ class Store:
         with self._lock:
             rows = self._db.execute(
                 "SELECT f.* FROM files f"
-                " WHERE f.state='available' AND f.recipient IS NULL"
+                " WHERE f.state='available' AND f.kept=0 AND f.recipient IS NULL"
                 " AND EXISTS (SELECT 1 FROM file_collections c"
                 "             WHERE c.file_id=f.id AND c.collected_at IS NOT NULL)"
                 " AND NOT EXISTS (SELECT 1 FROM file_collections c"
@@ -1885,7 +1897,7 @@ class Store:
     def mark_file(self, file_id: str, state: str, *, acked_by: str | None = None) -> None:
         with self._lock:
             self._db.execute(
-                "UPDATE files SET state=?, acked_at=?, acked_by=? WHERE id=?",
+                "UPDATE files SET state=?, acked_at=?, acked_by=? WHERE id=? AND state='available'",
                 (state, time.time() if acked_by else None, acked_by, file_id),
             )
             self._db.commit()
@@ -1902,7 +1914,7 @@ class Store:
         room_cutoff = now - (ttl_seconds if room_ttl_seconds is None else room_ttl_seconds)
         with self._lock:
             rows = self._db.execute(
-                "SELECT * FROM files WHERE state='available' AND ("
+                "SELECT * FROM files WHERE state='available' AND kept=0 AND ("
                 " (recipient IS NOT NULL AND created_at < ?)"
                 " OR (recipient IS NULL AND created_at < ?))",
                 (direct_cutoff, room_cutoff),
