@@ -111,6 +111,11 @@ def _stable_agent_session() -> bool:
 
 
 def bind_home(home: Path | str, cwd: Path | None = None) -> bool:
+    _AGENT_PATH.clear()  # the agent settings file follows the new selection at once
+    return _bind_home(home, cwd)
+
+
+def _bind_home(home: Path | str, cwd: Path | None = None) -> bool:
     """Remember an explicit selection for this stable agent session only.
 
     Called by foreground selection commands, never by profile persistence:
@@ -507,8 +512,9 @@ def agent_scoped(key: str) -> bool:
 _AGENT_CACHE: dict[str, Any] = {}
 AGENT_SETTINGS = "agent-settings.json"
 _AGENT_PATH: dict[tuple, tuple[Path | None, float]] = {}
-#: Set by `collab config --machine`: write agent-scoped keys to the shared file.
-WRITE_MACHINE = {"on": False}
+#: Set by `collab config KEY --machine`: write THAT agent-scoped key to the
+#: shared file (only that one; this agent's other overrides never move there).
+WRITE_MACHINE: dict[str, Any] = {"on": False, "key": None}
 
 
 def agent_config_path() -> Path | None:
@@ -605,8 +611,11 @@ def save_config(cfg: dict[str, Any]) -> None:
     machine, agent = _read_raw(machine_path), _read_raw(agent_path)
     current = {**machine, **{k: v for k, v in agent.items() if agent_scoped(k)}}
     changed_machine = changed_agent = False
+    machine_key = WRITE_MACHINE.get("key") if WRITE_MACHINE["on"] else None
     for key in set(cfg) | set(current):
-        to_agent = agent_scoped(key) and agent_path is not None and not WRITE_MACHINE["on"]
+        if WRITE_MACHINE["on"] and agent_scoped(key) and key != machine_key:
+            continue  # --machine names one key; the rest of this agent's stay put
+        to_agent = agent_scoped(key) and not WRITE_MACHINE["on"]
         # Compared with the layer being written: --machine must set the shared
         # value even when it equals this agent's own override.
         base = machine if (WRITE_MACHINE["on"] and agent_scoped(key)) else current
@@ -614,6 +623,9 @@ def save_config(cfg: dict[str, Any]) -> None:
             continue
         if key not in cfg and key not in base:
             continue
+        if to_agent and agent_path is None:
+            raise ValueError(f"cannot tell which agent `{key}` belongs to here; select this "
+                             "agent's state with --home, or use --machine for the shared default")
         if key in cfg:
             (agent if to_agent else machine)[key] = cfg[key]
         elif to_agent:

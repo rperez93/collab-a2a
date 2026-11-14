@@ -1,5 +1,6 @@
 """R21: one agent's settings must not leak to every agent of the same person."""
 import json
+from pathlib import Path
 
 import pytest
 
@@ -32,11 +33,11 @@ def test_machine_wide_settings_are_shared_and_ignored_in_an_agent_file(tmp_path,
 
 
 def test_machine_flag_sets_a_shared_default_that_an_agent_value_overrides(tmp_path, monkeypatch):
-    config.WRITE_MACHINE["on"] = True
+    config.WRITE_MACHINE.update(on=True, key="worker_max_attempts")
     try:
         runtime_settings.set_value("worker_max_attempts", 30)
     finally:
-        config.WRITE_MACHINE["on"] = False
+        config.WRITE_MACHINE.update(on=False, key=None)
     assert config.setting_source("worker_max_attempts") == "machine"
     runtime_settings.set_value("worker_max_attempts", 12)
     assert runtime_settings.get("worker_max_attempts") == 12 and config.setting_source("worker_max_attempts") == "agent"
@@ -135,9 +136,43 @@ def test_the_agent_file_follows_the_selected_home(tmp_path, monkeypatch):
 
 def test_machine_flag_writes_even_when_it_equals_this_agents_override():
     config.setting("display_name").write("own")
-    config.WRITE_MACHINE["on"] = True
+    config.WRITE_MACHINE.update(on=True, key="display_name")
     try:
         config.setting("display_name").write("own")
     finally:
-        config.WRITE_MACHINE["on"] = False
+        config.WRITE_MACHINE.update(on=False, key=None)
     assert json.loads(config.global_config_path().read_text())["display_name"] == "own"
+
+
+
+def test_machine_flag_moves_only_the_named_key():
+    runtime_settings.set_value("worker_instructions", "mine only")
+    config.WRITE_MACHINE.update(on=True, key="display_name")
+    try:
+        config.setting("display_name").write("team")
+    finally:
+        config.WRITE_MACHINE.update(on=False, key=None)
+    machine = json.loads(config.global_config_path().read_text())
+    assert machine == {"display_name": "team"}, "this agent's other overrides stay its own"
+
+
+def test_binding_another_home_moves_the_agent_file_at_once(tmp_path, monkeypatch):
+    monkeypatch.delenv("COLLAB_AGENT_CONFIG")
+    monkeypatch.delenv("COLLAB_HOME", raising=False)
+    first, second = tmp_path / "a" / ".collab", tmp_path / "b" / ".collab"
+    chosen = {"home": first}
+    monkeypatch.setattr(config, "collab_home", lambda *a, **k: chosen["home"])
+    monkeypatch.setattr(config, "_bind_home", lambda home, cwd=None: chosen.update(home=Path(home)) or True)
+    config._AGENT_PATH.clear()
+    assert config.agent_config_path().parent == first
+    config.bind_home(second)
+    assert config.agent_config_path().parent == second
+
+
+def test_an_unknown_agent_refuses_agent_writes_instead_of_sharing_them(monkeypatch):
+    monkeypatch.setattr(config, "agent_config_path", lambda: None)
+    with pytest.raises(ValueError, match="which agent"):
+        runtime_settings.set_value("worker_max_attempts", 5)
+    machine = config.global_config_path()
+    assert not machine.exists() or "worker_max_attempts" not in json.loads(machine.read_text())
+    runtime_settings.set_value("participant_stale_after", 40)  # machine keys still work

@@ -6065,6 +6065,7 @@ def cmd_config(args: argparse.Namespace) -> int:
     # R21: agent-scoped keys are written to this agent's own file unless the
     # person asks for the shared machine default on purpose.
     config_module.WRITE_MACHINE["on"] = bool(getattr(args, "machine", False))
+    config_module.WRITE_MACHINE["key"] = getattr(args, "key", None)
     if getattr(args, "tui", False):
         if args.key or args.value is not None or args.unset or args.json or editing or getattr(args, "machine", False):
             fail("--tui cannot be combined with a key, value, --unset, --edit, --json or --machine")
