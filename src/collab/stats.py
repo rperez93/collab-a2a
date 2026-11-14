@@ -265,6 +265,26 @@ def _percent(value: Any, key: str = "") -> float | None:
     return round(number, 4)
 
 
+#: Unicode categories no figure needs: Cc is C0/C1 control (ESC, BEL, CR …),
+#: Cf is format — the bidi overrides and zero-width characters — and Zl/Zp are
+#: the line and paragraph separators.
+_UNPRINTABLE = frozenset(("Cc", "Cf", "Zl", "Zp"))
+
+
+def printable(text: str) -> str:
+    """`text` without anything that is an instruction rather than a character.
+
+    THESE STRINGS ARE DRAWN ON OTHER PEOPLE'S TERMINALS. A model name is chosen
+    by whoever reports it, and «\x1b[31mRED\x1b]0;title\x07» arrived on the
+    roster intact as `model` and `main_model` — colour codes and a window-title
+    rewrite for every participant whose plain-print path showed it. A bidi
+    override does the quieter thing: «gpt» displayed backwards beside the real
+    one. `protocol.scrub` removes Cc only; a field also has no use for Cf.
+    """
+    import unicodedata
+    return "".join(ch for ch in text if unicodedata.category(ch) not in _UNPRINTABLE)
+
+
 def _coerce(field: str, value: Any, key: str = "") -> Any | None:
     # NOTHING IS NOT A FIGURE. `str(None)` is `"None"`, so a JSON `null` used to
     # coerce into the four-letter STRING for every text field — `collab stats
@@ -276,7 +296,7 @@ def _coerce(field: str, value: Any, key: str = "") -> Any | None:
     kind = CANONICAL[field]
     try:
         if kind is str:
-            text = str(value).strip()
+            text = printable(str(value)).strip()
             return text[:MAX_STRING] or None
         if isinstance(value, bool) or not math.isfinite(float(value)) or float(value) < 0:
             return None
@@ -619,6 +639,9 @@ def whole_picture(figures: dict[str, Any]) -> dict[str, Any]:
 #: `model_changed_at` beside the existing `model_observed_at`. Null is unknown.
 MODEL_SUMMARY = ("main_model", "worker_model", "model_changed_at")
 
+#: What `worker_usage` records as `last_model` when one call used several.
+MULTIPLE_MODELS = "multiple models"
+
 
 def model_summary(previous: dict[str, Any], merged: dict[str, Any],
                   now: float) -> dict[str, Any]:
@@ -635,14 +658,22 @@ def model_summary(previous: dict[str, Any], merged: dict[str, Any],
     known to unknown is a change; it is exactly what a withdrawn model is.
     """
     def name(value: Any) -> str | None:
-        return value.strip()[:150] if isinstance(value, str) and value.strip() else None
+        text = printable(value).strip() if isinstance(value, str) else ""
+        return text[:150] or None
 
     worker = merged.get("worker") if isinstance(merged.get("worker"), dict) else {}
+    worker_name = name(worker.get("last_model") or worker.get("model"))
+    # «MULTIPLE MODELS» IS NOT A MODEL. `worker_usage` writes it when one call
+    # used more than one, and a worker that sometimes reaches for a second
+    # model flipped `worker_model` between its name and this sentence — moving
+    # `model_changed_at` each time and publishing the sentence as a model. The
+    # last real name stands; a sentence about the call is not a change.
+    if worker_name == MULTIPLE_MODELS:
+        worker_name = previous.get("worker_model") if "worker_model" in previous else None
     pair = (name(merged.get("model")),
             # A worker that is OFF has no model in use; `worker.enabled` says
             # off, and this says unknown rather than the last one it ran.
-            None if worker.get("enabled") is False
-            else name(worker.get("last_model") or worker.get("model")))
+            None if worker.get("enabled") is False else worker_name)
     seen_before = "main_model" in previous or "worker_model" in previous
     before = (previous.get("main_model"), previous.get("worker_model"))
     changed = previous.get("model_changed_at")
@@ -755,7 +786,7 @@ def sanitise(reported: dict[str, Any]) -> dict[str, Any]:
             out[key[:MAX_STRING]] = value
             extras += 1
         elif isinstance(value, str):
-            out[key[:MAX_STRING]] = value[:MAX_STRING]
+            out[printable(key)[:MAX_STRING]] = printable(value)[:MAX_STRING]
             extras += 1
     return out
 

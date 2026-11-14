@@ -56,7 +56,8 @@ def extended(data):
         elif key in NUMBERS and number(value) is not None:
             out[key] = value
         elif key in TEXT and isinstance(value, str):
-            out[key] = value[:150]
+            from .stats import printable
+            out[key] = printable(value)[:150]
     for key, fields in NESTED.items():
         raw = data.get(key)
         if raw is None and key in data:
@@ -74,7 +75,8 @@ def extended(data):
                 if field in ('enabled', 'running') and isinstance(value, bool):
                     kept[field] = value
                 elif field in ('source', 'agent', 'model', 'cost_kind') and isinstance(value, str):
-                    kept[field] = value[:150]
+                    from .stats import printable
+                    kept[field] = printable(value)[:150]
                 elif number(value) is not None:
                     kept[field] = value
             out[key] = kept

@@ -114,3 +114,8 @@ polling is cancellable and bounded. The pin remains unchanged.
 - Later than the pin: usage figures record a quota route for every detected tool;
   tools with no local source, Gemini CLI among them, stay unknown with a reason.
   Pin unchanged.
+
+- Later than the pin: usage figures now name the model that ran the last Codex
+  turn, and the hub publishes `main_model`, `worker_model` and
+  `model_changed_at` beside `model_observed_at`, with null for unknown. Pin
+  unchanged.
