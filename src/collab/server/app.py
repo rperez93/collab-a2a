@@ -33,6 +33,8 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.middleware.authentication import AuthenticationMiddleware
 
+from ..file_retention import durable_source, keep_document
+
 from ..protocol import (
     DEFAULT_ROOM,
     EXT_PREFIX,
@@ -1259,7 +1261,11 @@ def create_app(
     def _file_view(record: dict[str, Any]) -> dict[str, Any]:
         """A file record as the client sees it: with its URL and, for a room
         file, who has it and who is still to collect."""
-        view = {**record, "download_url": _download_url(record["id"])}
+        ttl = FILE_TTL_SECONDS if record['recipient'] else ROOM_FILE_TTL_SECONDS
+        owner = store.participant_by_id(record.get("sender_id") or "")
+        view = {**record, "download_url": _download_url(record["id"]),
+                "owner": owner.name if owner else record['sender'], "kept": bool(record.get('kept')),
+                "expires_at": None if record.get('kept') else record['created_at'] + ttl}
         if not record["recipient"]:
             view.update(store.file_progress(record["id"]))
         return view
@@ -1277,8 +1283,13 @@ def create_app(
     @app.post(f"{EXT_PREFIX}/files/by-id", tags=["collab"])
     async def upload_file(request: Request, file: UploadFile = File(...),
                           to: str | None = None, room: str | None = None,
-                          delivery: str | None = None, to_id: str | None = None) -> dict[str, Any]:
+                          delivery: str | None = None, to_id: str | None = None,
+                          keep: bool | None = None, source: str = '') -> dict[str, Any]:
         user = _require(request)
+        try:
+            source = durable_source(source)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         _sweep_expired()
         if request.url.path.endswith("/files/by-id") and not to_id:
             raise HTTPException(status_code=400, detail="an explicit target participant ID is required")
@@ -1342,6 +1353,8 @@ def create_app(
                 store.add_file, file_id, name=name, size=size, sha256=digest.hexdigest(),
                 sender=user.name, recipient=to_name or None, room=room or DEFAULT_ROOM,
                 sender_id=user.id, recipient_id=to_id or None, audience=audience,
+                # Documents are kept until withdrawn unless the sender chose (#135).
+                kept=keep_document(name) if keep is None else keep, source=source,
             )
         except sqlite3.IntegrityError:
             # A concurrent retry of this delivery won the insert (store.add_file
@@ -1395,6 +1408,8 @@ def create_app(
             room=None if to_id else (record.get("room") or DEFAULT_ROOM),
             body={"action": "shared", "id": file_id, "name": record["name"], "size": record["size"],
                   "sha256": record["sha256"], "url": _download_url(file_id),
+                  "kept": bool(record.get("kept")), "owner": user.name,
+                  "source": record.get("source") or "",
                   "collab_worker_delivery": f"file:{file_id}"},
         ))
 
@@ -1416,14 +1431,21 @@ def create_app(
     @app.get(f"{EXT_PREFIX}/files/{{file_id}}/content", tags=["collab"])
     async def download_file(request: Request, file_id: str):
         user = _require(request)
+        await asyncio.to_thread(_sweep_expired)
         record = store.get_file(file_id)
-        if record is None or record["state"] != "available":
-            raise HTTPException(status_code=404, detail="no such file (it may already be collected)")
+        if record is None:
+            raise HTTPException(status_code=404, detail="no such file")
         if not _may_touch(record, user.id):
             raise HTTPException(status_code=403, detail="that file was not shared with you")
         path = _blob(file_id)
-        if not path.exists():
-            raise HTTPException(status_code=410, detail="the file is gone from the host")
+        if record['state'] == 'expired' or (record['state'] == 'available' and not path.exists()):
+            recovery = (f"durable copy: {record['source']}" if record.get('source') else
+                        "no durable copy was recorded; ask the owner to share it again")
+            owner = store.participant_by_id(record.get("sender_id") or "")
+            owner_name = owner.name if owner else record["sender"]
+            raise HTTPException(status_code=410, detail=f"file expired or missing; owner: {owner_name}; {recovery}")
+        if record['state'] != 'available':
+            raise HTTPException(status_code=404, detail="no such file (it may already be collected)")
         return FileResponse(path, filename=record["name"],
                             media_type="application/octet-stream",
                             headers={"X-Collab-Sha256": record["sha256"]})
@@ -1443,6 +1465,26 @@ def create_app(
             raise HTTPException(status_code=404, detail="no such file")
         if not _may_touch(record, user.id):
             raise HTTPException(status_code=403, detail="that file was not shared with you")
+
+        if record['state'] != 'available':
+            return {'id': file_id, 'state': record['state'], 'deleted': True}
+
+        if record.get('kept'):
+            new = user.id != record.get('sender_id') and await asyncio.to_thread(
+                store.record_collection, file_id, user.id)
+            progress = await asyncio.to_thread(store.file_progress, file_id)
+            latest = store.get_file(file_id)
+            if latest is None or latest['state'] != 'available':
+                return {'id': file_id, 'state': latest['state'] if latest else 'gone', 'deleted': True}
+            if new:
+                await hub.publish(Envelope(
+                    kind=KIND_FILE, sender=user.name, sender_id=user.id,
+                    to=record['sender'] if record['recipient'] else None,
+                    to_id=(record.get('sender_id') or '') if record['recipient'] else '',
+                    room=None if record['recipient'] else record['room'],
+                    body={'action': 'received', 'id': file_id, 'name': record['name'],
+                          'by': user.name, 'deleted': False, 'kept': True, **progress}))
+            return {'id': file_id, 'state': 'available', 'deleted': False, 'kept': True, **progress}
 
         if record["recipient"]:
             await asyncio.to_thread(_remove, file_id, "collected", acked_by=user.name)
