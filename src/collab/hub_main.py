@@ -55,9 +55,14 @@ def remember_url(cfg: HubConfig, supervisor: TunnelSupervisor | None,
     # a stale reason left on disk would be printed by the next `collab host`.
     update_fields(cfg.dir, public_url=url, pid=os.getpid(),
                   tunnel_pid=cfg.tunnel_pid, tunnel_stamp=cfg.tunnel_stamp,
-                  tunnel='proxy' if getattr(supervisor, 'shared', False) else 'ngrok',
-                  tunnel_error="")
-    if address_changed:
+                  tunnel=('proxy' if getattr(supervisor, 'shared', False) else
+                          ('ngrok' if url else 'none')),
+                  tunnel_error=getattr(supervisor, 'last_error', '') if not url else '',
+                  tunnel_notice=getattr(supervisor, "notice", ""))
+    if not url:
+        logger.warning("tunnel unavailable: %s; %s", getattr(supervisor, "last_error", ""),
+                       getattr(supervisor, "notice", ""))
+    elif address_changed:
         logger.warning("tunnel came back on a new address: %s", url)
     else:
         # A NEW PROCESS ON THE SAME ADDRESS, which is what a reserved domain
@@ -196,7 +201,11 @@ def main() -> int:
         from .config import proxy_mode
         from .proxy_host import SharedProxy, use_proxy
         if use_proxy(cfg.tunnel_mode, proxy_mode()):
-            supervisor = SharedProxy(cfg.session_id, domain=cfg.domain)
+            supervisor = SharedProxy(
+                cfg.session_id, domain=cfg.domain,
+                own_factory=lambda: TunnelSupervisor(
+                    cfg.port, log_path=str(cfg.dir / "ngrok.log"),
+                    domain=cfg.domain or None))
         else:
             supervisor = TunnelSupervisor(
                 cfg.port,
@@ -205,9 +214,10 @@ def main() -> int:
             )
         supervisor.start()
 
+    cfg.tunnel_notice = getattr(supervisor, "notice", "")
     if supervisor is not None and supervisor.public_url:
         cfg.public_url = supervisor.public_url
-        cfg.tunnel = "proxy" if isinstance(supervisor, SharedProxy) else "ngrok"
+        cfg.tunnel = "proxy" if getattr(supervisor, "shared", False) else "ngrok"
         # Only what we started: a tunnel we merely reused belongs to whoever
         # launched it, and stopping it would be taking something that is not
         # ours.

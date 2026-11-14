@@ -97,7 +97,8 @@ are protected. `collab sessions` marks the current and most recent saved records
 The default `proxy auto` uses one machine tunnel. Each session advertises a
 `/s/<session_id>` URL; the first primary session keeps the bare-domain route.
 Stopping one hub leaves the shared proxy and other hubs alone. A distinct
-reserved domain requires `collab host --tunnel own`; do not stop another
-session to resolve a domain conflict. `--no-tunnel` keeps hosting local-only.
+selected domain automatically falls back to a per-hub tunnel with a visible
+explanation, as with `collab host --tunnel own`; do not stop another session
+to resolve a domain conflict. `--no-tunnel` keeps hosting local-only.
 The proxy recovers on the hub watcher cycle, and exits after the last live
 hub disappears. Confirm the actual URL with `collab url`.

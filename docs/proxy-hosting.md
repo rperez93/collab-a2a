@@ -17,8 +17,13 @@ collab host --no-tunnel
 
 `auto` and `on` use the shared proxy; `off` uses a separate tunnel per hub.
 An explicit host mode is saved for resume. Local-only hosting starts neither
-kind of tunnel. A requested domain differing from a running proxy produces a
-visible error; choose a separate tunnel if that different domain is intended.
+kind of tunnel. Domain selection keeps the host precedence: an explicit flag,
+a chosen session pin, the configured default, then a defaulted pin. A selected
+domain differing from the running proxy automatically uses a separate per-hub
+tunnel and prints both domains and the reason. This also works when the shared
+tunnel was refused: its selected domain remains recorded. The existing proxy
+and its sessions are left alone. If the separate tunnel is also refused, its
+provider error is reported and this hub remains reachable locally.
 
 The hub never owns the shared proxy PID or its tunnel PID. Stopping a hub
 withdraws only its route; other sessions keep serving. The proxy exits after

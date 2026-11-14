@@ -209,11 +209,12 @@ def main(argv: list[str] | None = None) -> int:
     # Stopped here by its recorded stamp, never by name.
     _stop_orphaned_ngrok(proxy.ProxyState.load())
 
+    state.domain = args.domain or ngrok_domain()
     supervisor = None
     if not args.no_tunnel:
         supervisor = TunnelSupervisor(
             port, log_path=str(proxy.state_dir() / "proxy-ngrok.log"),
-            domain=args.domain or ngrok_domain() or None)
+            domain=state.domain or None)
         supervisor.start()
         if supervisor.last_error:
             logger.warning("tunnel did not start: %s", supervisor.last_error)

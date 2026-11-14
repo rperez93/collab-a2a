@@ -2874,4 +2874,6 @@ Provider call duration still contributes to reply time. See
 Hosting uses one machine proxy by default: sessions receive `/s/<id>` links
 under the shared domain. The primary session retains old bare-domain links.
 Use `collab host --tunnel own` for a separate session tunnel or `--no-tunnel`
-for local-only hosting. See [proxy hosting and migration](docs/proxy-hosting.md).
+for local-only hosting. A selected domain that differs from the running proxy
+automatically uses a per-hub tunnel and explains why; the proxy is left intact.
+See [proxy hosting and migration](docs/proxy-hosting.md).

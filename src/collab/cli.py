@@ -757,6 +757,8 @@ def cmd_host(args: argparse.Namespace) -> int:
         fail("the hub did not come up — see " + str(log))
         return 1
 
+    if cfg.tunnel_notice:
+        warn(cfg.tunnel_notice)
     if cfg.public_url:
         ok('shared proxy tunnel up' if cfg.tunnel == 'proxy' else
            f"ngrok tunnel up  {dim(ngrok_version() or '')}")

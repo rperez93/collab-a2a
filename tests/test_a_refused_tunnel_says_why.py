@@ -194,6 +194,7 @@ def _hubs_of(home) -> list[int]:
 
 @pytest.fixture
 def hosting(tmp_path, monkeypatch):
+    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).resolve().parents[1] / "src"))
     monkeypatch.setenv("COLLAB_PEERS_DIR", str(tmp_path / "peers"))
     monkeypatch.setenv("COLLAB_HOME", str(tmp_path / ".collab"))
     monkeypatch.delenv("COLLAB_NAME", raising=False)
@@ -218,6 +219,20 @@ def hosting(tmp_path, monkeypatch):
         with contextlib.suppress(OSError):
             os.kill(pid, signal.SIGKILL)
 
+    from collab import proxy
+    from collab.client import exclusive
+    state = proxy.ProxyState.load()
+    stamp = exclusive.decode(state.stamp)
+    if stamp and stamp.pid == state.pid and stamp.alive():
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(stamp.pid, signal.SIGTERM)
+        deadline = time.monotonic() + 5
+        while stamp.alive() and time.monotonic() < deadline:
+            time.sleep(.05)
+        if stamp.alive():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(stamp.pid, signal.SIGKILL)
+
 
 def _fake_ngrok_on_path(root, monkeypatch, body: str) -> None:
     bin_dir = root / "bin"
@@ -228,7 +243,7 @@ def _fake_ngrok_on_path(root, monkeypatch, body: str) -> None:
     monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
 
 
-def _host(root, *extra) -> str:
+def _host(root, *extra, tunnel="own") -> str:
     """Exercise the per-host supervisor explicitly now that proxy is default.
 
     One `collab host`, and the hub it started stopped again — every time,
@@ -240,7 +255,7 @@ def _host(root, *extra) -> str:
     try:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
             main(["host", "--no-daemon", "--no-update-check", "--name", "alice",
-                  "--tunnel", "own", *extra])
+                  "--tunnel", tunnel, *extra])
     finally:
         for cfg in hosted_sessions(root / ".collab"):
             stop_session(HubConfig.load(cfg.session_id, cfg.home) or cfg)
@@ -258,11 +273,12 @@ def _domains(root) -> list[str]:
     return seen
 
 
-def test_the_host_prints_the_refusal_the_hub_recorded_with_its_remedy(hosting, monkeypatch):
+@pytest.mark.parametrize("tunnel_mode", ["own", "proxy"])
+def test_the_host_prints_the_refusal_the_hub_recorded_with_its_remedy(hosting, monkeypatch, tunnel_mode):
     _fake_ngrok_on_path(hosting, monkeypatch,
                         "echo \"ERROR:  failed to start tunnel: The endpoint 'https://a.ngrok-free.app' "
                         "is already online. Either\"\necho 'ERROR:  ERR_NGROK_334'\nexit 1\n")
-    out = _host(hosting, "--fresh")
+    out = _host(hosting, "--fresh", tunnel=tunnel_mode)
 
     assert "ngrok refused: ERR_NGROK_334: The endpoint 'https://a.ngrok-free.app' is already online" in out
     assert "collab kill" in out, "the remedy must not resume over a hub that is still running"
@@ -270,19 +286,21 @@ def test_the_host_prints_the_refusal_the_hub_recorded_with_its_remedy(hosting, m
     assert "add-authtoken" not in out, "334 is not an authtoken problem"
 
 
-def test_an_unknown_refusal_gets_its_words_not_the_authtoken_paragraph(hosting, monkeypatch):
+@pytest.mark.parametrize("tunnel_mode", ["own", "proxy"])
+def test_an_unknown_refusal_gets_its_words_not_the_authtoken_paragraph(hosting, monkeypatch, tunnel_mode):
     _fake_ngrok_on_path(hosting, monkeypatch,
                         "echo 'ERROR:  failed to start tunnel: The domain x.ngrok.app is "
                         "reserved for another account. Then'\necho 'ERROR:  ERR_NGROK_320'\nexit 1\n")
-    out = _host(hosting, "--fresh")
+    out = _host(hosting, "--fresh", tunnel=tunnel_mode)
 
     assert "ERR_NGROK_320: The domain x.ngrok.app is reserved for another account" in out
     assert "add-authtoken" not in out
     assert "ngrok.log" in out
 
 
+@pytest.mark.parametrize("tunnel_mode", ["own", "proxy"])
 def test_the_default_domain_reaches_ngrok_on_create_and_a_corrected_one_on_resume(
-        hosting, monkeypatch):
+        hosting, monkeypatch, tunnel_mode):
     """Two hosts, ~10 s each: create uses the default, and resume uses a
     CORRECTED default over the session's old pin — the order that once kept a
     wrong domain through every fix of the setting. The rest of the precedence
@@ -290,14 +308,19 @@ def test_the_default_domain_reaches_ngrok_on_create_and_a_corrected_one_on_resum
     _fake_ngrok_on_path(hosting, monkeypatch, "echo 'ERROR:  ERR_NGROK_334'\nexit 1\n")
 
     config.set_ngrok_domain("first.ngrok.app")
-    _host(hosting, "--fresh")
+    _host(hosting, "--fresh", tunnel=tunnel_mode)
     config.set_ngrok_domain("fixed.ngrok.app")
-    _host(hosting)
+    resumed = _host(hosting, tunnel=tunnel_mode)
 
     assert _domains(hosting) == ["first.ngrok.app", "fixed.ngrok.app"]
 
+    if tunnel_mode == "proxy":
+        assert "using --tunnel own for this session" in resumed
+        assert "first.ngrok.app" in resumed and "fixed.ngrok.app" in resumed
 
-def test_the_334_remedy_lasts_past_the_next_plain_host(hosting, monkeypatch):
+
+@pytest.mark.parametrize("tunnel_mode", ["own", "proxy"])
+def test_the_334_remedy_lasts_past_the_next_plain_host(hosting, monkeypatch, tunnel_mode):
     """The remedy's own path: a session created FROM the default, then
     `--resume --domain own`, then a plain `collab host`. Deleting the resume
     path's provenance once left every test green while this went shared,
@@ -305,9 +328,9 @@ def test_the_334_remedy_lasts_past_the_next_plain_host(hosting, monkeypatch):
     _fake_ngrok_on_path(hosting, monkeypatch, "echo 'ERROR:  ERR_NGROK_334'\nexit 1\n")
     config.set_ngrok_domain("shared.ngrok.app")
 
-    _host(hosting, "--fresh")
-    _host(hosting, "--resume", "--domain", "own.ngrok.app")
-    _host(hosting)
+    _host(hosting, "--fresh", tunnel=tunnel_mode)
+    _host(hosting, "--resume", "--domain", "own.ngrok.app", tunnel=tunnel_mode)
+    _host(hosting, tunnel=tunnel_mode)
 
     assert _domains(hosting) == ["shared.ngrok.app", "own.ngrok.app", "own.ngrok.app"]
 

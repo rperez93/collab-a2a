@@ -60,6 +60,8 @@ class HubConfig:
     #: installed and had refused with ERR_NGROK_334. An older collab ignores
     #: the key, as `HubConfig.load` filters unknown ones.
     tunnel_error: str = ""
+    #: Visible explanation when a chosen domain requires a per-session tunnel.
+    tunnel_notice: str = ""
     pid: int = 0
     home: str = ""
     #: The hub and the tunnel again, STAMPED — the pid with the start time and

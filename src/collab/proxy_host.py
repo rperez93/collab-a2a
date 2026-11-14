@@ -1,6 +1,7 @@
 """A hub's attachment to the machine proxy; hubs never own its process."""
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -11,6 +12,8 @@ from urllib.parse import urlsplit
 from . import proxy
 from .client import exclusive
 from .client.daemon_files import open_log
+
+logger = logging.getLogger(__name__)
 
 
 def use_proxy(mode: str, setting: str) -> bool:
@@ -30,7 +33,8 @@ class SharedProxy:
 
     shared = True
 
-    def __init__(self, session_id: str, *, domain: str = '', timeout: float = 35):
+    def __init__(self, session_id: str, *, domain: str = '', timeout: float = 35,
+                 own_factory=None):
         self.session_id = session_id
         self.domain = domain
         self.timeout = timeout
@@ -38,24 +42,41 @@ class SharedProxy:
         self.last_error = ''
         self.restarts = 0
         self._child = None
+        self._own_factory = own_factory
+        self._own = None
+        self.notice = ''
 
     def own_pid(self) -> int:
-        return 0
+        return self._own.own_pid() if self._own is not None else 0
 
     def stop(self) -> None:
         # Ownership belongs to proxy_main, never to an individual hub.
-        pass
+        if self._own is not None:
+            self._own.stop()
 
     def _url(self, state) -> str:
+        selected = urlsplit(state.public_url).hostname or state.domain or ''
+        if self.domain and selected and selected != self.domain:
+            reason = (f'shared proxy uses another domain ({selected}); '
+                      f'session selected {self.domain}')
+            if self._own_factory is None:
+                self.last_error = reason + '; use --tunnel own for a separate per-session tunnel'
+                return ''
+            self.notice = reason + '; using --tunnel own for this session'
+            logger.warning(self.notice)
+            self._own = self._own_factory()
+            self.shared = False
+            return self._start_own()
         if not state.public_url:
             self.last_error = state.error or 'shared proxy has no public tunnel'
             return ''
-        if self.domain and urlsplit(state.public_url).hostname != self.domain:
-            self.last_error = ('shared proxy uses another domain; use --tunnel own '
-                               'for a separate per-session tunnel')
-            return ''
         self.last_error = ''
         return proxy.session_base(state.public_url, self.session_id)
+
+    def _start_own(self) -> str:
+        self.public_url = self._own.start()
+        self.last_error = self._own.last_error
+        return self.public_url
 
     @staticmethod
     def _alive(state) -> bool:
@@ -63,6 +84,8 @@ class SharedProxy:
         return bool(stamp and stamp.pid == state.pid and stamp.alive())
 
     def start(self) -> str:
+        if self._own is not None:
+            return self._start_own()
         state = proxy.ProxyState.load()
         if self._alive(state):
             self.public_url = self._url(state)
@@ -93,6 +116,11 @@ class SharedProxy:
         return ''
 
     def ensure(self) -> tuple[str, bool]:
+        if self._own is not None:
+            self.public_url, changed = self._own.ensure()
+            self.last_error = self._own.last_error
+            self.restarts = self._own.restarts
+            return self.public_url, changed
         previous = self.public_url
         state = proxy.ProxyState.load()
         if self._alive(state):
