@@ -33,6 +33,8 @@ not have arms nothing and believes it is listening.
 from __future__ import annotations
 
 import os
+import subprocess
+from typing import Callable
 
 #: The env var, the value it must have (or None for «set to anything»), the
 #: key, and where the marker is documented. Order matters only where a tool
@@ -93,16 +95,48 @@ NO_WATCHER = ("codex",)
 HOLDS_A_WATCHER = ("claude-code",)
 
 
-def detect(env: dict[str, str] | None = None) -> str:
-    """The tool running us, or '' when nothing here announces itself."""
+#: What `detect` says when more than one tool announced itself and the process
+#: chain could not say which of them is nearest. Not a tool and not «nothing»:
+#: it is «somebody, and collab cannot say who», which telemetry records as an
+#: unknown quota rather than crediting either tool.
+NESTED = "nested"
+
+
+def detect(env: dict[str, str] | None = None, *,
+           nearest: Callable[[], str] | None = None) -> str:
+    """The tool running us, or '' when nothing here announces itself.
+
+    MARKERS ARE INHERITED, so two of them mean nesting. Gemini CLI started from
+    inside a Codex thread runs its commands with CODEX_THREAD_ID still set, and
+    the first-match rule called that Codex: setup armed `stats --probe codex`
+    with the parent's thread and published the Codex account's quota as the
+    Gemini participant's own. The marker order cannot settle it — Codex inside
+    Gemini looks the same — so a tie is settled by the nearest agent PROCESS in
+    our ancestry, which is the tool actually running us, and when that cannot
+    decide the answer is NESTED, never a guess.
+    """
     source = os.environ if env is None else env
+    found: list[str] = []
     for name, wanted, key, _docs in MARKERS:
         value = (source.get(name) or "").strip()
         if not value:
             continue
-        if wanted is None or value.lower() == wanted:
-            return key
-    return ""
+        if (wanted is None or value.lower() == wanted) and key not in found:
+            found.append(key)
+    if len(found) <= 1:
+        return found[0] if found else ""
+    kind = (nearest or nearest_agent)()
+    return kind if kind in found else NESTED
+
+
+def nearest_agent() -> str:
+    """The kind of the nearest agent process above us, or '' if none is named."""
+    from . import lockfile, owner
+    try:
+        stamp = owner.owner_in(lockfile.ancestry())
+        return owner.kind_of(stamp.pid) if stamp else ""
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return ""
 
 
 def name_of(kind: str) -> str:

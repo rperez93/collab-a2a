@@ -21,14 +21,16 @@ The first Claude observation arrives when its host next invokes the hook;
 Codex probes immediately and then at `stats_interval` (120 seconds by default).
 Every other agent collab detects (Gemini CLI, opencode, Cursor, Copilot CLI,
 goose, Amp) is recorded with its quota unknown and the reason, which
-`collab stats` and `collab check` show; an earlier Codex or Claude route is
-not carried over, and nothing is published in place of the missing figure.
+`collab stats` and `collab check` show. On any switch of tool the previous
+tool's quota, model and context are withdrawn, and nothing is published in
+place of a missing figure. Markers are inherited, so a tool started inside
+another is settled by the nearest agent process, or recorded as «nested
+tools; cannot attribute».
 The main agent's model travels by the same route and at the same cadence as
 its quota: Claude Code's status line `model.display_name` on every render, and
 for Codex the last `turn_context.model` in the thread's own rollout tail (else
 thread/read), so a `/model` switch shows after the next turn and probe. Other
-agents show `m:?` – unknown, never guessed. Switching to a tool with no route
-withdraws the previous tool's quota, model and context.
+agents show `m:?` – unknown, never guessed.
 The hub derives `main_model`, `worker_model` and `model_changed_at` beside
 `model_observed_at` on every report; null is unknown. The first sighting is not
 a change, a disabled worker has no model in use, and posted copies of these

@@ -50,6 +50,13 @@ def ensure(profile) -> None:
         return
     value = {'provider': provider, 'thread_id': thread, 'explicit': explicit,
              'at': time.time(), 'error': ''}
+    # ON ANY SWITCH, NOT ONLY TO A TOOL WITH NO SOURCE. Claude Code → Codex kept
+    # Claude's five-hour window on file until a Codex probe succeeded — which
+    # may be never — so the room saw one tool's allowance under the other.
+    # The previous tool's figures go first; the new route fills them again.
+    # Only when no explicit source owns the figures: those are the person's.
+    if previous.get('provider') not in ('', None, provider) and not explicit:
+        _forget_previous_tool(profile)
     # ITS OWN KEY, NOT `error`. `collab check` reports a non-empty `error` as
     # «automatic telemetry setup failed», which this is not — setup did exactly
     # what it should — and an `error` would also defeat the unchanged-state
@@ -57,16 +64,6 @@ def ensure(profile) -> None:
     if (why := unknown_reason(provider)):
         value['quota_unknown'] = why
         _write(profile.dir / 'telemetry-setup.json', value)
-        # AND THE FIGURES THE OLD ROUTE LEFT BEHIND GO TOO. Removing the route
-        # stops new Codex figures, but the stored file still held the Codex
-        # account's windows and model, and the daemon posts that file — so the
-        # roster went on showing them under the Gemini participant. Withdrawn
-        # on disk, as `collab stats --clear-quota` does for quota, so the
-        # daemon carries the withdrawal up; see `_forget_previous_tool`.
-        # Only on a SWITCH from another tool, and only when no explicit source
-        # owns the figures: a person's own report under the same tool is theirs.
-        if previous.get('provider') not in ('', None, provider) and not explicit:
-            _forget_previous_tool(profile)
         return
     try:
         if provider == 'codex':

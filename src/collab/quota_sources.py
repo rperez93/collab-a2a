@@ -114,8 +114,21 @@ UNIDENTIFIED = Route(
     "hosttool.detect found no marker")
 
 
+#: What two inherited markers get when the process chain cannot say which
+#: tool is nearest. Crediting either would publish one tool's account as the
+#: other's — the fault `hosttool.detect` returns NESTED to avoid.
+NESTED = Route(
+    NONE,
+    "nested tools; cannot attribute",
+    "hosttool.detect saw several markers and no agent process settled them",
+    model="unknown: nested tools; cannot attribute")
+
+
 def route_for(kind: str) -> Route:
     """The route for a `hosttool.detect` key; unidentified for anything else."""
+    from .hosttool import NESTED as nested
+    if kind == nested:
+        return NESTED
     return ROUTES.get(kind, UNIDENTIFIED)
 
 
