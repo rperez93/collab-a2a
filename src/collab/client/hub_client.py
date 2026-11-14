@@ -200,7 +200,9 @@ class HubClient:
         from ..skill_sharing import validate_publication
         data = self._bounded_get(f"{EXT_PREFIX}/shared-skills/{skill_id}", params={},
                                  maximum=2 * 1024 * 1024, label='shared skill')
-        validate_publication(data.get('skill'))
+        # The normalized record (computed hashes, sorted files) is what the
+        # manifest, the review and the consent binding must all see.
+        data['skill'] = {**data['skill'], **validate_publication(data.get('skill'))}
         return data
 
     def withdraw_skill(self, skill_id: str) -> dict[str, Any]:
