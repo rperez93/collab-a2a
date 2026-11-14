@@ -319,3 +319,32 @@ def test_the_streaming_send_closes_its_task_too(session, host_headers):
             reply = _a2a_send(client, host_headers, i, method="SendStreamingMessage")
             assert reply.status_code == 200
         assert _open_tasks(app) == 0
+
+
+def test_closing_an_answered_task_takes_nothing_a_client_could_retrieve(session, host_headers):
+    """What a client can see of a sent message is unchanged by closing its
+    task: the ack is a Message with no task id, nothing is stored as a task,
+    and `ListTasks`/`GetTask` answer exactly as with the stock handler (empty,
+    and «task not found» for the message's own id). A reconnecting client
+    never had a task to poll or resubscribe to — the id was never sent."""
+    import uuid
+
+    from fastapi.testclient import TestClient
+
+    headers = {**host_headers, "A2A-Version": "1.0"}
+
+    def rpc(client, method, params):
+        return client.post("/a2a", headers=headers, json={
+            "jsonrpc": "2.0", "id": "1", "method": method, "params": params}).json()
+
+    with TestClient(session["app"]) as client:
+        message_id = uuid.uuid4().hex
+        sent = rpc(client, "SendMessage", {"message": {
+            "messageId": message_id, "role": "ROLE_USER", "parts": [{
+                "data": {"kind": "chat", "room": "general", "text": "hi"},
+                "mediaType": "application/json"}]}})
+        ack = sent["result"]["message"]
+        assert "taskId" not in ack and "contextId" not in ack
+        assert rpc(client, "ListTasks", {})["result"].get("tasks", []) == []
+        missing = rpc(client, "GetTask", {"id": message_id})
+        assert missing["error"]["message"] == "Task not found"
