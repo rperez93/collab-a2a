@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS approval_requests (
  target_id TEXT NOT NULL, canonical BLOB NOT NULL, digest TEXT NOT NULL,
  subject TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
  state TEXT NOT NULL, receipt_hash TEXT, receipt_expires INTEGER,
- credential_id TEXT, fingerprint TEXT, method TEXT);
+ credential_id TEXT, fingerprint TEXT, method TEXT, credential_generation INTEGER,
+ kind TEXT NOT NULL DEFAULT 'operation');
 CREATE INDEX IF NOT EXISTS approval_requests_target ON approval_requests(session_id,target_id);
 CREATE INDEX IF NOT EXISTS approval_requests_requester ON approval_requests(session_id,requester_id);
 CREATE TABLE IF NOT EXISTS approval_challenges (
@@ -87,6 +88,13 @@ class ApprovalStore:
         with store._lock:
             store._db.executescript(SCHEMA)
             with store._db:
+                columns = {r[1] for r in store._db.execute("PRAGMA table_info(approval_requests)")}
+                if "credential_generation" not in columns:
+                    # Existing draft receipts with unknown generation cannot
+                    # authorize dispatch under the new key lifecycle.
+                    store._db.execute("ALTER TABLE approval_requests ADD COLUMN credential_generation INTEGER")
+                if "kind" not in columns:
+                    store._db.execute("ALTER TABLE approval_requests ADD COLUMN kind TEXT NOT NULL DEFAULT 'operation'")
                 store._db.execute("INSERT OR IGNORE INTO approval_session VALUES(1,?)", (session_id,))
                 if store._db.execute("SELECT id FROM approval_session WHERE singleton=1").fetchone()[0] != session_id:
                     raise Rejected("wrong_session", 403)
@@ -300,17 +308,21 @@ class ApprovalStore:
             _text(operation["destination"], 2048)
             review = challenges.review({**operation, "api_version": 1, "session_id": self.session_id,
                                         "requester_id": requester, "target_id": target_id})
-            self._prune(db, now)
-            if (db.execute("SELECT COUNT(*) FROM approval_requests").fetchone()[0] >= MAX_REQUESTS
-                    or db.execute("SELECT COUNT(*) FROM approval_requests WHERE requester_id=? OR target_id=?",
-                                  (requester, target_id)).fetchone()[0] >= MAX_OWNER_REQUESTS):
-                raise Rejected("request_capacity", 429)
-            identity = _id("ar_")
-            db.execute("INSERT INTO approval_requests(id,session_id,requester_id,target_id,canonical,digest,subject,created_at,expires_at,state) VALUES(?,?,?,?,?,?,?,?,?,'pending')",
-                       (identity, self.session_id, requester, target_id, review.canonical, review.digest,
-                        operation["subject"], now, now + REQUEST_SECONDS))
-            self._audit(db, requester, "requested", now, identity, digest=review.digest, target_id=target_id)
-            return {"api_version": 1, "request_id": identity, "digest": review.digest, "expires_at": now + REQUEST_SECONDS}
+            return self._insert_request(db, requester, target_id, review, operation["subject"], now)
+
+    def _insert_request(self, db, requester, target, review, subject, now, *, expires=None, kind="operation"):
+        self._prune(db, now)
+        if (db.execute("SELECT COUNT(*) FROM approval_requests").fetchone()[0] >= MAX_REQUESTS
+                or db.execute("SELECT COUNT(*) FROM approval_requests WHERE requester_id=? OR target_id=?",
+                              (requester, target)).fetchone()[0] >= MAX_OWNER_REQUESTS):
+            raise Rejected("request_capacity", 429)
+        expires = min(expires, now + REQUEST_SECONDS) if expires is not None else now + REQUEST_SECONDS
+        identity = _id("ar_")
+        db.execute("INSERT INTO approval_requests(id,session_id,requester_id,target_id,canonical,digest,subject,created_at,expires_at,state,kind) VALUES(?,?,?,?,?,?,?,?,?,'pending',?)",
+                   (identity, self.session_id, requester, target, review.canonical, review.digest,
+                    subject, now, expires, kind))
+        self._audit(db, requester, "requested", now, identity, digest=review.digest, target_id=target)
+        return {"api_version": 1, "request_id": identity, "digest": review.digest, "expires_at": expires}
 
     def _request(self, db, owner, identity, now):
         row = db.execute("SELECT * FROM approval_requests WHERE id=? AND session_id=? AND target_id=?",
@@ -365,8 +377,9 @@ class ApprovalStore:
             receipt = secrets.token_urlsafe(32)
             expires = min(now + RECEIPT_SECONDS, request["expires_at"])
             db.execute("UPDATE approval_challenges SET used=1 WHERE id=?", (challenge_id,))
-            db.execute("UPDATE approval_requests SET state='approved',receipt_hash=?,receipt_expires=?,credential_id=?,fingerprint=?,method=? WHERE id=?",
-                       (token_hash(receipt), expires, credential_id, key["fingerprint"], key["method"], request_id))
+            db.execute("UPDATE approval_requests SET state='approved',receipt_hash=?,receipt_expires=?,credential_id=?,fingerprint=?,method=?,credential_generation=? WHERE id=?",
+                       (token_hash(receipt), expires, credential_id, key["fingerprint"], key["method"],
+                        self._generation(db, owner)[0], request_id))
             self._audit(db, owner, "approved", now, request_id, digest=request["digest"],
                         fingerprint=key["fingerprint"], method=key["method"], strength="strong", credential_trust="tofu-unverified")
             return {"api_version": 1, "request_id": request_id, "state": "approved", "receipt": receipt,
@@ -390,22 +403,29 @@ class ApprovalStore:
         transaction is an uncertain outcome, not permission for a second claim.
         """
         with self._transaction(token) as (db, owner, now):
-            row = self._request(db, owner, request_id, now)
-            if row["state"] != "approved":
-                raise Rejected("request_unavailable", 409)
-            _text(receipt, 128)
-            if digest != row["digest"] or not secrets.compare_digest(token_hash(receipt), row["receipt_hash"]):
-                raise Rejected("receipt_binding", 403)
-            if now >= row["receipt_expires"]:
-                raise Rejected("receipt_expired", 410)
-            key = self._key(db, owner, row["credential_id"], ready_at=now)
-            if key["fingerprint"] != row["fingerprint"]:
-                raise Rejected("credential_changed", 409)
+            row, key = self._receipt(db, owner, request_id, receipt, digest, now)
+            if row["kind"] != "operation":
+                raise Rejected("wrong_dispatch", 403)
             db.execute("UPDATE approval_requests SET state='consumed',receipt_hash=NULL WHERE id=?", (request_id,))
             self._audit(db, owner, "dispatch_claimed", now, request_id, digest=row["digest"],
                         fingerprint=key["fingerprint"], method=key["method"], strength="strong", credential_trust="tofu-unverified")
             return {"request_id": request_id, "canonical_review": bytes(row["canonical"]),
                     "digest": row["digest"], "strength": "strong", "credential_trust": "tofu-unverified"}
+
+    def _receipt(self, db, owner, request_id, receipt, digest, now):
+        row = self._request(db, owner, request_id, now)
+        if row["state"] != "approved":
+            raise Rejected("request_unavailable", 409)
+        _text(receipt, 128)
+        if digest != row["digest"] or not secrets.compare_digest(token_hash(receipt), row["receipt_hash"]):
+            raise Rejected("receipt_binding", 403)
+        if now >= row["receipt_expires"]:
+            raise Rejected("receipt_expired", 410)
+        key = self._key(db, owner, row["credential_id"], ready_at=now)
+        if (key["fingerprint"] != row["fingerprint"]
+                or row["credential_generation"] != self._generation(db, owner)[0]):
+            raise Rejected("credential_changed", 409)
+        return row, key
 
     def report_key(self, token, credential_id, *, observed_spki=None):
         """A client reports missing/changed local key material; never replace it.
@@ -415,6 +435,8 @@ class ApprovalStore:
         """
         with self._transaction(token) as (db, owner, now):
             key = self._key(db, owner, credential_id)
+            if key["state"] == "retired":
+                raise Rejected("credential_retired", 409)
             observed = None
             if observed_spki is not None:
                 # An observation can only freeze authority, never create it.
