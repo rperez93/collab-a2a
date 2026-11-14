@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+"""Developer iteration helper; a fast run is never a merge gate."""
+from __future__ import annotations
+
+import argparse
+import ast
+import json
+import os
+import selectors
+import signal
+import stat
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+GATES = ('tests/test_docs_match_cli.py', 'tests/test_skill_settings_match_the_registry.py',
+         'tests/test_okf_bundle.py')
+MAX_GIT_BYTES = 1024 * 1024
+MAX_SOURCE_BYTES = 512 * 1024
+MAX_SCAN_ENTRIES = 4096
+MAX_SCAN_DEPTH = 16
+MAX_TOTAL_SOURCE_BYTES = 8 * 1024 * 1024
+SCAN_SECONDS = 5.0
+
+
+def capture(argv, *, cwd: Path, env=None, limit=MAX_GIT_BYTES, timeout=10):
+    if os.name != 'posix':
+        raise ValueError('bounded process-group cleanup requires POSIX; use WSL for this helper')
+    process = subprocess.Popen(argv, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, start_new_session=True)
+    deadline = time.monotonic() + timeout
+    data = bytearray()
+    try:
+        os.set_blocking(process.stdout.fileno(), False)
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(argv, timeout)
+                if not selector.select(remaining):
+                    raise subprocess.TimeoutExpired(argv, timeout)
+                chunk = os.read(process.stdout.fileno(), min(65536, limit + 1 - len(data)))
+                if not chunk:
+                    return process.wait(timeout=max(.001, deadline - time.monotonic())), bytes(data)
+                data.extend(chunk)
+                if len(data) > limit:
+                    raise ValueError(f'command output exceeds {limit} bytes; selection refused')
+    finally:
+        # This is a session/process group created by this call, never a peer's
+        # PID. Descendants retaining stdout must not survive leader exit.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.stdout.close()
+        process.wait(timeout=2)
+
+
+def git(root: Path, *args: str) -> str:
+    code, data = capture(['git', *args], cwd=root)
+    if code:
+        raise ValueError('git could not resolve the changes; check --base and repository state')
+    return os.fsdecode(data)
+
+
+def regular_fd(path, *, dir_fd=None):
+    if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_NONBLOCK'):
+        raise ValueError('safe file inspection requires POSIX; use WSL for this helper')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError('selection refuses non-regular files, including FIFOs')
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def test_files(root: Path):
+    # Count EVERY entry before filtering names. Descriptor-relative opens and
+    # NOFOLLOW protect against a directory being swapped after enumeration.
+    count = 0
+    deadline = time.monotonic() + SCAN_SECONDS
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK
+    def walk(fd, relative, depth):
+        nonlocal count
+        with os.scandir(fd) as entries:
+            for entry in entries:
+                count += 1
+                if count > MAX_SCAN_ENTRIES or time.monotonic() > deadline:
+                    raise ValueError('incomplete test traversal: entry/time budget exceeded; use --test')
+                info = entry.stat(follow_symlinks=False)
+                path = relative / entry.name
+                if stat.S_ISDIR(info.st_mode):
+                    if depth >= MAX_SCAN_DEPTH:
+                        raise ValueError('incomplete test traversal: depth budget exceeded; use --test')
+                    child = os.open(entry.name, flags, dir_fd=fd)
+                    try:
+                        yield from walk(child, path, depth + 1)
+                    finally:
+                        os.close(child)
+                elif not stat.S_ISREG(info.st_mode):
+                    raise ValueError('selection refuses symlinks and non-regular test entries')
+                elif entry.name.startswith('test_') and entry.name.endswith('.py'):
+                    yield path, fd, entry.name
+                if time.monotonic() > deadline:
+                    raise ValueError('incomplete test traversal: time budget exceeded; use --test')
+    fd = os.open(root / 'tests', flags)
+    try:
+        yield from walk(fd, Path('tests'), 0)
+    finally:
+        os.close(fd)
+
+
+def changed_paths(root: Path, base: str) -> set[str]:
+    commit = git(root, 'rev-parse', '--verify', '--end-of-options', base + '^{commit}').strip()
+    committed = git(root, 'diff', '--no-ext-diff', '--no-textconv', '--name-only',
+                    '--no-renames', '-z', commit + '...HEAD', '--')
+    working = git(root, 'diff', '--no-ext-diff', '--no-textconv', '--name-only',
+                  '--no-renames', '-z', 'HEAD', '--')
+    untracked = git(root, 'ls-files', '--others', '--exclude-standard', '-z', '--',
+                    'src', 'tests', 'scripts', 'docs', 'CONTRIBUTING.md', 'pyproject.toml')
+    return {p for p in (committed + working + untracked).split('\0') if p}
+
+
+def imports(path: Path, *, dir_fd=None, file_name=None, budget=None) -> set[str]:
+    fd = regular_fd(file_name or path, dir_fd=dir_fd)
+    try:
+        limit = min(MAX_SOURCE_BYTES, budget[0]) if budget is not None else MAX_SOURCE_BYTES
+        data = bytearray()
+        while True:
+            chunk = os.read(fd, min(65536, limit + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+            if len(data) > limit:
+                raise ValueError(f'{path.name} exceeds the 512 KiB file or aggregate source budget; use --test')
+    finally:
+        os.close(fd)
+    if budget is not None:
+        budget[0] -= len(data)
+    try:
+        tree = ast.parse(bytes(data), filename=str(path))
+    except (SyntaxError, RecursionError, MemoryError) as exc:
+        raise ValueError(f'cannot inspect {path.name}: {type(exc).__name__}; fix it or use --test') from exc
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            found.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            found.add(node.module)
+            found.update(node.module + '.' + alias.name for alias in node.names)
+    return found
+
+
+def test_target(root: Path, target: str) -> str:
+    file, *nodes = target.split('::')
+    path = root / file
+    try:
+        relative = path.relative_to(root)
+        if '..' in relative.parts or relative.parts[0] != 'tests':
+            raise ValueError
+    except (ValueError, IndexError):
+        raise ValueError(f'--test must name an existing file under tests/: {target}') from None
+    if path.suffix != '.py':
+        raise ValueError(f'--test must name a Python test: {target}')
+    if os.name != 'posix':
+        raise ValueError('safe target inspection requires POSIX; use WSL for this helper')
+    if len(relative.parts) > MAX_SCAN_DEPTH + 2:
+        raise ValueError('explicit test target exceeds the depth budget')
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK
+    fd = os.open(root / 'tests', flags)
+    try:
+        for component in relative.parts[1:-1]:
+            child = os.open(component, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        file_fd = regular_fd(relative.name, dir_fd=fd)
+        os.close(file_fd)
+    finally:
+        os.close(fd)
+    return relative.as_posix() + ''.join('::' + node for node in nodes)
+
+
+def select(root: Path, changed: set[str], explicit: list[str]) -> tuple[list[str], list[str]]:
+    selected = {test_target(root, name) for name in GATES}
+    if explicit:
+        selected.update(test_target(root, name) for name in explicit)
+        return sorted(selected), []
+    modules = {p[4:-3].replace('/', '.') for p in changed
+               if p.startswith('src/collab/') and p.endswith('.py')}
+    matched = set()
+    budget = [MAX_TOTAL_SOURCE_BYTES]
+    for path, directory_fd, file_name in test_files(root):
+        name = path.as_posix()
+        if name in changed:
+            selected.add(name)
+        if modules:
+            referenced = imports(path, dir_fd=directory_fd, file_name=file_name, budget=budget)
+            hits = {m for m in modules if any(i == m or i.startswith(m + '.') for i in referenced)}
+            hits.update(m for m in modules if path.stem == 'test_' + m.rsplit('.', 1)[-1])
+            if hits:
+                selected.add(name)
+                matched.update(hits)
+    unmatched = sorted(modules - matched)
+    broad = {p for p in changed if p == 'pyproject.toml' or
+             (p.startswith('tests/') and p.endswith('.py') and
+              not Path(p).name.startswith('test_'))}
+    unmatched.extend(sorted(broad))
+    unmatched.extend(sorted(p for p in changed if p.startswith('scripts/')))
+    return sorted(selected), unmatched
+
+
+def supports_worker_optout(root: Path) -> bool:
+    # Configuring a scratch Store never runs a provider. Force auto-start on
+    # so a missing host marker or default-off preference cannot fake support.
+    with tempfile.TemporaryDirectory(prefix='collab-fast-guard-') as folder:
+        scratch = Path(folder)
+        config = scratch / 'config.json'
+        config.write_text(json.dumps({'worker_auto_start': True, 'worker_agent': 'codex'}))
+        env = {**os.environ, 'PYTHONPATH': str(root / 'src'),
+               'COLLAB_CONFIG': str(config), 'COLLAB_AGENT_CONFIG': str(config),
+               'COLLAB_HOME': str(scratch / 'home'), 'COLLAB_STATE_DIR': str(scratch / 'state'),
+               'COLLAB_PEERS_DIR': str(scratch / 'peers'), 'COLLAB_NO_WORKER': '1'}
+        code = ('import sys; from collab.worker import Store; '
+                's=Store(sys.argv[1]); s.ensure_default(); '
+                'sys.exit(0 if not (s.configuration() or {}).get("enabled") else 3)')
+        try:
+            status, _ = capture([sys.executable, '-c', code, str(scratch / 'worker')],
+                                cwd=root, env=env, limit=4096, timeout=10)
+            return status == 0
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            return False
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest='command', required=True)
+    test = sub.add_parser('test', help='run developer iteration checks')
+    test.add_argument('--fast', action='store_true', required=True,
+                      help='changed-test selection plus docs/registry/OKF checks; not a merge gate')
+    test.add_argument('--base', default='origin/main', help='compare branch to this ref (default: origin/main)')
+    test.add_argument('--test', action='append', default=[], metavar='FILE[::NODE]',
+                      help='explicit affected tests instead of automatic selection; gates still run')
+    test.add_argument('--list', action='store_true', help='print the selection without running it')
+    args = parser.parse_args(argv)
+    started = time.monotonic()
+    try:
+        changed = set() if args.test else changed_paths(ROOT, args.base)
+        tests, unmatched = select(ROOT, changed, args.test)
+        if unmatched:
+            raise ValueError('no reliable fast selection for ' + ', '.join(unmatched) +
+                             '; supply affected --test paths (the full suite is still required for merging)')
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        print(f'FAIL: selection: {exc}', file=sys.stderr)
+        return 2
+    print(f'Fast iteration: {len(tests)} targets; target <60 s, not a timeout or merge gate.', flush=True)
+    print('Selection uses changed test files and direct imports; indirect coverage needs explicit --test.', flush=True)
+    for name in tests:
+        print('  ' + name, flush=True)
+    if args.list:
+        print('DONE: selection only; no tests ran.', flush=True)
+        return 0
+    if not supports_worker_optout(ROOT):
+        print('FAIL: checkout lacks verified COLLAB_NO_WORKER support; no tests started. '
+              'Integrate the worker opt-out prerequisite first.', file=sys.stderr)
+        return 2
+    env = {**os.environ, 'COLLAB_NO_WORKER': '1', 'COLLAB_NO_UPDATE_CHECK': '1',
+           'PYTHONPATH': str(ROOT / 'src')}
+    try:
+        result = subprocess.run([sys.executable, '-m', 'pytest', '-q', *tests], cwd=ROOT, env=env)
+        code = result.returncode
+    except KeyboardInterrupt:
+        code = 130
+    except OSError as exc:
+        print(f'FAIL: could not start pytest: {exc}', file=sys.stderr)
+        return 2
+    elapsed = time.monotonic() - started
+    print(f'{"DONE" if code == 0 else "FAIL"}: fast iteration, {elapsed:.2f}s; full suite still required.', flush=True)
+    if elapsed >= 60:
+        print('Over the 60 s target: narrow --test for iteration; do not drop merge-wave coverage.', flush=True)
+    return code if code >= 0 else 128 - code
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
