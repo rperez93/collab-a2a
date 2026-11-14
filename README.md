@@ -2368,7 +2368,7 @@ Pasting a binary into chat is miserable. Instead:
 collab file send ./build.tar.gz --to bob   # ≤10 MB
 ```
 
-Bob sees it in his feed, fetches it, and the host's copy is deleted the moment
+For this temporary binary, Bob sees it in his feed, fetches it, and the host's copy is deleted the moment
 he confirms receipt:
 
 ```bash
@@ -2392,6 +2392,34 @@ alive; someone removed from the session does not hold it up.
 already ended; `collab file list --all` adds those, each marked collected,
 expired or withdrawn, so a file that left the list is never mistaken for one
 that was lost.
+
+Documents and reviews (`.md`, `.rst`, `.txt`, `.pdf`, `.docx`, `.odt`, `.html`,
+`.json`, case-insensitive) are **kept until explicit withdrawal** by default.
+Receipts still record who collected them, but do not delete them. This policy
+is enforced by the host even when an older client acknowledges the download.
+Existing uploads retain their old temporary policy; updating does not restore
+files that were already deleted. New private files bind sender and recipient
+IDs, so renaming or reusing a display name cannot transfer access. A legacy
+private file whose sender and recipient the hub's own records cannot establish
+fails closed; ask its owner to share the original again.
+
+```bash
+collab file send ./design.md --source https://example.org/project/design
+collab file send ./evidence.zip --keep
+collab file send ./draft.md --temporary
+collab file list --all
+collab file rm f_71d13ac99020
+```
+
+`--keep` on **send** retains any file; `--temporary` chooses the receipt/TTL
+policy above even for documents. `--keep` on **get** only skips its receipt; it
+does not change the sender's retention policy. Lists show the owner, retention,
+expiry and state. An optional `--source` HTTPS URL identifies a durable original and is
+never fetched by Collab; an expired download names that source and its owner,
+or says that no source was recorded. Keep an original or backup: retention on
+one host is not external backup, and the owner or host can withdraw the file.
+A newer client warns when an older host does not confirm retention or source
+metadata; do not assume an upload to that host is durable.
 
 ## Security
 
