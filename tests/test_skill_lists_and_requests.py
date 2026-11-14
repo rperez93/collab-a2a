@@ -151,7 +151,9 @@ def test_accept_needs_the_operator_terminal_and_binds_the_request(monkeypatch):
     calls = []
     assert run(monkeypatch, hub, 'accept', request_id, name='bob', approved=True, calls=calls) == 0
     asked, consumed = calls[0][1], calls[1][1]
-    assert asked == consumed and asked['subject'] == 'skill-accept' and asked['binding'] == 'alice'
+    import hashlib
+    assert asked == consumed and asked['subject'] == 'skill-accept'
+    assert asked['binding'] == hashlib.sha256(b'name:alice').hexdigest(), 'no hub id in this fake: name fallback'
     assert calls[0][2]['arguments (peer-supplied, untrusted)'] == 'PR 7'
 
 def test_forged_requests_are_dropped_and_peer_text_cannot_drive_the_terminal(monkeypatch, capsys):
@@ -284,3 +286,26 @@ def test_an_unreadable_request_time_counts_as_expired():
     hub = Hub([Envelope(kind='chat', sender='alice', to='bob', seq=1, text='x', ts='not-a-time',
                         body={'skill_request': {'id': 'sr_00000000cccc', 'skill': 'review'}})])
     assert cli._skill_requests(hub, SimpleNamespace(name='bob', participant_id=''))[0]['state'] == 'expired'
+
+
+def test_state_and_limits_follow_the_requesters_stable_id_not_the_name():
+    # Alice asks and is accepted; mallory renames to 'alice' and replays the id.
+    events = [Envelope(kind='chat', sender='alice', sender_id='p_alice', to='bob', seq=1, text='x',
+                       body={'skill_request': {'id': 'sr_00000000aaaa', 'skill': 'review'}}),
+              Envelope(kind='chat', sender='bob', sender_id='p_bob', to='alice', to_id='p_alice', seq=2,
+                       text='x', body={'skill_response': {'id': 'sr_00000000aaaa', 'state': 'accepted'}}),
+              Envelope(kind='chat', sender='alice', sender_id='p_mallory', to='bob', seq=3, text='x',
+                       body={'skill_request': {'id': 'sr_00000000aaaa', 'skill': 'deploy'}})]
+    found = cli._skill_requests(Hub(events), SimpleNamespace(name='bob', participant_id='p_bob'))
+    assert [(r['from_id'], r['skill'], r['state']) for r in found] == [
+        ('p_alice', 'review', 'accepted'), ('p_mallory', 'deploy', 'pending')]
+    assert cli._accept_fields(found[0])['binding'] != cli._accept_fields(found[1])['binding']
+
+
+def test_a_reply_is_refused_when_the_name_now_belongs_to_someone_else(monkeypatch):
+    events = [Envelope(kind='chat', sender='alice', sender_id='p_alice', to='bob', seq=1, text='x',
+                       body={'skill_request': {'id': 'sr_00000000bbbb', 'skill': 'review'}})]
+    hub = Hub(events)
+    hub.participants = lambda: {'participants': [{'name': 'alice', 'id': 'p_impostor'}]}
+    assert run(monkeypatch, hub, 'decline', 'sr_00000000bbbb', name='bob') == 1
+    assert hub.sent == []

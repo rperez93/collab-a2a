@@ -6873,7 +6873,9 @@ def _skill_requests(client, profile) -> list[dict[str, Any]]:
     for env in events:
         reply = (env.body or {}).get("skill_response")
         if mine(env, "sender", "sender_id") and isinstance(reply, dict) and reply.get("state") in SKILL_STATES:
-            states[(str(reply.get("id")), env.to)] = reply["state"]
+            # Keyed by the requester's stable id where the hub stamped one: a
+            # display name can be renamed or reused by somebody else.
+            states[(str(reply.get("id")), getattr(env, "to_id", "") or env.to)] = reply["state"]
     from datetime import datetime, timezone
     from .skill_sharing import NAME_RE
     found, seen, waiting = [], set(), {}
@@ -6889,7 +6891,8 @@ def _skill_requests(client, profile) -> list[dict[str, Any]]:
                 or not isinstance(skill, str) or not NAME_RE.fullmatch(skill)
                 or not isinstance(args, str)):
             continue
-        key = (request_id, env.sender)
+        who = getattr(env, "sender_id", "") or env.sender  # stable identity, name as fallback
+        key = (request_id, who)
         if key in seen:
             continue
         seen.add(key)
@@ -6904,11 +6907,11 @@ def _skill_requests(client, profile) -> list[dict[str, Any]]:
         if state == "pending":
             # A peer may keep only a few requests open at once; the rest are
             # throttled, so one sender cannot flood the human with prompts.
-            waiting[env.sender] = waiting.get(env.sender, 0) + 1
-            if waiting[env.sender] > MAX_OPEN_PER_PEER:
+            waiting[who] = waiting.get(who, 0) + 1
+            if waiting[who] > MAX_OPEN_PER_PEER:
                 state = "throttled"
-        found.append({"id": request_id, "from": env.sender, "skill": skill,
-                      "args": args[:4000], "seq": env.seq, "state": state})
+        found.append({"id": request_id, "from": env.sender, "from_id": getattr(env, "sender_id", "") or "",
+                      "skill": skill, "args": args[:4000], "seq": env.seq, "state": state})
     return found
 
 
@@ -6917,7 +6920,7 @@ def _accept_fields(match: dict[str, Any]) -> dict[str, str]:
     import hashlib
     digest = hashlib.sha256((match["skill"] + "\0" + match["args"]).encode()).hexdigest()
     return dict(subject="skill-accept", request_id=match["id"][:200], digest=digest,
-                binding=f"{match['from']}"[:200])
+                binding=hashlib.sha256((match.get("from_id") or "name:" + match["from"]).encode()).hexdigest())
 
 
 def cmd_skills_remote(args: argparse.Namespace) -> int:
@@ -7013,11 +7016,18 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
                     return 1
                 # Revalidate, then consume immediately before the reply.
                 again = [r for r in _skill_requests(client, profile)
-                         if r["id"] == match["id"] and r["from"] == match["from"]]
+                         if r["id"] == match["id"] and (r["from_id"] or r["from"]) == (match["from_id"] or match["from"])]
                 if not again or again[0]["state"] != "pending" or _accept_fields(again[0]) != fields:
                     raise ValueError("the request changed while it was being reviewed; nothing was accepted")
                 consent.consume(profile.dir, receipt, **fields)
             state = {"accept": "accepted", "decline": "declined", "done": "done"}[args.action]
+            if match.get("from_id"):
+                # The reply goes by name; refuse if that name now belongs to
+                # somebody else, so an answer cannot reach an impostor.
+                people = client.participants().get("participants", []) if hasattr(client, "participants") else []
+                holder = next((p.get("id") for p in people if p.get("name") == match["from"]), None)
+                if people and holder != match["from_id"]:
+                    raise ValueError(f"{match['from']!r} is now somebody else; the reply was not sent")
             words = {"accepted": f"accepted your request to run `{match['skill']}`; running it now",
                      "declined": f"declined your request to run `{match['skill']}`",
                      "done": f"ran `{match['skill']}`"}[state]
