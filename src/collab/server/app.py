@@ -1118,7 +1118,9 @@ def create_app(
         # derived from it per sender, so an uncertain retry shares it once.
         if isinstance(delivery, str) and 0 < len(delivery) <= 80:
             file_id = "f_" + hashlib.sha256(f"{user.id}|{delivery}".encode()).hexdigest()[:20]
-            if (existing := store.get_file(file_id)) is not None:
+            # A stored row whose blob never landed is an upload to complete,
+            # not a duplicate: acknowledging it would lose the file.
+            if (existing := store.get_file(file_id)) is not None and _blob(file_id).exists():
                 await _announce(existing, user)  # a retry repairs a lost announcement
                 return {**_file_view(existing), "duplicate": True}
         else:
@@ -1179,6 +1181,8 @@ def create_app(
                 os.replace(target, final)
             with contextlib.suppress(OSError):
                 target.unlink()
+            if not final.exists():
+                raise HTTPException(status_code=409, detail="this delivery was stored with other bytes")
             await _announce(existing, user)
             return {**_file_view(existing), "duplicate": True}
         except BaseException:
@@ -1189,29 +1193,28 @@ def create_app(
         await _announce(record, user)
         return _file_view(record)
 
-    announcing = asyncio.Lock()
-
     async def _announce(record: dict[str, Any], user) -> None:
-        """Publish a file's event exactly once its blob is in place.
+        """Publish a file's event once its blob is in place, at most once.
 
-        Idempotent: a retry that finds the record stored but never announced
-        (the first request died between insert and publish, or lost a race)
-        publishes it, so a stored file is never one nobody is told about.
+        A retry that finds the record stored but never announced (the first
+        request died between insert and publish, or lost a race) publishes it,
+        so a stored file is never one nobody is told about. The event and its
+        delivery marker commit together (Store.append_once), so a retry after
+        a successful publish cannot announce it twice.
         """
         file_id = record["id"]
-        async with announcing:
-            if store.file_announced(file_id) or not _blob(file_id).exists():
-                return
-            to_name = record.get("recipient")
-            to_id = resolve_target(to_name)[1] if to_name else None
-            await hub.publish(Envelope(
-                kind=KIND_FILE, sender=user.name, sender_id=user.id,
-                to=to_name or None, to_id=to_id,
-                room=None if to_id else (record.get("room") or DEFAULT_ROOM),
-                body={"action": "shared", "id": file_id, "name": record["name"], "size": record["size"],
-                      "sha256": record["sha256"], "url": _download_url(file_id)},
-            ))
-            store.mark_file_announced(file_id)
+        if not _blob(file_id).exists():
+            return
+        to_name = record.get("recipient")
+        to_id = resolve_target(to_name)[1] if to_name else None
+        await hub.publish(Envelope(
+            kind=KIND_FILE, sender=user.name, sender_id=user.id,
+            to=to_name or None, to_id=to_id,
+            room=None if to_id else (record.get("room") or DEFAULT_ROOM),
+            body={"action": "shared", "id": file_id, "name": record["name"], "size": record["size"],
+                  "sha256": record["sha256"], "url": _download_url(file_id),
+                  "collab_worker_delivery": f"file:{file_id}"},
+        ))
 
     @app.get(f"{EXT_PREFIX}/files", tags=["collab"])
     async def list_files(request: Request) -> dict[str, Any]:
