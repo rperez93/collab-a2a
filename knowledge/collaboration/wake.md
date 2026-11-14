@@ -301,3 +301,14 @@ Later than the pin: hub approval-security system events can also reach the armed
 main-agent route while a worker owns conversation. They preserve ordinary wake
 and replay gates and do not authorize an operation. Alarm-only custom recipes
 use filtered stdin or COLLAB_WAKE_PROMPT; COLLAB_WAKE_BATCH is empty.
+## Remote consent (later than the pin)
+
+Remote prompts and goals use a separate receiver-local consent queue.
+`collab remote offer` sends through the worker with a stable recipient check;
+`collab remote goal` configures a host goal offered on each join. Neither
+receipt nor joining accepts an offer. The human reviews, binds a local target,
+then accepts the exact hash or declines. Ordinary worker and wake inputs
+exclude offer-protocol messages, including legacy queued wake batches.
+Approved delivery uses frozen local argv and cwd once; uncertain delivery is
+not retried. See [receiver consent](../../docs/remote-requests.md) for commands,
+trust boundary, expiry and prompt retention. Historical pins remain unchanged.

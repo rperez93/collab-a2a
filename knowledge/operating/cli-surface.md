@@ -307,3 +307,11 @@ list.
   --tunnel proxy` stops the session's listener, hub and own tunnel before the
   proxy takes its domain, and a `--no-tunnel` session is never routed. (Later
   than the pin, R11d-2.)
+## Remote consent (later than the pin)
+
+`collab remote` provides offer, pending, show, bind, accept, decline and goal
+operations. The host's connection goal is an offer; each receiving human must
+accept locally. Noninteractive `--human-approved` attests an actual human
+approval of `--sha256`, never permission inferred from remote text. See the
+[remote request guide](../../docs/remote-requests.md). The historical parser
+pin above is unchanged.
