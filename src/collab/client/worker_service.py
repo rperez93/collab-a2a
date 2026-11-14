@@ -445,17 +445,21 @@ class Conversation:
             for row in pending_now:
                 source = (self._source(row).get("source") or {})
                 asker_ids[row["id"]] = source.get("sender_id") or who(row["sender"])
-            open_questions = [(row["question"][:60], asker_ids[row["id"]]) for row in pending_now
-                              if len(row.get("question", "")) >= 20]
+            asker_rooms = {row["id"]: (self._source(row).get("source") or {}).get("room") or ""
+                           for row in pending_now}
+            open_questions = [(row["question"][:60], asker_ids[row["id"]], asker_rooms[row["id"]])
+                              for row in pending_now if len(row.get("question", "")) >= 20]
             kept = []
             for reply in result["replies"]:
-                leak = next((q for q, asker in open_questions
-                             if q in reply["text"] and who(reply["to"]) != asker), None)
+                # Fine for the asker, by DM or in the asker's own room.
+                leak = next((q for q, asker, room in open_questions
+                             if q in reply["text"] and who(reply["to"]) != asker
+                             and not (room and not reply["to"] and reply.get("room") == room)), None)
                 if leak is None:
                     kept.append(reply)
-            if len(kept) != len(result["replies"]):
-                logger.warning("dropped %d worker reply(ies) repeating an open question",
-                               len(result["replies"]) - len(kept))
+            if dropped := len(result["replies"]) - len(kept):
+                logger.warning("dropped %d worker reply(ies) repeating an open question", dropped)
+                store.count_dropped(dropped)
                 result = {**result, "replies": kept}
             escalations = result["escalations"] + worker_runtime.unrouted_deferrals(
                 result, selected, pending_now,
