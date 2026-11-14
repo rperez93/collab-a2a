@@ -25,6 +25,18 @@ def state(profile) -> dict:
         return {}
 
 
+def _may_install_hook() -> bool:
+    """Whether automatic setup may install the global Claude hook (R21).
+
+    Not when this agent or its kind chose a source, not when any layer opted
+    out with an empty stats_command, and not while a legacy machine probe is
+    un-adopted: the person is told about it and decides (adopt or clear).
+    """
+    from .config import resolve
+    value, layer = resolve('stats_command')
+    return layer == 'default' or (layer == 'machine' and value != '')
+
+
 def ensure(profile) -> None:
     from .hosttool import detect
     from .worker_telemetry import _write
@@ -68,7 +80,7 @@ def ensure(profile) -> None:
     try:
         if provider == 'codex':
             value['thread_id'] = os.environ.get('CODEX_THREAD_ID') or os.environ.get('CODEX_SESSION_ID') or ''
-        elif not set_by_this_agent('stats_command'):
+        elif _may_install_hook():
             from .statusline.install import install_claude_code, status_claude_code
             if not status_claude_code()['installed']:
                 # A shared hook must resolve its own calling process. Pinning

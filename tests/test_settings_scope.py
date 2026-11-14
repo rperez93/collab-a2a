@@ -502,3 +502,62 @@ def test_only_an_opt_out_can_be_set_for_every_agent():
             config.save_config({**config.load_config(), "stats_command": "my-probe"})
     finally:
         config.WRITE_MACHINE.update(on=False, key=None)
+
+
+
+@pytest.mark.parametrize("machine, installs", [
+    ({}, 1),                                         # nothing chosen: automatic setup runs
+    ({"stats_auto_setup": False}, 0),                # machine opt-out
+    ({"stats_command": ""}, 0),                      # machine opt-out by empty probe
+    ({"stats_command": "my-gemini-probe --json"}, 0),  # un-adopted legacy probe: wait for the person
+])
+def test_ensure_installs_the_hook_only_when_no_layer_decided(tmp_path, monkeypatch, machine, installs):
+    """K4: tested through ensure(), with the installer recorded."""
+    from collab import hosttool, telemetry_setup
+    from collab.config import SessionProfile
+    from collab.statusline import install as hook
+    calls = []
+    monkeypatch.setattr(hosttool, "detect", lambda: "claude-code")
+    monkeypatch.setattr(telemetry_setup, "share_stats_enabled", lambda: True)
+    monkeypatch.setattr(hook, "status_claude_code", lambda: {"installed": False})
+    monkeypatch.setattr(hook, "install_claude_code", lambda **k: calls.append(k))
+    config.global_config_path().parent.mkdir(parents=True, exist_ok=True)
+    config.global_config_path().write_text(json.dumps(machine))
+    config._CACHE.clear()
+    profile = SessionProfile("s_hook", "http://hub", "me", "host", "token", home=str(tmp_path / "home"))
+    profile.dir.mkdir(parents=True, exist_ok=True)
+    telemetry_setup.ensure(profile)
+    assert len(calls) == installs, (machine, calls)
+
+
+def test_check_keeps_warning_while_the_legacy_probe_is_unadopted(tmp_path, monkeypatch):
+    """K7: host/join say it once; collab check says it on every run until adopted or cleared."""
+    from collab import cli
+    monkeypatch.setenv("COLLAB_HOME", str(tmp_path / "home"))
+    config._AGENT_PATH.clear()
+    config.global_config_path().parent.mkdir(parents=True, exist_ok=True)
+    config.global_config_path().write_text(json.dumps({"stats_command": "my-gemini-probe --json"}))
+    config._CACHE.clear()
+    assert cli._legacy_probe_note() and cli._legacy_probe_note() is None     # host/join: once
+    assert cli._legacy_probe_note(once=False) and cli._legacy_probe_note(once=False)  # check: always
+    config.setting("stats_command").write("")                                 # cleared by the person
+    assert cli._legacy_probe_note(once=False) is None
+
+
+def test_collab_check_itself_warns_on_every_run(tmp_path, monkeypatch, capsys):
+    """K7 through the real caller: two runs, two warnings."""
+    import argparse
+    from types import SimpleNamespace
+    from collab import cli
+    monkeypatch.setenv("COLLAB_HOME", str(tmp_path / "home"))
+    config._AGENT_PATH.clear()
+    config.global_config_path().parent.mkdir(parents=True, exist_ok=True)
+    config.global_config_path().write_text(json.dumps({"stats_command": "my-gemini-probe --json"}))
+    config._CACHE.clear()
+    monkeypatch.setattr(cli, "_sweep_a_previous_boot", lambda: None)
+    monkeypatch.setattr(cli, "_checks", lambda profile: [])
+    monkeypatch.setattr(cli.SessionProfile, "current", classmethod(lambda cls, cwd=None: SimpleNamespace(session_id="s")))
+    for _ in range(2):
+        cli.cmd_check(argparse.Namespace(json=True, verbose=False, session=None))
+        checks = json.loads(capsys.readouterr().out)["checks"]
+        assert [c["check"] for c in checks] == ["settings"]
