@@ -443,16 +443,51 @@ def available() -> bool:
         return False
 
 
-def enrol(name: str) -> dict:
-    """Create a gesture-bound key named `name` — the human is prompted — and
-    return what the hub registers. Raises `AlreadyEnrolled` rather than
-    replacing a key, `Refused` on a cancel."""
+def enrol(name: str, challenge: str) -> dict:
+    """Create a gesture-bound key named `name` and PROVE POSSESSION of it by
+    signing the hub's enrolment `challenge` (unpadded base64url, from
+    `/enrol/start`) — two Hello gestures — and return exactly what
+    `/enrol/finish` takes, `challenge_id` aside.
+
+    WHY THE SECOND GESTURE (R22b decision e_867b714f…): `create` and the public
+    key alone prove nothing about who holds the private half of the key that
+    is sent; a signature over the hub's fresh challenge does. Raises
+    `AlreadyEnrolled` rather than replacing a key and `Refused` on a cancel —
+    of either gesture. A key whose proof was cancelled stays in Hello under
+    its name; `prove` completes its enrolment without creating another.
+    """
+    raw = _enrol_challenge(challenge)
     answer = _checked(_run({"op": "create", "name": _name(name)}, HUMAN))
     spki = _ps_b64(answer.get("spki"), "spki")
+    return _proven(name, spki, raw)
+
+
+def prove(name: str, challenge: str) -> dict:
+    """`enrol`'s record for a key that ALREADY exists under `name` — one
+    gesture, over the hub's enrolment challenge. For an enrolment whose proof
+    was cancelled, or a key the hub has not registered yet."""
+    raw = _enrol_challenge(challenge)
+    return _proven(name, public_key(name), raw)
+
+
+def _enrol_challenge(challenge: Any) -> bytes:
+    """Checked before any prompt: a challenge that cannot be signed must not
+    cost the human a gesture first."""
+    return unb64url(challenge, limit=4096)
+
+
+def _proven(name: str, spki: bytes, challenge: bytes) -> dict:
+    signature = sign(name, challenge)
+    # Checked against the key just created: an answer this Hello did not make
+    # is never forwarded as a proof. The hub checks it again, and that is the
+    # check that counts (see `open_window`).
+    if not verify(spki, challenge, signature):
+        raise HelloError("SignatureMismatch")
     # The hub's names (`POST /enrol/finish`, #161), and nothing else: it
     # rejects unknown fields. `algorithm` is COSE -257, RS256, as Hello signs.
     return {"credential_id": name, "method": "hello", "algorithm": -257,
-            "public_key_spki": b64url(spki)}
+            "public_key_spki": b64url(spki),
+            "proof": {"type": "hello", "signature": b64url(signature)}}
 
 
 def public_key(name: str) -> bytes:
@@ -523,6 +558,14 @@ def _line(value: Any, limit: int) -> str:
     return (text[:limit] + "…") if len(text) > limit else (text or "?")
 
 
+def _digest_hex(value: Any) -> str:
+    """The hub's digest — base64url of exactly 32 bytes — as hex."""
+    raw = unb64url(value, limit=32)
+    if len(raw) != 32:
+        raise ValueError("a digest is 32 bytes")
+    return raw.hex()
+
+
 def fields(request: dict) -> dict:
     """What the window's three lines say.
 
@@ -531,7 +574,15 @@ def fields(request: dict) -> dict:
     pushed the real id off a wrapped label. The name comes second, marked as
     self-chosen; the third line is subject, destination, authority and the
     digest's first 16 hex.
+
+    THE DIGEST ARRIVES AS THE HUB SENDS IT, unpadded base64url of the raw
+    32-byte SHA-256; the 16 hex digits are computed here, for the eye only,
+    and never sent anywhere.
     """
+    try:
+        digest = _digest_hex(request.get("digest"))[:16]
+    except ValueError:
+        digest = "invalid"
     return {
         "requester": f"Requester: {_line(request.get('requester_id'), 64)}"
                      "  — participant id, assigned by the hub",
@@ -539,7 +590,7 @@ def fields(request: dict) -> dict:
         "summary": (f"{_line(request.get('subject'), 60)} → "
                     f"{_line(request.get('destination'), 60)}"
                     f" · grants {_line(request.get('authority'), 60)}"
-                    f" · digest {_line(request.get('digest'), 16)}"),
+                    f" · digest {digest}"),
     }
 
 
@@ -570,6 +621,7 @@ def open_window(request: dict) -> dict:
     try:
         _name(cred)
         challenge = unb64url(request.get("challenge"), limit=4096)
+        _digest_hex(request.get("digest"))
     except (ValueError, TypeError):
         return {"choice": "unavailable", "reason": "BadRequest"}
     review = _visible(request.get("review_text"), lines=True)
@@ -628,12 +680,12 @@ def build_window_only(request: dict) -> dict:
 
 __all__ = ["AlreadyEnrolled", "HelloError", "NotEnrolled", "Refused", "Unavailable",
            "available", "b64url", "build_window_only", "enrol", "fields",
-           "open_window", "public_key", "sign", "unb64url", "verify"]
+           "open_window", "prove", "public_key", "sign", "unb64url", "verify"]
 
 
 def _self_check(name: str = "collab-selftest") -> None:      # pragma: no cover
-    """By hand only: enrol (prompts), sign (prompts), verify."""
-    record = enrol(name)
+    """By hand only: enrol (prompts twice), sign (prompts), verify."""
+    record = enrol(name, b64url(os.urandom(32)))
     spki = unb64url(record["public_key_spki"], limit=4096)
     message = b"collab hello self-check"
     print(verify(spki, message, sign(name, message)))
