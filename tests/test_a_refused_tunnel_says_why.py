@@ -847,6 +847,11 @@ def test_a_session_asking_for_a_held_primary_is_told_and_does_not_get_it(
         said = _host(hosting, "--tunnel", "proxy", "--primary", "--fresh")
         assert "primary session is s_already" in said
         assert proxy.ProxyState.load().primary == "s_already"
+        # The refused claim is not kept with the session: kept, every revive
+        # retried it and the slot passed silently once s_already was purged.
+        from collab.server.session import hosted_sessions
+        mine = hosted_sessions(hosting / ".collab")[0]
+        assert mine.proxy_primary is False
     finally:
         shared.terminate()
         shared.wait(timeout=10)

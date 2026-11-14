@@ -260,6 +260,14 @@ def _published(peer: Any) -> bool:
     record on this machine (`HubConfig.no_tunnel`, which a hub the daemon
     revives reads too), never from the registry entry, which is a claim.
     A session whose record cannot be read is not routed: fail closed.
+
+    AND ONLY A SESSION THAT ATTACHED ITSELF (`tunnel == "proxy"`, written by its
+    hub once it joined the shared proxy). Routing every loopback host gave a
+    session hosted `--no-tunnel` by an older collab — whose record carries no
+    `no_tunnel` key — a public path the moment the proxy started, and gave
+    own-tunnel or tunnel-less sessions a second public path at `/s/<id>`
+    (adversarial review of #163). Old links still work: a bare-domain link
+    reaches the recorded primary, which attached itself to become one.
     """
     import re
 
@@ -271,7 +279,7 @@ def _published(peer: Any) -> bool:
         cfg = HubConfig.load(peer.session_id, peer.home)
     except (OSError, ValueError, TypeError):
         return False
-    return cfg is not None and not cfg.no_tunnel
+    return cfg is not None and cfg.tunnel == "proxy" and not cfg.no_tunnel
 
 
 class Routes:
