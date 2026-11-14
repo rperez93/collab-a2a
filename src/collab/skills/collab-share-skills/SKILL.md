@@ -59,8 +59,8 @@ matter is rebuilt with only the namespaced name and the description, so it
 cannot shadow your own skills or pre-grant tools (`allowed-tools` is dropped),
 and invisible or control characters are refused. `.collab-provenance.json`
 (session, publisher, publication id, both hashes, time) sits beside it;
-`uninstall-shared` removes only directories carrying it. Only `SKILL.md` is
-installed; files it refers to are not.
+`uninstall-shared` removes only directories carrying it. Only `SKILL.md` and
+the supporting files published with it are installed.
 
 ## Skill lists and consented requests
 
