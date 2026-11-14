@@ -204,3 +204,62 @@ async def test_the_daemon_publishes_the_list_alone_and_withdraws_it_once(monkeyp
         await daemon_mod.Daemon._report_stats(fake, client)
         await daemon_mod.Daemon._report_stats(fake, client)
         assert posted[1:] == [{'skills': []}], 'withdrawn exactly once'
+
+
+@pytest.mark.asyncio
+async def test_toggling_the_list_with_stats_private_withdraws_every_time(monkeypatch):
+    import httpx
+    from collab import runtime_settings
+    from collab.client import daemon as daemon_mod
+    monkeypatch.setattr(daemon_mod, 'share_stats_enabled', lambda: False)
+    posted = []
+    async def transport(request):
+        posted.append(json.loads(request.content))
+        return httpx.Response(200, json={})
+    async def installed():
+        return [{'name': 'review', 'description': 'r'}]
+    fake = SimpleNamespace(profile=SimpleNamespace(url='http://hub', token='t'), _installed_skills=installed)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        for on in (True, False, True, False):
+            runtime_settings.set_value('share_skill_list', on)
+            await daemon_mod.Daemon._report_stats(fake, client)
+    assert [p['skills'] for p in posted] == [[{'name': 'review', 'description': 'r'}], [],
+                                             [{'name': 'review', 'description': 'r'}], []]
+
+
+@pytest.mark.asyncio
+async def test_with_stats_shared_the_list_rides_the_stats_report(monkeypatch):
+    import httpx
+    from collab.client import daemon as daemon_mod
+    monkeypatch.setattr(daemon_mod, 'share_stats_enabled', lambda: True)
+    monkeypatch.setattr(daemon_mod, 'read_stats', lambda profile: {'model': 'm'})
+    monkeypatch.setattr('collab.worker.metrics', lambda root: None)
+    posted = []
+    async def transport(request):
+        posted.append(json.loads(request.content))
+        return httpx.Response(200, json={})
+    async def installed():
+        return [{'name': 'review', 'description': 'r'}]
+    fake = SimpleNamespace(profile=SimpleNamespace(url='http://hub', token='t', dir='/nonexistent'),
+                           _installed_skills=installed, _stats_file_mtime=lambda: 0.0,
+                           _last_stats=None, _stats_sent_mtime=0.0, _stats_sent_at=0.0)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        await daemon_mod.Daemon._report_stats(fake, client)
+    assert posted[-1]['skills'] == [{'name': 'review', 'description': 'r'}]
+    assert posted[-1]['stats'] == {'model': 'm'}
+
+
+def test_without_a_terminal_accept_is_refused_for_the_right_reason(monkeypatch, capsys):
+    monkeypatch.setattr(cli.sys.stdin, 'isatty', lambda: False, raising=False)
+    monkeypatch.setattr('builtins.input', lambda *a: (_ for _ in ()).throw(AssertionError('prompted')))
+    match = {'from': 'alice', 'skill': 'review', 'args': ''}
+    assert cli._human_consents(match, argparse.Namespace(human_approved=False)) is False
+    captured = capsys.readouterr()
+    assert '--human-approved' in captured.err + captured.out
+    assert cli._human_consents(match, argparse.Namespace(human_approved=True)) is True
+
+
+def test_an_unreadable_request_time_counts_as_expired():
+    hub = Hub([Envelope(kind='chat', sender='alice', to='bob', seq=1, text='x', ts='not-a-time',
+                        body={'skill_request': {'id': 'sr_00000000cccc', 'skill': 'review'}})])
+    assert cli._skill_requests(hub, SimpleNamespace(name='bob', participant_id=''))[0]['state'] == 'expired'

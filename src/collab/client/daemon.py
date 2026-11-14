@@ -956,6 +956,7 @@ class Daemon:
             if sharing_skills:
                 # The skill list is its own consent (share_skill_list), not
                 # a usage figure: publish it alone when stats are private.
+                self._skills_withdrawn = False  # so the next "off" withdraws again
                 skills = await self._installed_skills()
                 if skills != getattr(self, "_skills_sent_alone", None):
                     try:

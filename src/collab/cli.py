@@ -6774,7 +6774,7 @@ def _skill_requests(client, profile) -> list[dict[str, Any]]:
             age = (datetime.now(timezone.utc) - datetime.fromisoformat(
                 str(env.ts).replace("Z", "+00:00"))).total_seconds()
         except ValueError:
-            age = 0.0
+            age = SKILL_REQUEST_TTL + 1  # no readable time: never pending forever
         state = states.get(key, "pending")
         if state == "pending" and age > SKILL_REQUEST_TTL:
             state = "expired"
