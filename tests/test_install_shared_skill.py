@@ -80,7 +80,9 @@ def test_consent_is_the_operator_terminal_and_binds_bytes_and_destination(monkey
     assert kinds[:2] == ["request", "consume"] and ("audit", "installed", None) in calls
     asked, consumed = calls[0][1], calls[1][1]
     assert asked == consumed and asked["digest"] == record()["sha256"]
-    assert asked["binding"].endswith("shared-bob-b-review") and asked["subject"] == "skill-install"
+    import hashlib
+    assert asked["binding"] == hashlib.sha256(calls[0][2]["destination"].encode()).hexdigest()
+    assert asked["subject"] == "skill-install"
     review = calls[0][2]
     assert review["text"] == record()["content"] and review["destination"].endswith("shared-bob-b-review")
 
@@ -161,3 +163,14 @@ def test_already_installed_is_refused_before_the_human_is_asked(monkeypatch, tar
     calls = []
     assert run(monkeypatch, target, record(), approved=True, calls=calls) == 1
     assert not any(c[0] == "request" for c in calls)
+
+
+def test_long_destinations_never_share_a_binding(monkeypatch, tmp_path):
+    bindings = []
+    for leaf in ("a" * 240, "a" * 239 + "b"):
+        root = tmp_path / leaf
+        target = skills.Target("claude-code", "Claude Code", "skills", root / "skills", root)
+        calls = []
+        run(monkeypatch, target, record(), approved=True, calls=calls)
+        bindings.append(calls[0][1]["binding"])
+    assert bindings[0] != bindings[1]

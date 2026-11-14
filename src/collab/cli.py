@@ -7054,8 +7054,9 @@ def cmd_skills_install_shared(args: argparse.Namespace) -> int:
             raise ValueError("the publication's text does not match its SHA-256; not installing it")
         dest = sk.check_installable(record, target=target, force=args.force)  # before asking
         owner_tag = hashlib.sha256(str(record.get("owner_id", "")).encode()).hexdigest()[:8]
+        # The full destination, hashed: truncating it let two long paths share a binding.
         fields = dict(subject="skill-install", request_id=str(record.get("id", ""))[:200],
-                      digest=digest, binding=str(dest)[:200])
+                      digest=digest, binding=hashlib.sha256(str(dest).encode()).hexdigest())
         review = {"operation": "install a peer's shared skill into this agent",
                   "publisher": str(record.get("owner", "")), "participant": owner_tag,
                   "skill": str(record.get("name", "")), "description": str(record.get("description", "")),
