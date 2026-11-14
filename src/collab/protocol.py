@@ -575,7 +575,11 @@ class Envelope:
             if action in ("pr", "pr-remove"):
                 verb = "linked" if action == "pr" else "unlinked"
                 num = f"#{b['number']}" if b.get("number") else str(b.get("url", ""))
-                return f"[task {b.get('id', '?')}] {self.sender} {verb} {num}"
+                suffix = ""
+                if b.get("evidence"):
+                    from collab.pr_review import status
+                    suffix = " — " + status(b["evidence"])
+                return f"[task {b.get('id', '?')}] {self.sender} {verb} {num}{suffix}"
             state = short_state(b.get("state", ""))
             owner = f" ({b['owner']})" if b.get("owner") else ""
             of = f" in {b['project']}" if b.get("project") else ""
