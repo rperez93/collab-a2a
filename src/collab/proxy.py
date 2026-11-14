@@ -186,23 +186,29 @@ class Routes:
 
     @staticmethod
     def _read() -> dict[str, str]:
-        table: dict[str, str] = {}
+        from .routes import private_records
+        candidates: dict[str, set[str]] = {}
+        machine, user = peers.machine_id(), peers.current_user()
         # HOSTS ONLY, LOOPBACK ONLY, THIS MACHINE ONLY. A guest's record names
         # a hub somewhere else; a non-loopback `local_url` would make a file in
         # a directory turn this into a relay to wherever it says.
-        for peer in peers.discover(prune=False):
-            if peer.role != "host":
-                continue
-            if peer.machine_id and peer.machine_id != peers.machine_id():
+        # Discovery folds competing hosts and permits shared registries; neither
+        # is sufficient authority to forward a caller's bearer token. Scan only
+        # private, live records and refuse a truncated scan before routing.
+        for peer in private_records(require_complete=True):
+            if (peer.role != "host" or peer.machine_id != machine or peer.user != user
+                    or not isinstance(peer.session_id, str) or not peer.session_id
+                    or len(peer.session_id) > 200):
                 continue
             # `local_url` first; a host with no tunnel (2.1.2 included) writes
             # it empty because its shared `url` is already the loopback one —
             # found live: such a session was a 404 until this fallback.
             address = next((u for u in (peer.local_url, peer.url)
-                            if u and peers.is_loopback(u)), "")
+                            if isinstance(u, str) and u and peers.is_loopback(u)), "")
             if address:
-                table[peer.session_id] = address.rstrip("/")
-        return table
+                candidates.setdefault(peer.session_id, set()).add(address.rstrip("/"))
+        return {session_id: next(iter(addresses))
+                for session_id, addresses in candidates.items() if len(addresses) == 1}
 
 
 def split_target(path: str, primary: str) -> tuple[str, str] | None:

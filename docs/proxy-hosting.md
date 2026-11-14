@@ -36,3 +36,12 @@ Proxy state and process logs live in `proxy/` under the machine peer registry;
 the tunnel log is `proxy-ngrok.log` in the registry root. Startup
 errors are also stored in the host session for its normal tunnel diagnostic.
 The proxy owns its tunnel supervision; a hub merely observes the shared address.
+
+Routing requires the peer registry to be a private directory owned by this
+user, with regular, non-symlink records that other users cannot write. Shared
+or writable registries do not authorize forwarding credentials. Conflicting
+live host addresses for one session are refused. The proxy also refuses a
+registry scan that reaches its 1,024-entry work budget, because an unseen entry
+could contain another host for the same session. These cases produce no route
+rather than choosing an arbitrary upstream. Use a private `COLLAB_PEERS_DIR`
+for scratch tests and keep their records out of the live registry.
