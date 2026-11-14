@@ -7,7 +7,12 @@ acknowledgement Message back carrying the assigned ``seq``.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
+import logging
+
 from a2a.server.agent_execution import AgentExecutor, RequestContext
+from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.events.event_queue_v2 import EventQueue
 from a2a.types import Message, Role
 from a2a.utils.errors import InvalidParamsError
@@ -112,3 +117,76 @@ class CollabAgentExecutor(AgentExecutor):
         # Messages are delivered synchronously on publish, so by the time a
         # cancel could arrive there is nothing left to stop.
         return None
+
+
+logger = logging.getLogger(__name__)
+
+#: The ActiveTasks this request opened, collected so they can be closed when
+#: it is answered. Per request, by context: two concurrent sends never see
+#: each other's.
+_OPENED: contextvars.ContextVar[list | None] = contextvars.ContextVar(
+    "collab_a2a_opened", default=None)
+
+
+class OneShotRequestHandler(DefaultRequestHandler):
+    """The SDK's handler, with every `SendMessage` closed once it is answered.
+
+    A LEAK OF ONE ACTIVE TASK PER MESSAGE, measured. a2a-sdk 1.1.2 opens an
+    `ActiveTask` for every `SendMessage` and keeps it in its registry until
+    the task is FINISHED — and a task answered with a Message, which is how
+    the hub acknowledges (`ack_message`), never finishes: its producer waits
+    for a next request that never comes. Each held its queues, locks, request
+    context and the protobuf message. The R17 plateau run measured the hub
+    growing 20.6 MiB per 10 minutes at one message a second, linearly, with
+    or without MALLOC_ARENA_MAX=2; in process it was 35.8 KiB per send, the
+    registry gaining exactly one entry per message
+    (`tests/test_the_hub_and_daemon_stay_cheap_under_load.py`).
+
+    Collab's exchanges are one-shot: the envelope is fanned out on publish and
+    nothing ever continues a task. So each one is closed with the SDK's own
+    public teardown (`ActiveTask.aclose`), which lets the registry drop it.
+    `_setup_active_task` is the one protected hook used, to learn which task
+    the request opened; were it ever renamed, the measurement test fails
+    rather than the hub quietly growing again.
+    """
+
+    async def _setup_active_task(self, params, context):  # noqa: D401
+        active_task, request_context = await super()._setup_active_task(params, context)
+        opened = _OPENED.get()
+        if opened is not None:
+            opened.append(active_task)
+        return active_task, request_context
+
+    async def _close(self, opened: list) -> None:
+        for active_task in opened:
+            try:
+                await active_task.aclose()
+            except Exception:                       # noqa: BLE001
+                logger.warning("could not close an answered A2A task", exc_info=True)
+
+    async def on_message_send(self, params, context):
+        opened: list = []
+        token = _OPENED.set(opened)
+        try:
+            return await super().on_message_send(params, context)
+        finally:
+            _OPENED.reset(token)
+            await self._close(opened)
+
+    async def on_message_send_stream(self, params, context):
+        # The streaming route opens the same task; a client choosing it must
+        # not bring the leak back.
+        opened: list = []
+        token = _OPENED.set(opened)
+        try:
+            async for event in super().on_message_send_stream(params, context):
+                yield event
+        finally:
+            # CLOSED FIRST, THE TOKEN AFTER, AND ONLY IF IT CAN BE. A stream's
+            # generator may be finished from another task than the one that
+            # started it, where the token belongs to a different Context and
+            # `reset` raises — which skipped the close and kept every
+            # streamed task, as the stock handler did.
+            await self._close(opened)
+            with contextlib.suppress(ValueError):
+                _OPENED.reset(token)

@@ -64,7 +64,7 @@ from ..protocol import (
 from .auth import BearerBackend, RateLimiter, new_secret
 from .card import build_agent_card
 from .events import event_stream
-from .executor import CollabAgentExecutor
+from .executor import CollabAgentExecutor, OneShotRequestHandler
 from .hub import Hub
 from .roster_transport import roster_response
 from .store import ArchivedProject, Store, UnknownProject, TaskClaimConflict
@@ -296,11 +296,14 @@ def create_app(
             local_tls_config.secure_port = 0
             update_fields(local_tls_config.dir, secure_port=0)
 
-    handler = DefaultRequestHandler(
+    # One-shot: each SendMessage's task is closed once answered. The stock
+    # handler kept one per message for the hub's whole life (R17).
+    handler = OneShotRequestHandler(
         agent_executor=CollabAgentExecutor(hub),
         task_store=InMemoryTaskStore(),
         agent_card=card,
     )
+    app.state.a2a_handler = handler
 
     join_limiter = RateLimiter(limit=10, window=60.0)
 
