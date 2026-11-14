@@ -29,6 +29,10 @@ for Codex the last `turn_context.model` in the thread's own rollout tail (else
 thread/read), so a `/model` switch shows after the next turn and probe. Other
 agents show `m:?` – unknown, never guessed. Switching to a tool with no route
 withdraws the previous tool's quota, model and context.
+The hub derives `main_model`, `worker_model` and `model_changed_at` beside
+`model_observed_at` on every report; null is unknown. The first sighting is not
+a change, a disabled worker has no model in use, and posted copies of these
+fields are overwritten.
 
 Explicit `stats_command` settings override automatic routing. Clearing with
 `collab stats --source ''` is a persistent opt-out; `collab config --unset
