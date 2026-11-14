@@ -43,6 +43,13 @@ requires that token.
   A revoked token is rejected on its next use.
 - The invite can be replaced at any time, without ending the session
   (`collab url --rotate`).
+  The hub checks the invite against the session database at every join, so a
+  rotation takes effect on the hub that is already running: the old link stops
+  admitting anyone the moment it is retired.
+  Participants authenticate with their own bearer token rather than with the
+  link, so nobody already in the session is disconnected by it.
+  A leaked link is therefore a way in until the host replaces it, not for the
+  life of the session.
 - An offline participant's name is reserved for that participant. Rejoining
   under it hands their row (id, history, direct messages, files) back only to
   a caller presenting their own saved token; `collab join` sends it
@@ -53,13 +60,6 @@ requires that token.
   gets a new id, never the removed row. Clients older than this change do not
   send the token, so after going offline they cannot rejoin under their own
   name until they update; they can join under another name meanwhile.
-  The hub checks the invite against the session database at every join, so a
-  rotation takes effect on the hub that is already running: the old link stops
-  admitting anyone the moment it is retired.
-  Participants authenticate with their own bearer token rather than with the
-  link, so nobody already in the session is disconnected by it.
-  A leaked link is therefore a way in until the host replaces it, not for the
-  life of the session.
 - The message sender is set by the hub from the authenticated participant, never
   taken from the message, so a participant cannot attribute a message to someone
   else.
