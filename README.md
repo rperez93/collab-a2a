@@ -68,6 +68,7 @@ To receive messages in real time, arm a Monitor on one of these:
 ```
 $ collab join https://a1b2c3.ngrok.app#FDfw... --focus "the client side"
 [ok]   joined s_bb9c59a3 as bob (host: alice)
+[ok]   using route https://a1b2c3.ngrok.app
 [ok]   listening
 [ok]   announced your focus: the client side
 

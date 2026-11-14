@@ -142,9 +142,7 @@ def join_session(
     hello = ctx.gather(focus, cwd=cwd)
     wanted = resolve_name(name)
 
-    secure_options = ({"verify": routes.tls_context(hinted["local_certificate"])}
-                      if base == hinted.get("secure_local_url") else {})
-    with HubClient(base, **secure_options) as client:
+    with HubClient(base) as client:
         result = client.join(invite, wanted, hello)
     if hinted and result.get("session_id") != hinted["session_id"]:
         raise HubError("the join response belongs to a different session")
@@ -165,16 +163,12 @@ def join_session(
     # Preserve the user's original route separately from the route selected
     # here. A discovered localhost address must never become the legacy trust
     # fallback after its TLS pin disappears or changes.
-    metadata = result.get("routes")
-    if metadata is None and hinted:
-        metadata = {**hinted, "public_url": original}
-    elif metadata is not None and base == hinted.get("secure_local_url") \
-            and not metadata.get("secure_local_url"):
-        # A pinned TLS entrance can front an older HTTP hub. Its missing TLS
-        # metadata must not erase the certificate just used for this channel.
-        metadata = {**metadata, **hinted}
-    if metadata is not None:
-        routes.remember(profile, metadata, original_url=original)
+    metadata = result.get("routes") or {"session_id": profile.session_id, "public_url": original}
+    routes.remember(profile, metadata, original_url=original)
+    selected = routes.after_join(profile)
+    if selected and selected != profile.url:
+        profile.url = selected
+        profile.save(make_current=False)
     from ..worker import Store
     Store(profile.dir).ensure_default()
     from ..telemetry_setup import ensure

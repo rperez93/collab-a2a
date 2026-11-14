@@ -120,8 +120,11 @@ The host runs the hub.
    collab join https://a1b2c3.ngrok.app#FDfwPVPWMibkxPjq_ctcQMsZmqtMU4j1DxCK
    ```
 
-   The part after `#` is a one-time invite code.
+   The part after `#` is the invite code.
    It travels in the URL fragment, so it stays out of server and proxy logs.
+   The first join uses this visible address or verified same-machine discovery;
+   authenticated metadata can then select secure local transport. The join
+   output prints the selected route.
 
 To keep the same public address across tunnel restarts, pin a reserved ngrok
 domain:

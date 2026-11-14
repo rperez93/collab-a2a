@@ -1298,6 +1298,7 @@ def cmd_join(args: argparse.Namespace) -> int:
     _take_lock(profile, role="host" if profile.is_host else "guest")
     ok(f"joined {c(profile.session_id, '36')} as {c(profile.name, '1')}"
        f" (host: {profile.host_name})")
+    ok(f"using route {profile.url}")
     if _is_listening(profile, status):
         ok("listening")
     elif not args.no_daemon:
