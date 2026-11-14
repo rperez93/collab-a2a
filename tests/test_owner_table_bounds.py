@@ -54,23 +54,72 @@ def test_table_uses_wide_bounded_runner_and_rejects_failed_partial_output(monkey
                     {'timeout':2,'max_bytes':64*1024})]
 
 
-@pytest.mark.parametrize('mode',['flood','silent'])
-def test_hostile_table_command_bounds_cpu_memory_and_wall(tmp_path,monkeypatch,mode):
-    """A fake ps cannot turn the shared table into an unbounded capture or spin."""
+def _measure_table(tmp_path, mode, *, inherited_ballast=False):
     fake=tmp_path/'ps'
     body='import os\nwhile True: os.write(1,b"x"*65536)' if mode=='flood' else 'import time;time.sleep(30)'
     fake.write_text('#!'+sys.executable+'\n'+body+'\n')
     fake.chmod(0o700)
-    monkeypatch.setenv('PATH',str(tmp_path))
-    # Isolated process makes absolute peak RSS meaningful rather than a warm delta.
-    code='''import json,resource,time
+    code='''import json,resource,sys,time
+from pathlib import Path
 from collab import owner
-wall,cpu=time.monotonic(),time.process_time()
+scale=1024 if sys.platform=='darwin' else 1
+baseline=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/scale
+before=resource.getrusage(resource.RUSAGE_SELF)
+children=resource.getrusage(resource.RUSAGE_CHILDREN)
+wall=time.monotonic()
 assert owner._table([42])=={}
-print(json.dumps({'wall':time.monotonic()-wall,'cpu':time.process_time()-cpu,
- 'rss_kib':resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}))
+after=resource.getrusage(resource.RUSAGE_SELF)
+child_after=resource.getrusage(resource.RUSAGE_CHILDREN)
+metrics={'wall':time.monotonic()-wall,
+ 'cpu':after.ru_utime+after.ru_stime-before.ru_utime-before.ru_stime+
+       child_after.ru_utime+child_after.ru_stime-children.ru_utime-children.ru_stime,
+ 'inherited_ru_peak_kib':after.ru_maxrss/scale,'ru_baseline_kib':baseline,
+ 'ru_growth_kib':max(0,after.ru_maxrss/scale-baseline)}
+try:
+ status=Path('/proc/self/status').read_text()
+ values={line.split(':',1)[0]:int(line.split()[1]) for line in status.splitlines()
+         if line.startswith(('VmHWM:','VmRSS:'))}
+ metrics.update(memory_metric='post-exec-proc',peak_kib=values['VmHWM'],current_kib=values['VmRSS'])
+except (OSError,KeyError,ValueError):
+ # ru_maxrss can inherit the parent's highwater. This portable fallback is
+ # explicitly baseline/growth, not an absolute peak, and can mask allocation
+ # below that inherited peak. Do not describe it as the Linux measurement.
+ metrics.update(memory_metric='ru-baseline-growth')
+print(json.dumps(metrics))
 '''
+    env={**os.environ,'PATH':str(tmp_path),
+         'PYTHONPATH':str(Path(__file__).resolve().parents[1]/'src')}
+    if inherited_ballast:
+        # One disposable process owns the allocation. exec preserves its
+        # getrusage highwater while /proc resets VmHWM to the new image.
+        code=('import os,sys; ballast=bytearray(150*1024*1024); del ballast; '
+              + 'os.execve(sys.executable,[sys.executable,"-c",'+repr(code)+'],os.environ)')
     result=subprocess.run([sys.executable,'-c',code],capture_output=True,text=True,
-        env={**os.environ,'PYTHONPATH':str(Path(__file__).resolve().parents[1]/'src')},timeout=5,check=True)
-    metrics=json.loads(result.stdout)
-    assert metrics['wall']<4 and metrics['cpu']<.5 and metrics['rss_kib']<128*1024
+                          env=env,timeout=5,check=True)
+    return json.loads(result.stdout)
+
+
+def _assert_table_budget(metrics):
+    # CPU includes the owned ps child, not only the waiting reader process.
+    assert metrics['wall']<4 and metrics['cpu']<.5
+    if metrics['memory_metric']=='post-exec-proc':
+        assert metrics['current_kib']<=metrics['peak_kib']<128*1024
+    else:
+        assert metrics['memory_metric']=='ru-baseline-growth'
+        assert metrics['ru_growth_kib']<64*1024
+        assert metrics['inherited_ru_peak_kib']>=metrics['ru_baseline_kib']
+
+
+@pytest.mark.parametrize('mode',['flood','silent'])
+def test_hostile_table_command_bounds_cpu_memory_and_wall(tmp_path,mode):
+    """A fake ps cannot turn the shared table into an unbounded capture or spin."""
+    _assert_table_budget(_measure_table(tmp_path,mode))
+
+
+@pytest.mark.skipif(not Path('/proc/self/status').is_file(),reason='Linux post-exec VmHWM regression')
+def test_inherited_parent_highwater_does_not_false_fail_a_bounded_reader(tmp_path):
+    """An inherited150MiB ru_maxrss is not memory retained by the new reader image."""
+    metrics=_measure_table(tmp_path,'flood',inherited_ballast=True)
+    assert metrics['inherited_ru_peak_kib']>128*1024
+    assert metrics['memory_metric']=='post-exec-proc'
+    _assert_table_budget(metrics)
