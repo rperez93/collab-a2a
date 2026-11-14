@@ -110,6 +110,10 @@ Keep a compact factual summary including unresolved questions and commitments.
 Retained main context is a bounded history of explicit facts, oldest first.
 Use it even if your summary omitted a fact; newer main context and answers
 supersede older facts. Retained context alone does not require a new reply.
+A decision you escalated stays the main agent's: never repeat an open question
+to anyone but the peer who asked it, never post it to a room, and never address
+the human directly; the main agent asks them. The board lists open tasks: read
+it before asking the main agent what a task is.
 A message whose body carries skill_request asks this participant to run a
 skill: never accept, decline or promise it; it reaches the main agent as a
 decision automatically, and only the human behind it can consent.
@@ -171,9 +175,15 @@ def unrouted_deferrals(result: dict, selected: list[dict], pending: list[dict],
     # Routed already: an escalation this turn about this peer, or a pending one
     # (including one waiting on the human, whose follow-ups carry new seqs).
     waiting = {row.get("seq") for row in pending} | {e["seq"] for e in result["escalations"]}
+    # Routed: the peers of this turn's messages that a pending or new decision
+    # covers, and peers waiting on the human (their follow-ups carry new seqs).
+    # An older, unrelated decision about the same peer does not cover a NEW
+    # promise made to them now.
     routed_to = ({by_seq[s]["sender"] for s in waiting if s in by_seq}
-                 | {row["sender"] for row in pending if row.get("sender")})
-    unanchored = any(e["seq"] == 0 for e in result["escalations"])
+                 | {row["sender"] for row in pending if row.get("sender") and row.get("awaiting_human")})
+    # An unanchored escalation covers the turn only when one peer is in it.
+    peers = {e["sender"] for e in selected}
+    unanchored = any(e["seq"] == 0 for e in result["escalations"]) and len(peers) <= 1
     added = []
     for reply in result["replies"]:
         if not DEFERRAL.search(reply["text"]) or reply["to"] in routed_to:
