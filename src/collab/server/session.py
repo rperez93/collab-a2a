@@ -59,6 +59,14 @@ class HubConfig:
     #: installed and had refused with ERR_NGROK_334. An older collab ignores
     #: the key, as `HubConfig.load` filters unknown ones.
     tunnel_error: str = ""
+    #: The host's `--no-tunnel` choice, kept with the session. It used to live
+    #: only in the environment of the hub `collab host` spawned, so when the
+    #: host's daemon revived a dead hub (its environment never had the flag)
+    #: the revived hub started ngrok: a session the host chose to keep local
+    #: tried to publish itself, and was stopped only because the account's
+    #: endpoint was already online (ERR_NGROK_334, seen in an R17 load run).
+    #: An older collab ignores the key, as `HubConfig.load` filters unknown ones.
+    no_tunnel: bool = False
     pid: int = 0
     home: str = ""
     #: The hub and the tunnel again, STAMPED — the pid with the start time and

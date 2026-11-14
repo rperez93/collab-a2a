@@ -307,7 +307,9 @@ Be clear-eyed about the limits.
 - Review an armed wake with `collab wake show`, and keep to the reviewed recipes
   unless you have a reason not to.
 - Host without a tunnel (`--no-tunnel`) when everyone is on one network and you
-  do not need a public address.
+  do not need a public address. The choice is kept with the session, so a hub
+  the daemon revives after a crash stays local too; each `collab host` decides
+  again, and resuming without the flag publishes the session once more.
 
 ## Version 2 boundaries
 
