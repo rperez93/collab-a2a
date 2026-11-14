@@ -223,7 +223,7 @@ def is_strong_ask(env: Any) -> bool:
 
 
 def strong_acceptance(env: Any, *, requester_id: str, target_id: str,
-                      source_seq: int) -> dict | None:
+                      source_seq: int, request_id: str | None = None) -> dict | None:
     """The hub's acceptance of one strong request, or None.
 
     THE SERVER-OWNED EVENT, NOTHING ELSE (v1, «Concrete peer-skill acceptance
@@ -241,9 +241,24 @@ def strong_acceptance(env: Any, *, requester_id: str, target_id: str,
             or answer.get("state") != "accepted" or answer.get("strength") != "strong"
             or answer.get("source_seq") != source_seq or type(source_seq) is not int
             or not isinstance(answer.get("digest"), str)
-            or not _HEX64.fullmatch(answer["digest"])):
+            or not _HEX64.fullmatch(answer["digest"])
+            or (request_id is not None and answer.get("id") != request_id)):
         return None
     return answer
+
+
+def requester_digest(source: Any) -> str | None:
+    """The review digest the REQUESTER can compute for its own request, or None
+    while it cannot.
+
+    The hub's canonical review includes `source_fingerprint`, a SHA-256 of the
+    event as the hub STORED it, which the requester cannot reproduce from what
+    it sent; and the review itself is served only to the target (v1 at
+    8257a05). Until the hub makes it recomputable (asked of the core owner),
+    the requester records the digest and verifies everything else — the
+    event's kind, both ids, the source sequence and the request id. When this
+    returns a digest, `sent_state` compares it."""
+    return None
 
 
 @dataclass(frozen=True)
@@ -330,6 +345,7 @@ def _hello():
 #: branch: until it is, a passkey credential is unavailable here — never a
 #: reason to fall back to anything weaker.
 PASSKEY: Callable[[dict, Callable[[], dict]], dict] | None = None
+PASSKEY_SEAM = "passkey page not integrated"
 
 
 def open_window(request: dict, fetch_challenge: Callable[[], dict], *,
@@ -346,22 +362,26 @@ def open_window(request: dict, fetch_challenge: Callable[[], dict], *,
         if outcome.get("choice") == "passkey":
             # «Use a passkey instead»: that is a different enrolled key, and
             # its page; not a lesser way to approve with this one.
-            return {"choice": "unavailable", "reason": "PasskeyNotIntegrated"}
+            return {"choice": "unavailable", "reason": PASSKEY_SEAM}
         return outcome
     if method == "passkey":
         if PASSKEY is None:
-            return {"choice": "unavailable", "reason": "PasskeyNotIntegrated"}
+            return {"choice": "unavailable", "reason": PASSKEY_SEAM}
         return PASSKEY(request, fetch_challenge)
     return {"choice": "unavailable", "reason": "UnknownMethod"}
 
 
 def hello_key_name(session_id: str, participant_id: str) -> str:
     """The Hello key for this participant in this session: keys are owned per
-    (session, participant) at the hub, so one key name per pair."""
-    name = f"collab-{session_id}-{participant_id}"
-    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", name):
-        raise ValueError("this session or participant id cannot name a Hello key")
-    return name
+    (session, participant) at the hub, so one key name per pair. Checked by
+    the ADAPTER's own name rule, the one `KeyCredentialManager` sees, so the
+    two can never disagree about what a valid name is."""
+    from ..consent_hello import _name
+
+    try:
+        return _name(f"collab-{session_id}-{participant_id}")
+    except ValueError:
+        raise ValueError("this session or participant id cannot name a Hello key") from None
 
 
 def usable_key(keys: list[dict], *, now: float | None = None) -> tuple[dict | None, str]:

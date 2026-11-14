@@ -46,6 +46,7 @@ collab skills peers                                # peers' installed skill name
 collab skills ask SKILL --to NAME [--args TEXT]    # a DM carrying a skill request
 collab skills ask SKILL --to NAME --strong         # …that needs STRONG approval
 collab skills requests                             # requests addressed to you
+collab skills sent                                 # requests you asked, and their state
 collab skills accept ID [--human-approved]         # only with your human's consent
 collab skills decline ID [--note REASON]
 collab skills done ID --note 'result'              # after running an accepted one
@@ -69,9 +70,13 @@ request, checks it against the message (both participant ids, the message's
 sequence, the skill, the arguments and the digest), and opens collab's
 approval window; the Windows Hello prompt follows Approve. `--human-approved`
 and the terminal y/N never accept a strong request, and a chat reply saying
-«accepted» is not an acceptance: only the hub's own event is. Your human
+«accepted» is not an acceptance: only the hub's own event is — the one
+`collab skills sent` reads for the requests you asked, recording its digest
+(not yet recomputable on the asking side; the listing says so). Your human
 enrols a key first, themselves, in a terminal: `collab consent enrol` (two
 Hello prompts; the key is usable after a 10-minute cooling-off, and everyone in
 the session is told). `collab consent keys` lists it. Passkeys on other
-platforms need the passkey page, which is not in this build. collab still
+platforms need the passkey page, which is not in this build; and while the
+hub reports strong approval unavailable, a strong request cannot be accepted
+at all — nothing weaker is offered instead. collab still
 executes nothing: accepting records the acceptance, and you run the skill.

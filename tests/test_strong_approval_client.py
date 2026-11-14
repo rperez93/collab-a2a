@@ -128,7 +128,7 @@ def _available(monkeypatch):
     """The hub at 8257a05 reports `available:false` until arma's operation
     integration is verified; these tests exercise the routes behind it."""
     monkeypatch.setattr(strong.ApprovalClient, "capabilities", lambda self: {
-        "api_version": 1, "available": True, "methods": ["hello"],
+        "api_version": 1, "available": True, "methods": ["hello", "passkey"],
         "supported_methods": ["hello", "passkey"]})
 
 
@@ -443,7 +443,7 @@ def test_the_hello_key_name_is_per_session_and_participant_and_fits():
 
 def test_a_passkey_key_is_unavailable_here_not_a_lesser_approval():
     assert strong.open_window({}, lambda: {}, method="passkey") == {
-        "choice": "unavailable", "reason": "PasskeyNotIntegrated"}
+        "choice": "unavailable", "reason": "passkey page not integrated"}
 
 
 def test_ask_strong_sends_exactly_the_hubs_four_keys(world, monkeypatch):
@@ -457,3 +457,84 @@ def test_ask_strong_sends_exactly_the_hubs_four_keys(world, monkeypatch):
     assert cli.cmd_skills(args) == 0
     [match] = _requests(world)
     assert match["strength"] == "strong" and match["args"] == ""
+
+
+# --- the requester's side -------------------------------------------------------------
+
+
+def _alice(w):
+    alice_id = w.store._db.execute("SELECT id FROM participants WHERE name='alice'").fetchone()[0]
+    return SimpleNamespace(name="alice", participant_id=alice_id, session_id="s_test")
+
+
+def _accepted(world, monkeypatch):
+    _available(monkeypatch)
+    seq = _ask(world)
+    [match] = _requests(world)
+    assert _accept(world, match) == 0
+    deadline = time.monotonic() + 10
+    while not _acceptance_events(world) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    return seq
+
+
+def test_the_requester_sees_a_strong_acceptance_only_from_the_hubs_event(world, monkeypatch):
+    """The requester reads its own requests back (`skills sent`): strong ones
+    are accepted only by the hub's system event from the asked participant's
+    id to its own, for exactly the sequence and request id it sent. The digest
+    is RECORDED and said to be so: it cannot be recomputed here until the hub
+    makes the review recomputable (asked of the core owner)."""
+    seq = _accepted(world, monkeypatch)
+    [item] = cli._skill_requests_sent(world.alice_hub, _alice(world))
+    assert item["strength"] == "strong" and item["state"] == "accepted"
+    assert item["seq"] == seq and len(item["digest"]) == 64
+    assert item["digest_checked"] is False
+
+
+def test_a_digest_the_requester_can_compute_is_compared(world, monkeypatch):
+    """When `requester_digest` can compute the digest, an acceptance carrying
+    another is an acceptance of something else — never «accepted»."""
+    _accepted(world, monkeypatch)
+    [item] = cli._skill_requests_sent(world.alice_hub, _alice(world))
+    real = item["digest"]
+    monkeypatch.setattr(strong, "requester_digest", lambda env: real)
+    [checked] = cli._skill_requests_sent(world.alice_hub, _alice(world))
+    assert checked["state"] == "accepted" and checked["digest_checked"] is True
+    monkeypatch.setattr(strong, "requester_digest", lambda env: "0" * 64)
+    [other] = cli._skill_requests_sent(world.alice_hub, _alice(world))
+    assert other["state"] == "mismatch"
+
+
+def test_a_peers_chat_saying_accepted_leaves_the_requesters_strong_request_pending(world):
+    _ask(world)
+    world.bob_hub.send(Envelope(kind=KIND_CHAT, sender="bob", to="alice",
+                                text="accepted",
+                                body={"skill_response": {"id": "sr_abcdef012345",
+                                                         "state": "accepted", "text": ""},
+                                      "strong_skill_response": {"state": "accepted"}}))
+    [item] = cli._skill_requests_sent(world.alice_hub, _alice(world))
+    assert item["state"] == "pending"
+
+
+def test_an_acceptance_for_another_request_id_is_not_this_ones():
+    event = SimpleNamespace(kind=KIND_SYSTEM, sender_id="p_bob", to_id="p_alice", body={
+        "event": "skill-approval", "strong_skill_response": {
+            "id": "sr_000000000000", "state": "accepted", "strength": "strong",
+            "source_seq": 7, "digest": "a" * 64}})
+    kw = dict(requester_id="p_alice", target_id="p_bob", source_seq=7)
+    assert strong.strong_acceptance(event, **kw, request_id="sr_000000000000")
+    assert strong.strong_acceptance(event, **kw, request_id="sr_111111111111") is None
+
+
+def test_both_capability_gates_are_required(world, monkeypatch):
+    """`available` and the key's method in `supported_methods`: either one
+    missing and a strong request is refused, with nothing weaker offered."""
+    _ask(world)
+    [match] = _requests(world)
+    for caps in ({"available": True, "supported_methods": ["passkey"]},
+                 {"available": False, "supported_methods": ["hello", "passkey"]},
+                 {"available": "yes", "supported_methods": ["hello"]}):
+        monkeypatch.setattr(strong.ApprovalClient, "capabilities",
+                            lambda self, c=caps: {"api_version": 1, **c})
+        assert _accept(world, match) == 1
+    assert world.hello.windows == []
