@@ -7688,6 +7688,14 @@ def print_overview() -> None:
 class _CollabParser(argparse.ArgumentParser):
     def parse_known_args(self, args=None, namespace=None):
         parsed, remaining = super().parse_known_args(args, namespace)
+        # The flat skills parser still serves legacy accept. Shared installs
+        # use operator-terminal receipts; silently accepting this obsolete flag
+        # implied a consent mechanism that install-shared no longer supports.
+        if (getattr(parsed, 'func', None) is cmd_skills
+                and getattr(parsed, 'action', None) == 'install-shared'
+                and getattr(parsed, 'human_approved', False)):
+            self.error('skills install-shared does not accept --human-approved; '
+                       'approval requires the human operator terminal')
         # argparse stops its optional positional after «comment --id ID».
         # Recover just that one comment, leaving unknown flags and additional
         # arguments to the ordinary parser error instead of swallowing typos.
@@ -8355,7 +8363,7 @@ Esc cancels a draft, q quits. Editor commands run without a shell.""")
     sk.add_argument("--args", help="with ask: arguments for the requested skill")
     sk.add_argument("--note", help="with accept/decline/done: a reason or the result")
     sk.add_argument("--human-approved", action="store_true",
-                    help="with accept, without a terminal: your human has explicitly consented")
+                    help="with accept only, without a terminal: your human has explicitly consented; not for install-shared")
     sk.add_argument("--name", help="published skill name override")
     sk.add_argument("--description", help="published skill description override")
     sk.add_argument("--after", default="", help="shared inventory page cursor")

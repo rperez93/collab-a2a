@@ -174,3 +174,25 @@ def test_long_destinations_never_share_a_binding(monkeypatch, tmp_path):
         run(monkeypatch, target, record(), approved=True, calls=calls)
         bindings.append(calls[0][1]["binding"])
     assert bindings[0] != bindings[1]
+
+
+@pytest.mark.parametrize('argv', [
+    ['skills', 'install-shared', 'sk_test', '--human-approved'],
+    ['skills', '--human-approved', 'install-shared', 'sk_test'],
+])
+def test_shared_install_rejects_the_obsolete_approval_flag_before_dispatch(argv, capsys):
+    """An ignored legacy flag must not imply it can approve a receipt-only install."""
+    with pytest.raises(SystemExit) as refused:
+        cli.build_parser().parse_args(argv)
+    assert refused.value.code == 2
+    error = capsys.readouterr().err
+    assert 'does not accept --human-approved' in error
+    assert 'human operator terminal' in error
+
+
+def test_receipt_install_form_and_the_separate_legacy_accept_form_still_parse():
+    """Rejecting an install flag must not remove the held legacy accept contract."""
+    install = cli.build_parser().parse_args(['skills', 'install-shared', 'sk_test'])
+    assert install.action == 'install-shared' and install.target == 'sk_test'
+    accept = cli.build_parser().parse_args(['skills', 'accept', 'request_test', '--human-approved'])
+    assert accept.action == 'accept' and accept.human_approved is True
