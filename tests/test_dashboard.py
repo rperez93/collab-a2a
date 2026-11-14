@@ -35,11 +35,12 @@ def test_no_cache_and_an_old_hub_are_reported_as_such():
     assert dashboard_rows(old_peer, SKILLS)[0]["skills_state"] == "unknown"
 
 
-def test_the_daemon_fetches_lists_only_when_a_count_changes_and_retries_failures():
+def test_the_daemon_fetches_lists_only_when_a_count_changes_and_retries_failures(tmp_path):
     from types import SimpleNamespace
     from collab.client.daemon import Daemon
     calls = []
-    fake = SimpleNamespace(snapshot={"participants": [{"id": "p1", "skills_count": 2}]},
+    fake = SimpleNamespace(profile=SimpleNamespace(url="http://hub", token="t", dir=tmp_path),
+                           snapshot={"participants": [{"id": "p1", "skills_count": 2}]},
                            _schedule_refresh=lambda name, op: calls.append(name))
     Daemon._maybe_refresh_skills(fake, client=None)
     Daemon._maybe_refresh_skills(fake, client=None)
@@ -125,7 +126,7 @@ async def test_the_daemon_fetch_uses_an_etag_backs_off_and_only_commits_on_succe
     async def transport(request):
         seen.append(request.headers.get("if-none-match"))
         return answers.pop(0)
-    fake = SimpleNamespace(profile=SimpleNamespace(url="http://hub", token="t"), paths=paths)
+    fake = SimpleNamespace(profile=SimpleNamespace(url="http://hub", token="t", dir=tmp_path), paths=paths)
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
         await Daemon._fetch_skills(fake, client, ("sig",))
         assert getattr(fake, "_skills_signature", None) is None and fake._skills_retry_at > 0
@@ -144,7 +145,7 @@ def test_404_is_cached_as_hub_too_old(tmp_path):
     paths.root.mkdir(parents=True, exist_ok=True)
     async def go():
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(404))) as client:
-            await Daemon._fetch_skills(SimpleNamespace(profile=SimpleNamespace(url="http://hub", token="t"),
+            await Daemon._fetch_skills(SimpleNamespace(profile=SimpleNamespace(url="http://hub", token="t", dir=tmp_path),
                                                        paths=paths), client, ("s",))
     asyncio.run(go())
     assert json.loads(paths.skills.read_text())["unsupported"] is True

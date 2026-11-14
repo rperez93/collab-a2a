@@ -963,6 +963,8 @@ class Daemon:
                 # a usage figure: publish it alone when stats are private.
                 self._skills_withdrawn = False  # so the next "off" withdraws again
                 skills = await self._installed_skills()
+                if not setting("share_skill_list"):
+                    return  # consent may change during the off-loop scan
                 if skills != getattr(self, "_skills_sent_alone", None):
                     try:
                         r = await client.post(f"{self.profile.url}{EXT_PREFIX}/stats",
@@ -1005,12 +1007,21 @@ class Daemon:
             # Observability must not suppress token/quota reports. Cancellation
             # is a BaseException and continues to stop the enclosing task.
             figures['resources'] = None
-        if not share_stats_enabled():
-            return
         payload = {**peers.identity(), "stats": figures}
         if sharing_skills:
             self._skills_withdrawn = False
             payload["skills"] = await self._installed_skills()
+        # Both the resource sample and skill scan await external work. Consent
+        # at entry does not authorize a POST after the user has opted out.
+        sending_stats = share_stats_enabled()
+        if not setting("share_skill_list"):
+            payload.pop("skills", None)
+        if not sending_stats:
+            if "skills" not in payload:
+                return
+            payload = {"skills": payload["skills"]}
+            if payload["skills"] == getattr(self, "_skills_sent_alone", None):
+                return
         changed = payload != self._last_stats
         # An unchanged figure in a file rewritten since we last sent it is
         # the route saying «still true», and the hub's stamp has to say so
@@ -1026,9 +1037,12 @@ class Daemon:
                 json=payload, timeout=10.0,
             )
             if r.status_code == 200:
-                self._last_stats = payload
-                self._stats_sent_at = time.time()
-                self._stats_sent_mtime = mtime
+                if sending_stats:
+                    self._last_stats = payload
+                    self._stats_sent_at = time.time()
+                    self._stats_sent_mtime = mtime
+                elif "skills" in payload:
+                    self._skills_sent_alone = payload["skills"]
                 self._stats_post_error = None
             else:
                 self._stats_post_error = f"hub answered {r.status_code}"
@@ -2742,6 +2756,20 @@ class Daemon:
         except (httpx.HTTPError, ValueError) as exc:
             self._snapshot_error = type(exc).__name__
 
+    def _skill_refresh_target(self):
+        """Bind validators, signatures and retry clocks to authenticated routes.
+
+        Counts can be identical on another hub or under a changed certificate;
+        the old ten-minute suppression window must not conceal that change.
+        """
+        from .. import routes
+        target = routes.generation(self.profile)
+        if target != getattr(self, "_skills_target", None):
+            self._skills_target = target
+            self._skills_etag = self._skills_signature = None
+            self._skills_at = self._skills_retry_at = self._skills_backoff = 0.0
+        return target
+
     def _maybe_refresh_skills(self, client: httpx.AsyncClient) -> None:
         """Fetch peers' skill lists when a count changed, or every SKILLS_REFRESH.
 
@@ -2753,6 +2781,7 @@ class Daemon:
         people = self.snapshot.get("participants", [])
         if not any(p.get("skills_count") for p in people):
             return
+        Daemon._skill_refresh_target(self)
         signature = tuple(sorted((p.get("id", ""), p.get("skills_count")) for p in people))
         now = time.time()
         if now < getattr(self, "_skills_retry_at", 0.0):
@@ -2763,6 +2792,8 @@ class Daemon:
         self._schedule_refresh("skills", lambda: self._fetch_skills(client, signature))
 
     async def _fetch_skills(self, client: httpx.AsyncClient, signature=None) -> None:
+        from .. import routes
+        generation = Daemon._skill_refresh_target(self)
         # Revalidate only what is on disk: an ETag kept after a failed write
         # turned every later answer into a 304 and the cache never appeared.
         etag = getattr(self, "_skills_etag", None) if self.paths.skills.exists() else None
@@ -2789,17 +2820,20 @@ class Daemon:
                     if not isinstance(people, list):
                         raise ValueError("malformed participant skill lists")
                     data = {"participants": people, "untrusted": True}
-                    new_etag = r.headers.get("etag")
                 else:
                     raise ValueError(f"hub answered {r.status_code}")
+            if generation != routes.generation(self.profile):
+                return  # obsolete response owns neither cache bytes nor validators
             if data is not None:
                 data["fetched_at"] = time.time()
                 tmp = self.paths.root / "skills.tmp"
                 tmp.write_text(json.dumps(data))
                 tmp.replace(self.paths.skills)
-                if "participants" in data:
-                    self._skills_etag = new_etag  # only once the cache it validates exists
+            self._skills_etag = (r.headers.get("etag") if r.status_code == 200
+                                 else etag if r.status_code == 304 else None)
         except (httpx.HTTPError, ValueError, OSError):
+            if generation != routes.generation(self.profile):
+                return
             backoff = min(max(2 * getattr(self, "_skills_backoff", 1.5), 3.0), SKILLS_REFRESH)
             self._skills_backoff, self._skills_retry_at = backoff, time.time() + backoff
             return
