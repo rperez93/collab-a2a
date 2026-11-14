@@ -625,3 +625,25 @@ async def test_no_worker_daemon_holds_a_queue_that_worker_off_holds(conversation
     conversation.daemon._http = object()
     await conversation.tick()
     assert conversation.delivery is None
+
+
+async def test_a_rate_limited_provider_waits_and_an_auth_failure_escalates_once(conversation, tmp_path, monkeypatch):
+    from collab import worker_runtime
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    failures = [("rate_limit", 0.0), ("auth", 0.0), ("auth", 0.0)]
+    async def run(*args, **kwargs):
+        kind, wait = failures.pop(0)
+        raise worker_runtime.WorkerRuntimeError(f"Worker provider exited with status 1 ({kind})",
+                                                kind=kind, retry_after=wait)
+    monkeypatch.setattr("collab.worker_runtime.run_turn", run)
+    incoming(conversation, 1, "Question")
+    import time as _time
+    start = _time.time()
+    await conversation.turn()
+    assert conversation.next_at - start >= 900, "rate limit waits for the window"
+    assert "(rate_limit)" in store.status()["error"]
+    for _ in range(2):
+        conversation.next_at = 0
+        await conversation.turn()
+    assert [p["once"] for p in store.pending()] == ["provider-auth"], "escalated once, not per retry"

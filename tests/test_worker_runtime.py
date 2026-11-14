@@ -386,3 +386,12 @@ def test_the_answered_exemption_does_not_cover_a_newer_follow_up():
         {"to": "bob", "room": "general", "text": "I'll get back to you on that."}]}
     assert unrouted_deferrals(result, selected, pending=[], answered={"bob": 12}) == []
     assert [a["seq"] for a in unrouted_deferrals(result, selected, pending=[], answered={"bob": 5})] == [12]
+
+
+def test_provider_exits_are_classified_without_keeping_their_text():
+    from collab.worker_runtime import classify_exit
+    assert classify_exit(b"Error: 429 Too Many Requests. Please retry after 120 seconds") == ("rate_limit", 120.0)
+    assert classify_exit(b"Invalid API key. Please run /login")[0] == "auth"
+    assert classify_exit(b"model claude-x not found")[0] == "model"
+    assert classify_exit(b"connect ECONNREFUSED 127.0.0.1:443")[0] == "network"
+    assert classify_exit(b"segfault")[0] == "other"
