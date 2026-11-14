@@ -291,7 +291,7 @@ def test_sidecar_replace_failure_keeps_previous_path(saved, monkeypatch):
     assert SessionProfile.load_from(p.dir).working_path == str(work)
 
 
-@pytest.mark.parametrize('ownership', ['unowned', 'dead', 'foreign', 'own', 'shell', 'kept-shell'])
+@pytest.mark.parametrize('ownership', ['unowned', 'dead', 'foreign', 'own', 'shell', 'kept-shell', 'kept-dead', 'own-shell'])
 def test_same_session_resume_distinguishes_owner_from_live_listener(
         saved, monkeypatch, ownership):
     """A kept listener can outlive its agent without locking out explicit resume."""
@@ -306,15 +306,15 @@ def test_same_session_resume_distinguishes_owner_from_live_listener(
     agent = None
     try:
         owner_stamp = ''
-        if ownership in ('dead', 'foreign', 'shell', 'kept-shell'):
+        if ownership in ('dead', 'foreign', 'shell', 'kept-shell', 'kept-dead'):
             agent = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
             stamp = stamp_for(agent.pid)
             assert stamp.alive()
             owner_stamp = stamp.encode() if ownership in ('dead', 'foreign') else ''
-            if ownership == 'kept-shell':
+            if ownership in ('kept-shell', 'kept-dead'):
                 from collab import owner
                 owner.keep(p.dir)
-            if ownership == 'dead':
+            if ownership in ('dead', 'kept-dead'):
                 agent.terminate()
                 agent.wait(timeout=5)
                 assert not stamp.alive()
@@ -323,7 +323,8 @@ def test_same_session_resume_distinguishes_owner_from_live_listener(
         lockfile.acquire(lockfile.Lock(
             name=p.name, session_id=p.session_id,
             listener_pid=os.getpid(), listener=stamp_for(os.getpid()).encode(),
-            owner=owner_stamp, owner_pids=[agent.pid] if ownership in ('shell', 'kept-shell') else []), home)
+            owner=owner_stamp, owner_pids=([os.getpid()] if ownership == 'own-shell' else
+                        [agent.pid] if ownership in ('shell', 'kept-shell', 'kept-dead') else [])), home)
         assert lockfile.read(home).held
         (home / 'current').write_text('s_previous\n')
         before_lock = (home / 'agent.lock').read_bytes()
@@ -349,7 +350,7 @@ def test_same_session_resume_distinguishes_owner_from_live_listener(
         monkeypatch.setattr(cli.onboard, 'ensure_daemon',
                             lambda *a, **k: pytest.fail('--no-daemon must not start a process'))
         result = cli.main(['resume', p.session_id, '--no-daemon'])
-        if ownership in ('foreign', 'shell'):
+        if ownership in ('foreign', 'shell', 'kept-shell'):
             assert result == 1
             assert calls == []
             assert (home / 'current').read_text() == 's_previous\n'

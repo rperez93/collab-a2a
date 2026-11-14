@@ -3118,11 +3118,10 @@ def cmd_resume(args: argparse.Namespace) -> int:
     recorded_owner = exclusive.decode(lock.owner) if lock else None
     legacy_foreign = (lock and lock.held and not recorded_owner and lock.owner_pids
                       and any(lockfile.process_alive(pid) for pid in lock.owner_pids)
-                      and not lock.owned_by(lockfile.ancestry())
-                      and not owner.kept(record.dir))
+                      and not lock.owned_by(lockfile.ancestry()))
     if legacy_foreign or (recorded_owner and recorded_owner.alive()
             and recorded_owner.pid not in lockfile.ancestry()):
-        fail(f"{lock.describe()} belongs to another live agent; refusing to take its identity")
+        fail(f"{lock.describe()} belongs to another live agent; refusing to take its identity; use --home for a deliberate second identity")
         return 1
     original = Path.cwd()
     old_home = os.environ.get("COLLAB_HOME")
