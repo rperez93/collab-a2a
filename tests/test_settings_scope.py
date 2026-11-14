@@ -122,3 +122,22 @@ def test_an_explicit_set_pins_even_the_inherited_value(capsys):
                               edit=False, machine=False)
     assert cli.cmd_config(args) == 0
     assert config.setting_source("display_name") == "agent"
+
+
+def test_the_agent_file_follows_the_selected_home(tmp_path, monkeypatch):
+    monkeypatch.delenv("COLLAB_AGENT_CONFIG")
+    monkeypatch.delenv("COLLAB_HOME", raising=False)
+    chosen = tmp_path / "picked" / ".collab-custom"
+    monkeypatch.setattr(config, "collab_home", lambda *a, **k: chosen)
+    config._AGENT_PATH.clear()
+    assert config.agent_config_path() == chosen / config.AGENT_SETTINGS
+
+
+def test_machine_flag_writes_even_when_it_equals_this_agents_override():
+    config.setting("display_name").write("own")
+    config.WRITE_MACHINE["on"] = True
+    try:
+        config.setting("display_name").write("own")
+    finally:
+        config.WRITE_MACHINE["on"] = False
+    assert json.loads(config.global_config_path().read_text())["display_name"] == "own"
