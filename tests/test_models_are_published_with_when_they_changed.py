@@ -102,3 +102,76 @@ def test_a_worker_call_on_several_models_is_not_a_change_of_model(room):
     assert stats["model_changed_at"] == settled["model_changed_at"]
     stats = room({"worker": {"enabled": True, "last_model": "small-1"}})
     assert stats["model_changed_at"] == settled["model_changed_at"]
+
+
+# --- every layer a reported string passes through is printable -------------------
+
+import json
+import unicodedata
+
+from collab import stats as statmod
+
+EVIL = "\x1b[31mRED\x1b]0;t\x07‮gpt​\ud800͸x"
+
+
+def _printable(value):
+    """No control, format, separator, surrogate, private or unassigned code point."""
+    bad = [ch for ch in value if unicodedata.category(ch) in
+           ("Cc", "Cf", "Zl", "Zp", "Cs", "Co", "Cn")]
+    assert not bad, repr(value)
+    value.encode("utf-8")            # what the roster encoder does to it
+    return value
+
+
+def _strings(obj):
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            yield key
+            yield from _strings(value)
+    elif isinstance(obj, str):
+        yield obj
+
+
+def test_extended_text_fields_are_printable():
+    """D7: `last_model` and `source` take the TEXT path; tui.py draws last_model raw."""
+    out = statmod.sanitise({"last_model": EVIL, "source": EVIL, "cost_scope": EVIL})
+    for key in ("last_model", "source", "cost_scope"):
+        assert _printable(out[key]).endswith("gptx")
+
+
+def test_strings_nested_in_the_worker_and_subagents_are_printable():
+    """D8: the worker block and subagent block each carry their own strings."""
+    out = statmod.sanitise({"worker": {"enabled": True, "model": EVIL, "last_model": EVIL,
+                                       "source": EVIL, "agent": EVIL},
+                            "subagents": {"active": 1, "source": EVIL}})
+    seen = list(_strings(out))
+    assert any("gptx" in s for s in seen)
+    for s in seen:
+        _printable(s)
+
+
+def test_extra_keys_and_values_are_printable():
+    """D11: a handful of unknown fields are kept; neither their names nor values may command."""
+    out = statmod.sanitise({"note" + EVIL: EVIL})
+    assert out, "the extra field is kept"
+    for s in _strings(out):
+        _printable(s)
+
+
+def test_the_model_summary_cleans_what_it_is_given_directly():
+    """D12: `name()` is its own layer, for a merged dict that bypassed sanitise."""
+    out = statmod.model_summary({}, {"model": EVIL, "worker": {"last_model": EVIL}}, 1.0)
+    assert _printable(out["main_model"]).endswith("gptx")
+    assert _printable(out["worker_model"]).endswith("gptx")
+
+
+def test_a_lone_surrogate_cannot_break_the_roster_for_everyone(room, tmp_path):
+    """N2: `"gpt\\ud800x"` survived as a model and the roster's UTF-8 encode raised."""
+    from collab.server.roster_transport import _roster_parts
+    store = Store(tmp_path / "roster.db")
+    person = store.add_participant("p", "token")
+    hub = Hub(store, session_id="s", host_name="p")
+    hub.merge_stats(person.id, json.loads('{"model": "gpt\\ud800x"}'))
+    parts, _tag = _roster_parts(hub.snapshot())
+    body = b"".join(parts).decode("utf-8")
+    assert '"main_model":"gptx"' in body

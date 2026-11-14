@@ -593,8 +593,9 @@ goose, Amp) is recorded with its quota unknown and the reason, which
 `collab stats` and `collab check` show. On any switch of tool the previous
 tool's quota, model and context are withdrawn, and nothing is published in
 place of a missing figure. Markers are inherited, so a tool started inside
-another is settled by the nearest agent process, or recorded as «nested
-tools; cannot attribute».
+another is credited only when every marker's tool is an agent process above
+it, nearest first; otherwise the quota is «nested tools; cannot attribute».
+A stale inherited marker therefore reads as unknown – the accepted cost.
 Explicit sources and cleared sources take precedence. `stats_auto_setup false` disables
 future automatic setup and automatic polling, without removing existing hooks.
 Main and worker usage remain separate; native worker usage continues to collect.

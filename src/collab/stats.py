@@ -267,8 +267,12 @@ def _percent(value: Any, key: str = "") -> float | None:
 
 #: Unicode categories no figure needs: Cc is C0/C1 control (ESC, BEL, CR …),
 #: Cf is format — the bidi overrides and zero-width characters — and Zl/Zp are
-#: the line and paragraph separators.
-_UNPRINTABLE = frozenset(("Cc", "Cf", "Zl", "Zp"))
+#: the line and paragraph separators. Cs, Co and Cn go too: a LONE SURROGATE
+#: (`"gpt\ud800x"`, which `json.loads` accepts) survived as a model and made
+#: the roster's UTF-8 encoding raise UnicodeEncodeError, so one report broke the
+#: roster for everyone; private-use and unassigned code points draw as nothing
+#: anybody can read.
+_UNPRINTABLE = frozenset(("Cc", "Cf", "Zl", "Zp", "Cs", "Co", "Cn"))
 
 
 def printable(text: str) -> str:
