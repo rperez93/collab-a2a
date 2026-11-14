@@ -2683,14 +2683,20 @@ def dashboard_rows(snapshot: dict[str, Any], skills: dict[str, Any] | None, *,
             stats = {}
         quotas = {name: {"used_pct": w.get("used_pct"), "resets_at": w.get("resets_at")}
                   for name, w in (stats.get("quotas") or {}).items() if isinstance(w, dict)}
-        budget = (stats.get("worker") or {}).get("budget_remaining")
+        from .stats import STATS_STALE_AFTER, _stamp_of, reported_age
+        stamp = _stamp_of(stats)
+        stale = bool(stats) and (stamp is None or time.time() - stamp > STATS_STALE_AFTER)
+        worker = stats.get("worker") if isinstance(stats.get("worker"), dict) else {}
+        budget = worker.get("budget_remaining")
         count = person.get("skills_count")
-        if skills is None:
+        if count is None:
+            skill_state = "unknown"  # a hub or peer older than skill lists
+        elif not count:
+            skill_state = "not shared"
+        elif skills is None:
             skill_state = "unknown"
         elif skills.get("unsupported"):
             skill_state = "hub too old"
-        elif not count:
-            skill_state = "not shared"
         else:
             skill_state = "shared"
         listed = lists.get(person.get("id")) or lists.get(person.get("name")) or []
@@ -2700,6 +2706,11 @@ def dashboard_rows(snapshot: dict[str, Any], skills: dict[str, Any] | None, *,
                      "connected": live and bool(person.get("connected")),
                      "quota": stats.get("quota_used_pct") if not quotas else None,
                      "quotas": quotas, "quota_summary": quota_summary(stats, with_resets=True),
+                     "quota_stale": stale, "reported": reported_age(stats) if stats else "",
+                     "main_model": str(stats.get("model") or "unknown"),
+                     "worker_model": str(worker.get("model") or "unknown"),
+                     "model_observed_at": stats.get("model_observed_at"),
+                     "model_changed_at": stats.get("model_changed_at"),
                      "worker_budget": budget if isinstance(budget, (int, float)) else None,
                      "skills": listed if skill_state == "shared" else [],
                      "skills_state": skill_state})
@@ -2737,10 +2748,13 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
     for row in rows:
         mark = c("●", "32") if row["connected"] else dim("○")
         you = dim(" (you)") if row["you"] else ""
-        quota = row["quota_summary"] or dim("quota unknown")
+        quota = said(row["quota_summary"]) if row["quota_summary"] else dim("quota unknown")
+        if row["quota_summary"] and row["quota_stale"]:
+            quota += dim(f" ({said(row['reported'])}, old)")
         budget = ("" if row["worker_budget"] is None
                   else f"  worker {int(row['worker_budget'])} turns left")
         print(f"  {mark} {c(said(row['name']), '1')}{you}  {quota}{budget}")
+        print(dim(f"      models: main {said(row['main_model'])} · worker {said(row['worker_model'])}"))
         if row["skills"]:
             names = ", ".join(said(s.get("name", "")) for s in row["skills"][:12] if isinstance(s, dict))
             more = f" +{len(row['skills']) - 12}" if len(row["skills"]) > 12 else ""
