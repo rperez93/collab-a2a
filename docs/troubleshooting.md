@@ -77,9 +77,12 @@ name you asked for.
   collab join <url> --name <another>
   ```
 
-A name freed by a rename, or held by someone who has left, is available again.
-If you are rejoining your own session after a disconnect, the name is handed back
-to you once the hub sees that the previous holder is no longer connected.
+A name freed by a rename is available again. A name whose holder is offline
+is not: it is handed back only to that participant, who proves it with the
+token their own collab state saved at the earlier join (`collab join` sends it
+automatically from the same state). Anyone else, even with a valid invite, is
+refused, so an invite cannot be used to take over an absent participant's
+history, direct messages or files. If you lost that state, join under a new name.
 
 ## The hub rejected my token
 

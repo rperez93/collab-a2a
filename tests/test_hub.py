@@ -11,10 +11,12 @@ from a2a.types import AgentCard
 from collab.protocol import EXTENSION_URI
 
 
-def _join(client, session, name="bob", **hello):
-    r = client.post("/ext/collab/v1/join", json={"protocol_major": 2, "version": "2.0.0",
-        "invite": session["invite"], "name": name, "hello": hello or {"focus": "client side"},
-    })
+def _join(client, session, name="bob", resume_token=None, **hello):
+    body = {"protocol_major": 2, "version": "2.0.0",
+            "invite": session["invite"], "name": name, "hello": hello or {"focus": "client side"}}
+    if resume_token:
+        body["resume_token"] = resume_token
+    r = client.post("/ext/collab/v1/join", json=body)
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -163,14 +165,14 @@ def test_a_name_whose_holder_is_gone_is_a_rejoin_not_a_clash(client, session):
     its own name was taken and to pick another one."""
     first = _join(client, session, name="bob", focus="the client side")
 
-    again = _join(client, session, name="bob")
+    again = _join(client, session, name="bob", resume_token=first["token"])
     assert again["name"] == "bob", "no suffix, no refusal"
     assert again["id"] == first["id"], "and the same person, not a second bob"
 
 
 def test_a_rejoin_keeps_what_was_already_known_about_them(client, session):
     first = _join(client, session, name="bob", repo="webapp", focus="the client side")
-    _join(client, session, name="bob", focus="the auth refactor")
+    _join(client, session, name="bob", resume_token=first["token"], focus="the auth refactor")
 
     people = client.get("/ext/collab/v1/snapshot",
                         headers={"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {session['host_token']}"}
@@ -188,7 +190,7 @@ def test_the_old_token_stops_working_after_a_rejoin(client, session):
     old = {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {first['token']}"}
     assert client.get("/ext/collab/v1/snapshot", headers=old).status_code == 200
 
-    _join(client, session, name="bob")
+    _join(client, session, name="bob", resume_token=first["token"])
     assert client.get("/ext/collab/v1/snapshot", headers=old).status_code == 401
 
 
@@ -264,3 +266,35 @@ def test_task_lifecycle_uses_real_a2a_states(client, host_headers):
     assert done["state"] == "TASK_STATE_COMPLETED"
     assert client.get("/ext/collab/v1/tasks?open_only=true",
                       headers=host_headers).json()["tasks"] == []
+
+
+
+def _try_join(client, session, name, resume_token=None):
+    body = {"protocol_major": 2, "version": "2.0.0", "invite": session["invite"], "name": name, "hello": {}}
+    if resume_token is not None:
+        body["resume_token"] = resume_token
+    return client.post("/ext/collab/v1/join", json=body)
+
+
+@pytest.mark.parametrize("proof", [None, "", "not-a-token", "OTHER"])
+def test_an_offline_participants_name_cannot_be_taken_without_their_token(client, session, proof):
+    """T_eb446db26c37: an invite alone used to inherit an offline participant's row:
+    their id, history, direct messages and private files."""
+    bob = _join(client, session, name="bob")
+    carol = _join(client, session, name="carol")
+    token = carol["token"] if proof == "OTHER" else proof   # someone else's valid token is no proof either
+    r = _try_join(client, session, "bob", resume_token=token)
+    assert r.status_code == 409 and "offline" in r.json()["detail"]
+    old = {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {bob['token']}"}
+    assert client.get("/ext/collab/v1/snapshot", headers=old).status_code == 200, "bob's own token still works"
+
+
+def test_the_client_offers_its_own_saved_token_when_it_rejoins(tmp_path, monkeypatch):
+    from collab.client import onboard
+    from collab.config import SessionProfile
+    monkeypatch.setenv("COLLAB_HOME", str(tmp_path / "home"))
+    mine = SessionProfile("s_one", "https://hub.example", "bob", "alice", "tok-bob", home=str(tmp_path / "home"))
+    mine.save()
+    assert onboard._resume_token("https://hub.example", "https://hub.example", "", "bob") == "tok-bob"
+    assert onboard._resume_token("https://hub.example", "https://hub.example", "", "carol") == ""
+    assert onboard._resume_token("https://other.example", "https://other.example", "", "bob") == ""

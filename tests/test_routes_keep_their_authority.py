@@ -104,7 +104,7 @@ def test_an_uncertain_join_post_is_never_retried_on_another_route(tmp_path, monk
             return self
         def __exit__(self, *args):
             pass
-        def join(self, *args):
+        def join(self, *args, **kwargs):
             raise HubError("join response was lost")
     monkeypatch.setattr(onboard, "HubClient", Client)
     with pytest.raises(HubError, match="response was lost"):
