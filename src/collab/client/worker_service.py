@@ -484,10 +484,13 @@ class Conversation:
                               for row in pending_now if len(row.get("question", "")) >= 20]
             kept = []
             for reply in result["replies"]:
-                # Fine for the asker, by DM or in the asker's own room.
+                # Fine only for the asker: by DM, or addressed to them in the
+                # room where they asked publicly (validate_result requires a
+                # 'to' on every reply, so a room reply still names its peer).
                 leak = next((q for q, asker, room in open_questions
-                             if q in reply["text"] and who(reply["to"]) != asker
-                             and not (room and not reply["to"] and reply.get("room") == room)), None)
+                             if q in reply["text"] and (
+                                 who(reply["to"]) != asker
+                                 or (reply.get("room") and reply.get("room") != room))), None)
                 if leak is None:
                     kept.append(reply)
             if dropped := len(result["replies"]) - len(kept):
@@ -495,13 +498,9 @@ class Conversation:
                 store.count_dropped(dropped)
                 result = {**result, "replies": kept}
             escalations = result["escalations"] + worker_runtime.unrouted_deferrals(
-                result, selected, store.pending(),
+                result, selected, pending_now,
                 answered={a["source"]["sender"]: int(a["source"].get("seq") or 0)
                           for a in answers if a.get("source", {}).get("sender")})
-
-
-                result, selected, pending_now,
-                answered={a["source"]["sender"] for a in answers if a.get("source", {}).get("sender")})
             committed = store.commit_turn(
                 expected_cursor=snapshot["cursor"], cursor=cursor,
                 summary=result["summary"], replies=result["replies"],
