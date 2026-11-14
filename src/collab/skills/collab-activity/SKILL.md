@@ -299,10 +299,11 @@ and the status is the first step rather than an afterthought.
 When idle after finishing work, proactively inspect the current batch and claim
 suitable unowned work within the accepted goal. Inspect free-text dependencies
 and ownership before claiming; on a claim conflict, refresh and choose again.
-While working, parallelize with up to two native teammates by default when
-your host provides them and the user has not set another limit; go beyond two
-only when the user asks and fresh measured capacity permits it. Unknown
-capacity is not spare capacity beyond that default. Default pickup
+While working, you may run up to two native teammates by default when
+independent work exists, your host provides them, and neither the user nor
+`delegation_max_children` sets a lower limit. Go beyond two only when the user
+asks and fresh measured capacity permits it. Unknown capacity is not spare
+capacity beyond that default. Default pickup
 notices arrive after five continuous idle minutes through the monitor or wake
 route; `collab config task_pickup_idle_delay 300` changes that delay and
 `collab config task_auto_pickup false` disables automatic notices. Keep activity
