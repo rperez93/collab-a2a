@@ -21,7 +21,7 @@ detail = seed if board == "synthetic" else (seed * 160)[:8000]
 task_count = 80 if board == "synthetic" else 250
 payload = {
     "server_time": 123.0, "seq": 1, "you": "alice", "you_id": "p-alice",
-    "batch": {"id": "B_measure", "state": "closed", "total": task_count,
+    "batch": {"id": "B_measure", "state": "open", "total": task_count,
               "done": 40, "holding": [], "counted_at": 123.0},
     "participants": [
         {"name": f"agent-{i}", "connected": True,
@@ -34,6 +34,12 @@ payload = {
         for i in range(task_count)],
 }
 from collab.batch import pace
+completed = [10 + i * .5 for i in range(40)]
+for index, task in enumerate(payload["tasks"]):
+    task["state"] = "completed" if index < 40 else "working"
+    task["completed_at"] = completed[index] if index < 40 else None
+payload["batch"]["pace"] = pace(opened_at=1, completed=completed,
+    outstanding=task_count - 40, now=payload["batch"]["counted_at"])
 payload_bytes = len(JSONResponse(payload).body)
 clock_header_bytes = 0
 body_bytes = responses_200 = responses_304 = 0
@@ -42,7 +48,8 @@ started = time.process_time()
 for index in range(count):
     payload["server_time"] += 1
     payload["batch"]["counted_at"] += 1
-    payload["batch"]["pace"] = pace(opened_at=1, completed=[10, 20], outstanding=2, now=123+index)
+    payload["batch"]["pace"] = pace(opened_at=1, completed=completed, outstanding=task_count - 40,
+        now=payload["batch"]["counted_at"])
     if changing:
         payload["seq"] += 1
         payload["tasks"][index % task_count]["detail"] = detail[:7997] + str(index)
