@@ -857,15 +857,20 @@ class Conversation:
                         (source.get("room") or "") if source.get("broadcast") is True else "")
                 # The human's answer text may reach only its own asker: a reply
                 # to anyone else repeating it is withheld, never sent.
-                answer_snippets = [str(answer.get("text", ""))[:60] for answer in peer_answers
+                answer_snippets = [(answer["id"], str(answer.get("text", ""))[:60])
+                                   for answer in peer_answers
                                    if len(str(answer.get("text", ""))) >= 20]
                 kept = []
+                withheld_for = set()
                 for reply in result["replies"]:
                     ident = reply.get("to_id")
                     if ident not in targets:
                         # An ordinary reply to another peer in the same turn: it is
                         # no reason to hold anyone's answer (T_9e266ef03035).
-                        if not any(snippet in reply["text"] for snippet in answer_snippets):
+                        repeated = {aid for aid, snippet in answer_snippets if snippet in reply["text"]}
+                        if repeated:
+                            withheld_for |= repeated
+                        else:
                             kept.append(reply)
                         continue
                     if reply.get("room") and reply["room"] not in source_rooms.get(ident, set()):
@@ -878,6 +883,19 @@ class Conversation:
                                  if (answer["prompt"].get("decision_source") or {}).get("sender_id") == ident}
                     reply["source_seq"] = next(iter(sequences)) if len(sequences) == 1 else 0
                     kept.append(reply)
+                # An answer whose ONLY carrier was withheld (it went to someone
+                # else) must not be consumed: committing the turn would mark it
+                # answered with nothing delivered, and the human's decision would
+                # vanish. Hold it for local review instead, as a wrong room does
+                # (adversarial review of #162, case M3).
+                delivered_to = {reply.get("to_id") for reply in kept}
+                orphaned = {answer["id"] for answer in peer_answers
+                            if answer["id"] in withheld_for
+                            and (answer["prompt"].get("decision_source") or {}).get("sender_id")
+                            not in delivered_to}
+                if orphaned:
+                    self._hold_model_answers(store, orphaned, snapshot, logged)
+                    return
                 if dropped := len(result["replies"]) - len(kept):
                     store.count_dropped(dropped)
                     result = {**result, "replies": kept}
