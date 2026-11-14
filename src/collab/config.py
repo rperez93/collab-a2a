@@ -2015,6 +2015,20 @@ def _bare_host(value: Any) -> str:
     return host
 
 
+def proxy_mode() -> str:
+    value = load_config().get('proxy', 'auto')
+    return value if value in ('auto', 'on', 'off') else 'auto'
+
+
+def set_proxy_mode(value: str) -> str:
+    if value not in ('auto', 'on', 'off'):
+        raise ValueError('proxy must be auto, on or off')
+    cfg = load_config()
+    cfg['proxy'] = value
+    save_config(cfg)
+    return value
+
+
 def ngrok_domain() -> str:
     """The reserved ngrok domain `collab host` uses when `--domain` is absent.
 
@@ -2252,6 +2266,8 @@ def settings() -> tuple[Setting, ...]:
                 lambda v: set_rules(v)),
         # BESIDE `rules`, the other setting read at `collab host`. Per platform
         # by name: see `ngrok_domain`.
+        Setting("proxy", "share one machine tunnel (auto/on), or use one per hub (off)",
+                "auto", str, proxy_mode, set_proxy_mode),
         Setting("ngrok_domain", "reserved ngrok domain `collab host` uses when "
                                 "`--domain` is not given; empty lets ngrok choose",
                 "", str,

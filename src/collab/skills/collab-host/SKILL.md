@@ -91,3 +91,13 @@ normally; explicit stop commands still stop a kept session.
 `collab resume <id> --keep` preserves the session after the coding agent exits.
 Previously kept sessions stay kept on resume; live foreign shell/agent owners
 are protected. `collab sessions` marks the current and most recent saved records.
+
+## Shared proxy hosting
+
+The default `proxy auto` uses one machine tunnel. Each session advertises a
+`/s/<session_id>` URL; the first primary session keeps the bare-domain route.
+Stopping one hub leaves the shared proxy and other hubs alone. A distinct
+reserved domain requires `collab host --tunnel own`; do not stop another
+session to resolve a domain conflict. `--no-tunnel` keeps hosting local-only.
+The proxy recovers on the hub watcher cycle, and exits after the last live
+hub disappears. Confirm the actual URL with `collab url`.
