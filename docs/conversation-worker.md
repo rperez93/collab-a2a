@@ -14,15 +14,26 @@ resend their request. A brief «I’ll check and get back to you» can accompany
 escalation; it must not imply that a decision has already been made. The usual
 scope and supplied-facts limits still apply.
 
-Host and join enable a conversation worker by default in 2.1.0, using Codex
-and `worker_codex_model` (Luna by default). It may make model calls as messages
+Host and join enable a conversation worker by default, on the same coding
+agent as the participant and its lower-tier model (`worker_claude_model`, Haiku 5.5,
+under Claude Code; `worker_codex_model`, Luna, under Codex). An unrecognised
+host gets no automatic worker and a visible error; there is no cross-provider
+fallback. It may make model calls as messages
 arrive. Its initial scope permits coordination using supplied facts and
 escalates missing context, decisions, blockers and conflicting edits. Supply
 actual task progress with `collab worker context` and keep a monitor or wake
-armed for decisions. Set `collab config worker_agent claude` before setup to use
-Claude/Haiku 4.5 instead, or `collab config worker_auto_start false` to opt out of
-automatic setup. These settings affect unconfigured sessions; existing provider
-choices and `collab worker off` survive reconnects and daemon starts.
+armed for decisions. Set `collab config worker_agent codex` or `claude` to pin a
+provider instead of following the host (`auto`), or `collab config
+worker_auto_start false` to opt out of automatic setup, or set
+`COLLAB_NO_WORKER=1` in the environment of a scratch or test session: setup
+records an off that a later join keeps, and a listener started with it runs no
+worker at all (`0`, `false`, `no`, `off` and empty mean unset). An untouched automatic
+worker follows the host on the next join; explicit provider choices and
+`collab worker off` survive reconnects and daemon starts. While the worker is
+enabled it is the participant's only voice: `collab send` queues the exact text
+on its outbox, delivered even during a model turn, instead of posting directly.
+A worker reply that promises to get back to a peer without escalating is turned
+into a pending decision, so the question still reaches the main agent.
 `--no-daemon` prepares the worker but does not run it. Provider failures remain
 visible in `collab worker status`; there is no automatic provider fallback.
 
@@ -35,15 +46,14 @@ collab worker send --to bob 'The API is unchanged; I will send the test result w
 collab worker status
 ```
 
-`--agent` selects the **worker provider**, independently of the main coding host.
-A Cursor or OpenCode main agent can use the Claude worker; a Claude main agent
-can use Codex. `worker start` replaces the default configuration with the
-provider and scope you supply.
+`--agent` selects the **worker provider**. Automatic setup uses the main coding
+agent's own provider; an explicit `worker start` may choose another one and
+replaces the default configuration with the provider and scope you supply.
 
 | Provider | Model selection | Requirements |
 | --- | --- | --- |
 | `codex` | `worker_codex_model` defaults to `gpt-5.6-luna`; `--model` pins a session | Installed Codex CLI with the isolation flags used by Collab, existing CLI authentication |
-| `claude` | `worker_claude_model` defaults to `claude-haiku-4-5`; `--model` pins a session | Installed Claude CLI with safe and restricted modes, existing CLI authentication |
+| `claude` | `worker_claude_model` defaults to `claude-haiku-5-5`; `--model` pins a session | Installed Claude CLI with safe and restricted modes, existing CLI authentication |
 | `opencode` | `worker_opencode_model` or explicit `--model provider/model` | Installed OpenCode CLI supporting `--pure`, existing provider authentication |
 | `cursor` | `worker_cursor_model` or explicit `--model MODEL` | Installed `cursor-agent` or `agent`; `CURSOR_API_KEY` in the listener's environment |
 | `command` | The adapter owns model selection | Explicit `--command` JSON argument list implementing the protocol below |
@@ -94,7 +104,7 @@ flowchart TD
     S --> W[Daemon conversation worker]
     W --> P{Selected worker provider}
     P --> CX[Codex / Luna]
-    P --> CH[Claude / Haiku 4.5]
+    P --> CH[Claude / Haiku 5.5]
     P --> OC[OpenCode / explicit model]
     P --> CU[Cursor / explicit model]
     P --> X[Custom command]
@@ -158,6 +168,11 @@ The default durable limit is 60 model attempts per hour, including failures;
 `worker_max_attempts` and `worker_budget_window` configure it live;
 restarting the daemon does not reset it. Reaching the limit reports a recovery
 time instead of funding an endless worker-to-worker acknowledgement loop.
+Once half the budget is spent, turns are paced: the time left in the window is
+spread over the attempts left, so a busy session batches more messages per turn
+rather than going silent until the window rolls. The remaining budget and its
+reset time travel with the worker's figures (`budget_remaining`,
+`budget_reset_at`) for everyone's roster.
 
 The CLI flags and configuration controls are based on the official
 [Codex configuration reference](https://developers.openai.com/codex/config-reference/),

@@ -7,6 +7,13 @@ import pytest
 from collab import cli, worker
 
 
+
+@pytest.fixture(autouse=True)
+def workers_allowed(monkeypatch):
+    """Routing through an enabled worker is what these test; conftest's
+    COLLAB_NO_WORKER (no paid calls in tests) would bypass it."""
+    monkeypatch.delenv("COLLAB_NO_WORKER", raising=False)
+
 def configured(tmp_path):
     store = worker.Store(tmp_path)
     store.configure({"agent": "codex", "scope": "Coordinate test ownership"})
@@ -139,7 +146,7 @@ def test_health_updates_neither_consume_messages_nor_claim_success(tmp_path):
     assert not store.status()["running"]
 
 
-@pytest.mark.parametrize("agent,model", [("codex", "gpt-5.6-luna"), ("claude", "claude-haiku-4-5")])
+@pytest.mark.parametrize("agent,model", [("codex", "gpt-5.6-luna"), ("claude", "claude-haiku-5-5")])
 def test_native_providers_have_explicit_cheap_defaults(tmp_path, agent, model):
     store = worker.Store(tmp_path)
     store.configure({"agent": agent, "scope": "Only coordinate ownership"})
@@ -315,3 +322,135 @@ def test_invalid_retry_times_never_wedge_an_outbox_record(tmp_path, retry_at):
     with pytest.raises(ValueError, match="retry time"):
         store.defer(old["id"], retry_at=retry_at, error="offline")
     assert store.outbox()[0] == old
+
+
+def test_main_send_while_worker_enabled_is_queued_not_posted(tmp_path, monkeypatch, capsys):
+    """R3: the main agent has one voice while its worker is on: the outbox."""
+    import argparse
+    from collab import cli
+    from collab.config import SessionProfile
+    from collab.client import onboard
+    profile = SessionProfile(session_id='test', url='http://hub.invalid', name='alice',
+                             host_name='bob', token='t', home=str(tmp_path), room='general')
+    monkeypatch.setattr(cli, '_require_own_profile', lambda args: profile)
+    monkeypatch.setattr(onboard, 'ensure_daemon', lambda p, **kw: None)
+    class Hub:
+        def __enter__(self): return self
+        def __exit__(self, *exc): return False
+        def participants(self): return {'participants': [{'name': 'alice'}, {'name': 'bob'}]}
+        def send(self, env): raise AssertionError('posted directly')
+    monkeypatch.setattr(cli, '_client', lambda p: Hub())
+    store = worker.Store(profile.dir)
+    store.configure({'agent': 'claude', 'scope': 'Coordinate'})
+    args = argparse.Namespace(text=['ship', 'it'], to=None, room=None, thread='t1')
+    assert cli.cmd_send(args) == 0
+    args = argparse.Namespace(text=['for', 'you'], to='bob', room=None, thread=None)
+    assert cli.cmd_send(args) == 0
+    args = argparse.Namespace(text=['typo'], to='bobb', room=None, thread=None)
+    assert cli.cmd_send(args) == 1, 'an unknown recipient fails now, not in a retry loop'
+    args = argparse.Namespace(text=['in', 'ops'], to=None, room='ops', thread=None)
+    assert cli.cmd_send(args) == 0
+    queued = [(r['text'], r['to'], r['room'], r.get('thread')) for r in store.outbox()]
+    assert queued == [('ship it', '', 'general', 't1'), ('for you', 'bob', '', None),
+                      ('in ops', '', 'ops', None)]
+
+
+def test_a_busy_session_paces_the_worker_instead_of_exhausting_it():
+    """R3 follow-up: 60 turns in under an hour went silent; spread the rest."""
+    from collab.worker import pace
+    now = 1000.0
+    assert pace({'remaining': 40, 'reset_at': now + 3000}, limit=60, gap=5, now=now) == 5
+    assert pace({'remaining': 29, 'reset_at': now + 3000}, limit=60, gap=5, now=now) == 100
+    assert pace({'remaining': 0, 'reset_at': now + 600}, limit=60, gap=5, now=now) == 600
+    assert pace({'remaining': 10, 'reset_at': now + 10}, limit=60, gap=5, now=now) == 5
+
+
+def test_remaining_budget_is_published_with_worker_figures(tmp_path):
+    store = worker.Store(tmp_path)
+    store.configure({'agent': 'claude', 'scope': 'Coordinate'})
+    store.reserve_turn(expected_generation=store.snapshot()['generation'], limit=60, window=3600)
+    figures = worker.metrics(tmp_path)
+    assert figures['budget_remaining'] == 59 and figures['budget_reset_at'] > 0
+    from collab.telemetry import worker_report
+    assert worker_report(figures)['budget_remaining'] == 59
+
+
+def test_proposals_and_votes_ride_the_worker_outbox_with_their_body(tmp_path, monkeypatch):
+    from collab.config import SessionProfile
+    profile = SessionProfile(session_id='test', url='http://hub.invalid', name='alice',
+                             host_name='bob', token='t', home=str(tmp_path), room='general')
+    monkeypatch.setattr(cli, '_client', lambda p: (_ for _ in ()).throw(AssertionError('posted directly')))
+    store = worker.Store(profile.dir)
+    store.configure({'agent': 'claude', 'scope': 'Coordinate'})
+    assert cli._send_body(profile, 'proposes X', {'proposal': {'id': 'p1'}})
+    record = store.outbox()[0]
+    assert record['body'] == {'proposal': {'id': 'p1'}} and record['room'] == 'general'
+
+
+def test_worker_off_delivers_queued_sends_first(tmp_path, monkeypatch):
+    import argparse
+    from collab.config import SessionProfile
+    profile = SessionProfile(session_id='test', url='http://hub.invalid', name='alice',
+                             host_name='bob', token='t', home=str(tmp_path), room='general')
+    sent = []
+    class Hub:
+        def __enter__(self): return self
+        def __exit__(self, *exc): return False
+        def send(self, env): sent.append(env)
+    monkeypatch.setattr(cli, '_require_own_profile', lambda a: profile)
+    monkeypatch.setattr(cli, '_client', lambda p: Hub())
+    store = worker.Store(profile.dir)
+    store.configure({'agent': 'claude', 'scope': 'Coordinate'})
+    record = store.send('last word', to='bob')
+    assert cli.cmd_worker(argparse.Namespace(worker_action='off')) == 0
+    assert [e.text for e in sent] == ['last word']
+    assert sent[0].body['collab_worker_delivery'] == record
+    assert not store.outbox() and not store.status()['enabled']
+
+
+def test_task_comment_while_worker_enabled_is_queued(tmp_path, monkeypatch, capsys):
+    from collab.config import SessionProfile
+    from collab.client import onboard
+    profile = SessionProfile(session_id='test', url='http://hub.invalid', name='alice',
+                             host_name='bob', token='t', home=str(tmp_path), room='general')
+    monkeypatch.setattr(onboard, 'ensure_daemon', lambda p, **kw: None)
+    store = worker.Store(profile.dir)
+    assert cli._queue_comment(profile, 'task', 'T_1', 'x') is None, 'no worker: post directly'
+    store.configure({'agent': 'claude', 'scope': 'Coordinate'})
+    assert cli._queue_comment(profile, 'task', 'T_1', 'evidence') == 0
+    assert store.outbox()[0]['kind'] == 'comment'
+    assert 'queued for delivery by your worker' in capsys.readouterr().out
+
+
+def test_file_send_while_worker_enabled_is_queued_as_a_private_copy(tmp_path, monkeypatch):
+    import argparse, contextlib
+    from collab.config import SessionProfile
+    from collab.client import onboard
+    profile = SessionProfile(session_id='test', url='http://hub.invalid', name='alice',
+                             host_name='bob', token='t', home=str(tmp_path), room='general')
+    monkeypatch.setattr(cli, '_require_own_profile', lambda a: profile)
+    monkeypatch.setattr(cli, '_require_profile', lambda a: profile)
+    monkeypatch.setattr(onboard, 'ensure_daemon', lambda p, **kw: None)
+    client = SimpleNamespace(upload_file=lambda *a, **k: (_ for _ in ()).throw(AssertionError('posted directly')))
+    monkeypatch.setattr(cli, '_client', lambda p: contextlib.nullcontext(client))
+    store = worker.Store(profile.dir)
+    store.configure({'agent': 'claude', 'scope': 'Coordinate'})
+    path = tmp_path / 'notes.txt'
+    path.write_text('v1')
+    args = cli.build_parser().parse_args(['file', 'send', str(path), '--to', 'bob'])
+    assert cli.cmd_file(args) == 0
+    path.write_text('v2, changed after sending')
+    record = store.outbox()[0]
+    assert record['kind'] == 'file' and record['to'] == 'bob'
+    from pathlib import Path
+    assert Path(record['stash']).read_text() == 'v1'
+    store.acknowledge(record['id'])
+    assert not Path(record['stash']).exists()
+
+
+def test_under_collab_no_worker_the_cli_posts_directly(tmp_path, monkeypatch):
+    store = worker.Store(tmp_path)
+    store.configure({'agent': 'claude', 'scope': 'Coordinate'})
+    assert store.enabled()
+    monkeypatch.setenv('COLLAB_NO_WORKER', '1')
+    assert not store.enabled(), 'no listener will run it, so nothing may be queued'

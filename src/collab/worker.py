@@ -18,7 +18,7 @@ from typing import Any
 
 MAX_TEXT = 16000
 MAX_PENDING = 1000
-DEFAULT_MODELS = {"codex": "gpt-5.6-luna", "claude": "claude-haiku-4-5"}
+DEFAULT_MODELS = {"codex": "gpt-5.6-luna", "claude": "claude-haiku-5-5"}
 # Automatic delegation has no private task context. Permit coordination only;
 # promises about code, scope, and progress must come from the main agent.
 DEFAULT_SCOPE = (
@@ -27,6 +27,33 @@ DEFAULT_SCOPE = (
     "task context to the main agent. Never invent progress or promise code changes."
 )
 SUPPORTED_AGENTS = ("codex", "claude", "opencode", "cursor", "command")
+# The coding agent running collab (hosttool.detect) and the worker provider of
+# the same family. R3: the worker runs on the SAME agent, so there is no
+# cross-provider fallback; an unrecognised host gets no automatic worker.
+HOST_PROVIDERS = {"claude-code": "claude", "codex": "codex", "opencode": "opencode",
+                  "cursor": "cursor"}
+NO_PROVIDER = ("Worker not configured: the coding agent was not recognised; "
+               "run `collab worker start --agent …` or set worker_agent")
+
+
+def host_provider(env: dict[str, str] | None = None) -> str:
+    """The host's own worker provider, or '' when the host is not recognised."""
+    from .hosttool import detect
+    return HOST_PROVIDERS.get(detect(env), "")
+
+
+def no_worker(env: dict[str, str] | None = None) -> bool:
+    """COLLAB_NO_WORKER read as a boolean: unset, '', 0, false, no and off mean no."""
+    import os
+    value = ((os.environ if env is None else env).get("COLLAB_NO_WORKER") or "").strip().lower()
+    return value not in ("", "0", "false", "no", "off")
+
+
+def default_agent(env: dict[str, str] | None = None) -> str:
+    """The provider automatic setup uses, or '' when there is none to use."""
+    from .runtime_settings import get
+    chosen = get("worker_agent")
+    return chosen if chosen != "auto" else host_provider(env)
 
 
 def _text(value: Any, label: str, *, empty: bool = False) -> str:
@@ -61,6 +88,15 @@ def _config(config: dict[str, Any], *, allow_empty_model: bool = False) -> dict[
         result["model_default"] = bool(config.get("model_default", not bool(config.get("model"))))
         result["model"] = _text(config.get("model") or get(f"worker_{agent}_model"), "model (required when no default is configured)", empty=allow_empty_model)
     return result
+
+
+def _drop_stash(row) -> None:
+    """Delete a queued file's private copy once its record is gone."""
+    if row is None:
+        return
+    stash = json.loads(row[0]).get("stash")
+    if stash:
+        Path(stash).unlink(missing_ok=True)
 
 
 class Store:
@@ -116,7 +152,7 @@ class Store:
         with self._db() as db:
             state = self._state(db)
             state.update(config=config, generation=state["generation"] + 1,
-                         running=False, error="", retry_at=0)
+                         running=False, error="", retry_at=0, auto=False)
             self._save(db, state)
         return config
 
@@ -130,20 +166,54 @@ class Store:
         from .runtime_settings import get
         if not get("worker_auto_start"):
             return
+        if no_worker():
+            # Scratch and test sessions: a throwaway hub spent ~287k tokens in
+            # three minutes on a worker nobody asked for. Recorded as an
+            # explicit off, so a later join without the variable keeps it off.
+            with self._db() as db:
+                state = self._state(db)
+                if state["config"] is None and not state["generation"]:
+                    state.update(generation=1, running=False)
+                    self._save(db, state)
+            return
         with self._db() as db:
             state = self._state(db)
+            agent = default_agent()
             if state["config"] is not None or state["generation"]:
+                # A config automatic setup chose, still untouched, follows the
+                # coding agent: a Claude main must not keep a Codex worker
+                # because its first setup ran from a plain shell or before the
+                # default changed. Unknown hosts and explicit choices stay.
+                config = state["config"] or {}
+                # States written before the flag existed: generation 1 with
+                # the untouched default scope and model is automatic setup.
+                auto = state.get("auto", state["generation"] == 1
+                                 and config.get("scope") == DEFAULT_SCOPE
+                                 and config.get("model_default"))
+                if (auto and config.get("enabled") and agent
+                        and get("worker_agent") == "auto" and config.get("agent") != agent):
+                    config = _config({"agent": agent, "scope": config["scope"]},
+                                     allow_empty_model=True)
+                    state.update(config=config, generation=state["generation"] + 1,
+                                 error="" if config["model"] else
+                                 "Worker requires a model; set worker_" + agent + "_model")
+                    self._save(db, state)
+                return
+            if not agent:
+                # Retried on the next join, which may come from a known host.
+                state.update(error=NO_PROVIDER)
+                self._save(db, state)
                 return
             # Empty model settings are valid (other providers require a local
             # choice). Automatic setup must not turn that into a failed join:
             # retain the choice and expose an error without choosing a fallback.
             # The runtime rejects empty models before spawning any provider and
             # reads the corrected default on the next turn.
-            config = _config({"agent": get("worker_agent"), "scope": DEFAULT_SCOPE},
+            config = _config({"agent": agent, "scope": DEFAULT_SCOPE},
                              allow_empty_model=True)
             error = ("Worker requires a model; set worker_" + config["agent"] + "_model"
                      if not config["model"] else "")
-            state.update(config=config, generation=1, error=error)
+            state.update(config=config, generation=1, error=error, auto=True)
             self._save(db, state)
 
     def off(self) -> None:
@@ -173,7 +243,8 @@ class Store:
             return {**state, "enabled": bool((state["config"] or {}).get("enabled")),
                     "pending": self._records(db, "escalation"),
                     "outbox_count": len(outbox),
-                    "outbox": [{"id": r["id"], "to": r["to"], "room": r["room"],
+                    "outbox": [{"id": r["id"], "kind": r.get("kind", "chat"),
+                                "to": r.get("to", r.get("subject_id", "")), "room": r.get("room", ""),
                                 "error": r.get("error", ""), "retry_at": r.get("retry_at", 0)}
                                for r in outbox]}
 
@@ -182,7 +253,8 @@ class Store:
         with self._db() as db:
             return self._add(db, "context", {"text": text})
 
-    def send(self, text: str, *, to: str, room: str = "") -> str:
+    def send(self, text: str, *, to: str, room: str = "", thread: str = "",
+             body: dict[str, Any] | None = None) -> str:
         """Queue the main agent's exact message without asking a model to repeat it.
 
         Context supplies facts and can legitimately produce no reply. Treating
@@ -191,16 +263,102 @@ class Store:
         the hub validates the address, and failed delivery remains visible.
         """
         text = _text(text, "message")
-        to = _text(to, "recipient")
+        # An empty recipient is a room message: the main agent's own `send`
+        # is routed here while its worker is enabled.
+        to = _text(to, "recipient", empty=True)
         room = _text(room, "room", empty=True)
+        thread = _text(thread, "thread", empty=True)
         if len(text) > 8000:
             raise ValueError("message exceeds 8000 characters")
-        if len(to) > 200 or len(room) > 200 or any("\0" in value for value in (text, to, room)):
+        if not to.strip() and not room.strip():
+            raise ValueError("a queued message needs a recipient or a room")
+        if (len(to) > 200 or len(room) > 200 or len(thread) > 200
+                or any("\0" in value for value in (text, to, room, thread))):
             raise ValueError("invalid message routing or NUL in message")
         with self._db() as db:
             if not (self._state(db)["config"] or {}).get("enabled"):
                 raise ValueError("start the worker before queueing a message")
-            return self._add(db, "outbox", {"text": text, "to": to, "room": room})
+            data = {"text": text, "to": to, "room": room}
+            if thread:
+                data["thread"] = thread
+            if body:
+                if len(json.dumps(body)) > MAX_TEXT:
+                    raise ValueError("message body is too large to queue")
+                data["body"] = body
+            return self._add(db, "outbox", data)
+
+    def queue_file(self, path: Path, *, to: str = "", room: str = "") -> str:
+        """A file the main agent shares, delivered by the worker in order (R3).
+
+        The bytes are copied now, so what is delivered is what was sent even if
+        the file changes or disappears before the listener gets to it.
+        """
+        import hashlib
+        import shutil
+        source = Path(path)
+        if not source.is_file():
+            raise ValueError(f"no such file: {source}")
+        if not (to.strip() or room.strip()):
+            raise ValueError("a queued file needs a recipient or a room")
+        stash_dir = self.path.parent / "outbox-files"
+        stash_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        stash = stash_dir / f"{uuid.uuid4().hex}-{source.name[:100]}"
+        shutil.copyfile(source, stash)
+        stash.chmod(0o600)
+        digest = hashlib.sha256(stash.read_bytes()).hexdigest()
+        try:
+            with self._db() as db:
+                if not (self._state(db)["config"] or {}).get("enabled"):
+                    raise ValueError("start the worker before queueing a file")
+                return self._add(db, "outbox", {"kind": "file", "stash": str(stash), "name": source.name,
+                                                "to": to, "room": room, "sha256": digest,
+                                                "text": f"file {source.name}"})
+        except BaseException:
+            stash.unlink(missing_ok=True)
+            raise
+
+    def queue_comment(self, subject: str, subject_id: str, text: str) -> str:
+        """A task or project comment from the main agent, delivered in order (R3)."""
+        if subject not in ("task", "project"):
+            raise ValueError("a comment is about a task or a project")
+        text = _text(text, "comment")
+        subject_id = _text(subject_id, "subject id")
+        if len(subject_id) > 200 or "\0" in text + subject_id:
+            raise ValueError("invalid comment subject or NUL in comment")
+        with self._db() as db:
+            if not (self._state(db)["config"] or {}).get("enabled"):
+                raise ValueError("start the worker before queueing a comment")
+            return self._add(db, "outbox", {"kind": "comment", "subject": subject,
+                                            "subject_id": subject_id, "text": text})
+
+    def reject(self, record_id: str, *, reason: str) -> None:
+        """A send the hub refused for good: drop it and tell the main agent.
+
+        Retrying a 4xx forever only filled the outbox (and MAX_PENDING) with
+        a message that can never arrive; the main agent decides what to do.
+        """
+        with self._db() as db:
+            row = db.execute("SELECT data FROM records WHERE id=? AND kind='outbox'", (record_id,)).fetchone()
+            if row is None:
+                return
+            data = json.loads(row[0])
+            db.execute("DELETE FROM records WHERE id=?", (record_id,))
+            _drop_stash(row)
+            target = (f"{data['subject']} {data['subject_id']}" if data.get("kind") == "comment"
+                      else "@" + data["to"] if data.get("to") else "#" + (data.get("room") or "general"))
+            self._add(db, "escalation", {"reason": "blocker", "seq": 0, "question": (
+                f"Your message to {target} could not be delivered ({reason}): "
+                f"{data['text'][:300]!r}. Resend it to a valid address or drop it.")})
+
+    def enabled(self) -> bool:
+        """Whether the worker is this participant's voice right now.
+
+        Under COLLAB_NO_WORKER no listener runs it, so queueing would strand
+        messages: the CLI posts directly instead.
+        """
+        if not self.path.exists() or no_worker():
+            return False
+        return bool((self.configuration() or {}).get("enabled"))
 
     def pending(self) -> list[dict[str, Any]]:
         with self._db() as db:
@@ -281,7 +439,9 @@ class Store:
 
     def acknowledge(self, record_id: str) -> None:
         with self._db() as db:
+            row = db.execute("SELECT data FROM records WHERE id=? AND kind='outbox'", (record_id,)).fetchone()
             db.execute("DELETE FROM records WHERE id=? AND kind='outbox'", (record_id,))
+        _drop_stash(row)
 
     def defer(self, record_id: str, *, retry_at: float, error: str) -> bool:
         """Defer one reply without holding up unrelated peers' conversations."""
@@ -430,6 +590,29 @@ class Store:
             self._save(db, state)
             return 0.0
 
+    def budget(self, *, limit: int, window: float, now: float | None = None) -> dict[str, float]:
+        """Attempts left in the rolling window and when the oldest one expires."""
+        now = time.time() if now is None else now
+        with self._db() as db:
+            attempts = [t for t in self._state(db).get("model_attempts", []) if t > now - window]
+        return {"remaining": max(0, limit - len(attempts)),
+                "reset_at": (min(attempts) + window) if attempts else now}
+
+
+def pace(budget: dict[str, float], *, limit: int, gap: float, now: float | None = None) -> float:
+    """Seconds until the next model turn may start.
+
+    The plain gap while more than half the budget is left; past that, the time
+    left in the window spread over the attempts left. A busy session then
+    batches more messages into each turn instead of spending the whole budget
+    in minutes and going silent until the window rolls (seen live: 60 turns
+    gone in under an hour with four agents).
+    """
+    now = time.time() if now is None else now
+    if budget["remaining"] * 2 > limit:
+        return gap
+    return max(gap, (budget["reset_at"] - now) / (budget["remaining"] + 1))
+
 
 def configure(root, config):
     return Store(root).configure(config)
@@ -466,9 +649,16 @@ def metrics(root):
     return {**state.get("usage", {}), **state.get("reported_stats", {}), "enabled": state["enabled"], "running": state["running"],
         "agent": cfg.get("agent", ""), "model": model or state.get("reported_stats", {}).get("model", ""), "turns": state["turn"],
         "attempts": state.get("attempts_total", 0), "pending": len(state["pending"]),
+        **_budget_figures(store),
         "errors": int(bool(state["error"])), "source": state.get("reported_stats", {}).get("source") or "collab-worker",
         "observed_at": max(state.get("last_progress", 0), state.get("usage", {}).get("observed_at", 0),
                            (state.get("reported_stats", {}).get("observed_at") or 0))}
+
+
+def _budget_figures(store) -> dict[str, float]:
+    from .runtime_settings import get
+    left = store.budget(limit=get("worker_max_attempts"), window=get("worker_budget_window"))
+    return {"budget_remaining": left["remaining"], "budget_reset_at": left["reset_at"]}
 
 
 def notify_repairs(root, inbox):

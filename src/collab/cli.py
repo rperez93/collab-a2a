@@ -1378,6 +1378,38 @@ def cmd_send(args: argparse.Namespace) -> int:
     if reason := message_refusal(text):
         fail(reason)
         return 1
+    # While a worker is enabled it is this participant's only voice in the
+    # session: a direct post would race its replies and say things it does not
+    # know. Queue the exact text on its durable outbox instead of refusing.
+    from .worker import Store
+    store = Store(profile.dir)
+    if store.enabled():
+        if args.to:
+            # A direct post failed at once on an unknown name; a queued one
+            # would retry forever. Ask the hub first; offline still queues.
+            try:
+                with _client(profile) as client:
+                    names = {p.get("name") for p in client.participants().get("participants", [])}
+                if names and args.to not in names:
+                    fail(f"no participant named {args.to!r} in this session")
+                    return 1
+            except HubError:
+                pass
+        try:
+            record_id = store.send(text, to=args.to or "",
+                                   room="" if args.to else (args.room or profile.room or ""),
+                                   thread=args.thread or "")
+        except ValueError as exc:
+            fail(str(exc))
+            return 1
+        try:
+            onboard.ensure_daemon(profile, wait=False)
+        except (OSError, RuntimeError, HubError):
+            pass  # queued durably; the listener delivers it when it is back
+        target = f"@{args.to}" if args.to else f"#{args.room or profile.room}"
+        ok(f"queued for {target} through your worker: {record_id}")
+        print(dim("  your worker is enabled, so it delivers what you send; `collab worker status` shows delivery"))
+        return 0
     env = Envelope(
         kind=KIND_CHAT, text=text, sender=profile.name,
         room=None if args.to else (args.room or profile.room),
@@ -2115,6 +2147,8 @@ def cmd_task(args: argparse.Namespace) -> int:
                     fail("`collab task comment --id T_xxx \"what you want to"
                          " say\"`")
                     return 1
+                if (queued := _queue_comment(profile, "task", args.id, args.title)) is not None:
+                    return queued
                 client.add_comment("task", args.id, args.title)
                 ok(f"commented on {said(args.id)}")
                 return 0
@@ -2325,6 +2359,8 @@ def cmd_project(args: argparse.Namespace) -> int:
                     fail("`collab project comment --id P_xxx \"what you want"
                          " to say\"`")
                     return 1
+                if (queued := _queue_comment(profile, "project", args.id, args.title)) is not None:
+                    return queued
                 client.add_comment("project", args.id, args.title)
                 ok(f"commented on {said(args.id)}")
                 return 0
@@ -3511,6 +3547,18 @@ def cmd_file(args: argparse.Namespace) -> int:
                     fail(f"{path.name} is {size / 1024 / 1024:.1f}MB — the limit is "
                          f"{MAX_FILE_BYTES // 1024 // 1024}MB")
                     return 1
+                from .worker import Store
+                if getattr(profile, "dir", None) and Store(profile.dir).enabled():
+                    # R3: the worker is this participant's one voice while it is on.
+                    record_id = Store(profile.dir).queue_file(
+                        path, to=args.to or "", room="" if args.to else (args.room or profile.room or "general"))
+                    try:
+                        onboard.ensure_daemon(profile, wait=False)
+                    except (OSError, RuntimeError, HubError):
+                        pass
+                    ok(f"{said(path.name)} queued for delivery by your worker: {record_id}")
+                    print(dim("  `collab worker status` shows it until it is delivered"))
+                    return 0
                 record = client.upload_file(path, to=args.to, room=args.room)
                 if args.json:
                     print(json.dumps(record, indent=2))
@@ -6033,8 +6081,44 @@ def cmd_worker(args: argparse.Namespace) -> int:
             store.configure(config)
             onboard.ensure_daemon(profile)
             ok("collaboration worker enabled; the listener owns its lifecycle")
+            from .worker import no_worker
+            if no_worker():
+                warn("COLLAB_NO_WORKER is set: a listener started from this environment runs no worker")
             print("  `collab worker status` reports provider errors and pending decisions")
         elif args.worker_action == "off":
+            # Queued main-agent sends are delivered before the worker stops:
+            # left behind, a later start posted them stale and out of order.
+            queued = store.outbox()
+            from .protocol import EXT_PREFIX as protocol_prefix
+            if queued:
+                try:
+                    with _client(profile) as client:
+                        for record in queued:
+                            if record.get("kind") == "file":
+                                client.upload_file(Path(record["stash"]), to=record.get("to") or None,
+                                                   room=None if record.get("to") else (record.get("room") or None))
+                                store.acknowledge(record["id"])
+                                continue
+                            if record.get("kind") == "comment":
+                                client._request("POST", f"{protocol_prefix}/comments", json={
+                                    "subject": record["subject"], "id": record["subject_id"],
+                                    "text": record["text"], "collab_worker_delivery": record["id"]})
+                                store.acknowledge(record["id"])
+                                continue
+                            client.send(Envelope(kind=KIND_CHAT, text=record["text"], sender=profile.name,
+                                                 to=record.get("to") or None,
+                                                 room=None if record.get("to") else (record.get("room") or None),
+                                                 thread=record.get("thread") or None,
+                                                 body={**(record.get("body") or {}),
+                                                       "collab_worker_delivery": record["id"]}))
+                            store.acknowledge(record["id"])
+                except HubError as exc:
+                    left = len(store.outbox())
+                    store.off()
+                    warn(f"{left} queued message(s) could not be delivered now ({exc}); they are kept "
+                         "and go out, in order, the next time the worker is started")
+                    ok("collaboration worker disabled; pending decisions and replies are preserved")
+                    return 0
             store.off()
             ok("collaboration worker disabled; pending decisions and replies are preserved")
         elif args.worker_action == "reply":
@@ -6259,6 +6343,31 @@ def _new_proposal_id() -> str:
     return "fs_" + secrets.token_hex(4)
 
 
+def _queue_comment(profile: SessionProfile, subject: str, subject_id: str,
+                   text: str) -> int | None:
+    """Route a board comment through the enabled worker; None means post it.
+
+    R3: the worker is this participant's one voice while it is on, and a
+    comment is delivered verbatim and in order with the rest of its messages.
+    """
+    from .worker import Store
+    store = Store(profile.dir)
+    if not store.enabled():
+        return None
+    try:
+        record_id = store.queue_comment(subject, subject_id, text)
+    except ValueError as exc:
+        fail(str(exc))
+        return 1
+    try:
+        onboard.ensure_daemon(profile, wait=False)
+    except (OSError, RuntimeError, HubError):
+        pass
+    ok(f"queued for delivery by your worker: {record_id}")
+    print(dim("  `collab worker status` shows it until it is delivered"))
+    return 0
+
+
 def _send_body(profile: SessionProfile, text: str,
                body: dict[str, Any]) -> bool:
     """Say something in the room with a body on it. False if the hub refused.
@@ -6267,6 +6376,17 @@ def _send_body(profile: SessionProfile, text: str,
     message rides in a chat's body — the same door learnings use. Nothing
     hub-side reads it; the exchange is between daemons.
     """
+    from .worker import Store
+    store = Store(profile.dir)
+    if store.enabled():
+        # R3: proposals and votes are messages too; the worker's outbox is
+        # this participant's one voice while it is on.
+        try:
+            store.send(text, to="", room=profile.room or "general", body=body)
+        except ValueError as exc:
+            fail(str(exc))
+            return False
+        return True
     env = Envelope(kind=KIND_CHAT, text=text, sender=profile.name,
                    room=profile.room, body=body,
                    stats=_current_stats(profile))

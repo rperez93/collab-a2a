@@ -304,3 +304,64 @@ def test_claude_stream_diagnostics_do_not_discard_valid_actions():
     assert runtime._decode('claude', b'Warning: optional config missing\n' + result, None) == GOOD
     with pytest.raises(runtime.WorkerRuntimeError):
         runtime._decode('claude', result + b'\n{"type":"result","type":"result"}', None)
+
+
+def test_a_deferring_reply_without_an_escalation_is_routed_to_the_main_agent():
+    """Observed live: 'hold tight, I'll get back to you' with nothing filed."""
+    from collab.worker_runtime import unrouted_deferrals
+    selected = [{"seq": 7, "sender": "cortana", "text": "Which task should I claim?"}]
+    result = {"replies": [{"text": "Hold tight, I'll get back to you.", "to": "cortana", "room": ""}],
+              "escalations": []}
+    added = unrouted_deferrals(result, selected, pending=[])
+    assert [(e["reason"], e["seq"]) for e in added] == [("decision", 7)]
+    assert "Which task should I claim?" in added[0]["question"]
+    assert unrouted_deferrals(result, selected, pending=[{"seq": 7}]) == []
+    routed = {**result, "escalations": [{"reason": "decision", "seq": 7, "question": "q"}]}
+    assert unrouted_deferrals(routed, selected, pending=[]) == []
+    plain = {"replies": [{"text": "R3 is claimed by cortana.", "to": "cortana", "room": ""}],
+             "escalations": []}
+    assert unrouted_deferrals(plain, selected, pending=[]) == []
+
+
+def test_deferral_repair_covers_curly_apostrophes_and_each_peer_separately():
+    from collab.worker_runtime import unrouted_deferrals
+    selected = [{"seq": 3, "sender": "ana", "room": "", "text": "Merge now?"},
+                {"seq": 4, "sender": "bo", "room": "", "text": "Which port?"}]
+    result = {"replies": [{"text": "I\u2019ll check and confirm.", "to": "bo", "room": ""},
+                          {"text": "Asked my human.", "to": "ana", "room": ""}],
+              "escalations": [{"reason": "decision", "seq": 3, "question": "Merge?"}]}
+    added = unrouted_deferrals(result, selected, pending=[])
+    assert [e["seq"] for e in added] == [4], "ana's escalation must not hide bo's promise"
+
+
+def test_relaying_the_main_answer_and_quoting_other_dms_are_not_repaired():
+    from collab.worker_runtime import unrouted_deferrals
+    selected = [{"seq": 2, "sender": "carol", "to": "alice", "room": "", "text": "private to alice"}]
+    answer = "Hold tight, I'll get back to you after the deploy."
+    relayed = {"replies": [{"text": answer, "to": "bob", "room": ""}], "escalations": []}
+    assert unrouted_deferrals(relayed, selected, pending=[], answered={"bob"}) == []
+    paraphrased = {"replies": [{"text": "Hold tight — the deploy answer is coming.", "to": "bob", "room": ""}],
+                   "escalations": []}
+    assert unrouted_deferrals(paraphrased, selected, pending=[], answered={"bob"}) == []
+    # bob's DM thread has no message this turn; carol's private DM must not be quoted
+    stray = {"replies": [{"text": "Stand by, I'll check and confirm.", "to": "bob", "room": ""}],
+             "escalations": []}
+    assert unrouted_deferrals(stray, selected, pending=[]) == []
+
+
+def test_the_deferral_pattern_has_fewer_false_positives():
+    from collab.worker_runtime import DEFERRAL
+    assert DEFERRAL.search("Stand by.") and DEFERRAL.search("Will update you shortly")
+    assert not DEFERRAL.search("Let me check: the tests pass now")
+    assert not DEFERRAL.search("I'll check the logs")
+
+
+
+def test_an_escalation_about_a_peer_in_the_same_turn_routes_its_deferral():
+    from collab.worker_runtime import unrouted_deferrals
+    selected = [{"seq": 4, "sender": "bob", "to": "", "room": "general", "text": "Which port?"}]
+    result = {"replies": [{"text": "I'll check and confirm.", "to": "bob", "room": ""}],
+              "escalations": [{"reason": "decision", "seq": 4, "question": "Port?"}]}
+    assert unrouted_deferrals(result, selected, pending=[]) == []
+    alone = {**result, "escalations": []}
+    assert [e["seq"] for e in unrouted_deferrals(alone, selected, pending=[])] == [4]

@@ -149,6 +149,55 @@ def validate_result(value: object) -> dict:
     return value
 
 
+# A reply that defers to the main agent ("hold tight", "I'll get back to you")
+# is a promise only an escalation keeps. Models were observed making it with no
+# escalation, so the question never reached the main agent: loss by omission.
+DEFERRAL = re.compile(
+    r"\b(hold tight|stand by|get back to you|circle back|will update you"
+    r"|i(?:['\u2019]|\s+wi)ll (check and|confirm and|ask and|find out|let you know|update you)"
+    r"|(check|confirm) with (my|the) (human|main|user|lead)|as soon as i (have|hear|get)"
+    r"|te (aviso|confirmo|respondo)|d[ée]jame (revisar|confirmar|preguntar) y)\b",
+    re.IGNORECASE)
+
+
+def unrouted_deferrals(result: dict, selected: list[dict], pending: list[dict],
+                       answered: set[str] | frozenset = frozenset()) -> list[dict]:
+    """Escalations for deferring replies the model did not route itself.
+
+    A peer the turn escalated about, or one already waiting on a pending
+    decision, has had its question routed; only the silent promise is repaired.
+    """
+    by_seq = {e["seq"]: e for e in selected}
+    # Routed already: an escalation this turn about this peer, or a pending one.
+    waiting = {row.get("seq") for row in pending} | {e["seq"] for e in result["escalations"]}
+    routed_to = {by_seq[s]["sender"] for s in waiting if s in by_seq}
+    added = []
+    for reply in result["replies"]:
+        if not DEFERRAL.search(reply["text"]) or reply["to"] in routed_to:
+            continue
+        # A peer whose question the main agent answered this turn is being
+        # given that answer, however the worker words it; a decision about
+        # the relay would loop. By peer, not by matching the text.
+        if reply["to"] in answered:
+            continue
+        # The peer's own message, else the newest message in the same named
+        # room; never someone else's DM.
+        source = ([e for e in selected if e["sender"] == reply["to"]]
+                  or [e for e in selected if reply["room"] and not e.get("to")
+                      and e.get("room", "") == reply["room"]])
+        if not source:
+            continue  # nothing to ask about: a decision with no question loops
+        seq = source[-1]["seq"]
+        if seq in waiting or any(a["seq"] == seq for a in added):
+            continue
+        asked = source[-1]["text"][:1000]
+        added.append({"reason": "decision", "seq": seq, "question": (
+            f"Your worker told {reply['to'] or 'the room'} it would get back to them "
+            f"without routing the question to you. Their message: {asked!r}. "
+            "What should it answer?")})
+    return added
+
+
 def _json(data: bytes | str) -> object:
     def unique(pairs):
         result = {}

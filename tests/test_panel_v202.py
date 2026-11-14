@@ -108,3 +108,12 @@ def test_standalone_panels_never_advertise_inert_pane_switch_keys():
         long, short = panel._navigation_keys()
         assert 'Tab' not in long + short and '1/2' not in long + short
         assert 'End' in long
+
+
+def test_the_worker_column_shows_the_configured_model_not_usage_history():
+    """R3: a switched worker kept showing its previous provider's last_model."""
+    person = {"name": "friday", "stats": {"model": "m", "worker": {
+        "model": "gpt-6-luna", "last_model": "claude-sonnet-5", "running": True}}}
+    rows = tui._participant_card(person, 100, who="friday", state="online", online=True,
+        selected=False, fields=list(tui.participant_metrics.FIELDS), detailed=False, doing="")
+    assert "w●:gpt-6-luna" in rows[0].text and "claude-sonnet-5" not in rows[0].text
