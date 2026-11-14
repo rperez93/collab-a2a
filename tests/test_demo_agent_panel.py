@@ -239,6 +239,9 @@ def test_together_inside_tmux_opens_the_viewer_in_a_second_pane(monkeypatch):
 
     _with_terminal(monkeypatch)
     monkeypatch.setenv("TMUX", "/tmp/tmux-1/default,1,0")
+    # The simulated caller supplies a complete pane identity; partial context
+    # now resolves its exact terminal rather than guessing an active pane.
+    monkeypatch.setenv("TMUX_PANE", "%7")
     monkeypatch.setattr(w, "tmux_available", lambda: True)
     opened, ran = [], []
     monkeypatch.setattr(w, "open_tmux_pane",

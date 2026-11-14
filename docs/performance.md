@@ -410,3 +410,23 @@ Reproduce with `benchmarks/roster_clocks.py synthetic unchanged clock_headers`
 and `legacy_pace`, or choose `near_2mib` / `changing`, under an absolute branch
 `PYTHONPATH`. No network, session state or model calls are used. Regression
 tests separately enforce resource bounds and exact live-clock transitions.
+
+### Terminal context and pending decisions
+
+The viewer resolves its own tmux pane even when a coding host strips the tmux
+environment. Discovery uses exact terminal identity, bounded socket queries and
+an isolated process group for each command. An ambiguous or incomplete lookup
+leaves the choice to a separate terminal. There is no active-pane guess.
+
+Fresh-process silent and flooding fake tmux commands stopped in 0.252 / 0.021 s
+wall, using 0.00072 / 0.00089 s controller CPU and 22,044 / 22,140 KiB peak RSS.
+Tests verify their owned child processes are reaped. These are controller costs,
+not measurements of a real tmux server or provider process.
+
+A synthetic 40-participant roster at 54 columns used 0.335 / 0.310 s CPU for
+2,000 cached calls before/after pending alerts, and 2.616 / 2.470 s for 500
+changing-count rebuilds. Peak RSS stayed within 68 KiB across these samples.
+The differences are descriptive noise, not a speedup claim. Alerts add no
+polling and keep unknown worker timestamps explicit. Real isolated tmux tests
+exercise disclosure keys and mouse input at 38, 54 and 80 columns.
+[Raw terminal measurements](performance-terminal-context.json).
