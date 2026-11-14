@@ -7632,8 +7632,11 @@ def _accept_strong(client, profile, match: dict[str, Any], args: argparse.Namesp
                                         credential_id=key["credential_id"])
         print(dim("  the approval window is open: read the review there, and approve or "
                   "decline it yourself"))
+        # Keyword arguments only: the passkey leg passes `origin`, the Hello
+        # leg nothing (agreed contract).
         outcome = strong.open_window(
-            request, lambda: api.challenge(reviewed.request_id, key["credential_id"]),
+            request, lambda **kw: api.challenge(reviewed.request_id, key["credential_id"],
+                                                origin=kw.get("origin")),
             method=key["method"])
         choice = outcome.get("choice")
         if choice == "decline":
