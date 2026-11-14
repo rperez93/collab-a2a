@@ -25,7 +25,7 @@ import httpx
 from httpx_sse import aconnect_sse
 
 from .. import (__version__, activity as act, diagnostics, lockfile,
-               owner as ownership, peers, wake)
+               owner as ownership, peers, roster_clocks, wake)
 from ..batch import DELTA_SHOWN_FOR
 from ..config import (SessionProfile, follow_agent_enabled, repo_for_home,
                       share_stats_enabled, stats_source)
@@ -2638,10 +2638,22 @@ class Daemon:
             r = await client.get(
                 f"{self.profile.url}{EXT_PREFIX}/participants",
                 headers=request_headers(self.profile.token,
-                                        {"If-None-Match": etag} if etag else None),
+                                        {roster_clocks.OFFER: "1", **({"If-None-Match": etag} if etag else {})}),
                 timeout=10.0,
             )
             if r.status_code == 200 or (r.status_code == 304 and etag and self.snapshot):
+                if r.status_code == 304:
+                    batch = self.snapshot.get("batch")
+                    if isinstance(batch, dict) and batch.get("pace") is not None:
+                        observed = roster_clocks.read_clocks(r.headers)
+                        if observed is None:
+                            # A stripping proxy or old hub must not renew a
+                            # cached ETA over an old observation. Force the
+                            # next scheduled read to recover with full JSON.
+                            self._snapshot_etag = None
+                            self._snapshot_error = "conditional roster omitted valid pace clocks"
+                            return
+                        self.snapshot["batch"] = {**batch, **observed}
                 self._snapshot_error = ""
                 if r.status_code == 200:
                     self.snapshot = r.json()

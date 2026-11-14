@@ -1,0 +1,109 @@
+{
+  "method": "Fresh Python subprocesses with absolute branch PYTHONPATH; synthetic overdue pace advances on every request. Legacy full-pace ETags compared to opt-in authoritative clock headers; both use identical current serializer and gzip. CPU includes request loop; Linux postexec VmHWM. Clock header bytes include names and CRLF; other HTTP headers/TLS excluded. No provider or network calls.",
+  "results": [
+    {
+      "board": "synthetic",
+      "state": "unchanged",
+      "variant": "legacy_pace",
+      "requests": 100,
+      "payload_bytes": 17746,
+      "body_bytes": 108456,
+      "clock_header_bytes": 0,
+      "responses_200": 100,
+      "responses_304": 0,
+      "cpu_seconds": 0.03229953000000001,
+      "peak_rss_kib": 26096
+    },
+    {
+      "board": "synthetic",
+      "state": "unchanged",
+      "variant": "clock_headers",
+      "requests": 100,
+      "payload_bytes": 17746,
+      "body_bytes": 1084,
+      "clock_header_bytes": 16243,
+      "responses_200": 1,
+      "responses_304": 99,
+      "cpu_seconds": 0.028777382000000004,
+      "peak_rss_kib": 25660
+    },
+    {
+      "board": "synthetic",
+      "state": "changing",
+      "variant": "legacy_pace",
+      "requests": 100,
+      "payload_bytes": 17746,
+      "body_bytes": 124324,
+      "clock_header_bytes": 0,
+      "responses_200": 100,
+      "responses_304": 0,
+      "cpu_seconds": 0.026100015000000004,
+      "peak_rss_kib": 26352
+    },
+    {
+      "board": "synthetic",
+      "state": "changing",
+      "variant": "clock_headers",
+      "requests": 100,
+      "payload_bytes": 17746,
+      "body_bytes": 124324,
+      "clock_header_bytes": 0,
+      "responses_200": 100,
+      "responses_304": 0,
+      "cpu_seconds": 0.029507785999999994,
+      "peak_rss_kib": 26404
+    },
+    {
+      "board": "near_2mib",
+      "state": "unchanged",
+      "variant": "legacy_pace",
+      "requests": 20,
+      "payload_bytes": 2031457,
+      "body_bytes": 346452,
+      "clock_header_bytes": 0,
+      "responses_200": 20,
+      "responses_304": 0,
+      "cpu_seconds": 0.206625407,
+      "peak_rss_kib": 31676
+    },
+    {
+      "board": "near_2mib",
+      "state": "unchanged",
+      "variant": "clock_headers",
+      "requests": 20,
+      "payload_bytes": 2031457,
+      "body_bytes": 17321,
+      "clock_header_bytes": 3085,
+      "responses_200": 1,
+      "responses_304": 19,
+      "cpu_seconds": 0.172567042,
+      "peak_rss_kib": 29744
+    },
+    {
+      "board": "near_2mib",
+      "state": "changing",
+      "variant": "legacy_pace",
+      "requests": 20,
+      "payload_bytes": 2031457,
+      "body_bytes": 335398,
+      "clock_header_bytes": 0,
+      "responses_200": 20,
+      "responses_304": 0,
+      "cpu_seconds": 0.19438373999999997,
+      "peak_rss_kib": 31544
+    },
+    {
+      "board": "near_2mib",
+      "state": "changing",
+      "variant": "clock_headers",
+      "requests": 20,
+      "payload_bytes": 2031457,
+      "body_bytes": 335398,
+      "clock_header_bytes": 0,
+      "responses_200": 20,
+      "responses_304": 0,
+      "cpu_seconds": 0.235823954,
+      "peak_rss_kib": 31676
+    }
+  ]
+}
