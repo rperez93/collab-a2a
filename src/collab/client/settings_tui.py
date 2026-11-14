@@ -409,12 +409,15 @@ class SettingsEditor:
                 put(row, line.ljust(width - 1), curses.color_pair(tui.C_SELECTION) | curses.A_BOLD
                     if item.name == self.selected else curses.color_pair(tui.C_TEXT))
             if self.item:
-                put(height - 6, self.selected, curses.A_BOLD)
+                # THE LAYER FIRST, on the setting's own heading: appended to the
+                # reset line, a long default clipped it off for six settings at
+                # 52 columns, and the reset line has to keep its own words at 38.
+                # The name is the highlighted row above, so it can lose columns.
+                put(height - 6, f"set by: {_layer(self.item.name)} · {self.selected}", curses.A_BOLD)
                 about = edit_lines(self.item.about, 0, width - 2)[0]
                 for i, line in enumerate(about[:2], height - 5):
                     put(i, line)
-                put(height - 3, "r: Reset to default: " + (shown(self.item.default) or "(empty)")
-                    + " · set by: " + _layer(self.item.name))
+                put(height - 3, "r: Reset to default: " + (shown(self.item.default) or "(empty)"))
             if self.mode == "search":
                 try:
                     caret = (2, min(columns("Search: " + self.query), width - 2))

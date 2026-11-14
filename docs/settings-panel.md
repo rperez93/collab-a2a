@@ -36,8 +36,9 @@ Commands are edited as text; saving a configured command lets its usual runtime
 consumer use it.
 
 `r` or **Reset to default** shows the default and asks for confirmation before applying it.
-The line beside it names where the selected value comes from — `agent`, `kind`,
-`machine`, `legacy` or `default` — as `collab config KEY` does.
+The selected setting's heading begins with where its value comes from —
+`set by: agent`, `kind`, `machine`, `legacy` or `default` — as `collab config
+KEY` says.
 A star beside a setting means its effective value differs from its default.
 
 Changes saved by another terminal appear automatically. Saving rereads the

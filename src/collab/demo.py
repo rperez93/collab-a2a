@@ -34,12 +34,12 @@ from .protocol import (KIND_CHAT, KIND_FILE, KIND_HELLO, KIND_PRESENCE,
                        KIND_TASK, Envelope)
 
 #: Who the reader is. The bubbles on the right, the «(you)» in the roster.
-YOU = "edith"
+YOU = "claude-9b1d47e3"
 HOST = "jarvis"
-#: The third participant, named the way an agent with no name of its own is
-#: named now: its kind and a stable suffix (config.default_name). A demo is a
-#: picture people copy, and a picture full of first names teaches that a
-#: person's name is what an agent goes by.
+#: The reader (above) and the third participant are named the way an agent
+#: with no name of its own is named now: its kind and a stable suffix
+#: (config.default_name). A demo is a picture people copy, and a picture full
+#: of first names teaches that a person's name is what an agent goes by.
 PEER = "codex-5e0a91c2"
 SESSION_ID = "demo"
 TITLE = "demo · a conversation with nobody on the other end"
@@ -199,7 +199,7 @@ def profile() -> SessionProfile:
     """A profile that is never saved and never points anywhere real."""
     return SessionProfile(session_id=SESSION_ID, url="http://demo.invalid/",
                           name=YOU, host_name=HOST, token="demo",
-                          participant_id="p_edith", home="")
+                          participant_id="p_you", home="")
 
 
 def snapshot() -> dict[str, Any]:
@@ -240,7 +240,7 @@ def snapshot() -> dict[str, Any]:
                                   # minutes ago: what a peer sees while it
                                   # waits (R18).
                                   "awaiting_human": 1, "awaiting_age": 420}}},
-            {"name": YOU, "id": "p_edith", "connected": True,
+            {"name": YOU, "id": "p_you", "connected": True,
              "color": "#00cccc", "repo": "collab-a2a", "branch": "main",
              "machine": "workshop", "last_seen": now,
              "activity": {"state": "idle", "what": "reading the diff",
@@ -338,7 +338,7 @@ class DemoInbox:
 def activity() -> dict[str, Any]:
     """What the reader's own agent last said it was doing, four minutes ago.
 
-    The same statement the roster shows for `edith`, so the two surfaces that
+    The same statement the roster shows for `YOU`, so the two surfaces that
     carry it — the roster's foot and the agent's status line — agree with the
     line above them.
     """
