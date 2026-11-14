@@ -326,19 +326,21 @@ class ApprovalStore:
         self._audit(db, requester, "requested", now, identity, digest=review.digest, target_id=target)
         return {"api_version": 1, "request_id": identity, "digest": review.digest, "expires_at": expires}
 
-    def _request(self, db, owner, identity, now):
-        row = db.execute("SELECT * FROM approval_requests WHERE id=? AND session_id=? AND target_id=?",
-                         (_text(identity), self.session_id, owner)).fetchone()
+    def _request(self, db, owner, identity, now, *, allow_requester=False):
+        row = db.execute("SELECT * FROM approval_requests WHERE id=? AND session_id=? AND (target_id=? OR (?=1 AND requester_id=?))",
+                         (_text(identity), self.session_id, owner, int(allow_requester), owner)).fetchone()
         if row is None:
             raise Rejected("unknown_request", 404)
         if now >= row["expires_at"]:
             raise Rejected("request_expired", 410)
         self._active_person(db, row["requester_id"])
+        if allow_requester:
+            self._active_person(db, row["target_id"])
         return row
 
     def review(self, token, request_id):
         with self._transaction(token, charge=False) as (db, owner, now):
-            row = self._request(db, owner, request_id, now)
+            row = self._request(db, owner, request_id, now, allow_requester=True)
             return {"api_version": 1, "request_id": request_id, "review": json.loads(row["canonical"]),
                     "canonical_review": crypto.encode(row["canonical"]), "digest": row["digest"],
                     "state": row["state"], "required_strength": "strong"}

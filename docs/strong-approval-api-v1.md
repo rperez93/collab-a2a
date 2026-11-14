@@ -128,8 +128,16 @@ no whitespace, `=`, standard-base64 alphabet or alternate encoding. Decode with
 field-specific limits and require encoding the decoded bytes to reproduce the
 input exactly. `digest` and key fingerprints are lowercase SHA-256 hex.
 
-IDs are opaque, case-sensitive hub-issued strings; adapters must not derive or
-interchange `request_id`, `challenge_id`, `credential_id`, or `nonce`. Expiry is
+Request and challenge IDs are opaque, case-sensitive hub-issued strings;
+adapters must not reconstruct them or interchange them with credential IDs or
+nonces. `credential_id` is the immutable provider's registered-key handle, not
+a fixed session/participant naming formula. Hello key names must match
+`[A-Za-z0-9._-]{1,64}`; a valid `collab-<session>-<participant>` name is merely
+one possible convention, and adding/rotating keys needs fresh handles. Passkey
+IDs encode the authenticator's credential ID as canonical unpadded base64url.
+Only the initial enrolment challenge has a null credential ID before the new
+key is known. `enrol/finish` requires the ID, SPKI and possession proof for
+both methods; Hello has no exemption from proof or ownership. Expiry is
 an integer Unix-second instant. The hub clock is authoritative. Challenges
 expire at `now >= expires_at`, 120 seconds after issuance, and are single-use.
 
@@ -172,6 +180,12 @@ reported separately by capability discovery.
   the UTF-8 bytes the hub hashes. The UI displays the full decoded review as
   untrusted text. Reading it grants no dispatch authority; payload secrecy
   from the reviewing same-UID agent is not claimed.
+  The authenticated target **or original requester**, identified by immutable
+  participant ID, may read this exact canonical review while both remain
+  active. The requester hashes `canonical_review` bytes returned by the hub;
+  it must not reconstruct a subset from skill/args/IDs because the server also
+  binds authority, destination, source fingerprint and operation semantics.
+  This read permission grants no challenge, signing, decline or receipt right.
 * `POST /requests/{request_id}/challenge` accepts `{credential_id, origin?}`
   and returns `{api_version, request_id, challenge_id, credential_id, method,
   challenge, expires_at, digest, rp_id?, origin?}`. The request is frozen to
@@ -243,9 +257,26 @@ Bindings are bounded to 4096 globally and 256 per receiver, retained until the
 source expires; acceptance and request-expiry do not immediately erase replay
 protection. Accepted events share the bounded durable approval-event outbox
 with security alarms and preserve private entitlement in live and replay feeds.
-Production frontend consumption and the policy that prevents a legacy weak
-acceptance from satisfying a strong request remain integration gates. Collab
-does not execute a skill as a side effect of this API.
+The shared message persistence boundary now records explicit strong-request
+policy atomically with each source. Both REST and A2A reject subsequent legacy
+`accepted`/`done` responses for that routing pair and request ID, and refuse
+client attempts to mint `strong_skill_response` or `event:"skill-approval"`.
+Declining still needs only authenticated authority; ordinary weak requests
+retain their existing behavior. A strong request ID with a prior weak
+acceptance or completion is refused, preventing an acceptance sent in advance
+from being inherited by the old reader. Concurrent source/response publication
+cannot commit both: one transaction must refuse.
+
+The policy registry is bounded to 4096 entries. It preserves each routing
+pair/ID while its newest strong source remains in the event history, even
+past approval expiry; pruning the source makes its policy row reclaimable.
+This global cap is a storage bound, not per-peer flood protection. Draft-state
+compatibility checks inspect at most 500 indexed pair events, matching the old
+reader's maximum history window, with bounded SQL payload prefixes. The pair
+indexes are installed after identity migration so old databases remain valid.
+Production frontend consumption, native signing, local execution policy and
+human ceremonies remain integration gates. Collab does not execute a skill
+as a side effect of this API.
 
 ## Proof bytes and origin binding
 
