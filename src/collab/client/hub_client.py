@@ -430,9 +430,17 @@ class HubClient:
                     f"{self.base_url}{EXT_PREFIX}/files" + ("/by-id" if to_id else ""),
                     headers=self._headers(), files=files, params=params,
                     timeout=120.0,  # a 10MB upload over a tunnel needs room
+                    # NEVER FOLLOWED, as `_request` never follows: the bearer
+                    # header goes wherever a redirect points, and behind the
+                    # shared proxy a relative Location such as `/files` is
+                    # the bare domain — the PRIMARY session, not this one.
+                    follow_redirects=False,
                 )
             except httpx.HTTPError as exc:
                 raise HubError(f"upload failed: {exc}") from exc
+        if r.is_redirect:
+            raise HubError(f"upload refused: the hub answered {r.status_code} "
+                           "with a redirect, which is not followed")
         if r.status_code == 413:
             raise HubError(r.json().get("detail", "file too large"))
         if r.status_code >= 400:
@@ -454,7 +462,12 @@ class HubClient:
         url = f"{self.base_url}{EXT_PREFIX}/files/{file_id}/content"
         try:
             with self._client.stream("GET", url, headers=self._headers(),
-                                     timeout=120.0) as r:
+                                     timeout=120.0, follow_redirects=False) as r:
+                # Never followed: see `upload_file`.
+                if r.is_redirect:
+                    raise HubError(f"download refused: the hub answered "
+                                   f"{r.status_code} with a redirect, which is "
+                                   "not followed")
                 if r.status_code == 404:
                     raise HubError("no such file — it may already have been collected")
                 if r.status_code >= 400:

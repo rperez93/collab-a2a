@@ -28,9 +28,18 @@ session that held the domain then. The primary is chosen explicitly, with
 session so a hub its daemon revives asks again. Starting or restarting the
 proxy never chooses one. Once recorded, only that session may set it; a second
 session asking is refused, and `collab host` says which session holds it. The
-primary remains fixed when that session ends: the bare route returns 404,
-never another session. Changing it is deliberate: with the proxy stopped,
-remove `primary` from `proxy/state.json` in the peer registry.
+primary remains fixed when that session stops: the bare route returns 404,
+never another session, until it is hosted again. `collab kill --purge` of the
+primary session releases it, since a purged session never comes back.
+Otherwise, changing it is deliberate: with the proxy stopped, remove `primary`
+from `proxy/state.json` in the peer registry.
+
+A session its host kept local (`--no-tunnel`, or `COLLAB_NO_TUNNEL=1`) is
+never routed: the proxy reads each session's own record on this machine and
+skips it, so it is a 404 at `/s/<id>` and on the bare domain, and stays one
+when its daemon revives its hub. A session whose record the proxy cannot read
+is not routed either.
+
 An explicit host mode is saved for resume. Local-only hosting starts neither
 kind of tunnel. A requested domain differing from a running proxy produces a
 visible error; choose a separate tunnel if that different domain is intended.
@@ -49,12 +58,15 @@ account is the one endpoint. Moving it is one command:
 collab host --resume <session_id> --tunnel proxy --primary --keep
 ```
 
-It does the cutover in order: it records the new mode with the session (so a
-hub revived meanwhile comes up attached), stops the session's hub, listener
-and own ngrok by their recorded stamps, waits — up to 20 s — until the hub and
-its ngrok have exited, and only then starts the new hub, whose proxy takes the
-same domain. If they have not exited by then it stops and says so rather than
-starting a proxy ngrok would refuse (ERR_NGROK_334). Like any `host --resume`
+It does the cutover in order. It records the new mode with the session, so a
+hub revived meanwhile comes up attached. It stops the session's listener first
+and waits for it, since the listener is what revives a dead hub. It then stops
+the session's running hub, whatever its tunnel, and its own ngrok, by their
+recorded stamps, and waits — up to 20 s each — until they have exited. Only if
+the session's record still names the hub it stopped does it start the new hub,
+whose proxy takes the same domain. If anything has not exited, or a hub was
+started for the session meanwhile, it stops and says so rather than starting a
+proxy ngrok would refuse (ERR_NGROK_334) or a second hub. Like any `host --resume`
 it mints a new invite; guests already in the session keep their tokens, and the
 bare-domain address they hold reaches the primary. The proxy never seizes or
 kills a tunnel some other session holds: a domain in use there produces the

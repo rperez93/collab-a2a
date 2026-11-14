@@ -16,6 +16,21 @@ from .client.daemon_files import open_log
 logger = logging.getLogger("collab.proxy_host")
 
 
+def proxy_env(base) -> dict:
+    """The environment the MACHINE-WIDE proxy starts with: this hub's, minus
+    everything that names one session or one agent. It was `os.environ`
+    whole, so the proxy carried the starting hub's COLLAB_HOME, agent kind and
+    owner — and an owner is what makes a collab process follow an agent and
+    stop when it leaves, which the proxy serving every session must never do.
+    """
+    from . import owner
+
+    env = owner.without_owner(dict(base))
+    for name in ("COLLAB_HOME", "COLLAB_AGENT_KIND"):
+        env.pop(name, None)
+    return env
+
+
 def use_proxy(mode: str, setting: str) -> bool:
     if mode == 'own':
         return False
@@ -99,7 +114,8 @@ class SharedProxy:
         if child is None or child.poll() is not None:
             with open_log(proxy.log_path()) as log:
                 child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log,
-                                         stderr=log, start_new_session=True, env=dict(os.environ))
+                                         stderr=log, start_new_session=True,
+                                         env=proxy_env(os.environ))
             self._child = child
             threading.Thread(target=child.wait, daemon=True,
                              name='collab-proxy-reaper').start()

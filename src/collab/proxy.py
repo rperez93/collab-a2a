@@ -179,15 +179,15 @@ class ProxyState:
 
     def save(self) -> None:
         with _state_locked():
-            # THE PRIMARY IS NEVER WRITTEN HERE. It is set once, by
-            # `claim_primary`, and every whole-object save keeps whatever the
-            # file already names: the running proxy saves the state it loaded
-            # at start every time its tunnel changes, and that copy would
-            # otherwise revert a primary claimed since — the bare-domain links
-            # of the session that claimed it then reach nobody.
-            recorded = ProxyState.load().primary
-            if recorded:
-                self.primary = recorded
+            # THE PRIMARY IS NEVER WRITTEN HERE. It is set by `claim_primary`
+            # and cleared by `release_primary`, and every whole-object save
+            # keeps whatever the file names — empty included: the running
+            # proxy saves the state it loaded at start every time its tunnel
+            # changes, and that copy would otherwise revert a primary claimed
+            # since (the claimant's bare-domain links reach nobody) or restore
+            # one released since (a purged session's links reach its successor
+            # in that slot — or would, were it claimed).
+            self.primary = ProxyState.load().primary
             self._write()
 
     def _write(self) -> None:
@@ -197,6 +197,22 @@ class ProxyState:
         tmp.write_text(json.dumps(asdict(self), indent=2))
         os.chmod(tmp, 0o600)
         tmp.replace(path)
+
+
+def release_primary(session_id: str) -> bool:
+    """Clear the primary if, and only if, it is `session_id`. For a session
+    that is PURGED (`collab kill --purge`): its conversation is gone and its
+    id will never be hosted again, so a bare-domain slot held for it would be
+    held for nobody, forever. A stopped session keeps it — the strict rule."""
+    if not session_id:
+        return False
+    with _state_locked():
+        state = ProxyState.load()
+        if state.primary != session_id:
+            return False
+        state.primary = ""
+        state._write()
+        return True
 
 
 def claim_primary(session_id: str) -> str:
@@ -233,6 +249,31 @@ def session_base(public_url: str, session_id: str) -> str:
     return f"{public_url.rstrip('/')}{SESSION_PREFIX}{session_id}"
 
 
+def _published(peer: Any) -> bool:
+    """May this host's session be reached through the proxy at all?
+
+    NOT A SESSION ITS HOST KEPT LOCAL. `--no-tunnel` (or COLLAB_NO_TUNNEL) is
+    the host saying the session has no public path, and the proxy is one: it
+    routed every loopback host on the machine, so once a machine ran it, a
+    session kept local answered at `/s/<id>` on the public domain — behind its
+    token, but public all the same. The choice is read from the session's OWN
+    record on this machine (`HubConfig.no_tunnel`, which a hub the daemon
+    revives reads too), never from the registry entry, which is a claim.
+    A session whose record cannot be read is not routed: fail closed.
+    """
+    import re
+
+    from .server.session import HubConfig
+
+    if not peer.home or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", peer.session_id or ""):
+        return False
+    try:
+        cfg = HubConfig.load(peer.session_id, peer.home)
+    except (OSError, ValueError, TypeError):
+        return False
+    return cfg is not None and not cfg.no_tunnel
+
+
 class Routes:
     """Session id -> the hub's loopback URL, from the registry, briefly cached."""
 
@@ -267,7 +308,7 @@ class Routes:
             # found live: such a session was a 404 until this fallback.
             address = next((u for u in (peer.local_url, peer.url)
                             if u and peers.is_loopback(u)), "")
-            if address:
+            if address and _published(peer):
                 table[peer.session_id] = address.rstrip("/")
         return table
 

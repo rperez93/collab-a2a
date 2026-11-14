@@ -36,13 +36,33 @@ def _free_port() -> int:
 @pytest.fixture
 def registry(tmp_path, monkeypatch):
     monkeypatch.setenv("COLLAB_PEERS_DIR", str(tmp_path / "peers"))
+    global _HOME
+    _HOME = tmp_path / "home"
     return tmp_path / "peers"
+
+
+#: Where `_session` writes each test's hub records; set by `registry`.
+_HOME: Path = Path("/nonexistent")
+
+
+def _session(session_id: str, *, no_tunnel: bool = False) -> str:
+    """The session's own record on this machine, which the proxy reads to see
+    whether its host kept it local (R11d-2): no record, no route."""
+    import json
+
+    where = _HOME / "sessions" / session_id
+    where.mkdir(parents=True, exist_ok=True)
+    (where / "hub.json").write_text(json.dumps({
+        "session_id": session_id, "host_name": "h", "port": 1, "bind": "127.0.0.1",
+        "invite": "i", "host_token": "t", "no_tunnel": no_tunnel}))
+    return str(_HOME)
 
 
 def _announce(session_id: str, local_url: str, *, role: str = "host",
               pid: int | None = None) -> None:
     peers.announce(session_id=session_id, name="h", role=role, url=local_url,
-                   repo="/r", home="/h", local_url=local_url, pid=pid or os.getpid())
+                   repo="/r", home=_session(session_id), local_url=local_url,
+                   pid=pid or os.getpid())
 
 
 # ── routing rules, no network ────────────────────────────────────────────────
@@ -74,9 +94,11 @@ def test_a_host_without_a_tunnel_is_routed_by_its_shared_loopback_url(registry):
     """2.1.2 with no tunnel leaves `local_url` empty: its `url` IS the loopback
     address. Found live — the session was a 404 behind the proxy."""
     peers.announce(session_id="s_old", name="h", role="host",
-                   url="http://127.0.0.1:40920", repo="/r", home="/h", pid=os.getpid())
+                   url="http://127.0.0.1:40920", repo="/r", home=_session("s_old"),
+                   pid=os.getpid())
     peers.announce(session_id="s_pub", name="h", role="host",
-                   url="https://x.ngrok.app", repo="/r", home="/h", pid=os.getpid())
+                   url="https://x.ngrok.app", repo="/r", home=_session("s_pub"),
+                   pid=os.getpid())
     assert proxy.Routes(ttl=0).table() == {"s_old": "http://127.0.0.1:40920"}
 
 
@@ -255,7 +277,8 @@ def test_a_one_mebibyte_upload_costs_the_proxy_little_memory(proxied):
 def test_the_proxy_state_survives_a_pruning_read_of_the_registry(registry):
     """It lived beside the records as `proxy.json`, which `discover(prune=True)`
     deletes once it is older than STALE_AFTER — 90 s after start."""
-    state = proxy.ProxyState(primary="s_abc", pid=1)
+    assert proxy.claim_primary("s_abc") == "s_abc"
+    state = proxy.ProxyState(pid=1)
     state.save()
     old = time.time() - 600
     os.utime(proxy.state_path(), (old, old))
@@ -596,3 +619,37 @@ def test_main_wires_the_door_the_log_filter_and_the_low_limit_warning(registry, 
                for f in logging.getLogger("asyncio").filters)
     assert "only 1024 file descriptors" in caplog.text
     assert proxy.ProxyState.load().descriptors == 1024
+
+
+
+# ── R11d-2: a session its host kept local has no public path ─────────────────
+
+def test_a_session_kept_local_is_not_a_route(registry):
+    """`--no-tunnel` means no public path, and the proxy is one. Read from the
+    session's own record on this machine, never from the registry entry; a
+    record that cannot be read routes nothing (fail closed)."""
+    _announce("s_public", "http://127.0.0.1:41020")
+    peers.announce(session_id="s_local", name="h", role="host",
+                   url="http://127.0.0.1:41021", repo="/r",
+                   home=_session("s_local", no_tunnel=True), pid=os.getpid())
+    peers.announce(session_id="s_unread", name="h", role="host",
+                   url="http://127.0.0.1:41022", repo="/r",
+                   home=str(registry.parent / "nowhere"), pid=os.getpid())
+    peers.announce(session_id="../escape", name="h", role="host",
+                   url="http://127.0.0.1:41023", repo="/r",
+                   home=_session("s_public"), pid=os.getpid())
+    assert proxy.Routes(ttl=0).table() == {"s_public": "http://127.0.0.1:41020"}
+
+
+def test_a_released_primary_is_not_restored_by_the_running_proxys_save(registry):
+    """The proxy saves the state it loaded at start. A primary released since
+    (`collab kill --purge`) must stay released, or the purged session's slot
+    comes back on the proxy's next tunnel change."""
+    assert proxy.claim_primary("s_gone") == "s_gone"
+    running = proxy.ProxyState.load()
+    assert running.primary == "s_gone"
+    assert proxy.release_primary("s_other") is False
+    assert proxy.release_primary("s_gone") is True
+    running.public_url = "https://moved.test"
+    running.save()
+    assert proxy.ProxyState.load().primary == ""

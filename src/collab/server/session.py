@@ -476,6 +476,12 @@ def update_fields(session_dir: Path, **fields: Any) -> bool:
     return True
 
 
+def daemon_stamp(cfg: HubConfig) -> Stamp:
+    """The session's listener, by its recorded stamp: the process that revives
+    a dead hub, which a cutover has to stop FIRST (see `cli`'s cutover)."""
+    return _daemon_pid(cfg)
+
+
 def _daemon_pid(cfg: HubConfig) -> Stamp:
     """The listener this session recorded, as much identified as its file allows."""
     try:
