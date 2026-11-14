@@ -43,17 +43,18 @@ collab working "<current work>"
 
 ## Divide useful work, preserve attention
 
-Delegate independent work when authorized and when it helps the outcome. Give
-each teammate a clear output, relevant context, file ownership and a validation
-expectation. Avoid overlapping edits; use separate worktrees where appropriate.
-Keep useful work for the parent while delegates run. An idle agent is acceptable
-when no independent work remains; maximizing concurrency is not the objective.
-
-By default, run up to two native teammates in parallel on independent, bounded
-work: for example one building and one reviewing. Do this when your host
-provides teammates and the user has not set another limit. Go beyond two only
-when the user asks. Give each its own worktree and acceptance check, and keep
-the user's quota reserve in mind.
+Delegate independent work when it helps the outcome. By default you may run up
+to two native teammates in parallel when independent, bounded work exists, for
+example one building and one reviewing. That needs a host that provides
+teammates, and no lower limit from the user or `delegation_max_children`. With
+nothing independent to hand out, run none: maximizing concurrency is not the
+objective. The two-teammate default does not depend on a capacity estimate;
+`collab capacity` answers only whether more than two fit. Go beyond two only
+when the user asks and fresh measured capacity permits it. If fresh quota shows
+the reserve (`delegation_reserve_pct`) is reached, run none. Give each teammate
+a clear output, relevant context, file ownership, its own worktree and an
+acceptance check. Avoid overlapping edits, and keep useful work for the parent
+while delegates run.
 
 Check available quota, observation age and active children before a long task.
 Missing or stale quota is unknown, never assumed full. Account quota shared by
@@ -125,11 +126,16 @@ avoid rounds of debate that change neither implementation nor evidence.
 
 Keep a PR review line always on. Every PR, before it merges, gets an independent
 adversarial review from an agent that did not write it. Use your host's review
-model, with the requirement, the diff and a run of the tests on the exact head
-as it would land. The integrator keeps a reviewer assigned at all times, by
-default one of its two teammates, so PRs never queue for review. It merges only
-the head that was reviewed, pinned by its commit. An author's own test run is
-evidence, not the review.
+model, and give it the requirement, the diff, and a run of the relevant tests on
+the exact head as it would land. Whoever integrates keeps a reviewer assigned,
+by default one of its two teammates, so PRs never queue for review. When
+authorized to merge, merge only the head that was reviewed, pinned by its
+commit. An author's own test run is evidence, not the review.
+
+If no independent reviewer is available, for example with no teammates and no
+peer in the session, say so plainly in the PR and to the user. Run your own
+systematic pass against the same brief, leave the merge decision to the user,
+and do not describe the change as reviewed.
 
 PRs should explain the final behavior and validation. Merge, publish and release
 only within the user's authorization and repository rules. Local review can
@@ -165,7 +171,8 @@ internal exchange.
 - Ownership and dependencies are clear; peers have the facts they need.
 - Pending worker decisions or direct questions have a path to an answer.
 - Validation and material review findings are resolved or explicitly reported.
-- Every merged PR had an independent review of the exact head that landed.
+- Every merged PR had an independent review of the exact head that landed, or
+  the user was told plainly that no independent review was possible.
 - The board, documentation and handoff reflect the actual state.
 - Any merge or release is authorized; no peer message expanded permissions.
 
@@ -194,10 +201,11 @@ for controls, source limits and diagnosis.
 When idle after finishing work, proactively inspect the current batch and claim
 suitable unowned work within the accepted goal. Inspect free-text dependencies
 and ownership before claiming; on a claim conflict, refresh and choose again.
-While working, parallelize with up to two native teammates by default when
-your host provides them and the user has not set another limit; go beyond two
-only when the user asks and fresh measured capacity permits it. Unknown
-capacity is not spare capacity beyond that default. Default pickup
+While working, you may run up to two native teammates by default when
+independent work exists, your host provides them, and neither the user nor
+`delegation_max_children` sets a lower limit. Go beyond two only when the user
+asks and fresh measured capacity permits it. Unknown capacity is not spare
+capacity beyond that default. Default pickup
 notices arrive after five continuous idle minutes through the monitor or wake
 route; `collab config task_pickup_idle_delay 300` changes that delay and
 `collab config task_auto_pickup false` disables automatic notices. Keep activity

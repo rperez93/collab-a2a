@@ -106,7 +106,8 @@ Proactive pickup is enabled by default. After **five continuous idle minutes**, 
 participant with no owned unfinished tasks receives a notice to inspect the
 latest batch. A working participant can also receive one when fresh native
 child counts and an explicitly configured quota/concurrency budget show spare
-capacity. Unknown capacity is never treated as available; conversation workers
+capacity. Beyond the default of up to two teammates, unknown capacity is never
+treated as available; conversation workers
 are not native children. The idle delay still applies to an idle main agent even
 when it has spare child capacity.
 
