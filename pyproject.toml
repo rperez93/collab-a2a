@@ -11,6 +11,8 @@ requires-python = ">=3.10"
 license = { text = "MIT" }
 
 dependencies = [
+    # Hub-side Hello/WebAuthn signature verification (R22b).
+    "cryptography>=46",
     "a2a-sdk[fastapi]>=1.1.2",
     "uvicorn>=0.30",
     "httpx>=0.28.1",
