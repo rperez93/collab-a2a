@@ -54,6 +54,9 @@ def _never_the_machines_own_config(tmp_path, monkeypatch):
     # under the next one's.
     config._CACHE.clear()
     config._AGENT_CACHE.clear()
+    config._KIND_CACHE.clear()
+    config.WRITE_MACHINE.update(on=False, key=None)
+    config.WRITE_KIND.update(on=False, key=None, kind=None)
     yield
     config._CACHE.clear()
     config._AGENT_CACHE.clear()

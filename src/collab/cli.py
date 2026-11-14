@@ -5709,6 +5709,16 @@ def _say_if_a_retired_key_is_still_there() -> None:
 
 
 def cmd_config(args: argparse.Namespace) -> int:
+    """See `_cmd_config`; the write-layer flags never outlive one command."""
+    from . import config as config_module
+    try:
+        return _cmd_config(args)
+    finally:
+        config_module.WRITE_MACHINE.update(on=False, key=None)
+        config_module.WRITE_KIND.update(on=False, key=None, kind=None)
+
+
+def _cmd_config(args: argparse.Namespace) -> int:
     """Every global setting in one place — see them, and change them.
 
     The settings arrived one command at a time and there was no way to ask what
