@@ -139,7 +139,7 @@ def script(now: _dt.datetime | None = None) -> list[Line]:
         Line("tool", "shell  collab send …"),
         sent(_said(events, you, "next: the bottom bar")),
         Line("tool", "shell  collab recv --wait 600"),
-        heard(_said(events, "mila", "a drawn scrollbar?")),
+        heard(_said(events, demo.PEER, "a drawn scrollbar?")),
         Line("tool", "shell  collab send …"),
         sent(_said(events, you, "one line of it")),
         heard(_said(events, host, "and the jump button")),
