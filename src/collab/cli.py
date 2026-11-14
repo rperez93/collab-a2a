@@ -3501,7 +3501,9 @@ def _file_size(size: int) -> str:
 def _file_retention_status(record: dict[str, Any]) -> str:
     if record.get("state", "available") != "available":
         return "no longer on host"
-    if record.get('kept'):
+    if type(record.get('kept')) is not bool:
+        return 'retention unconfirmed by host'
+    if record.get('kept') is True:
         return 'kept until withdrawal'
     expires = record.get('expires_at')
     if expires is None:
@@ -3514,7 +3516,7 @@ def _file_retention_status(record: dict[str, Any]) -> str:
 
 
 def cmd_file(args: argparse.Namespace) -> int:
-    from .file_retention import durable_source, keep_document
+    from .file_retention import durable_source, keep_document, retention_warning
     if args.action != 'send' and (getattr(args, 'temporary', False) or getattr(args, 'source', '')):
         fail('--temporary and --source apply to file send')
         return 2
@@ -3544,9 +3546,9 @@ def cmd_file(args: argparse.Namespace) -> int:
                     fail(str(exc))
                     return 2
                 record = client.upload_file(path, to=args.to, room=args.room, keep=keep, source=source)
-                if (keep and not record.get('kept')) or (source and record.get('source') != source):
-                    print('Warning: host did not confirm durable retention/source; keep your original. '
-                          'This upload may still expire or be deleted on receipt.', file=sys.stderr)
+                if warning := retention_warning(record, keep, source):
+                    print('Warning: host did not confirm requested retention/source. ' + warning,
+                          file=sys.stderr)
                 if args.json:
                     print(json.dumps(record, indent=2))
                     return 0
@@ -3555,11 +3557,11 @@ def cmd_file(args: argparse.Namespace) -> int:
                 print(f"       {dim('they fetch it with: collab file get ' + record['id'])}")
                 print(f"       owner: {scrub(str(record.get('owner', record.get('sender', 'you'))))}; "
                       f"{_file_retention_status(record)}")
-                if record.get('kept'):
+                if record.get('kept') is True:
                     print(f"       {dim('withdraw explicitly with: collab file rm ' + record['id'])}")
-                elif args.to:
+                elif record.get('kept') is False and args.to:
                     print(f"       {dim('it is deleted from the host once they confirm receipt')}")
-                else:
+                elif record.get('kept') is False:
                     # A room file waits for everyone who is here now, then goes;
                     # the clock is the other way it ends.
                     awaited = record.get("remaining", 0)
@@ -3607,8 +3609,10 @@ def cmd_file(args: argparse.Namespace) -> int:
                     return 0
                 ok(f"saved {path} ({_file_size(path.stat().st_size)}, checksum verified)")
                 if args.keep:
-                    if record and record.get('kept'):
+                    if record and record.get('kept') is True:
                         ok('retained on host until explicit withdrawal; receipt not confirmed')
+                    elif record and type(record.get('kept')) is not bool:
+                        warn('--keep: retention unconfirmed by host; keep your original')
                     elif record and not record["recipient"]:
                         minutes = ROOM_FILE_TTL_SECONDS // 60
                         warn(f"--keep: not confirming receipt (the room's copy lasts "

@@ -21,3 +21,10 @@ def durable_source(value: str) -> str:
     except ValueError:
         raise ValueError('durable source must be an HTTPS URL without embedded credentials') from None
     return value
+
+
+def retention_warning(record, keep, source):
+    """Only an explicit matching host response confirms durable metadata."""
+    if not isinstance(record, dict) or type(record.get('kept')) is not bool or (keep is not None and record.get('kept') is not keep) or (source and record.get('source') != source):
+        return 'Upload accepted, but retention/source is unconfirmed. Keep your original; inspect the host before sharing again.'
+    return ''
