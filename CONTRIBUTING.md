@@ -45,7 +45,13 @@ silently omit slow cases to meet that target. It sets an absolute checkout
 `PYTHONPATH` for child hubs, disables automatic workers and update checks, and
 never updates the installed CLI. Before pytest, it behavior-checks the runtime
 worker opt-out in isolated state; older checkouts without that prerequisite
-refuse to run tests. `--list` remains available there. Run it on each meaningful change. Record the
+refuse to run tests. `--list` remains available there. The bounded selector requires POSIX descriptor
+and process-group support (use WSL on Windows). It caps captured command output
+while reading, terminates its own command group on completion/error, refuses
+non-regular files and symlinks, and enforces total entry, depth, source-byte and
+selection-time budgets. Incomplete selection is an error, never a partial green
+result. These bounds cover selection; trusted pytest execution is intentionally
+not time-limited. Run it on each meaningful change. Record the
 commit, selected tests, result, and any untested contracts with the PR.
 
 **The full suite remains the merge gate.** For a wave of reviewed PRs, compose

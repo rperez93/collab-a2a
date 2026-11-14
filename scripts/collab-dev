@@ -6,6 +6,9 @@ import argparse
 import ast
 import json
 import os
+import selectors
+import signal
+import stat
 from pathlib import Path
 import subprocess
 import sys
@@ -17,22 +20,100 @@ GATES = ('tests/test_docs_match_cli.py', 'tests/test_skill_settings_match_the_re
          'tests/test_okf_bundle.py')
 MAX_GIT_BYTES = 1024 * 1024
 MAX_SOURCE_BYTES = 512 * 1024
-MAX_TEST_FILES = 4096
+MAX_SCAN_ENTRIES = 4096
+MAX_SCAN_DEPTH = 16
+MAX_TOTAL_SOURCE_BYTES = 8 * 1024 * 1024
+SCAN_SECONDS = 5.0
+
+
+def capture(argv, *, cwd: Path, env=None, limit=MAX_GIT_BYTES, timeout=10):
+    if os.name != 'posix':
+        raise ValueError('bounded process-group cleanup requires POSIX; use WSL for this helper')
+    process = subprocess.Popen(argv, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, start_new_session=True)
+    deadline = time.monotonic() + timeout
+    data = bytearray()
+    try:
+        os.set_blocking(process.stdout.fileno(), False)
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(argv, timeout)
+                if not selector.select(remaining):
+                    raise subprocess.TimeoutExpired(argv, timeout)
+                chunk = os.read(process.stdout.fileno(), min(65536, limit + 1 - len(data)))
+                if not chunk:
+                    return process.wait(timeout=max(.001, deadline - time.monotonic())), bytes(data)
+                data.extend(chunk)
+                if len(data) > limit:
+                    raise ValueError(f'command output exceeds {limit} bytes; selection refused')
+    finally:
+        # This is a session/process group created by this call, never a peer's
+        # PID. Descendants retaining stdout must not survive leader exit.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.stdout.close()
+        process.wait(timeout=2)
 
 
 def git(root: Path, *args: str) -> str:
-    # Git output goes to disk, then is read with a cap. A broken command cannot
-    # fill memory or hold selection forever. No shell or external diff driver.
-    with tempfile.TemporaryFile() as output:
-        result = subprocess.run(['git', *args], cwd=root, stdout=output,
-                                stderr=subprocess.DEVNULL, timeout=10)
-        output.seek(0)
-        data = output.read(MAX_GIT_BYTES + 1)
-    if result.returncode:
+    code, data = capture(['git', *args], cwd=root)
+    if code:
         raise ValueError('git could not resolve the changes; check --base and repository state')
-    if len(data) > MAX_GIT_BYTES:
-        raise ValueError('changed-path output exceeds 1 MiB; use an explicit --test selection')
     return os.fsdecode(data)
+
+
+def regular_fd(path, *, dir_fd=None):
+    if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_NONBLOCK'):
+        raise ValueError('safe file inspection requires POSIX; use WSL for this helper')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError('selection refuses non-regular files, including FIFOs')
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def test_files(root: Path):
+    # Count EVERY entry before filtering names. Descriptor-relative opens and
+    # NOFOLLOW protect against a directory being swapped after enumeration.
+    count = 0
+    deadline = time.monotonic() + SCAN_SECONDS
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK
+    def walk(fd, relative, depth):
+        nonlocal count
+        with os.scandir(fd) as entries:
+            for entry in entries:
+                count += 1
+                if count > MAX_SCAN_ENTRIES or time.monotonic() > deadline:
+                    raise ValueError('incomplete test traversal: entry/time budget exceeded; use --test')
+                info = entry.stat(follow_symlinks=False)
+                path = relative / entry.name
+                if stat.S_ISDIR(info.st_mode):
+                    if depth >= MAX_SCAN_DEPTH:
+                        raise ValueError('incomplete test traversal: depth budget exceeded; use --test')
+                    child = os.open(entry.name, flags, dir_fd=fd)
+                    try:
+                        yield from walk(child, path, depth + 1)
+                    finally:
+                        os.close(child)
+                elif not stat.S_ISREG(info.st_mode):
+                    raise ValueError('selection refuses symlinks and non-regular test entries')
+                elif entry.name.startswith('test_') and entry.name.endswith('.py'):
+                    yield path, fd, entry.name
+                if time.monotonic() > deadline:
+                    raise ValueError('incomplete test traversal: time budget exceeded; use --test')
+    fd = os.open(root / 'tests', flags)
+    try:
+        yield from walk(fd, Path('tests'), 0)
+    finally:
+        os.close(fd)
 
 
 def changed_paths(root: Path, base: str) -> set[str]:
@@ -46,15 +127,26 @@ def changed_paths(root: Path, base: str) -> set[str]:
     return {p for p in (committed + working + untracked).split('\0') if p}
 
 
-def imports(path: Path) -> set[str]:
-    with path.open('rb') as stream:
-        data = stream.read(MAX_SOURCE_BYTES + 1)
-    if len(data) > MAX_SOURCE_BYTES:
-        raise ValueError(f'{path.name} exceeds the 512 KiB selector limit; use --test')
+def imports(path: Path, *, dir_fd=None, file_name=None, budget=None) -> set[str]:
+    fd = regular_fd(file_name or path, dir_fd=dir_fd)
     try:
-        tree = ast.parse(data, filename=str(path))
-    except SyntaxError as exc:
-        raise ValueError(f'cannot inspect {path.name}: {exc.msg}; fix it or use --test') from exc
+        limit = min(MAX_SOURCE_BYTES, budget[0]) if budget is not None else MAX_SOURCE_BYTES
+        data = bytearray()
+        while True:
+            chunk = os.read(fd, min(65536, limit + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+            if len(data) > limit:
+                raise ValueError(f'{path.name} exceeds the 512 KiB file or aggregate source budget; use --test')
+    finally:
+        os.close(fd)
+    if budget is not None:
+        budget[0] -= len(data)
+    try:
+        tree = ast.parse(bytes(data), filename=str(path))
+    except (SyntaxError, RecursionError, MemoryError) as exc:
+        raise ValueError(f'cannot inspect {path.name}: {type(exc).__name__}; fix it or use --test') from exc
     found = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -67,12 +159,31 @@ def imports(path: Path) -> set[str]:
 
 def test_target(root: Path, target: str) -> str:
     file, *nodes = target.split('::')
-    path = (root / file).resolve()
-    if not path.is_relative_to((root / 'tests').resolve()) or not path.is_file():
-        raise ValueError(f'--test must name an existing file under tests/: {target}')
+    path = root / file
+    try:
+        relative = path.relative_to(root)
+        if '..' in relative.parts or relative.parts[0] != 'tests':
+            raise ValueError
+    except (ValueError, IndexError):
+        raise ValueError(f'--test must name an existing file under tests/: {target}') from None
     if path.suffix != '.py':
         raise ValueError(f'--test must name a Python test: {target}')
-    return path.relative_to(root).as_posix() + ''.join('::' + node for node in nodes)
+    if os.name != 'posix':
+        raise ValueError('safe target inspection requires POSIX; use WSL for this helper')
+    if len(relative.parts) > MAX_SCAN_DEPTH + 2:
+        raise ValueError('explicit test target exceeds the depth budget')
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK
+    fd = os.open(root / 'tests', flags)
+    try:
+        for component in relative.parts[1:-1]:
+            child = os.open(component, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        file_fd = regular_fd(relative.name, dir_fd=fd)
+        os.close(file_fd)
+    finally:
+        os.close(fd)
+    return relative.as_posix() + ''.join('::' + node for node in nodes)
 
 
 def select(root: Path, changed: set[str], explicit: list[str]) -> tuple[list[str], list[str]]:
@@ -83,18 +194,13 @@ def select(root: Path, changed: set[str], explicit: list[str]) -> tuple[list[str
     modules = {p[4:-3].replace('/', '.') for p in changed
                if p.startswith('src/collab/') and p.endswith('.py')}
     matched = set()
-    count = 0
-    for path in (root / 'tests').rglob('test_*.py'):
-        count += 1
-        if count > MAX_TEST_FILES:
-            raise ValueError('more than 4096 test files; use --test')
-        if not path.resolve().is_relative_to(root.resolve()) or path.is_symlink():
-            raise ValueError('test symlinks are not inspected; use --test for a local file')
-        name = path.relative_to(root).as_posix()
+    budget = [MAX_TOTAL_SOURCE_BYTES]
+    for path, directory_fd, file_name in test_files(root):
+        name = path.as_posix()
         if name in changed:
             selected.add(name)
         if modules:
-            referenced = imports(path)
+            referenced = imports(path, dir_fd=directory_fd, file_name=file_name, budget=budget)
             hits = {m for m in modules if any(i == m or i.startswith(m + '.') for i in referenced)}
             hits.update(m for m in modules if path.stem == 'test_' + m.rsplit('.', 1)[-1])
             if hits:
@@ -124,11 +230,10 @@ def supports_worker_optout(root: Path) -> bool:
                 's=Store(sys.argv[1]); s.ensure_default(); '
                 'sys.exit(0 if not (s.configuration() or {}).get("enabled") else 3)')
         try:
-            result = subprocess.run([sys.executable, '-c', code, str(scratch / 'worker')],
-                                    cwd=root, env=env, stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL, timeout=10)
-            return result.returncode == 0
-        except (OSError, subprocess.TimeoutExpired):
+            status, _ = capture([sys.executable, '-c', code, str(scratch / 'worker')],
+                                cwd=root, env=env, limit=4096, timeout=10)
+            return status == 0
+        except (OSError, ValueError, subprocess.TimeoutExpired):
             return False
 
 
