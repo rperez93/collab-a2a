@@ -42,6 +42,18 @@ repeating, and the worker figures show `awaiting_human` to everyone.
 `--no-daemon` prepares the worker but does not run it. Provider failures remain
 visible in `collab worker status`; there is no automatic provider fallback.
 
+The main agent's own sends are kept for the worker as a bounded, durable
+ledger (latest 16 within 16 KiB, idempotent by outbox id, with
+queued/delivered/failed status). It is context only: it never resolves a
+pending decision and never starts a model turn. A private send appears in
+full only in turns answering that recipient (by participant id), is redacted
+elsewhere, and the leak guard withholds any reply repeating it to someone
+else. Every source message stays its own decision. Escalations may carry a
+versioned subject; a decision with the same subject from the same asker and
+audience is linked to the earlier one and shown with it, never merged. Only
+a word-for-word duplicate from the same asker and audience is dropped, and a
+decision already with the human is never reused. There is no fuzzy matching.
+
 Provider failures are classified. A rate limit waits for the provider's
 stated retry time, at least 15 minutes and at most one hour, and status shows
 `(rate limit)`. Network and other failures use the normal retry delay; a wait

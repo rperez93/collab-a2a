@@ -18,6 +18,9 @@ from typing import Any
 
 MAX_TEXT = 16000
 MAX_PENDING = 1000
+#: The main agent's own recent sends kept as worker context (T_c144c7ad2773).
+MAIN_SENT_KEEP = 16
+MAIN_SENT_BYTES = 16_384
 DEFAULT_MODELS = {"codex": "gpt-5.6-luna", "claude": "claude-haiku-5-5"}
 # Automatic delegation has no private task context. Permit coordination only;
 # promises about code, scope, and progress must come from the main agent.
@@ -147,6 +150,17 @@ def _drop_stash(row) -> None:
     stash = json.loads(row[0]).get("stash")
     if stash:
         Path(stash).unlink(missing_ok=True)
+
+
+def _asker(entry: dict[str, Any]) -> tuple[str, str]:
+    """(sender id, audience) from #146's decision_source: the one source of who asked.
+
+    The audience is the broadcast room, or "" for a private question, so a
+    private and a public ask are never the same asker's same question.
+    """
+    source = entry.get("decision_source") or {}
+    return (str(source.get("sender_id") or ""),
+            str(source.get("room") or "") if source.get("broadcast") else "")
 
 
 class Store:
@@ -310,6 +324,30 @@ class Store:
         with self._db() as db:
             return self._add(db, "context", {"text": text})
 
+    @staticmethod
+    def _note_sent(state: dict, record_id: str, *, to: str, to_id: str, room: str, text: str,
+                   status: str) -> None:
+        """Remember what the main agent itself said, so the worker never re-asks it.
+
+        Bounded (the latest MAIN_SENT_KEEP entries within MAIN_SENT_BYTES),
+        durable (worker state), and idempotent by outbox id. It is context only:
+        it never resolves a decision and never starts a model turn.
+        """
+        ledger = [e for e in state.get("main_sent", []) if e.get("id") != record_id]
+        # to_id is #146's frozen recipient id: visibility never resolves a name.
+        ledger.append({"id": record_id, "to": to, "to_id": to_id, "room": room, "private": bool(to),
+                       "text": text[:1000], "at": time.time(), "status": status})
+        ledger = ledger[-MAIN_SENT_KEEP:]
+        while ledger and len(json.dumps(ledger, ensure_ascii=False).encode()) > MAIN_SENT_BYTES:
+            ledger.pop(0)
+        state["main_sent"] = ledger
+
+    @staticmethod
+    def _mark_sent(state: dict, record_id: str, status: str) -> None:
+        for entry in state.get("main_sent", []):
+            if entry.get("id") == record_id:
+                entry["status"] = status
+
     def send(self, text: str, *, to: str, to_id: str = "", room: str = "", thread: str = "",
              body: dict[str, Any] | None = None) -> str:
         """Queue the main agent's exact message without asking a model to repeat it.
@@ -343,7 +381,11 @@ class Store:
                 if len(json.dumps(body)) > MAX_TEXT:
                     raise ValueError("message body is too large to queue")
                 data["body"] = body
-            return self._add(db, "outbox", data)
+            record_id = self._add(db, "outbox", data)
+            state = self._state(db)
+            self._note_sent(state, record_id, to=to, to_id=to_id, room=room, text=text, status="queued")
+            self._save(db, state)
+            return record_id
 
     def queue_file(self, path: Path, *, to: str = "", to_id: str = "", room: str = "") -> str:
         """A file the main agent shares, delivered by the worker in order (R3).
@@ -415,6 +457,9 @@ class Store:
             data = json.loads(row[0])
             db.execute("DELETE FROM records WHERE id=?", (record_id,))
             _drop_stash(row)
+            state = self._state(db)
+            self._mark_sent(state, record_id, "failed")  # the worker must not assume it arrived
+            self._save(db, state)
             target = (f"{data['subject']} {data['subject_id']}" if data.get("kind") == "comment"
                       else "@" + data["to"] if data.get("to") else "#" + (data.get("room") or "general"))
             self._add(db, "escalation", {"reason": "blocker", "seq": 0, "question": (
@@ -523,7 +568,12 @@ class Store:
             seq = e.get("seq", cursor)
             if not isinstance(seq, int) or seq < 0 or seq > cursor:
                 raise ValueError("invalid worker escalation sequence")
+            subject = e.get("subject") or ""
+            if not isinstance(subject, str) or len(subject) > 120 or "\0" in subject:
+                raise ValueError("invalid worker escalation subject")
             decisions.append({"reason": e["reason"], "question": _text(e.get("question"), "question"), "seq": seq})
+            if subject:
+                decisions[-1]["subject"] = subject
             source = (decision_sources or {}).get(seq)
             if source is not None:
                 # These fields come from the daemon's exact originating inbox
@@ -558,17 +608,59 @@ class Store:
                 db.executemany("DELETE FROM records WHERE id=? AND kind=?", [(rid, kind) for rid in ids])
             for reply in outgoing:
                 self._add(db, "outbox", reply)
-            pending = {(entry["seq"], entry["reason"], entry["question"])
-                       for entry in self._records(db, "escalation")}
+            def identity(entry):
+                return (entry["seq"], entry["reason"], entry["question"],
+                        *_asker(entry))
+            open_rows = self._records(db, "escalation")
+            # A decision with the human is never re-used for a new ask (D3).
+            pending = {identity(entry) for entry in open_rows if not entry.get("awaiting_human")}
             for decision in decisions:
-                identity = (decision["seq"], decision["reason"], decision["question"])
-                if identity not in pending:
-                    self._add(db, "escalation", decision)
-                    pending.add(identity)
+                if identity(decision) in pending:
+                    continue
+                # ONE DECISION PER SOURCE MESSAGE (#113). Only an exact
+                # duplicate of an open question from the same asker and audience
+                # is dropped; anything else is its own decision, so a genuinely
+                # new question is never buried inside an older one.
+                if self._exact_duplicate(open_rows, decision) is not None:
+                    continue
+                # Same versioned subject: LINKED, shown together, never merged.
+                related = [row["id"] for row in self._same_subject(open_rows, decision)]
+                if related:
+                    decision["related"] = related[-4:]
+                self._add(db, "escalation", decision)
+                pending.add(identity(decision))
+                open_rows = self._records(db, "escalation")
             state.update(cursor=cursor, summary=summary, turn=state.get("turn", 0) + 1, last_progress=time.time(),
                          error="", retry_at=0, running=False)
             self._save(db, state)
             return True
+
+    @staticmethod
+    def _same_asker(row: dict[str, Any], decision: dict[str, Any]) -> bool:
+        sender_id, audience = _asker(decision)
+        return bool(sender_id) and _asker(row) == (sender_id, audience)
+
+    @classmethod
+    def _exact_duplicate(cls, open_rows: list[dict[str, Any]], decision: dict[str, Any]) -> dict[str, Any] | None:
+        """The same question, word for word, from the same asker and audience, still open.
+
+        Never a decision already with the human: its answer is pending
+        elsewhere, and a new ask must stay visible on its own.
+        """
+        text = " ".join(decision["question"].split()).casefold()
+        for row in open_rows:
+            if (cls._same_asker(row, decision) and not row.get("awaiting_human")
+                    and " ".join(str(row.get("question", "")).split()).casefold() == text):
+                return row
+        return None
+
+    @classmethod
+    def _same_subject(cls, open_rows: list[dict[str, Any]], decision: dict[str, Any]) -> list[dict[str, Any]]:
+        """Open decisions with exactly the same versioned subject, asker and audience (for linking)."""
+        subject = decision.get("subject")
+        if not subject:
+            return []
+        return [row for row in open_rows if row.get("subject") == subject and cls._same_asker(row, decision)]
 
     def outbox(self) -> list[dict[str, Any]]:
         with self._db() as db:
@@ -601,6 +693,12 @@ class Store:
         with self._db() as db:
             row = db.execute("SELECT data FROM records WHERE id=? AND kind='outbox'", (record_id,)).fetchone()
             db.execute("DELETE FROM records WHERE id=? AND kind='outbox'", (record_id,))
+            # Only a row still queued was delivered now: after a rejection the
+            # row is already gone, and its failed status must stand.
+            if row is not None:
+                state = self._state(db)
+                self._mark_sent(state, record_id, "delivered")
+                self._save(db, state)
         _drop_stash(row)
 
     def defer(self, record_id: str, *, retry_at: float, error: str) -> bool:
