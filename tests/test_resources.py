@@ -228,3 +228,210 @@ def test_parent_reuse_during_child_discovery_invalidates_work(tmp_path, monkeypa
     assert result['roles']['agent']['rss_bytes'] is None
     assert result['roles']['work']['rss_bytes'] is None
     assert result['roles']['work']['complete'] is False
+
+
+def test_machine_pressure_survives_exhausted_process_read_budget(tmp_path, monkeypatch):
+    (tmp_path / 'meminfo').write_text('MemTotal: 1000 kB\nMemAvailable: 50 kB\n')
+    (tmp_path / 'loadavg').write_text('4.5 2 2 1/20 100')
+    monkeypatch.setattr('os.cpu_count', lambda: 2)
+    root = process(tmp_path, 10)
+    sampler = Sampler(tmp_path)
+    real_process = sampler.process
+    def exhausted(pid):
+        found = real_process(pid)
+        sampler.reads_left = 0
+        return found
+    monkeypatch.setattr(sampler, 'process', exhausted)
+    result = sampler.sample({'daemon': [root]})
+    assert result['roles']['daemon']['complete'] is False
+    assert result['machine']['warnings'] == ['low_memory', 'high_load']
+    assert result['machine']['memory_available_bytes'] == 50 * 1024
+
+
+def test_machine_thresholds_are_strict(tmp_path, monkeypatch):
+    (tmp_path / 'meminfo').write_text('MemTotal: 1000 kB\nMemAvailable: 100 kB\n')
+    (tmp_path / 'loadavg').write_text('2 2 2 1/20 100')
+    monkeypatch.setattr('os.cpu_count', lambda: 2)
+    assert Sampler(tmp_path).machine()['warnings'] == []
+
+
+def test_reparented_child_and_zombie_are_unknown(tmp_path):
+    root = process(tmp_path, 10, children=(11,))
+    process(tmp_path, 11, parent=99)
+    assert Sampler(tmp_path).sample({'daemon': [root]})['roles']['daemon']['complete'] is False
+    path = tmp_path / '10' / 'stat'
+    path.write_text(path.read_text().replace(' S ', ' Z '))
+    assert Sampler(tmp_path).sample({'daemon': [root]})['roles']['daemon']['processes'] is None
+
+
+def test_thread_cap_invalidates_partial_tree(tmp_path):
+    root = process(tmp_path, 10)
+    for index in range(65):
+        thread = tmp_path / '10' / 'task' / str(1000 + index)
+        thread.mkdir()
+        (thread / 'children').write_text('')
+    sampler = Sampler(tmp_path)
+    assert sampler.sample({'daemon': [root]})['roles']['daemon']['complete'] is False
+    assert sampler.reads_left > 900
+
+
+def test_negative_counter_delta_does_not_become_negative_usage(tmp_path):
+    root = process(tmp_path, 10, cpu=100)
+    sampler = Sampler(tmp_path)
+    sampler.sample({'daemon': [root]}, clock=0)
+    process(tmp_path, 10, cpu=10)
+    row = sampler.sample({'daemon': [root]}, clock=20)['roles']['daemon']
+    assert row['rss_bytes'] is not None
+    assert row['cpu_pct'] is None and row['read_bps'] is None
+
+
+def test_missing_procfs_does_not_claim_linux_source(tmp_path):
+    result = Sampler(tmp_path / 'absent').sample({})
+    assert result['source'] == 'unknown'
+
+
+def test_stats_source_exchange_is_not_registered_as_model_worker(tmp_path, monkeypatch):
+    import asyncio
+    import os
+    import sys
+    from collab import resources, worker_runtime
+    def unexpected(pid):
+        raise AssertionError('stats source must not be registered as a model worker')
+    monkeypatch.setattr(resources, 'register_worker', unexpected)
+    result = asyncio.run(worker_runtime._exchange(
+        [sys.executable, '-c', 'print("stats")'], b'', tmp_path, dict(os.environ), 5, None))
+    assert result.strip() == b'stats'
+
+
+def test_read_time_budget_preserves_machine_but_invalidates_unverified_tree(tmp_path, monkeypatch):
+    from collab import resources
+    root = process(tmp_path, 10)
+    (tmp_path / 'meminfo').write_text('MemTotal: 1000 kB\nMemAvailable: 50 kB\n')
+    sampler = Sampler(tmp_path)
+    original = sampler.process
+    def over_budget(pid):
+        found = original(pid)
+        sampler.deadline = -1
+        return found
+    monkeypatch.setattr(sampler, 'process', over_budget)
+    result = sampler.sample({'daemon': [root]})
+    assert result['machine']['warnings'] == ['low_memory']
+    assert result['roles']['daemon']['complete'] is False
+
+
+def test_agent_owner_must_belong_to_this_session(tmp_path, monkeypatch):
+    from collab import resources, lockfile
+    from collab.client.exclusive import Stamp
+    profile = SimpleNamespace(home=str(tmp_path), session_id='s_own', is_host=False)
+    monkeypatch.setattr(resources, 'proxy_roots', lambda: None)
+    monkeypatch.setattr(lockfile, 'read', lambda home: SimpleNamespace(session_id='s_other', owner=Stamp(10,'100','boot').encode()))
+    assert resources.own_roots(profile)['agent'] is None
+    monkeypatch.setattr(lockfile, 'read', lambda home: SimpleNamespace(session_id='s_own', owner=Stamp(10,'100','boot').encode()))
+    assert resources.own_roots(profile)['agent'] == [Stamp(10,'100','boot')]
+
+
+def test_proxy_from_previous_boot_is_not_attributed(tmp_path, monkeypatch):
+    import sys
+    from collab import resources
+    from collab.client.exclusive import Stamp
+    process(tmp_path, 10)
+    state = SimpleNamespace(pid=10, stamp=Stamp(10, '100', 'old-boot').text())
+    monkeypatch.setitem(sys.modules, 'collab.proxy', SimpleNamespace(ProxyState=SimpleNamespace(load=lambda:state)))
+    result = Sampler(tmp_path).sample({'proxy': resources.proxy_roots()})
+    assert result['roles']['proxy']['rss_bytes'] is None
+
+
+def test_role_warnings_are_explicit_and_shared_estimates_are_not_additive():
+    from collab.resources import format_lines
+    sample = {'observed_at':100, 'roles':{'daemon':{'complete':True,'rss_bytes':10*1024**3,
+        'cpu_pct':101,'read_bps':11*1024**2},'agent':{'complete':True,'rss_bytes':100}},'machine':{}}
+    lines = '\n'.join(format_lines(sample,detailed=True,now=101))
+    assert 'daemon RSS exceeds 1 GiB' in lines
+    assert 'daemon uses more than one CPU core' in lines
+    assert 'daemon storage IO exceeds 10 MiB/s' in lines
+    assert 'shared estimate; do not sum' in lines
+
+
+def test_slow_collector_does_not_accumulate_threads_or_block_stats(tmp_path, monkeypatch):
+    import asyncio
+    import threading
+    from collab import resources
+    from collab.client import daemon
+    from collab.config import SessionProfile
+    profile = SessionProfile('s_resource', 'http://unused', 'tester', 'host', 'secret', home=str(tmp_path))
+    instance = daemon.Daemon(profile)
+    release = threading.Event()
+    calls = []
+    def slow(*args):
+        calls.append(1)
+        release.wait(2)
+        return None
+    monkeypatch.setattr(resources, 'collect', slow)
+    monkeypatch.setattr(resources, 'PUBLISH_WAIT_SECONDS', .02)
+    monkeypatch.setattr(daemon, 'share_stats_enabled', lambda: True)
+    payloads = []
+    class Client:
+        async def post(self, url, **kwargs):
+            payloads.append(kwargs['json'])
+            return SimpleNamespace(status_code=200)
+    async def run():
+        try:
+            await asyncio.wait_for(instance._report_stats(Client()), .5)
+            await asyncio.wait_for(instance._report_stats(Client()), .5)
+            assert calls == [1]
+            assert payloads[0]['stats']['resources'] is None
+        finally:
+            release.set()
+            await instance._resource_task
+    asyncio.run(run())
+
+
+def test_broken_collector_does_not_suppress_quota_publication(tmp_path, monkeypatch):
+    import asyncio
+    from collab import resources
+    from collab.client import daemon
+    from collab.config import SessionProfile
+    instance = daemon.Daemon(SessionProfile('s_resource','http://unused','tester','host','secret',home=str(tmp_path)))
+    def broken(*args):
+        raise RuntimeError('broken platform probe')
+    monkeypatch.setattr(resources, 'collect', broken)
+    monkeypatch.setattr(daemon, 'share_stats_enabled', lambda: True)
+    payloads = []
+    class Client:
+        async def post(self,url,**kwargs):
+            payloads.append(kwargs['json'])
+            return SimpleNamespace(status_code=200)
+    asyncio.run(instance._report_stats(Client()))
+    assert payloads[0]['stats']['resources'] is None
+
+
+def test_slow_sampler_initialization_is_also_off_loop(tmp_path, monkeypatch):
+    import asyncio
+    import threading
+    from collab import resources
+    from collab.client import daemon
+    from collab.config import SessionProfile
+    instance = daemon.Daemon(SessionProfile('s_resource','http://unused','tester','host','secret',home=str(tmp_path)))
+    release = threading.Event()
+    calls = []
+    original = resources.Sampler
+    def slow_init():
+        calls.append(1)
+        release.wait(2)
+        return original()
+    monkeypatch.setattr(resources, 'Sampler', slow_init)
+    monkeypatch.setattr(resources, 'collect', lambda *args: None)
+    monkeypatch.setattr(resources, 'PUBLISH_WAIT_SECONDS', .02)
+    monkeypatch.setattr(daemon, 'share_stats_enabled', lambda: True)
+    class Client:
+        async def post(self,url,**kwargs):
+            return SimpleNamespace(status_code=200)
+    async def run():
+        try:
+            await asyncio.wait_for(instance._report_stats(Client()), .5)
+            await asyncio.wait_for(instance._report_stats(Client()), .5)
+            assert calls == [1]
+        finally:
+            release.set()
+            await instance._resource_task
+    asyncio.run(run())
