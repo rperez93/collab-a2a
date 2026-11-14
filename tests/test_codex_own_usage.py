@@ -144,6 +144,6 @@ def test_gemini_inside_codex_reads_no_codex_thread(monkeypatch):
     monkeypatch.setenv("CODEX_THREAD_ID", "parent")
     monkeypatch.setenv("GEMINI_CLI", "1")
     monkeypatch.setattr(quotas, "from_codex", lambda **kw: pytest.fail("asked codex"))
-    for nearest in ("gemini", ""):
-        monkeypatch.setattr(hosttool, "nearest_agent", lambda n=nearest: n)
+    for above in (["gemini", "codex"], []):
+        monkeypatch.setattr(hosttool, "agents_above", lambda a=above: a)
         assert codex_usage.current_usage() == {}

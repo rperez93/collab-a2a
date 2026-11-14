@@ -180,29 +180,51 @@ NESTED_PAIRS = [
 ]
 
 
+def _outer(env, inner):
+    """The other tool whose marker `env` carries."""
+    kinds = {hosttool.detect({k: v}) for k, v in env.items()}
+    return (kinds - {inner}).pop()
+
+
 @pytest.mark.parametrize("env,inner", NESTED_PAIRS)
 def test_a_nested_tool_is_the_nearest_process_not_the_first_marker(env, inner):
     """First-match credited the OUTER tool, whose markers the inner one inherits."""
-    assert hosttool.detect(env, nearest=lambda: inner) == inner
+    outer = _outer(env, inner)
+    assert hosttool.detect(env, chain=lambda: [inner, outer]) == inner
+
+
+@pytest.mark.parametrize("env,inner", NESTED_PAIRS)
+def test_an_unrecognised_inner_tool_under_a_named_outer_one_is_nested(env, inner):
+    """A wrapper collab cannot name, under Codex: the nearest NAMED process is
+    the outer tool, and taking it re-made the misattribution by another road."""
+    outer = _outer(env, inner)
+    assert hosttool.detect(env, chain=lambda: [outer]) == hosttool.NESTED
+
+
+def test_a_stale_inherited_marker_reads_as_unknown_by_design():
+    """The accepted cost: CLAUDECODE left in a tmux server's environment, Gemini
+    running, no Claude above — unknown, rather than a guess that is usually right."""
+    env = {"CLAUDECODE": "1", "GEMINI_CLI": "1"}
+    assert hosttool.detect(env, chain=lambda: ["gemini"]) == hosttool.NESTED
 
 
 @pytest.mark.parametrize("env,_inner", NESTED_PAIRS)
-@pytest.mark.parametrize("nearest", ["", "amp"])
-def test_a_tie_the_chain_cannot_settle_is_nested_never_a_guess(env, _inner, nearest):
+@pytest.mark.parametrize("above", [[], ["amp"]])
+def test_a_tie_the_chain_cannot_settle_is_nested_never_a_guess(env, _inner, above):
     """No agent process, or one that set none of the markers, decides nothing."""
-    assert hosttool.detect(env, nearest=lambda: nearest) == hosttool.NESTED
+    assert hosttool.detect(env, chain=lambda: above) == hosttool.NESTED
 
 
 def test_one_marker_never_asks_the_process_chain():
     """The chain is read only to settle a tie; a single marker is unambiguous."""
     def refuse():
         raise AssertionError("the chain was read for one marker")
-    assert hosttool.detect({"GEMINI_CLI": "1"}, nearest=refuse) == "gemini"
+    assert hosttool.detect({"GEMINI_CLI": "1"}, chain=refuse) == "gemini"
 
 
 def test_gemini_inside_codex_does_not_arm_the_parents_probe(profile, monkeypatch):
     """The reviewer's case: the parent's CODEX_THREAD_ID must not name this participant."""
-    monkeypatch.setattr(hosttool, "nearest_agent", lambda: "gemini")
+    monkeypatch.setattr(hosttool, "agents_above", lambda: ["gemini", "codex"])
     monkeypatch.setenv("CODEX_THREAD_ID", "parent")
     monkeypatch.setenv("GEMINI_CLI", "1")
     setup.ensure(profile)
@@ -213,7 +235,7 @@ def test_gemini_inside_codex_does_not_arm_the_parents_probe(profile, monkeypatch
 def test_an_unsettled_nest_records_an_unknown_quota_and_installs_no_hook(profile, monkeypatch):
     """Claude's global status-line hook must not be installed on a guess."""
     from collab.statusline import install
-    monkeypatch.setattr(hosttool, "nearest_agent", lambda: "")
+    monkeypatch.setattr(hosttool, "agents_above", lambda: [])
     monkeypatch.setattr(install, "install_claude_code",
                         lambda **kw: pytest.fail("hook installed for an unattributed tool"))
     monkeypatch.setenv("CLAUDECODE", "1")
@@ -225,28 +247,47 @@ def test_an_unsettled_nest_records_an_unknown_quota_and_installs_no_hook(profile
     assert setup.source(profile)[0] == ""
 
 
+def _run_nested(tmp_path, names, env):
+    """Run `detect` under a real chain of scripts named `names`, outermost first.
+
+    A script's kernel name is its file name, which is what `owner` reads, so a
+    shell script called `gemini` stands in for Gemini CLI exactly as far as the
+    chain is concerned. Each script waits for its child rather than exec-ing it,
+    so every one of them is really in the ancestry.
+    """
+    src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+    command = f'"{sys.executable}" -c \'from collab import hosttool; print(hosttool.detect())\''
+    for depth, name in enumerate(reversed(names)):
+        folder = tmp_path / str(depth)
+        folder.mkdir()
+        script = folder / name
+        script.write_text(f"#!/bin/sh\n{command}\nstatus=$?\nexit $status\n")
+        script.chmod(0o755)
+        command = f'"{script}"'
+    clean = {k: v for k, v in os.environ.items()
+             if k not in {m for m, *_ in hosttool.MARKERS}}
+    done = subprocess.run(["/bin/sh", "-c", command + "; exit $?"],
+                          env={**clean, **env, "PYTHONPATH": src},
+                          capture_output=True, text=True, timeout=20)
+    return done.stdout.strip() or done.stderr
+
+
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc")
 @pytest.mark.parametrize("outer,inner,env", [
     ("codex", "gemini", {"CODEX_THREAD_ID": "parent", "GEMINI_CLI": "1"}),
     ("claude", "codex", {"CLAUDECODE": "1", "CODEX_THREAD_ID": "t"}),
 ])
 def test_the_real_process_chain_names_the_inner_tool(tmp_path, outer, inner, env):
-    """By execution: a process really named after the inner tool runs `detect`.
+    """By execution: both tools really above us, the inner one nearest."""
+    assert _run_nested(tmp_path, [outer, inner], env) == inner
 
-    The script's kernel name is its file name, which is what `owner` reads, so
-    a shell script called `gemini` stands in for Gemini CLI exactly as far as
-    the chain is concerned.
-    """
-    src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
-    script = tmp_path / inner
-    script.write_text("#!/bin/sh\n" + f'"{sys.executable}" -c '
-                      "'from collab import hosttool; print(hosttool.detect())'\n")
-    script.chmod(0o755)
-    clean = {k: v for k, v in os.environ.items()
-             if k not in {m for m, *_ in hosttool.MARKERS}}
-    done = subprocess.run([str(script)], env={**clean, **env, "PYTHONPATH": src},
-                          capture_output=True, text=True, timeout=20)
-    assert done.stdout.strip() == inner, done.stderr
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc")
+def test_a_real_unnamed_wrapper_under_codex_is_nested(tmp_path):
+    """By execution: Gemini's marker with no gemini process above is not Codex's."""
+    out = _run_nested(tmp_path, ["codex", "wrapper"],
+                      {"CODEX_THREAD_ID": "parent", "GEMINI_CLI": "1"})
+    assert out == hosttool.NESTED
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc")

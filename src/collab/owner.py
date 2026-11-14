@@ -271,20 +271,38 @@ def owner_in(chain: list[int]) -> Stamp | None:
     return None
 
 
-def kind_of(pid: int) -> str:
-    """Which `AGENTS` key this one process presents itself as, or ''.
+def kinds_in(chain: list[int]) -> list[str]:
+    """The `AGENTS` keys of the processes in `chain`, nearest first, each once.
 
     `owner_in` answers WHERE the nearest agent is; `hosttool.detect` needs to
-    know WHICH it is, to settle two inherited markers. The same readings as
-    `owner_in`, against each tool's names in turn.
+    know WHICH tools are above it, to settle inherited markers. The same
+    readings as `owner_in`, and ONE process table for the whole chain: where
+    there is no /proc that table is a `ps`, and asking it per pid cost a second
+    one — 41–67 ms each on macOS. Each pid is first tested against every known
+    name at once, so a pid that is no agent costs one reading, not eight.
     """
     from .client import exclusive
 
-    table = {} if exclusive._HAVE_PROC else _table([pid])
-    for kind, names in AGENTS.items():
-        if _named_in(table[pid], names) if pid in table else _wearing_the_name(pid, names):
-            return kind
-    return ""
+    table = {} if exclusive._HAVE_PROC else _table(chain)
+    every = known_names()
+
+    def wears(pid: int, names: tuple[str, ...]) -> bool:
+        return _named_in(table[pid], names) if pid in table else _wearing_the_name(pid, names)
+
+    kinds: list[str] = []
+    for pid in chain:
+        if not wears(pid, every):
+            continue
+        kind = next((k for k, names in AGENTS.items() if wears(pid, names)), "")
+        if kind and kind not in kinds:
+            kinds.append(kind)
+    return kinds
+
+
+def kind_of(pid: int) -> str:
+    """Which `AGENTS` key this one process presents itself as, or ''."""
+    found = kinds_in([pid])
+    return found[0] if found else ""
 
 
 #: How a collab daemon describes itself to `argv`. A command whose ancestry

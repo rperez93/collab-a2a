@@ -55,6 +55,11 @@ def test_claude_installs_an_executable_shared_hook_without_pinning_one_participa
     from collab.statusline import install
     monkeypatch.setenv('CLAUDECODE', '1')
     monkeypatch.setenv('CODEX_THREAD_ID', 'inherited-codex-parent')
+    # Claude started inside Codex: both markers, so both processes are above.
+    # Stated rather than left to the machine's own ancestry, which decided it
+    # before — and which differs between a run inside Claude Code and one in CI.
+    from collab import hosttool
+    monkeypatch.setattr(hosttool, 'agents_above', lambda: ['claude-code', 'codex'])
     directory = tmp_path/'claude-config'
     directory.mkdir()
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(directory))
