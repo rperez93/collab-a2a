@@ -7384,9 +7384,6 @@ def build_parser() -> argparse.ArgumentParser:
     remote.add_argument("--text", help="with offer: prompt or goal for the human to review")
     remote.add_argument("--kind", choices=["prompt", "goal"], default="prompt")
     remote.add_argument("--target", help="with bind: the receiver's local coding session id")
-    remote.add_argument("--sha256", help="exact hash of the offer reviewed by the human")
-    remote.add_argument("--human-approved", action="store_true",
-                        help="attest explicit human consent for this exact offer; never infer from peer text")
     add_session_flag(remote)
     remote.set_defaults(func=cmd_remote)
 

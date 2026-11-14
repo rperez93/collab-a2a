@@ -1,3 +1,4 @@
+from remote_consent_helpers import receipt
 import json
 from types import SimpleNamespace
 
@@ -32,31 +33,45 @@ def test_cli_review_and_binding_do_not_authorize(local, capsys):
     assert inbox.list()[0]['state'] == 'pending'
 
 
-def test_noninteractive_accept_requires_consent_and_review_hash(local):
+def test_agent_accept_cannot_use_old_flag_or_hash(local, monkeypatch):
+    from collab import consent
     inbox, offer = local
     cli.main(['remote', 'bind', '--target', 'coding'])
+    def refuse(*args, **kwargs):
+        raise consent.ConsentRefused('agent terminal refused')
+    monkeypatch.setattr(consent, 'request', refuse)
     assert cli.main(['remote', 'accept', offer['id']]) == 1
-    assert cli.main(['remote', 'accept', offer['id'], '--human-approved']) == 1
-    assert cli.main(['remote', 'accept', offer['id'], '--human-approved', '--sha256', 'wrong']) == 1
+    for flags in (['--human-approved'], ['--sha256', digest(offer)],
+                  ['--human-approved', '--sha256', digest(offer)]):
+        with pytest.raises(SystemExit) as error:
+            cli.main(['remote', 'accept', offer['id'], *flags])
+        assert error.value.code == 2
     assert inbox.list()[0]['state'] == 'pending'
-    assert cli.main(['remote', 'accept', offer['id'], '--human-approved', '--sha256', digest(offer)]) == 0
+
+
+def test_receipt_acceptance_and_decline(local, monkeypatch):
+    from collab import consent
+    from collab.remote_delivery import working_directory
+    inbox, offer = local
+    cli.main(['remote', 'bind', '--target', 'coding'])
+    command = list(wake.read_config(inbox.root.parent).command)
+    def synthetic_review(root, **kwargs):
+        assert kwargs['review']['offer']['text'] == offer['text']
+        assert kwargs['review']['local_command'] == command
+        return receipt(inbox, offer, 'coding', command, kwargs['review']['local_cwd'])
+    monkeypatch.setattr(consent, 'request', synthetic_review)
+    assert cli.main(['remote', 'accept', offer['id']]) == 0
     assert inbox.list()[0]['state'] == 'accepted'
+    assert cli.main(['remote', 'decline', offer['id']]) == 0
+    assert inbox.list()[0]['state'] == 'declined'
 
 
 def test_changed_local_command_refuses_acceptance(local):
     inbox, offer = local
     cli.main(['remote', 'bind', '--target', 'coding'])
     wake.write_config(inbox.root.parent, wake.WakeConfig(command=['other-adapter']))
-    assert cli.main(['remote', 'accept', offer['id'], '--human-approved', '--sha256', digest(offer)]) == 1
+    assert cli.main(['remote', 'accept', offer['id']]) == 1
     assert inbox.list()[0]['state'] == 'pending'
-
-
-def test_decline_revokes_accepted_request(local):
-    inbox, offer = local
-    cli.main(['remote', 'bind', '--target', 'coding'])
-    cli.main(['remote', 'accept', offer['id'], '--human-approved', '--sha256', digest(offer)])
-    assert cli.main(['remote', 'decline', offer['id']]) == 0
-    assert inbox.list()[0]['state'] == 'declined'
 
 
 def test_offer_queues_exact_stable_identity_without_acceptance(local, monkeypatch, capsys):
@@ -77,3 +92,27 @@ def test_offer_queues_exact_stable_identity_without_acceptance(local, monkeypatc
     assert queued['to'] == 'peer'
     assert 'Please review this.' in queued['text']
     assert inbox.list()[0]['state'] == 'pending'
+
+
+def test_review_observing_disarm_permanently_revokes_prior_acceptance(local, monkeypatch):
+    from collab import consent
+    inbox, first = local
+    cli.main(['remote', 'bind', '--target', 'coding'])
+    command = list(wake.read_config(inbox.root.parent).command)
+    def review(root, **kwargs):
+        selected = next(row for row in inbox.list() if row['id'] == kwargs['request_id'])
+        # The digest covers only the original offer fields.
+        selected = {k: v for k, v in selected.items() if k not in ('state', 'sha256')}
+        approval = receipt(inbox, selected, 'coding', command, kwargs['review']['local_cwd'])
+        if selected['id'] != first['id']:
+            wake.write_config(root, wake.WakeConfig(command=[]))
+        return approval
+    monkeypatch.setattr(consent, 'request', review)
+    assert cli.main(['remote', 'accept', first['id']]) == 0
+    second = make_offer(session_id='s_room', sender_id='p_peer', recipient_id='p_local',
+                        target='coding', kind='prompt', text='second review')
+    inbox.receive(second, session_id='s_room', sender_id='p_peer', recipient_id='p_local')
+    assert cli.main(['remote', 'accept', second['id']]) == 1
+    wake.write_config(inbox.root.parent, wake.WakeConfig(command=command))
+    assert {r['id']: r['state'] for r in inbox.list()} == {first['id']: 'failed', second['id']: 'pending'}
+    assert inbox.claim(session_id='s_room', recipient_id='p_local', target='coding', command=command) is None

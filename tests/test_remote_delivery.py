@@ -1,3 +1,4 @@
+from remote_consent_helpers import receipt
 import asyncio
 import os
 import sys
@@ -23,7 +24,7 @@ def approved(tmp_path):
     inbox.bind('coding', command)
     assert remote_delivery.prepare(profile) is None
     inbox.accept(offer['id'], reviewed_digest=digest(offer), session_id='s_room',
-                 recipient_id='p_local', target='coding', command=command, human_approved=True)
+                 recipient_id='p_local', target='coding', command=command, approval=receipt(inbox, offer, 'coding', command))
     return profile, inbox, output
 
 
@@ -121,7 +122,7 @@ def test_relative_adapter_uses_bound_working_directory(approved, tmp_path):
     inbox.receive(offer, session_id=profile.session_id, sender_id='p_peer', recipient_id=profile.participant_id)
     inbox.accept(offer['id'], reviewed_digest=digest(offer), session_id=profile.session_id,
                  recipient_id=profile.participant_id, target='coding', command=command,
-                 human_approved=True, cwd=tmp_path)
+                 approval=receipt(inbox, offer, 'coding', command, tmp_path), cwd=tmp_path)
     assert asyncio.run(remote_delivery.deliver(profile, remote_delivery.prepare(profile))) is True
     assert (tmp_path / 'cwd-result').read_text() == str(tmp_path)
 

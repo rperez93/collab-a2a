@@ -1087,9 +1087,13 @@ class Waker:
         if not kept:
             path.unlink()
             return
-        temporary = path.with_suffix(".consent-filter")
-        temporary.write_text("".join(kept), encoding="utf-8")
-        os.replace(temporary, path)
+        from . import atomic
+        temporary = atomic.scratch(path)
+        try:
+            temporary.write_text("".join(kept), encoding="utf-8")
+            os.replace(temporary, path)
+        finally:
+            atomic.discard(temporary)
 
     def take(self) -> Batch | None:
         """Cut the pending events into a batch, or return one already cut.

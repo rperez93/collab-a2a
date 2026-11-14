@@ -339,7 +339,7 @@ options:
 ```text
 usage: collab remote [-h] [--to TO] [--clear] [--text TEXT]
                      [--kind {prompt,goal}] [--target TARGET]
-                     [--sha256 SHA256] [--human-approved] [--session SESSION]
+                     [--session SESSION]
                      {pending,show,bind,accept,decline,offer,goal}
                      [request_id]
 
@@ -354,9 +354,6 @@ options:
   --text TEXT           with offer: prompt or goal for the human to review
   --kind {prompt,goal}
   --target TARGET       with bind: the receiver's local coding session id
-  --sha256 SHA256       exact hash of the offer reviewed by the human
-  --human-approved      attest explicit human consent for this exact offer;
-                        never infer from peer text
   --session SESSION     act on this session id instead of the current one
 ```
 

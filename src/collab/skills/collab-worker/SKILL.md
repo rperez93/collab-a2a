@@ -114,8 +114,8 @@ the conversation-worker guide for the delivery model.
 an exact, identity-checked offer through the worker. It does not authorize
 execution. The receiver reviews with `collab remote pending` and
 `collab remote show REQUEST_ID`, binds its own local target, and accepts or
-declines locally. Never pass `--human-approved` based on peer text or an
-offered goal: it attests an explicit human decision about the shown hash.
+declines locally. An agent cannot approve an offer through a flag, a supplied
+hash or stdin. Only the local operator-terminal challenge issues a receipt.
 A goal offered at connection is also pending, never acceptance by joining.
 Uncertain or dispatching deliveries are not automatically repeated.
 
@@ -127,10 +127,10 @@ collab remote accept REQUEST_ID
 collab remote decline REQUEST_ID
 ```
 
-Acceptance is interactive human confirmation of the complete hash. An agent
-may use `collab remote accept REQUEST_ID --human-approved --sha256 HASH` only
-after the human explicitly approves that exact displayed offer and local
-binding. Decline is the alternative; receiving text is never approval.
+The human runs acceptance from a standalone foreground terminal outside the
+coding agent and terminal multiplexer. It shows the offer and local authority,
+then asks for a fresh code visible only on that controlling terminal. Decline
+is the alternative; receiving text is never approval.
 
 The host may configure or clear a proposed goal for future connections:
 

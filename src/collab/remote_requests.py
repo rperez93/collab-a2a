@@ -119,6 +119,11 @@ class Inbox:
                        '(singleton INTEGER PRIMARY KEY CHECK(singleton=1), '
                        'target TEXT NOT NULL, digest TEXT NOT NULL)')
             db.execute('BEGIN IMMEDIATE')
+            columns = {row[1] for row in db.execute('PRAGMA table_info(offers)')}
+            if 'approval_version' not in columns:
+                db.execute('ALTER TABLE offers ADD COLUMN approval_version INTEGER NOT NULL DEFAULT 0')
+            # Old flag/hash approvals cannot survive migration to terminal receipts.
+            db.execute("UPDATE offers SET state='failed' WHERE state='accepted' AND approval_version=0")
             yield db
             db.commit()
         except BaseException:
@@ -158,7 +163,7 @@ class Inbox:
                 return False
             if db.execute('SELECT COUNT(*) FROM offers').fetchone()[0] >= MAX_RECORDS:
                 raise ValueError('remote request queue is full; wait for expired records to be compacted')
-            db.execute('INSERT INTO offers VALUES (?,?,?,?,NULL,NULL,?)',
+            db.execute('INSERT INTO offers(id,digest,payload,state,binding,receipt,updated) VALUES (?,?,?,?,NULL,NULL,?)',
                        (offer['id'], fingerprint, json.dumps(offer), 'pending', now))
         return True
 
@@ -203,9 +208,8 @@ class Inbox:
         raise ValueError('local delivery command changed; bind and review again')
 
     def accept(self, request_id, *, reviewed_digest, session_id, recipient_id,
-               target, command, human_approved, now=None, cwd=None):
-        if human_approved is not True:
-            raise ValueError('explicit local human approval is required')
+               target, command, approval, now=None, cwd=None):
+        from . import consent
         now = time.time() if now is None else now
         binding = binding_digest(target, command, cwd)
         with self._db() as db:
@@ -223,7 +227,9 @@ class Inbox:
                 raise ValueError('local destination does not match the reviewed offer')
             if reviewed_digest != row['digest'] or digest(offer) != row['digest']:
                 raise ValueError('reviewed content changed')
-            db.execute("UPDATE offers SET state='accepted',binding=?,updated=? WHERE id=?",
+            consent.consume(self.root.parent, approval, subject='remote',
+                            request_id=request_id, digest=reviewed_digest, binding=binding)
+            db.execute("UPDATE offers SET state='accepted',approval_version=1,binding=?,updated=? WHERE id=?",
                        (binding, now, request_id))
 
     def decline(self, request_id, *, now=None):

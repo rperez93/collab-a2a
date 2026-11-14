@@ -1,3 +1,4 @@
+from remote_consent_helpers import receipt
 from test_chat_is_the_only_kind_a_client_sends import _join
 from collab.remote_requests import Inbox, RECEIVER_TARGET, digest
 
@@ -19,7 +20,7 @@ def test_host_goal_is_offered_at_connection_but_never_accepted(client, session, 
     route = dict(session_id=joined['session_id'], recipient_id=joined['id'],
                  target='chosen-by-human', command=command)
     assert inbox.claim(**route) is None
-    inbox.accept(offer['id'], reviewed_digest=digest(offer), human_approved=True, **route)
+    inbox.accept(offer['id'], reviewed_digest=digest(offer), approval=receipt(inbox, offer, 'chosen-by-human', command), **route)
     claimed = inbox.claim(**route)
     assert claimed['delivery_target'] == 'chosen-by-human'
     assert claimed['target'] == RECEIVER_TARGET
