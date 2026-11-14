@@ -182,7 +182,8 @@ def test_publisher_caches_sample_and_honors_stats_optout(tmp_path, monkeypatch):
     assert client.payloads[0]['stats']['resources']['observed_at'] == 100
     monkeypatch.setattr(daemon, 'share_stats_enabled', lambda: False)
     asyncio.run(instance._report_stats(client))
-    assert len(client.payloads) == 1
+    assert len([payload for payload in client.payloads if 'stats' in payload]) == 1
+    assert all('stats' not in payload for payload in client.payloads[1:])
     assert len(samples) == 1
 
 

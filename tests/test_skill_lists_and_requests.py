@@ -246,7 +246,8 @@ async def test_with_stats_shared_the_list_rides_the_stats_report(monkeypatch):
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
         await daemon_mod.Daemon._report_stats(fake, client)
     assert posted[-1]['skills'] == [{'name': 'review', 'description': 'r'}]
-    assert posted[-1]['stats'] == {'model': 'm'}
+    assert posted[-1]['stats']['model'] == 'm'
+    assert 'resources' in posted[-1]['stats'], 'resource telemetry rides the same report'
 
 
 def test_without_a_terminal_accept_is_refused_for_the_right_reason(monkeypatch, capsys):

@@ -170,7 +170,7 @@ async def test_a_roster_read_cues_the_skill_list_refresh(tmp_path):
     paths = DaemonPaths(tmp_path)
     paths.root.mkdir(parents=True, exist_ok=True)
     cued = []
-    fake = SimpleNamespace(profile=SimpleNamespace(url="http://hub", token="t"), paths=paths,
+    fake = SimpleNamespace(profile=SimpleNamespace(url="http://hub", token="t", dir=tmp_path), paths=paths,
                            snapshot={}, _adopt_identity=lambda: None,
                            _maybe_refresh_skills=lambda client: cued.append(client))
     roster = {"participants": [{"id": "p1", "skills_count": 2}]}
@@ -230,12 +230,13 @@ def test_shared_but_not_yet_listed_is_unknown():
     assert dashboard_rows(snap, {"participants": []})[0]["skills_state"] == "unknown"
 
 
-def test_the_periodic_refresh_and_the_backoff_gate():
+def test_the_periodic_refresh_and_the_backoff_gate(tmp_path):
     import time
     from types import SimpleNamespace
     from collab.client import daemon as d
     calls = []
-    fake = SimpleNamespace(snapshot={"participants": [{"id": "p1", "skills_count": 2}]},
+    fake = SimpleNamespace(profile=SimpleNamespace(url="http://hub", token="t", dir=tmp_path),
+                           snapshot={"participants": [{"id": "p1", "skills_count": 2}]},
                            _schedule_refresh=lambda name, op: calls.append(name),
                            _skills_signature=(("p1", 2),), _skills_at=time.time() - d.SKILLS_REFRESH - 1)
     d.Daemon._maybe_refresh_skills(fake, client=None)
@@ -254,7 +255,7 @@ async def test_backoff_grows_the_cap_holds_and_a_failed_write_keeps_no_etag(tmp_
     from collab.client.daemon_files import DaemonPaths
     paths = DaemonPaths(tmp_path)
     paths.root.mkdir(parents=True, exist_ok=True)
-    fake = SimpleNamespace(profile=SimpleNamespace(url="http://hub", token="t"), paths=paths)
+    fake = SimpleNamespace(profile=SimpleNamespace(url="http://hub", token="t", dir=tmp_path), paths=paths)
     monkeypatch.setattr(d, "SKILLS_MAX_BYTES", 64)
     big = lambda r: httpx.Response(200, content=b'{"participants": [' + b'1,' * 100 + b'1]}',
                                    headers={"etag": 'W/"x"'})
