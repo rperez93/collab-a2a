@@ -3803,6 +3803,10 @@ def cmd_file(args: argparse.Namespace) -> int:
                         onboard.ensure_daemon(profile, wait=False)
                     except (OSError, RuntimeError, HubError):
                         pass
+                    if args.json:
+                        print(json.dumps({"queued": True, "outbox_id": record_id, "name": path.name,
+                                          "size": size}, indent=2))
+                        return 0
                     ok(f"{said(path.name)} queued for delivery by your worker: {record_id}")
                     print(dim("  `collab worker status` shows it until it is delivered"))
                     return 0
@@ -6532,8 +6536,15 @@ def cmd_worker(args: argparse.Namespace) -> int:
                      "(use `collab worker send --to NAME` if they should hear it)")
             print(dim("  reply again without --awaiting-human once your human has answered"))
         elif args.worker_action == "reply":
-            store.answer(args.decision_id, args.text)
-            ok("decision queued for the collaboration worker")
+            mode = True if getattr(args, "verbatim", False) else False if getattr(args, "instruct", False) else None
+            record = next((r for r in store.pending() if r["id"] == args.decision_id), {})
+            verbatim = mode if mode is not None else bool(record.get("awaiting_human"))
+            to, room = _decision_source(profile, store, args.decision_id) if verbatim else ("", "")
+            store.answer(args.decision_id, args.text, verbatim=verbatim, notify_to=to, notify_room=room)
+            if verbatim and not (to or room or record.get("notify_to") or record.get("notify_room")):
+                warn("no asking peer is known for this decision; the worker relays it instead")
+            ok("answer queued for the asking peer as written" if verbatim
+               else "decision queued for the collaboration worker")
         elif args.worker_action == "context":
             store.context(args.text)
             ok("context queued for the collaboration worker")
@@ -8652,6 +8663,12 @@ Esc cancels a draft, q quits. Editor commands run without a shell.""")
             wp.add_argument("text")
             wp.add_argument("--awaiting-human", action="store_true",
                             help="keep the decision open: your human is deciding; TEXT goes to the peer")
+            how = wp.add_mutually_exclusive_group()
+            how.add_argument("--verbatim", action="store_true",
+                             help="send TEXT to the asking peer exactly as written and close the decision")
+            how.add_argument("--instruct", action="store_true",
+                             help="give TEXT to the worker as an instruction; it words the reply "
+                                  "(default, except for a decision waiting on your human)")
         elif action == "context":
             wp.add_argument("text")
         elif action == "send":
@@ -8741,18 +8758,21 @@ def _decisions_banner(args: argparse.Namespace) -> None:
     A main agent with no wake or monitor heard nothing until it happened to
     run `collab worker pending`; any collab command it runs now says so.
     """
-    if args.command == "worker" or os.environ.get("COLLAB_WORKER") == "1":
+    # Not for machinery: status lines, listeners, hooks and the daemon run
+    # collab constantly and must neither print this nor touch worker state.
+    if (args.command in ("worker", "statusline", "listen", "daemon", "watch", "wake", "check")
+            or os.environ.get("COLLAB_WORKER") == "1" or os.environ.get("COLLAB_BANNER") == "0"):
         return
     try:
-        from .worker import Store
+        from .worker import pending_count_readonly
         profile = SessionProfile.current()
         if profile is None:
             return
-        waiting = [r for r in Store(profile.dir).pending() if not r.get("awaiting_human")]
+        waiting = pending_count_readonly(profile.dir)
     except Exception:  # never let the banner break a command
         return
     if waiting:
-        print(c(f"collab: {len(waiting)} worker decision(s) await your answer — "
+        print(c(f"collab: {waiting} worker decision(s) await your answer — "
                 "`collab worker pending`", "33"), file=sys.stderr)
 
 

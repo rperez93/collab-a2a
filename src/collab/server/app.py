@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import os
+import uuid
 import sqlite3
 import logging
 import time
@@ -1263,7 +1265,8 @@ def create_app(
     @app.post(f"{EXT_PREFIX}/files", tags=["collab"])
     async def upload_file(request: Request, file: UploadFile = File(...),
                           to: str | None = None, room: str | None = None,
-                          keep: bool | None = None, source: str = '') -> dict[str, Any]:
+                          delivery: str | None = None, keep: bool | None = None,
+                          source: str = '') -> dict[str, Any]:
         user = _require(request)
         try:
             source = durable_source(source)
@@ -1272,10 +1275,29 @@ def create_app(
         _sweep_expired()
         to_name, to_id = resolve_target(to)
 
-        file_id = new_id("f")
+        # A worker-delivered upload carries its outbox id: the file id is
+        # derived from it per sender, so an uncertain retry shares it once.
+        if isinstance(delivery, str) and 0 < len(delivery) <= 80:
+            file_id = "f_" + hashlib.sha256(f"{user.id}|{delivery}".encode()).hexdigest()[:20]
+            # A stored row whose blob never landed is an upload to complete,
+            # not a duplicate: acknowledging it would lose the file.
+            # A delivery that already ended (collected, withdrawn, expired) is
+            # acknowledged as it is, never recreated.
+            if (existing := store.get_file(file_id)) is not None and (
+                    existing["state"] != "available" or _blob(file_id).exists()):
+                if existing["state"] == "available":
+                    await _announce(existing, user)  # a retry repairs a lost announcement
+                return {**_file_view(existing), "duplicate": True}
+        else:
+            file_id = new_id("f")
         digest = hashlib.sha256()
         size = 0
-        target = _blob(file_id)
+        # Written to a private temporary blob and moved into place only by the
+        # upload whose record insert wins: two concurrent retries of one
+        # delivery could otherwise interleave into one blob that matches
+        # neither recorded hash.
+        final = _blob(file_id)
+        target = final.with_name(f"{file_id}.{uuid.uuid4().hex}.part")
         try:
             with target.open("wb") as out:
                 while chunk := await file.read(1024 * 256):
@@ -1306,21 +1328,65 @@ def create_app(
         audience = () if to_id else [
             p.id for p in await asyncio.to_thread(store.participants)
             if p.id != user.id]
-        record = await asyncio.to_thread(
-            store.add_file, file_id, name=name, size=size, sha256=digest.hexdigest(),
-            sender=user.name, recipient=to_name or None, room=room or DEFAULT_ROOM,
-            audience=audience, kept=keep_document(name) if keep is None else keep, source=source,
-            sender_id=user.id, recipient_id=to_id or None,
-        )
+        try:
+            record = await asyncio.to_thread(
+                store.add_file, file_id, name=name, size=size, sha256=digest.hexdigest(),
+                sender=user.name, recipient=to_name or None, room=room or DEFAULT_ROOM,
+                audience=audience, kept=keep_document(name) if keep is None else keep, source=source,
+                sender_id=user.id, recipient_id=to_id or None,
+            )
+        except sqlite3.IntegrityError:
+            # A concurrent retry of this delivery won the insert (store.add_file
+            # rolled ours back). Our bytes fill its blob only if they are its bytes.
+            existing = store.get_file(file_id)
+            if existing is None:
+                with contextlib.suppress(OSError):
+                    target.unlink()
+                raise
+            if existing["state"] != "available":
+                with contextlib.suppress(OSError):
+                    target.unlink()
+                return {**_file_view(existing), "duplicate": True}
+            if not final.exists() and existing["sha256"] == digest.hexdigest():
+                os.replace(target, final)
+            with contextlib.suppress(OSError):
+                target.unlink()
+            if not final.exists():
+                raise HTTPException(status_code=409, detail="this delivery was stored with other bytes")
+            await _announce(existing, user)
+            return {**_file_view(existing), "duplicate": True}
+        except BaseException:
+            with contextlib.suppress(OSError):
+                target.unlink()
+            raise
+        os.replace(target, final)
+        await _announce(record, user)
+        return _file_view(record)
+
+    async def _announce(record: dict[str, Any], user) -> None:
+        """Publish a file's event once its blob is in place, at most once.
+
+        A retry that finds the record stored but never announced (the first
+        request died between insert and publish, or lost a race) publishes it,
+        so a stored file is never one nobody is told about. The event and its
+        delivery marker commit together (Store.append_once), so a retry after
+        a successful publish cannot announce it twice.
+        """
+        file_id = record["id"]
+        if not _blob(file_id).exists():
+            return
+        to_name = record.get("recipient")
+        to_id = record.get("recipient_id") or (resolve_target(to_name)[1] if to_name else None)
         await hub.publish(Envelope(
             kind=KIND_FILE, sender=user.name, sender_id=user.id,
             to=to_name or None, to_id=to_id,
-            room=None if to_id else (room or DEFAULT_ROOM),
-            body={"action": "shared", "id": file_id, "name": name, "size": size,
+            room=None if to_id else (record.get("room") or DEFAULT_ROOM),
+            body={"action": "shared", "id": file_id, "name": record["name"], "size": record["size"],
                   "sha256": record["sha256"], "url": _download_url(file_id),
-                  "kept": bool(record["kept"]), "owner": user.name, "source": source},
+                  "collab_worker_delivery": f"file:{file_id}",
+                  "kept": bool(record["kept"]), "owner": record.get("sender", user.name),
+                  "source": record.get("source", "")},
         ))
-        return _file_view(record)
 
     @app.get(f"{EXT_PREFIX}/files", tags=["collab"])
     async def list_files(request: Request, include_gone: bool = False) -> dict[str, Any]:

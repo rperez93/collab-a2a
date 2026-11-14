@@ -622,7 +622,8 @@ class Store:
         and event commit together, including across independent hub handles.
         """
         key = (env.body or {}).get("collab_worker_delivery")
-        dedup = env.kind == "chat" and env.sender_id and isinstance(key, str) and 0 < len(key) <= 128
+        # Chat replies and file announcements (key "file:<id>") are delivered once.
+        dedup = env.kind in ("chat", "file") and env.sender_id and isinstance(key, str) and 0 < len(key) <= 128
         with self._lock:
             self._db.execute("BEGIN IMMEDIATE")
             try:
@@ -1628,11 +1629,15 @@ class Store:
         recipient_id = recipient_id or (self.resolve_name(recipient) if recipient else None)
         now = time.time()
         with self._lock:
-            self._db.execute(
-                "INSERT INTO files (id,name,size,sha256,sender,recipient,room,created_at,kept,source,sender_id,recipient_id)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                (file_id, name, size, sha256, sender, recipient, room, now, int(kept), source, sender_id, recipient_id),
-            )
+            try:
+                self._db.execute(
+                    "INSERT INTO files (id,name,size,sha256,sender,recipient,room,created_at,kept,source,sender_id,recipient_id)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (file_id, name, size, sha256, sender, recipient, room, now, int(kept), source, sender_id, recipient_id),
+                )
+            except sqlite3.IntegrityError:
+                self._db.rollback()  # a concurrent retry of the same delivery won
+                raise
             self._db.executemany(
                 "INSERT OR IGNORE INTO file_collections (file_id, participant_id)"
                 " VALUES (?,?)",

@@ -611,6 +611,7 @@ async def test_a_rate_limited_provider_waits_and_an_auth_failure_escalates_once(
 
 
 @pytest.mark.asyncio
+
 async def test_an_escalation_with_a_wrong_seq_is_kept_not_thrown_away(conversation, tmp_path, monkeypatch):
     """The whole paid turn used to be discarded and backed off for one bad reference."""
     configure(conversation, tmp_path)
@@ -689,3 +690,74 @@ async def test_remote_offer_is_excluded_from_worker_model_input(conversation, tm
     assert len(calls) == 1
     assert 'UNAPPROVED_SENTINEL' not in json.dumps(calls[0])
     assert calls[0]['events'][0]['text'] == 'Ordinary coordination'
+
+@pytest.mark.asyncio
+async def test_daemon_upload_sends_the_delivery_key_refuses_changed_bytes_and_has_a_deadline(conversation, tmp_path):
+    import asyncio
+    import hashlib
+    import httpx
+    stash = tmp_path / "s.bin"
+    stash.write_bytes(b"abc")
+    sent = []
+    async def transport(request):
+        sent.append(dict(request.url.params))
+        return httpx.Response(200, json={"kept": False})
+    message = {"id": "o_9", "stash": str(stash), "name": "s.bin", "to": "bob",
+               "sha256": hashlib.sha256(b"abc").hexdigest()}
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as http:
+        conversation.daemon._http = http
+        assert await conversation._upload(message, timeout=5) == (200, "")
+        assert sent[0]["delivery"] == "o_9"
+        stash.write_bytes(b"changed")
+        assert await conversation._upload(message, timeout=5) == (422, "")
+        assert len(sent) == 1
+    stash.write_bytes(b"abc")
+    async def slow(request):
+        await asyncio.sleep(10)
+        return httpx.Response(200)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(slow)) as http:
+        conversation.daemon._http = http
+        with pytest.raises(asyncio.TimeoutError):
+            await conversation._upload(message, timeout=0.05)
+
+@pytest.mark.asyncio
+async def test_the_leak_guard_compares_participant_ids_across_a_rename(conversation, tmp_path, monkeypatch):
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    conversation.daemon.inbox.record(Envelope(seq=1, kind="chat", sender="bob", sender_id="p_b",
+                                              text="May we drop the legacy API in 3.0?"))
+    snap = store.snapshot()
+    store.commit_turn(expected_cursor=snap["cursor"], cursor=1, summary="", replies=[],
+                      escalations=[{"reason": "decision", "seq": 1,
+                                    "question": "Bob asks: may we drop the legacy API in 3.0?"}])
+    # bob renamed to robert; a carol joined under the old name 'bob'
+    conversation.daemon.snapshot["participants"] = [{"name": "robert", "id": "p_b"},
+                                                    {"name": "bob", "id": "p_c"}, {"name": "alice", "id": "p_a"}]
+    incoming(conversation, 2, "any news?")
+    async def run(*args, **kwargs):
+        return {"summary": "", "escalations": [], "replies": [
+            {"text": "Bob asks: may we drop the legacy API in 3.0? still open", "to": "robert", "room": ""},
+            {"text": "Bob asks: may we drop the legacy API in 3.0? still open", "to": "bob", "room": ""}]}
+    monkeypatch.setattr("collab.worker_runtime.run_turn", run)
+    sent = []
+    async def transport(request):
+        sent.append(json.loads(request.content)["to"])
+        return httpx.Response(200, json={"seq": 3})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        conversation.daemon._http = client
+        await conversation.turn()
+    assert sent == ["robert"], "the asker under its new name only; never the new holder of the old name"
+
+
+@pytest.mark.asyncio
+async def test_no_worker_daemon_holds_a_queue_that_worker_off_holds(conversation, tmp_path, monkeypatch):
+    """M21: under COLLAB_NO_WORKER, a disabled worker's outbox is not flushed."""
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    store.send("held", to="bob")
+    cfg = store.configuration()
+    store.configure({**cfg, "enabled": False})
+    monkeypatch.setenv("COLLAB_NO_WORKER", "1")
+    conversation.daemon._http = object()
+    await conversation.tick()
+    assert conversation.delivery is None

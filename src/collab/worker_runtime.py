@@ -193,35 +193,34 @@ DEFERRAL = re.compile(
 
 
 def unrouted_deferrals(result: dict, selected: list[dict], pending: list[dict],
-                       answered: set[str] | frozenset = frozenset()) -> list[dict]:
+                       answered: dict[str, int] | None = None) -> list[dict]:
     """Escalations for deferring replies the model did not route itself.
 
     A peer the turn escalated about, or one already waiting on a pending
     decision, has had its question routed; only the silent promise is repaired.
     """
-    by_seq = {e["seq"]: e for e in selected}
-    # Routed already: an escalation this turn about this peer, or a pending one
-    # (including one waiting on the human, whose follow-ups carry new seqs).
+    # An ordinary pending question covers its message, not a newer question
+    # from the same peer. An explicitly human-waiting peer remains paused.
     waiting = {row.get("seq") for row in pending} | {e["seq"] for e in result["escalations"]}
-    # Routed: the peers of this turn's messages that a pending or new decision
-    # covers, and peers waiting on the human (their follow-ups carry new seqs).
-    # An older, unrelated decision about the same peer does not cover a NEW
-    # promise made to them now.
-    routed_to = ({by_seq[s]["sender"] for s in waiting if s in by_seq}
-                 | {row["sender"] for row in pending if row.get("sender") and row.get("awaiting_human")})
+    awaiting_human = {row["sender"] for row in pending
+                      if row.get("sender") and row.get("awaiting_human")}
     # An unanchored escalation covers the turn only when one peer is in it.
     peers = {e["sender"] for e in selected}
     unanchored = any(e["seq"] == 0 for e in result["escalations"]) and len(peers) <= 1
     added = []
     for reply in result["replies"]:
-        if not DEFERRAL.search(reply["text"]) or reply["to"] in routed_to:
+        if not DEFERRAL.search(reply["text"]):
             continue
         if unanchored:
             continue  # this turn routed a question it could not tie to a message
         # A peer whose question the main agent answered this turn is being
         # given that answer, however the worker words it; a decision about
         # the relay would loop. By peer, not by matching the text.
-        if reply["to"] in answered:
+        # Scoped to the answered message: a follow-up from the same peer, newer
+        # than what was answered, is a new question and is still routed.
+        answered = answered or {}
+        if reply["to"] in answered and not any(
+                e["sender"] == reply["to"] and e["seq"] > answered[reply["to"]] for e in selected):
             continue
         # The peer's own message, else the newest message in the same named
         # room; never someone else's DM.
@@ -231,7 +230,7 @@ def unrouted_deferrals(result: dict, selected: list[dict], pending: list[dict],
         if not source:
             continue  # nothing to ask about: a decision with no question loops
         seq = source[-1]["seq"]
-        if seq in waiting or any(a["seq"] == seq for a in added):
+        if seq in waiting or reply["to"] in awaiting_human or any(a["seq"] == seq for a in added):
             continue
         asked = source[-1]["text"][:1000]
         added.append({"reason": "decision", "seq": seq, "question": (
