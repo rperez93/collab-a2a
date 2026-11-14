@@ -254,6 +254,7 @@ class Conversation:
         if hashlib.sha256(data).hexdigest() != message.get("sha256"):
             return 422  # the private copy changed: never send different bytes
         params = {k: message[k] for k in ("to", "room") if message.get(k)}
+        params["delivery"] = message["id"]  # the hub stores a retried upload once
         response = await self.daemon._http.post(
             f"{self.daemon.profile.url}{EXT_PREFIX}/files",
             headers=request_headers(self.daemon.profile.token), params=params,

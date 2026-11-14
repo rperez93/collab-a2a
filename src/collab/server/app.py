@@ -1106,12 +1106,20 @@ def create_app(
 
     @app.post(f"{EXT_PREFIX}/files", tags=["collab"])
     async def upload_file(request: Request, file: UploadFile = File(...),
-                          to: str | None = None, room: str | None = None) -> dict[str, Any]:
+                          to: str | None = None, room: str | None = None,
+                          delivery: str | None = None) -> dict[str, Any]:
         user = _require(request)
         _sweep_expired()
         to_name, to_id = resolve_target(to)
 
-        file_id = new_id("f")
+        # A worker-delivered upload carries its outbox id: the file id is
+        # derived from it per sender, so an uncertain retry shares it once.
+        if isinstance(delivery, str) and 0 < len(delivery) <= 80:
+            file_id = "f_" + hashlib.sha256(f"{user.id}|{delivery}".encode()).hexdigest()[:20]
+            if (existing := store.get_file(file_id)) is not None:
+                return {**_file_view(existing), "duplicate": True}
+        else:
+            file_id = new_id("f")
         digest = hashlib.sha256()
         size = 0
         target = _blob(file_id)
