@@ -163,6 +163,17 @@ def normalise_remote(url: str) -> str:
     return f"{host.lower()}/{path}"
 
 
+#: How long a repository's key is remembered, per directory. The daemon asks on
+#: every heartbeat (the learning spool, the arrivals, the bundle it publishes),
+#: and each answer was one or two `git` processes: measured on a scratch
+#: session, 820 forks in ten minutes per daemon — 6.8 s of fork/exec in the
+#: daemon and the git children's own CPU on top — for an answer that changes
+#: when somebody edits `origin`, which a five-minute memory still notices.
+REPO_KEY_TTL = 300.0
+
+_repo_keys: dict[str, tuple[float, str]] = {}
+
+
 def repo_key(cwd: Path | None = None) -> str:
     """Which repository a session is in, named so another machine agrees.
 
@@ -170,7 +181,25 @@ def repo_key(cwd: Path | None = None) -> str:
     it says the key is this machine's opinion. Two people with a directory
     called `api` and no remote are not working on the same repository, and a
     bare `api` would have claimed they were.
+
+    Remembered for `REPO_KEY_TTL` per directory: still derived from this
+    checkout, never from anything that arrived on the wire.
     """
+    import time as _time
+
+    where_key = str(Path(cwd or Path.cwd()).resolve())
+    held = _repo_keys.get(where_key)
+    now = _time.monotonic()
+    if held is not None and now - held[0] < REPO_KEY_TTL:
+        return held[1]
+    key = _repo_key(cwd)
+    if len(_repo_keys) >= 64:
+        _repo_keys.clear()
+    _repo_keys[where_key] = (now, key)
+    return key
+
+
+def _repo_key(cwd: Path | None = None) -> str:
     key = normalise_remote(_git("remote", "get-url", "origin", cwd=cwd))
     if key:
         return key
