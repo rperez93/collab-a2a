@@ -131,6 +131,12 @@ async def test_the_service_records_the_exact_inbox_identity_before_a_later_decis
         inbox.close()
 
 
+def _durable(state):
+    """The human's answer is kept: still an answer, or quarantined intact (never delivered)."""
+    with state._db() as db:
+        return db.execute("SELECT COUNT(*) FROM records WHERE kind IN ('answer','quarantine')").fetchone()[0] > 0
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", [True, False])
 async def test_an_instructed_human_answer_uses_its_original_peer_or_stays_durable(
@@ -160,7 +166,7 @@ async def test_an_instructed_human_answer_uses_its_original_peer_or_stays_durabl
         observed = [event for event in hub.history(viewer=original.id) if event.text == "Synthetic paraphrased answer"]
         assert bool(observed) is source
         assert not any(event.text == "Synthetic paraphrased answer" for event in hub.history(viewer=replacement.id))
-        assert bool(state.snapshot()["answers"]) is not source
+        assert _durable(state) is not source   # consumed when sourced; kept (answer or quarantine) when not
     finally:
         inbox.close()
 
@@ -212,7 +218,7 @@ async def test_an_ambiguous_human_answer_never_consumes_or_sends_the_decision(
             profile=SimpleNamespace(dir=tmp_path, name="alice", participant_id="p_me", url="http://unused", token="synthetic"),
             inbox=inbox, _http=NeverHTTP(), snapshot={"participants": [{"name": "bob"}, {"name": "carol"}]}))
         await service.turn()
-        assert state.snapshot()["answers"]
+        assert _durable(state)
         assert not state.outbox()
         assert bool(calls) is (failure != "missing")
     finally:
