@@ -516,8 +516,9 @@ class Conversation:
             # status needs a class of failure, not private subprocess logs.
             detail = str(exc) if isinstance(exc, worker_runtime.WorkerRuntimeError) else type(exc).__name__
             kind = getattr(exc, "kind", "")
-            if kind and kind != "other":
-                detail = f"{detail} ({kind.replace('_', ' ')})"
+            label = f"({kind.replace('_', ' ')})"
+            if kind and kind != "other" and label not in detail:  # the runtime may have named it already
+                detail = f"{detail} {label}"
             self.next_at = time.time() + provider_backoff(kind, getattr(exc, "retry_after", 0.0),
                                                           setting("worker_retry_delay"))
             if kind in ("auth", "model"):

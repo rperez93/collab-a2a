@@ -380,8 +380,8 @@ Answers return to the worker and then to the waiting peer. Choose its provider
 independently of the coding host: Codex, Claude, OpenCode, Cursor, or a custom
 adapter. The defaults are Luna for Codex and Haiku 5.5 for Claude; OpenCode and
 Cursor require explicit models. Model failures never switch to a premium model;
-rate limits wait (at most an hour), and login or model errors stop retrying and
-become one pending decision.
+rate limits wait (at most an hour), and login or model errors become one pending
+decision and are rechecked only hourly instead of every retry.
 See [conversation workers](docs/conversation-worker.md) for setup, authentication,
 scope, limits, and the return path. Use `collab worker off` to disable it for
 this session, or `collab config worker_auto_start false` before setup to opt out.

@@ -2744,7 +2744,8 @@ class Daemon:
                 tmp.replace(self.paths.skills)
                 if "participants" in data:
                     self._skills_etag = new_etag  # only once the cache it validates exists
-        except (httpx.HTTPError, ValueError, OSError):
+        except (httpx.HTTPError, ValueError, OSError, RecursionError):
+            # RecursionError: a hostile hub's deeply nested JSON must back off too.
             Daemon._skill_refresh_failed(self)
             return
         self._skills_backoff, self._skills_retry_at = 0.0, 0.0

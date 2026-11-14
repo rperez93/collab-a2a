@@ -776,3 +776,16 @@ async def test_a_private_question_carrying_a_room_does_not_open_that_room(conver
     assert not store.status()["error"], store.status()["error"]
     assert sent == [], "a DM that carried room=general stays private"
     assert store.status()["dropped_replies"] == 1
+
+
+@pytest.mark.asyncio
+async def test_the_failure_class_is_named_once_in_status(conversation, tmp_path, monkeypatch):
+    configure(conversation, tmp_path)
+    async def run(*args, **kwargs):
+        error = worker_runtime.WorkerRuntimeError("Worker provider exited with status 1 (rate limit)")
+        error.kind, error.retry_after = "rate_limit", 0.0
+        raise error
+    monkeypatch.setattr("collab.worker_runtime.run_turn", run)
+    incoming(conversation, 1, "Question")
+    await conversation.turn()
+    assert worker.Store(conversation.root).status()["error"].count("(rate limit)") == 1
