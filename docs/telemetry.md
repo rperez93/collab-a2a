@@ -171,3 +171,9 @@ in `worker status`. Complete usage envelopes from failed calls are counted;
 missing or interrupted usage remains unknown. Provider-reported cost is not
 necessarily billed cost: Claude reports an estimate at list prices, while Cursor
 SDK `cost.chargedCents` is a settled charge. No model-proposed usage is trusted.
+
+## Process and machine resources
+
+The [resource collector](resources.md) publishes bounded CPU, resident memory
+and IO observations separately from token usage and account quotas. Missing or
+stale measurements remain unknown. It honors the same stats-sharing switch.

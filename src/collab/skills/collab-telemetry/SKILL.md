@@ -118,3 +118,14 @@ an ETag, only when someone shares one and a roster count changes, or every ten
 minutes; failures back off. A roster from a stopped listener shows nobody
 connected and no quota. A skill list reads `not shared`, `unknown` (not fetched
 yet, or a peer older than skill lists) or `hub too old`.
+### Process resources
+
+`stats.resources` is separate from tokens and quota. Linux listeners sample
+explicitly stamped process trees every 15 seconds; stale samples (over 45
+seconds), incomplete trees and unsupported platforms are unknown. RSS includes
+shared pages, CPU100% means one core, and IO rates describe storage counters.
+Agent/work/proxy rows are shared estimates: never sum them across participants
+as exclusive usage. A pressure warning is advisory, not a quota or permission
+to kill a process. Never inspect another participant's private state to fill a
+missing metric. Coordinate full suites with `scripts/run-test-suite.py`; it
+limits lock waiting and sets a scratch config that disables automatic workers.

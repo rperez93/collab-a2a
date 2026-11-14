@@ -6,6 +6,7 @@ import time
 NUMBERS = {'quota_observed_at', 'observed_at', 'tokens_cached', 'tokens_cache_write', 'context_tokens', 'context_limit', 'model_observed_at', 'context_observed_at', 'cost_observed_at', 'tokens_observed_at'}
 TEXT = {'last_model', 'source', 'cost_kind', 'cost_scope'}
 NESTED = {
+ 'resources': set(),
  'subagents': {'active', 'total', 'source', 'observed_at'},
  'worker': {'enabled', 'running', 'agent', 'model', 'turns', 'attempts', 'pending', 'errors',
             'budget_remaining', 'budget_reset_at', 'awaiting_human', 'awaiting_since',
@@ -64,6 +65,10 @@ def extended(data):
         if raw is None and key in data:
             out[key] = None
         elif isinstance(raw, dict):
+            if key == 'resources':
+                from .resources import sanitise
+                out[key] = sanitise(raw)
+                continue
             if key == 'worker':
                 # A fixed allow-list prevents recursive worker/subagent trees.
                 # Reuse the ordinary quota parser so nested allowances have the
