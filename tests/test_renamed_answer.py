@@ -72,7 +72,8 @@ async def test_a_renamed_answer_uses_the_original_id_or_holds_only_a_conflicting
         assert payload["main_answers"][0]["prompt"]["decision_source"]["sender"] == new
         assert payload["main_answers"][0]["source"]["broadcast"] is False
         return {"summary": "PRIVATE-HUMAN-MARKER model summary", "replies": [
-            {"to": old if stale else new, "room": "ops", "text": "Synthetic private answer"}], "escalations": []}
+            # A private question is answered by DM (T_9e266ef03035); the room it carried never binds.
+            {"to": old if stale else new, "room": "", "text": "Synthetic private answer"}], "escalations": []}
 
     monkeypatch.setattr("collab.worker_runtime.run_turn", model)
     try:
