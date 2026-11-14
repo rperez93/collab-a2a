@@ -853,7 +853,10 @@ def collect(source_fd: int, path: Path | str, *, cap: int = GENERATION_CAP,
     dropped = cut = read_total = written = 0
     last_data = time.monotonic()
     skipping = False             # inside an over-long line, until its newline
-    batch: list[bytes] = []
+    # (bytes, how many dropped lines it stands for): 0 for an ordinary line,
+    # the count for a «dropped here» note, so a note that fails to be written
+    # carries its count forward instead of becoming one lost line.
+    batch: list[tuple[bytes, int]] = []
 
     def note(count: int) -> bytes:
         return (f"collab: {count} lines dropped here "
@@ -864,7 +867,7 @@ def collect(source_fd: int, path: Path | str, *, cap: int = GENERATION_CAP,
         now = time.monotonic()
         if now - window_start >= window:
             if dropped:
-                batch.append(note(dropped))
+                batch.append((note(dropped), dropped))
                 dropped = 0
             window_start, window_used, window_count = now, 0, 0
         if window_used + len(line) > window_bytes or window_count >= window_lines:
@@ -872,19 +875,22 @@ def collect(source_fd: int, path: Path | str, *, cap: int = GENERATION_CAP,
             return
         window_used += len(line)
         window_count += 1
-        batch.append(line)
+        batch.append((line, 0))
 
     def flush_batch() -> None:
         nonlocal written, dropped
         if not batch:
             return
-        block = b"".join(batch)
-        lines = len(batch)
+        block = b"".join(data for data, _ in batch)
+        # A failed write loses the ordinary lines AND whatever the notes in it
+        # stood for. Counting the batch's length instead turned «5 dropped»
+        # plus one new line into 2, and a lone note of 5 into 1.
+        lost = sum(stood_for or 1 for data, stood_for in batch if data)
         batch.clear()
         if out.write(block):
             written += len(block)
         else:
-            dropped += lines
+            dropped += lost
 
     while True:
         ready, _, _ = select.select([source_fd], [], [], silent_flush)
@@ -930,7 +936,8 @@ def collect(source_fd: int, path: Path | str, *, cap: int = GENERATION_CAP,
     if held:
         admit(held[:line_max] + b"\n")
     if dropped:
-        batch.append(note(dropped))
+        batch.append((note(dropped), dropped))
+        dropped = 0
     flush_batch()
     out.close()
     return {"read": read_total, "written": written, "dropped": dropped, "cut": cut}
