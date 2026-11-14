@@ -43,18 +43,19 @@ HEALTHY_DAEMON_BYTES_PER_HOUR = 74 * 3600 // 180       # ~1.5 KB
 
 
 def test_the_two_generations_and_the_headroom_fit_the_budget():
-    """Two generations of `GENERATION_CAP` are 8 MiB of the 10 MB budget; the
+    """Two generations of `GENERATION_CAP` are 6.3 MB of the 10 MB budget; the
     rest is what a writer may add between two checks. At the busiest measured
-    rate that headroom is days of writing, against a check every few seconds."""
+    healthy rate that headroom is days of writing, against a check a second.
+    (Arithmetic over the constants; the floods are measured below.)"""
     headroom = logcap.BUDGET - 2 * logcap.GENERATION_CAP
-    assert headroom > 1_500_000
+    assert headroom > 3_500_000
     for rate in (WORKER_BYTES_PER_HOUR, NGROK_BYTES_PER_HOUR,
                  HEALTHY_DAEMON_BYTES_PER_HOUR):
         per_check = rate * logcap.CHECK_EVERY / 3600
         assert per_check * 1000 < headroom, "a thousand checks' worth fits"
     # And how long a log lives before its first rotation, at those rates.
-    assert logcap.GENERATION_CAP / NGROK_BYTES_PER_HOUR > 18     # hours
-    assert logcap.GENERATION_CAP / WORKER_BYTES_PER_HOUR > 29
+    assert logcap.GENERATION_CAP / NGROK_BYTES_PER_HOUR > 13     # hours
+    assert logcap.GENERATION_CAP / WORKER_BYTES_PER_HOUR > 22
 
 
 def test_a_live_appending_writer_keeps_writing_into_the_same_file(tmp_path):
@@ -104,9 +105,12 @@ def test_a_child_process_holding_the_log_is_capped_too(tmp_path):
     assert b"\x00" not in data, "an appending writer leaves no hole"
     assert data.endswith(b"msg=last\n"), "the child kept writing to the live file"
     assert logcap.total(path) <= 2 * cap + 4096
+    assert peak <= 3 * cap, f"peak {peak} while the child was writing"
     assert logcap.rotated(path).exists()
 
 
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="root writes into a read-only directory regardless")
 def test_a_log_that_cannot_be_trimmed_does_not_take_the_process_down(tmp_path):
     """A log that cannot be rolled is a log that grows; that is a worse
     outcome than the one this prevents, and still not worth a dead daemon."""
@@ -123,17 +127,169 @@ def test_a_log_that_cannot_be_trimmed_does_not_take_the_process_down(tmp_path):
         os.chmod(locked, 0o700)
 
 
-def test_the_watcher_tightens_its_interval_under_a_flood(tmp_path):
-    """A traceback loop can write megabytes a second. A trim that found the
-    file past twice its cap means the next check comes at `CHECK_FLOODED`,
-    so the headroom is spent on seconds of flood rather than minutes."""
+def test_the_watcher_looks_as_often_as_the_observed_rate_requires(tmp_path,
+                                                                 monkeypatch):
+    """The first watcher went fast for ONE pass after a flood trim and then
+    back to five seconds while the flood went on: 15.2 MB at 2 MB/s, 31.8 MB
+    at 5 MB/s. The interval is now derived from the rate on every pass."""
+    clock = [1000.0]
+    monkeypatch.setattr(logcap.time, "monotonic", lambda: clock[0])
     path = tmp_path / "daemon.log"
-    watcher = logcap.Watcher([path], cap=1000)
-    path.write_bytes(b"x\n" * 400)                     # 800 B: under the cap
-    assert watcher.check() == logcap.CHECK_EVERY and watcher.rotations == 0
-    path.write_bytes(b"x\n" * 1500)                    # 3000 B: a flood
-    assert watcher.check() == logcap.CHECK_FLOODED and watcher.rotations == 1
+    path.write_bytes(b"x\n" * 10)
+    watcher = logcap.Watcher([path])
+    assert watcher.check() == logcap.CHECK_EVERY, "first pass: no rate yet"
+    clock[0] += 1
+    assert watcher.check() == logcap.CHECK_EVERY, "a quiet log"
+    for _ in range(3):                    # a sustained 2 MB/s, pass after pass
+        with open(path, "ab") as fh:
+            fh.write(b"y" * 2_000_000)
+        clock[0] += 1
+        wait = watcher.check()
+        assert wait * 2_000_000 <= logcap.BUDGET - 2 * logcap.GENERATION_CAP
+        assert wait < logcap.CHECK_EVERY
+
+
+def test_a_sustained_flood_stays_inside_the_budget(tmp_path):
+    """The real watcher, its real defaults, and the worst start: `.1` full, the
+    live file just under its cap, and then a writer in another process
+    appending 3 MB/s for five seconds. The peak, sampled every 5 ms across the
+    live file, `.1` and the spare, stays under 10 MB. Before the interval was
+    derived from the rate the reviewer measured 15.2 MB at 2 MB/s.
+
+    Measured on this machine from an empty log, peaks were 7.1, 8.0 and 6.9 MB
+    at 1, 3 and 5 MB/s — and 13.1 MB at 10 MB/s, past the 3.7 MB/s a standing
+    start is designed to hold (see collab.logcap)."""
+    path = tmp_path / "daemon.log"
+    logcap.rotated(path).write_bytes(b"o" * logcap.GENERATION_CAP)
+    path.write_bytes(b"x" * (logcap.GENERATION_CAP - 1000))
+    watcher = logcap.watch(path)
+    assert watcher is not None
+    try:
+        with open(path, "a") as fh:
+            writer = subprocess.Popen(
+                [sys.executable, "-c",
+                 "import sys,time\n"
+                 "line='E'*99+'\\n'\n"
+                 "block=line*300\n"                     # 30 KB
+                 "end=time.monotonic()+5\n"
+                 "while time.monotonic()<end:\n"
+                 "    t=time.monotonic(); sys.stdout.write(block); sys.stdout.flush()\n"
+                 "    time.sleep(max(0, 0.01-(time.monotonic()-t)))\n"],
+                stdout=fh)
+        peak = 0
+        while writer.poll() is None:
+            peak = max(peak, logcap.total(path))
+            time.sleep(0.005)
+        writer.wait()
+    finally:
+        watcher.stop()
+    assert watcher.rotations >= 2, "it was a flood"
+    assert peak <= logcap.BUDGET, f"peak {peak / 1e6:.2f} MB"
+
+
+def test_a_copy_that_cannot_be_written_never_empties_the_live_log(tmp_path):
+    """A full disk failing the copy's last flush used to leave the live file
+    already truncated and the tail in a partial spare: «live 0, .1 20 bytes,
+    .1.tmp 1048576». RLIMIT_FSIZE stands in for the full disk."""
+    path = tmp_path / "hub.log"
+    path.write_bytes(b"0123456789abcdef\n" * 70_000)        # 1.19 MB
+    probe = (
+        "import resource, signal, sys\n"
+        "signal.signal(signal.SIGXFSZ, signal.SIG_IGN)\n"
+        "resource.setrlimit(resource.RLIMIT_FSIZE, (1 << 20, 1 << 20))\n"
+        "from collab import logcap\n"
+        "print(logcap.trim(sys.argv[1], cap=1_100_000, sacrifice=sys.argv[2] == '1'))\n")
+    env = {**os.environ, "PYTHONPATH": os.path.join(os.getcwd(), "src")}
+    import collab
+    env["PYTHONPATH"] = os.path.dirname(os.path.dirname(collab.__file__))
+    out = subprocess.run([sys.executable, "-c", probe, str(path), "0"],
+                         capture_output=True, text=True, env=env, timeout=30)
+    assert out.stdout.strip() == "False", out.stderr
+    assert path.stat().st_size == 17 * 70_000, "the live log is untouched"
+    assert not logcap.spare_for(path).exists(), "and the partial copy is gone"
+
+    # Past the whole budget, history is the lesser loss: truncate without it.
+    out = subprocess.run([sys.executable, "-c", probe, str(path), "1"],
+                         capture_output=True, text=True, env=env, timeout=30)
+    assert out.stdout.strip() == "True", out.stderr
     assert path.stat().st_size == 0
+    assert not logcap.spare_for(path).exists()
+
+
+def test_the_spare_counts_and_a_stale_one_is_cleared(tmp_path):
+    """A trim killed half way leaves `.1.tmp`, which the budget did not count
+    and nothing removed. It counts now, and the next watcher clears it."""
+    path = tmp_path / "hub.log"
+    path.write_bytes(b"a\n" * 10)
+    logcap.spare_for(path).write_bytes(b"b" * 1000)
+    assert logcap.total(path) == 1020
+    watcher = logcap.watch(path)
+    watcher.stop()
+    assert not logcap.spare_for(path).exists()
+
+
+def test_a_filesystem_without_flock_is_still_capped(tmp_path, monkeypatch):
+    """Every `flock` error was read as «another trimmer holds it», so on a
+    mount that does not implement it (ENOLCK, EOPNOTSUPP) nothing was ever
+    trimmed. Only EWOULDBLOCK means held."""
+    import errno
+
+    def no_flock(fd, how):
+        raise OSError(errno.ENOLCK, "No locks available")
+
+    monkeypatch.setattr(logcap, "fcntl", SimpleNamespace(
+        flock=no_flock, LOCK_EX=2, LOCK_NB=4))
+    path = tmp_path / "ngrok.log"
+    path.write_bytes(b"line\n" * 1000)
+    assert logcap.trim(path, cap=100)
+
+    def held(fd, how):
+        raise BlockingIOError(errno.EWOULDBLOCK, "held")
+
+    monkeypatch.setattr(logcap, "fcntl", SimpleNamespace(flock=held, LOCK_EX=2, LOCK_NB=4))
+    path.write_bytes(b"line\n" * 1000)
+    assert logcap.trim(path, cap=100) is False
+
+
+def test_watch_never_stops_a_process_from_starting(monkeypatch):
+    """`watch` is on the start-up path of the daemon and the hub; a thread that
+    cannot be started must cost the cap, not the session."""
+    def refuse(self):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(logcap.threading.Thread, "start", refuse)
+    assert logcap.watch("/nonexistent/daemon.log") is None
+
+
+def test_the_daemons_hub_restart_opens_hub_log_through_the_cap(tmp_path, monkeypatch):
+    """The daemon restarted a dead hub into `hub.log` with a bare `open("a")`:
+    no cap for a hub that dies before its own watcher starts — once per feed
+    drop — and one descriptor leaked into the daemon per restart."""
+    from collab.client import daemon as d
+
+    opened = []
+    real = d.open_log
+
+    def spy(path, *args, **kwargs):
+        opened.append(path)
+        return real(path, *args, **kwargs)
+
+    log = tmp_path / "hub.log"
+    log.write_bytes(b"old traceback\n" * 100_000)            # past a tiny cap
+    monkeypatch.setattr(d, "open_log", lambda p: spy(p, cap=1000))
+    children = []
+    monkeypatch.setattr(d.subprocess, "Popen", lambda *a, **k: children.append(k))
+    monkeypatch.setattr(d.lockfile, "process_alive", lambda pid: False)
+    cfg = SimpleNamespace(pid=4242, session_id="s_x", home=str(tmp_path))
+    monkeypatch.setattr("collab.server.session.HubConfig.load",
+                        staticmethod(lambda *a, **k: cfg))
+    daemon = d.Daemon.__new__(d.Daemon)
+    daemon.profile = SimpleNamespace(is_host=True, session_id="s_x", home=str(tmp_path))
+    daemon.paths = d.DaemonPaths(tmp_path)
+    daemon._revive_hub_if_host()
+    assert opened == [log] and children
+    assert children[0]["stdout"].closed, "the daemon does not keep the handle"
+    assert log.stat().st_size == 0, "rolled by the capped opener"
 
 
 def test_a_pass_of_the_watcher_costs_almost_nothing():
@@ -215,8 +371,12 @@ def test_the_tunnel_url_is_still_found_after_ngrok_log_is_trimmed(tmp_path):
     from collab.server.tunnel import _url_from_log
 
     path = tmp_path / "ngrok.log"
-    path.write_text('lvl=info msg="started tunnel" url=https://a.example.app\n')
-    assert _url_from_log(str(path), offset=10_000) == "https://a.example.app"
+    path.write_text("lvl=info msg=heartbeat\n" * 1000)
+    offset = path.stat().st_size                     # where start-up began
+    assert logcap.trim(path, cap=100)
+    with open(path, "a") as fh:
+        fh.write('lvl=info msg="started tunnel" url=https://a.example.app\n')
+    assert _url_from_log(str(path), offset=offset) == "https://a.example.app"
 
 
 # --- the worker's line ---------------------------------------------------------
