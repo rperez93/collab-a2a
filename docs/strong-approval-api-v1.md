@@ -10,11 +10,35 @@ terminal approval when strong approval was requested.
 
 `server/approval_crypto.py` now verifies Hello and passkey assertion signatures,
 and `server/approval_challenge.py` builds bounded canonical review bytes and
-fresh contextual challenges. These are pure internal primitives: they neither
-enroll a key nor consume a challenge or issue a receipt. The durable state
-machine, authentication checks, API routes, operation adoption and real human
-ceremonies remain outstanding. The capability endpoint must not advertise
-availability based on these helpers alone.
+fresh contextual challenges. `server/approval_store.py` now adds an internal
+SQLite lifecycle sharing the hub participant database and write lock. It
+revalidates the bearer in each operation transaction, reserves first-key
+enrollment, verifies possession, freezes the initial key and applies a 600-second
+cooldown. It persists immutable operation reviews, single-use challenges,
+approvals and opaque hashed receipts. Receipt consumption claims dispatch once;
+it does not execute an operation or promise exactly-once external effects.
+
+API routes, signed key addition/rotation and host-strong recovery, event
+publication, operation-specific authorization/adoption, adapter wiring and real
+human ceremonies remain outstanding. The capability endpoint must not advertise
+availability based on these internal components alone.
+
+The internal store refreshes the clock after SQLite writer admission and after
+signature verification. It rejects expired receipts, replays, name substitution,
+revoked participants and changed/missing key reports. Reports can freeze a key,
+never overwrite it or prove a human gesture. Re-enrollment cannot silently
+replace an existing or frozen key. Returning local public-key material to its
+old value does not unfreeze it.
+
+Current storage policy: 1024 outstanding request rows globally, 64 matching
+requester/target rows, 1024 challenges, and 30 admitted mutations per participant
+per 60-second window. Expired requests and expired/used challenges are pruned
+when issuing new work. Failed proofs consume quota. Read failures and rejected
+over-quota calls do not append audit records. Audit retains the latest 1000
+events globally, filtering reads to the authenticated owner; it is bounded
+rolling history, not append-only archival or guaranteed per-owner retention.
+Audit metadata contains no proof, bearer, receipt or review payload. Network
+request limits and loud alarm delivery still belong to the unimplemented API.
 
 The current verifier profile requires RSA-2048/e=65537 for RS256 or P-256 for
 ES256. V1 requests no authenticator extensions and rejects assertions carrying
