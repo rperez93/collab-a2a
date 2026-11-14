@@ -1,5 +1,8 @@
 # Bundle Update Log
 
+## 2026-11-14 (R22b client)
+* **Update (later than the pin)**: Recorded in [the command surface](operating/cli-surface.md) the client half of strong approval — `collab consent enrol|keys`, `collab skills ask --strong`, and that a strong request is accepted only through the hub's review and a Hello gesture, never `--human-approved` or a chat reply. The pin and verification stamps are unchanged.
+
 ## 2026-11-14 (R11d-2 shared proxy)
 * **Update (later than the pin)**: Recorded in [the command surface](operating/cli-surface.md) that `collab host` now attaches to the shared-machine proxy when the `proxy` machine setting or `--tunnel proxy` asks — `off` by default this release — that `--primary` names the bare-domain session explicitly, that moving a session onto the proxy stops its listener, hub and own tunnel first, that a `--no-tunnel` session is never routed, and that `kill --purge` releases the primary. The pin and verification stamps are unchanged.
 
