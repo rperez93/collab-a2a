@@ -1119,6 +1119,7 @@ def create_app(
         if isinstance(delivery, str) and 0 < len(delivery) <= 80:
             file_id = "f_" + hashlib.sha256(f"{user.id}|{delivery}".encode()).hexdigest()[:20]
             if (existing := store.get_file(file_id)) is not None:
+                await _announce(existing, user)  # a retry repairs a lost announcement
                 return {**_file_view(existing), "duplicate": True}
         else:
             file_id = new_id("f")
@@ -1167,25 +1168,50 @@ def create_app(
                 audience=audience,
             )
         except sqlite3.IntegrityError:
-            with contextlib.suppress(OSError):
-                target.unlink()
+            # A concurrent retry of this delivery won the insert (store.add_file
+            # rolled ours back). Our bytes fill its blob only if they are its bytes.
             existing = store.get_file(file_id)
             if existing is None:
+                with contextlib.suppress(OSError):
+                    target.unlink()
                 raise
+            if not final.exists() and existing["sha256"] == digest.hexdigest():
+                os.replace(target, final)
+            with contextlib.suppress(OSError):
+                target.unlink()
+            await _announce(existing, user)
             return {**_file_view(existing), "duplicate": True}
         except BaseException:
             with contextlib.suppress(OSError):
                 target.unlink()
             raise
         os.replace(target, final)
-        await hub.publish(Envelope(
-            kind=KIND_FILE, sender=user.name, sender_id=user.id,
-            to=to_name or None, to_id=to_id,
-            room=None if to_id else (room or DEFAULT_ROOM),
-            body={"action": "shared", "id": file_id, "name": name, "size": size,
-                  "sha256": record["sha256"], "url": _download_url(file_id)},
-        ))
+        await _announce(record, user)
         return _file_view(record)
+
+    announcing = asyncio.Lock()
+
+    async def _announce(record: dict[str, Any], user) -> None:
+        """Publish a file's event exactly once its blob is in place.
+
+        Idempotent: a retry that finds the record stored but never announced
+        (the first request died between insert and publish, or lost a race)
+        publishes it, so a stored file is never one nobody is told about.
+        """
+        file_id = record["id"]
+        async with announcing:
+            if store.file_announced(file_id) or not _blob(file_id).exists():
+                return
+            to_name = record.get("recipient")
+            to_id = resolve_target(to_name)[1] if to_name else None
+            await hub.publish(Envelope(
+                kind=KIND_FILE, sender=user.name, sender_id=user.id,
+                to=to_name or None, to_id=to_id,
+                room=None if to_id else (record.get("room") or DEFAULT_ROOM),
+                body={"action": "shared", "id": file_id, "name": record["name"], "size": record["size"],
+                      "sha256": record["sha256"], "url": _download_url(file_id)},
+            ))
+            store.mark_file_announced(file_id)
 
     @app.get(f"{EXT_PREFIX}/files", tags=["collab"])
     async def list_files(request: Request) -> dict[str, Any]:

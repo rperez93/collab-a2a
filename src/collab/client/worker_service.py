@@ -122,7 +122,9 @@ class Conversation:
             # A daemon told to have no worker runs no model, whatever worker.db
             # says (the variable is inherited through spawn). Anything already
             # queued is still delivered: stranding it would lose messages.
-            if (self.daemon._http is not None and (self.delivery is None or self.delivery.done())
+            # `worker off` holds its queue, so only an enabled worker's is sent.
+            if ((cfg or {}).get("enabled") and self.daemon._http is not None
+                    and (self.delivery is None or self.delivery.done())
                     and any(r.get("retry_at", 0) <= time.time() for r in store.outbox())):
                 self.delivery = asyncio.create_task(self._flush_outbox_only(store, generation))
             return
@@ -250,16 +252,25 @@ class Conversation:
         """Upload a queued file's private copy; the HTTP status decides its fate."""
         import hashlib
         stash = Path(message["stash"])
-        data = stash.read_bytes()
-        if hashlib.sha256(data).hexdigest() != message.get("sha256"):
-            return 422  # the private copy changed: never send different bytes
-        params = {k: message[k] for k in ("to", "room") if message.get(k)}
-        params["delivery"] = message["id"]  # the hub stores a retried upload once
-        response = await self.daemon._http.post(
-            f"{self.daemon.profile.url}{EXT_PREFIX}/files",
-            headers=request_headers(self.daemon.profile.token), params=params,
-            files={"file": (message["name"], data, "application/octet-stream")}, timeout=timeout)
-        return response.status_code
+
+        def read() -> bytes | None:
+            data = stash.read_bytes()
+            return data if hashlib.sha256(data).hexdigest() == message.get("sha256") else None
+
+        async def send() -> int:
+            # Up to 10 MB read and hashed off the event loop, under the same deadline.
+            data = await asyncio.to_thread(read)
+            if data is None:
+                return 422  # the private copy changed: never send different bytes
+            params = {k: message[k] for k in ("to", "room") if message.get(k)}
+            params["delivery"] = message["id"]  # the hub stores a retried upload once
+            response = await self.daemon._http.post(
+                f"{self.daemon.profile.url}{EXT_PREFIX}/files",
+                headers=request_headers(self.daemon.profile.token), params=params,
+                files={"file": (message["name"], data, "application/octet-stream")}, timeout=timeout)
+            return response.status_code
+
+        return await asyncio.wait_for(send(), timeout=timeout)
 
     def _source(self, record):
         """A compact summary cannot be trusted to remember a reply address."""
