@@ -389,6 +389,8 @@ class Store:
             if row is None:
                 raise ValueError(f"no pending worker decision {escalation_id}")
             data = json.loads(row[0])
+            if data.get("awaiting_human"):
+                return ""  # already with the human; the peer was told the first time
             data.update(awaiting_human=True, awaiting_since=time.time())
             db.execute("UPDATE records SET data=? WHERE id=?", (json.dumps(data), escalation_id))
             if not (to or room) or not (self._state(db)["config"] or {}).get("enabled"):

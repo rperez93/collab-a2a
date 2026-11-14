@@ -412,9 +412,11 @@ class Conversation:
                           *(a["source"]["seq"] for a in answers if "source" in a)}
             # A wrong seq used to throw the whole paid turn away and back off;
             # the question is still worth routing, so keep it unanchored.
+            only = {e["seq"] for e in selected}
             for escalation in result["escalations"]:
                 if escalation["seq"] not in valid_seqs:
-                    escalation["seq"] = 0
+                    # One message in the turn can only be the one it meant.
+                    escalation["seq"] = next(iter(only)) if len(only) == 1 else 0
             for reply in result["replies"]:
                 if reply["to"] and reply["to"] not in known:
                     raise ValueError("worker proposed an unknown recipient")
@@ -424,8 +426,10 @@ class Conversation:
                 rooms.add("general")
                 if reply["room"] and reply["room"] not in rooms:
                     raise ValueError("worker proposed an unknown room")
+            pending_now = [{**row, "sender": (self._source(row).get("source") or {}).get("sender", "")}
+                           for row in store.pending()]
             escalations = result["escalations"] + worker_runtime.unrouted_deferrals(
-                result, selected, store.pending(),
+                result, selected, pending_now,
                 answered={a["source"]["sender"] for a in answers if a.get("source", {}).get("sender")})
             committed = store.commit_turn(
                 expected_cursor=snapshot["cursor"], cursor=cursor,

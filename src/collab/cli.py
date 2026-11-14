@@ -5911,7 +5911,10 @@ def _decision_source(profile: SessionProfile, store, decision_id: str) -> tuple[
     seq = record.get("seq") or 0
     if not seq:
         return "", ""
-    inbox = Inbox(profile.dir, readonly=True)
+    try:
+        inbox = Inbox(profile.dir, readonly=True)
+    except (OSError, ValueError):
+        return "", ""
     try:
         events = inbox.after(seq - 1, limit=1)
     finally:
@@ -5988,6 +5991,9 @@ def cmd_worker(args: argparse.Namespace) -> int:
             onboard.ensure_daemon(profile, wait=False)
             ok("decision kept open while your human decides"
                + (f"; the peer is told: {record}" if record else ""))
+            if not record:
+                warn("peer not notified: already waiting, or no source message to answer "
+                     "(use `collab worker send --to NAME` if they should hear it)")
             print(dim("  reply again without --awaiting-human once your human has answered"))
         elif args.worker_action == "reply":
             store.answer(args.decision_id, args.text)
