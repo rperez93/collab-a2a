@@ -298,3 +298,21 @@ def test_the_client_offers_its_own_saved_token_when_it_rejoins(tmp_path, monkeyp
     assert onboard._resume_token("https://hub.example", "https://hub.example", "", "bob") == "tok-bob"
     assert onboard._resume_token("https://hub.example", "https://hub.example", "", "carol") == ""
     assert onboard._resume_token("https://other.example", "https://other.example", "", "bob") == ""
+
+
+def test_a_host_profile_is_never_offered_as_rejoin_proof(tmp_path, monkeypatch):
+    """X6: the host's token must not be sent by a guest join under the host's name."""
+    from collab.client import onboard
+    from collab.config import SessionProfile
+    monkeypatch.setenv("COLLAB_HOME", str(tmp_path / "home"))
+    SessionProfile("s_host", "https://hub.example", "alice", "alice", "tok-host", is_host=True,
+                   home=str(tmp_path / "home")).save()
+    assert onboard._resume_token("https://hub.example", "https://hub.example", "s_host", "alice") == ""
+
+
+def test_removing_a_participant_frees_the_name_under_a_new_id(client, session):
+    bob = _join(client, session, name="bob")
+    host = {"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {session['host_token']}"}
+    assert client.post("/ext/collab/v1/revoke", json={"name": "bob"}, headers=host).status_code == 200
+    again = _join(client, session, name="bob")
+    assert again["id"] != bob["id"], "a removed participant's row is never handed to a newcomer"

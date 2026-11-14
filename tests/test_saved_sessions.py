@@ -495,3 +495,23 @@ def test_profile_remains_private_if_sidecar_replace_fails(saved, monkeypatch):
     with pytest.raises(OSError, match='interrupted sidecar'):
         profile.save()
     assert stat.S_IMODE((profile.dir / 'profile.json').stat().st_mode) == 0o600
+
+
+def test_a_client_rejoins_its_own_offline_identity_with_its_saved_token(saved, live_server):
+    """X3: through join_session itself, not a hand-built body: the same state
+    gets the same participant id back; a different state cannot take it."""
+    from collab.client.onboard import join_session
+    url = live_server['base'] + '#' + live_server['invite']
+    first, _, _ = join_session(url, name='rejoiner', start_daemon=False)
+    again, _, _ = join_session(url, name='rejoiner', start_daemon=False)
+    assert again.participant_id == first.participant_id and again.token != first.token
+
+
+def test_another_state_cannot_rejoin_under_that_name(saved, live_server, tmp_path, monkeypatch):
+    from collab.client.hub_client import HubError
+    from collab.client.onboard import join_session
+    url = live_server['base'] + '#' + live_server['invite']
+    join_session(url, name='owner', start_daemon=False)
+    monkeypatch.setenv('COLLAB_HOME', str(tmp_path / 'someone-else'))
+    with pytest.raises(HubError, match='offline'):
+        join_session(url, name='owner', start_daemon=False)

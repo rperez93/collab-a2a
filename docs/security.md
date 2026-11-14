@@ -43,6 +43,16 @@ requires that token.
   A revoked token is rejected on its next use.
 - The invite can be replaced at any time, without ending the session
   (`collab url --rotate`).
+- An offline participant's name is reserved for that participant. Rejoining
+  under it hands their row (id, history, direct messages, files) back only to
+  a caller presenting their own saved token; `collab join` sends it
+  automatically from the collab state that joined as them. An invite alone is
+  refused (409), even when the holder is offline, and there is no host
+  override: the host cannot reassign someone's identity either. Removing a
+  participant (`collab kick`) frees the name, and the next person to take it
+  gets a new id, never the removed row. Clients older than this change do not
+  send the token, so after going offline they cannot rejoin under their own
+  name until they update; they can join under another name meanwhile.
   The hub checks the invite against the session database at every join, so a
   rotation takes effect on the hub that is already running: the old link stops
   admitting anyone the moment it is retired.
