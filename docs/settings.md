@@ -30,8 +30,12 @@ state (one agent session in one workspace); a new conversation starts from the
 shared defaults, so set lasting preferences with `--machine`. `collab config` marks
 each value `[this agent]` or `[shared by every agent here]`, and `--json`
 carries `scope` and `source`. A value written to the machine file before this
-split keeps applying until an agent sets its own; host and join say so when the
-display name comes from it.
+split keeps applying until an agent sets its own, except for the identity keys
+`display_name`, `color`, `stats_command` and `stats_auto_setup`: those are never
+inherited (a machine value is shown as legacy, and host and join say how to
+adopt it), and `--machine` cannot set them. Writes to the shared file are locked
+against a concurrent agent, and a write always resolves this agent's currently
+selected home.
 
 ## Live changes
 

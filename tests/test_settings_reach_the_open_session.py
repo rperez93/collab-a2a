@@ -264,7 +264,8 @@ def test_a_same_size_change_inside_one_tick_is_still_seen(isolated):
 def test_a_colour_is_always_seven_characters_and_still_changes(isolated):
     """The everyday version of the same thing: two `collab color` calls in one
     second differ in no byte the stamp was looking at."""
-    path = isolated / "config.json"
+    path = config.agent_config_path()  # colour is an agent setting (R21)
+    path.parent.mkdir(parents=True, exist_ok=True)
     tick = int(time.time())
 
     path.write_text(json.dumps({"color": "#00cccc"}))
@@ -396,7 +397,8 @@ def test_a_value_read_during_the_window_is_not_trusted_after_it(isolated,
 
 def test_the_same_holds_for_a_colour(isolated, coarse_clock):
     """Seven characters whatever it is, so the size never moves either."""
-    path = isolated / "config.json"
+    path = config.agent_config_path()  # colour is an agent setting (R21)
+    path.parent.mkdir(parents=True, exist_ok=True)
 
     path.write_text(json.dumps({"color": "#00cccc"}))
     assert config.default_color() == "#00cccc"
