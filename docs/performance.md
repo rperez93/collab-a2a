@@ -395,13 +395,13 @@ id or target URL. Request counts vary with RTT and scheduling; the recorded
 A synthetic overdue batch previously forced a full response on every clock
 tick. Negotiated authoritative pace headers changed 100 stable-board reads
 from 100 full bodies to one body and 99 validations. Compressed body bytes fell
-from 108,456 to 1,084, with 16,243 additional clock-header bytes. Controller CPU
-was 0.0323 / 0.0288 s and peak RSS 26,096 / 25,660 KiB. For 20 reads of a board
-near 2 MiB, body plus clock-header bytes fell from 346,452 to 20,406.
+from 130,276 to 1,302, with 16,850 additional clock-header bytes. Controller CPU
+was 0.0402 / 0.0372 s and peak RSS 26,068 / 25,684 KiB. For 20 reads of a board
+near 2 MiB, body plus clock-header bytes fell from 345,580 to 20,495.
 
-Changing boards still returned every full body: 100 reads took 0.0261 / 0.0295 s
-CPU; the near-2-MiB case took 0.1944 / 0.2358 s for 20 reads, with peak RSS
-31,544 / 31,676 KiB. These single fresh-process samples show the metadata
+Changing boards still returned every full body: 100 reads took 0.0468 / 0.0377 s
+CPU; the near-2-MiB case took 0.2171 / 0.2401 s for 20 reads, with peak RSS
+31,520 / 31,748 KiB. These single fresh-process samples show the metadata
 tradeoff; they do not establish a general CPU speedup. Clock-header counts
 include their names and framing, while other HTTP headers and TLS are excluded.
 [Raw clock-path measurements](performance-roster-clocks.json).
