@@ -165,6 +165,42 @@ def test_wrong_recipient_and_stale_token_cannot_approve(hub, signer):
         approve(hub, signer, req, c, cred)
 
 
+def test_requester_reads_exact_canonical_review_without_mutation_rights(hub, signer):
+    req, result, c, cred = approved(hub, signer)
+    own = hub.api.review("test-bob", req["request_id"])
+    peer = hub.api.review("test-alice", req["request_id"])
+    assert peer == own
+    assert hashlib.sha256(crypto.decode(peer["canonical_review"], limit=65536)).hexdigest() == req["digest"]
+    for action in (
+        lambda: hub.api.challenge("test-alice", req["request_id"], credential_id=cred),
+        lambda: hub.api.approve("test-alice", req["request_id"], challenge_id=c["challenge_id"], credential_id=cred, proof=proof(signer, c)),
+        lambda: hub.api.decline("test-alice", req["request_id"]),
+        lambda: hub.api.consume("test-alice", req["request_id"], receipt=result["receipt"], digest=req["digest"]),
+    ):
+        with pytest.raises(approvals.Rejected, match="unknown_request"):
+            action()
+    assert hub.api.review("test-bob", req["request_id"])["state"] == "approved"
+
+
+def test_requester_read_tracks_identity_and_expires(hub):
+    req = request(hub)
+    hub.store.rename(hub.people["alice"].id, "renamed")
+    hub.store.rename(hub.people["carol"].id, "alice")
+    assert hub.api.review("test-alice", req["request_id"])["review"]["requester_id"] == hub.people["alice"].id
+    with pytest.raises(approvals.Rejected, match="unknown_request"):
+        hub.api.review("test-carol", req["request_id"])
+    hub.now[0] += approvals.REQUEST_SECONDS
+    with pytest.raises(approvals.Rejected, match="request_expired"):
+        hub.api.review("test-alice", req["request_id"])
+
+
+def test_requester_cannot_read_after_target_revocation(hub):
+    req = request(hub)
+    assert hub.store.revoke(hub.people["bob"].id)
+    with pytest.raises(approvals.Rejected, match="participant_unavailable"):
+        hub.api.review("test-alice", req["request_id"])
+
+
 def test_new_request_and_challenge_refresh_invalidate_old_binding(hub, signer):
     cred, _ = enrol(hub, signer)
     first, second = request(hub), request(hub, destination="local:other")

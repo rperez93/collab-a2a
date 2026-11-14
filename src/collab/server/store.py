@@ -31,6 +31,7 @@ from typing import Any, Iterable
 
 from ..batch import DONE_STATE as COMPLETED_STATE
 from ..protocol import Envelope
+from . import skill_approval_policy
 
 class TaskClaimConflict(ValueError):
     """A competing claim or completion won before this write acquired the lock."""
@@ -305,13 +306,17 @@ class Store:
         self._db = sqlite3.connect(self.path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         with self._lock:
-            self._db.executescript(SCHEMA)
+            self._db.executescript(SCHEMA + skill_approval_policy.SCHEMA)
             # WAL before the migration, not after: the back-fills below are DML,
             # sqlite3 opens an implicit transaction for them, and journal_mode
             # cannot change inside one.  Run after, the pragma quietly does
             # nothing and every migrated session stays on the rollback journal.
             self._db.execute("PRAGMA journal_mode=WAL")
             self._migrate()
+            # Identity columns may not exist until migration of an old DB.
+            # Bound skill-policy history scans by their actual routing pair.
+            self._db.execute("CREATE INDEX IF NOT EXISTS idx_events_pair_seq ON events(sender_id,recipient_id,seq)")
+            self._db.execute("CREATE INDEX IF NOT EXISTS idx_events_pair_kind_seq ON events(sender_id,recipient_id,kind,seq)")
             self._db.commit()
 
     def _columns(self, table: str) -> set[str]:
@@ -614,6 +619,7 @@ class Store:
                     if row:
                         self._db.commit()
                         return Envelope.from_dict(json.loads(row[0])), False
+                skill_approval_policy.check(self._db, env)
                 cur = self._db.execute(
                     "INSERT INTO events (kind, room, sender, recipient, sender_id,"
                     " recipient_id, ts, payload) VALUES (?,?,?,?,?,?,?,?)",
@@ -623,6 +629,7 @@ class Store:
                 env.seq = int(cur.lastrowid)
                 self._db.execute("UPDATE events SET payload=? WHERE seq=?",
                                  (json.dumps(env.to_dict()), env.seq))
+                skill_approval_policy.record(self._db, env)
                 if dedup:
                     self._db.execute("INSERT INTO worker_deliveries VALUES (?,?,?)",
                                      (env.sender_id, key, env.seq))

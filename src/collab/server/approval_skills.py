@@ -13,6 +13,7 @@ from ..skill_sharing import NAME_RE
 from . import approval_alarms as events
 from . import approval_challenge as challenges
 from .approval_store import Rejected, _id, _text
+from . import skill_approval_policy
 
 SOURCE_TTL = 86400
 MAX_SOURCE_BYTES = 32768
@@ -85,6 +86,10 @@ class SkillApprovals:
         core = self.core
         with core._transaction(token) as (db, owner, now):
             source, requester, expires, fingerprint = self._source(db, owner, source_seq, now)
+            try:
+                skill_approval_policy.register(db, requester, owner, source["id"], source_seq)
+            except skill_approval_policy.SkillApprovalRefused:
+                raise Rejected("skill_policy_refused", 409) from None
             db.execute("DELETE FROM approval_skill_bindings WHERE expires_at<=?", (now,))
             binding = db.execute("SELECT * FROM approval_skill_bindings WHERE session_id=? AND owner_id=? AND (source_seq=? OR (requester_id=? AND source_id=?))",
                                  (core.session_id, owner, source_seq, requester, source["id"])).fetchone()

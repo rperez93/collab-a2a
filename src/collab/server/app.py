@@ -465,9 +465,9 @@ def create_app(
         try:
             env = await hub.publish(env)
         except MessageRefused as exc:
-            # 413, and the reason as the body: the sender reads it, and it
-            # names the alternative. See protocol.MAX_MESSAGE.
-            raise HTTPException(status_code=413, detail=str(exc)) from exc
+            # Size refusals remain 413; a strong-approval policy refusal is
+            # 409 and cannot trigger a weak-consent fallback.
+            raise HTTPException(status_code=getattr(exc, "status_code", 413), detail=str(exc)) from exc
         return {"seq": env.seq, "ts": env.ts}
 
     @app.get(f"{EXT_PREFIX}/history", tags=["collab"])
