@@ -3946,8 +3946,10 @@ def cmd_file(args: argparse.Namespace) -> int:
                     # the clock is the other way it ends.
                     awaited = record.get("remaining", 0)
                     minutes = ROOM_FILE_TTL_SECONDS // 60
-                    print(f"       {dim(f'kept on the host until all {awaited} of them have it, '
-                                        f'or for {minutes} minutes')}")
+                    # Built first: a quote-nested multi-line f-string is a
+                    # SyntaxError before Python 3.12, and 3.10 is the floor.
+                    kept = f"kept on the host until all {awaited} of them have it, or for {minutes} minutes"
+                    print(f"       {dim(kept)}")
                 return 0
 
             if args.action == "list":
