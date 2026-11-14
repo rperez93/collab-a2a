@@ -31,6 +31,7 @@ import pathlib
 import subprocess
 import sys
 import threading
+import time
 from logging import handlers
 
 from collab import config as cfg
@@ -193,12 +194,15 @@ def test_the_log_queue_drops_its_newest_and_says_so_in_place():
 
 def test_the_listeners_sentinel_is_never_the_record_dropped():
     """A full queue must still take the sentinel, or `stop` waits on a join
-    from `atexit` for a record that was thrown away."""
+    from `atexit` for a record that was thrown away — and what it evicts to
+    get in is counted into a gap line ahead of it, not lost in silence."""
     pipe = daemon_files._Bounded(2)
     pipe.put_nowait(1)
     pipe.put_nowait(2)
     pipe.put_nowait(daemon_files._SENTINEL)
-    assert [pipe.get_nowait(), pipe.get_nowait()] == [2, daemon_files._SENTINEL]
+    gap, last = pipe.get_nowait(), pipe.get_nowait()
+    assert gap.getMessage().startswith("2 log lines dropped")
+    assert last is daemon_files._SENTINEL
 
 
 def test_the_queue_is_bounded_to_something_a_daemon_can_hold():
@@ -349,3 +353,37 @@ def test_every_write_is_one_syscall_of_whole_records(tmp_path, monkeypatch):
             json.loads(line)
     finally:
         diag._root = None
+
+
+def test_a_gap_followed_by_silence_is_still_said(tmp_path):
+    """The gap line was admitted only by the NEXT record, so a burst followed by
+    a quiet daemon — or by its exit — lost lines without a word. It is said
+    when the queue empties, and the listener's stop says any gap it evicts."""
+    import logging as stdlib
+
+    path = tmp_path / "daemon.log"
+    handler = stdlib.FileHandler(path)
+    handler.setFormatter(stdlib.Formatter("%(levelname)s %(message)s"))
+    pipe = daemon_files._Bounded(3)
+    for n in range(6):
+        pipe.put_nowait(stdlib.makeLogRecord({"msg": f"line {n}", "levelname": "INFO"}))
+    listener = daemon_files._Listener(pipe, handler)
+    listener.start()
+    deadline = time.monotonic() + 2
+    while not pipe.empty() and time.monotonic() < deadline:
+        time.sleep(0.01)                  # drained, then nothing more arrives
+    time.sleep(0.05)
+    listener.stop()
+    handler.close()
+    text = path.read_text()
+    assert "line 0" in text and "line 2" in text and "line 3" not in text
+    assert "3 log lines dropped" in text
+
+    full = daemon_files._Bounded(3)
+    for n in range(3):
+        full.put_nowait(f"r{n}")
+    full.put_nowait(daemon_files._SENTINEL)
+    taken = [full.get_nowait() for _ in range(full.qsize())]
+    assert taken[-1] is daemon_files._SENTINEL
+    gaps = [t for t in taken if isinstance(t, stdlib.LogRecord)]
+    assert gaps and gaps[0].getMessage().startswith("2 log lines dropped"), taken
