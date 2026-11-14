@@ -471,3 +471,31 @@ def test_only_the_host_can_be_reset_this_way(hub):
     picks whose keys to retire."""
     with pytest.raises(approvals.Rejected, match="host_unavailable"):
         hub.api.reset_host_credentials()
+
+
+def test_a_host_reset_leaves_every_other_participant_s_keys_alone(hub, signer):
+    """Review of #169, Z7: a reset that retired EVERY participant's keys would
+    silently remove everyone's strong approval while the alarm named only the
+    host. A non-host's mature key must stay active and keep approving."""
+    with hub.store._lock, hub.store._db:
+        hub.store._db.execute("UPDATE participants SET is_host=1 WHERE id=?", (hub.people["alice"].id,))
+    cred, _ = enrol(hub, signer)                           # bob, not the host
+    assert hub.api.reset_host_credentials()["owner_id"] == hub.people["alice"].id
+    with hub.store._lock:
+        states = [r[0] for r in hub.store._db.execute(
+            "SELECT state FROM approval_keys WHERE owner_id=?", (hub.people["bob"].id,))]
+    assert states == ["active"]
+    req = request(hub)
+    c = hub.api.challenge("test-bob", req["request_id"], credential_id=cred)
+    consume(hub.api, req, approve(hub, signer, req, c, cred))
+
+
+def test_a_receipt_issued_before_a_host_reset_cannot_be_consumed_after_it(hub, signer):
+    """Review of #169, Z6: an approval the old host key gave before the reset
+    must not be spendable afterwards."""
+    with hub.store._lock, hub.store._db:
+        hub.store._db.execute("UPDATE participants SET is_host=1 WHERE id=?", (hub.people["bob"].id,))
+    req, result, _, _ = approved(hub, signer)
+    hub.api.reset_host_credentials()
+    with pytest.raises(approvals.Rejected):
+        consume(hub.api, req, result)
