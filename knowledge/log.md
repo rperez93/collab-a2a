@@ -1,5 +1,8 @@
 # Bundle Update Log
 
+## 2026-11-14 (default name)
+* **Update (later than the pin)**: Recorded in [state ownership](architecture/state-ownership.md) that the default display name no longer comes from git's `user.name` or `$USER` — a legacy machine name is adopted once, else the agent kind and a stable suffix. The pin and verification stamps are unchanged.
+
 ## 2026-11-14 (R20 first pass)
 * **Update (later than the pin)**: Recorded in [the command surface](operating/cli-surface.md) the commands and flags merged after 2.1.2 — `dashboard`, `config --machine/--kind`, `ngrok_domain`, `resume --keep` and the takeover refusal, `worker reply` answer modes, `watch --panel`, `file list --all` — recorded at `main` df2e2b8 — and that the shared-machine proxy is not yet started by any command. The pin and verification stamps are unchanged.
 
