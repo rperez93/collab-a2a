@@ -271,6 +271,22 @@ def owner_in(chain: list[int]) -> Stamp | None:
     return None
 
 
+def kind_of(pid: int) -> str:
+    """Which `AGENTS` key this one process presents itself as, or ''.
+
+    `owner_in` answers WHERE the nearest agent is; `hosttool.detect` needs to
+    know WHICH it is, to settle two inherited markers. The same readings as
+    `owner_in`, against each tool's names in turn.
+    """
+    from .client import exclusive
+
+    table = {} if exclusive._HAVE_PROC else _table([pid])
+    for kind, names in AGENTS.items():
+        if _named_in(table[pid], names) if pid in table else _wearing_the_name(pid, names):
+            return kind
+    return ""
+
+
 #: How a collab daemon describes itself to `argv`. A command whose ancestry
 #: contains one is running inside a turn that daemon started.
 DAEMON_ARGV = "collab.daemon_main"

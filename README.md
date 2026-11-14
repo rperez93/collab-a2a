@@ -1919,8 +1919,11 @@ or starting the daemon. `stats_auto_setup` is enabled by default. Routing belong
 to each participant, so a mixed room keeps Claude and Codex sources separate.
 Every other agent collab detects (Gemini CLI, opencode, Cursor, Copilot CLI,
 goose, Amp) is recorded with its quota unknown and the reason, which
-`collab stats` and `collab check` show; an earlier Codex or Claude route is
-not carried over, and nothing is published in place of the missing figure.
+`collab stats` and `collab check` show. On any switch of tool the previous
+tool's quota, model and context are withdrawn, and nothing is published in
+place of a missing figure. Markers are inherited, so a tool started inside
+another is settled by the nearest agent process, or recorded as «nested
+tools; cannot attribute».
 Explicit sources and explicit opt-outs take precedence. Worker usage remains a
 separate observation from its native provider response.
 
