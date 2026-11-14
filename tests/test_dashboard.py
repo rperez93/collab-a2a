@@ -84,7 +84,7 @@ def test_hostile_reset_values_cannot_crash_any_roster_view():
     for value in ("\u00b2", "9" * 30, "99999999999999"):
         _short_reset(value)
         quota_summary({"quotas": {"5h": {"used_pct": 10, "resets_at": value}}}, with_resets=True)
-    assert "999%" in quota_summary({"quotas": {"5h": {"used_pct": 1e308}}})
+    assert quota_summary({"quotas": {"5h": {"used_pct": 1e308}}}) == "", "an impossible figure is unknown"
 
 
 def test_an_old_quota_is_marked_and_peer_text_is_escaped(capsys, tmp_path, monkeypatch):
