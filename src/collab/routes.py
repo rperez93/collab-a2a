@@ -286,6 +286,11 @@ def after_join(profile):
     return _synchronous(lambda: _preferred_local(profile, load(profile)))
 
 
+def for_resume(profile):
+    """Resume uses the same pinned route selection as a running listener."""
+    return _synchronous(lambda: select(profile))
+
+
 async def healthy(candidate, session_id, *, verify=True, timeout=LOCAL_DEADLINE):
     """Probe without credentials; TLS authenticates the channel before health."""
     import httpx

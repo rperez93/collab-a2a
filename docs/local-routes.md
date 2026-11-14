@@ -9,12 +9,14 @@ Discovery examines at most 1,024 directory entries before filtering file
 names, with at most 16 KiB read from each eligible regular record. Shared or
 writable registries remain discovery-only for automatic credential routing.
 
-For automatic LAN selection, hosting also starts a TLS entrance to the
-existing listener. OpenSSL generates a private per-session certificate/key
-when needed. The entrance forwards bytes to the same hub; it creates no new
-room, store or membership. If TLS setup is unavailable, the public route
-remains usable and the host log explains the failure. An untrusted plaintext
-LAN address is never silently substituted.
+Hosting can also start a TLS entrance to the existing listener. The default
+loopback entrance stays on that machine; a LAN entrance requires a reachable
+numeric private address supplied by the authenticated host. A join link does
+not discover or authorize a LAN destination. OpenSSL generates a private
+per-session certificate/key when needed. The entrance forwards bytes to the
+same hub; it creates no new room, store or membership. If TLS setup is
+unavailable, the public route remains usable and the host log explains the
+failure. An untrusted plaintext LAN address is never silently substituted.
 
 Public join lines keep the short legacy form
 `collab join https://host#invite`. Routed public paths such as `/s/<id>` may
