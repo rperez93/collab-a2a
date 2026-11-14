@@ -137,3 +137,12 @@ projects and tasks from older batches do not trigger pickup; closing the latest
 batch still permits completing its unfinished tasks. A blocked task can remain
 visible, because dependencies are free text: the agent decides whether it can
 proceed within the accepted goal and its native delegation permissions.
+
+## Shared tunnel policy
+
+`collab config proxy auto` (default) and `on` use one machine proxy for ngrok.
+`collab config proxy off` keeps per-hub tunnels. A host can override the policy
+with `collab host --tunnel own` or `--tunnel proxy`; `--tunnel auto` returns to
+the setting. `--no-tunnel` wins over all modes. The selected explicit mode is
+saved with the session. Changes apply when the hub starts, not to running hubs.
+See [shared proxy hosting](proxy-hosting.md) for legacy links and recovery.

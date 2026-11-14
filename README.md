@@ -2383,6 +2383,7 @@ collab config --json              # the same table, for an agent to read
 | `timezone` | the zone dates and times are read in; an IANA name, or `auto` for the computer's own | — | `auto` |
 | `share_stats` | share your usage with the session | `collab stats --share on\|off` | `on` |
 | `rules` | print collab's rules of conduct at `host` and `join`; the pointer to the repo's own `COLLAB.md` always prints | — | `on` |
+| `proxy` | shared machine tunnel policy: auto/on, or per-hub off | `collab host --tunnel own` | auto |
 | `ngrok_domain` | reserved ngrok domain `collab host` uses when `--domain` is not given; a session you gave its own `--domain` keeps it | `collab host --domain` | empty |
 | `watch_layout` | `split`, `tmux`, `chat` or `roster` | `collab watch --layout <l> --save` | `split` |
 | `watch_roster_size` | how much room the roster gets, in percent | `collab watch --roster-size <n> --save` | `30` |
@@ -2867,3 +2868,10 @@ no longer impose a model cooldown; `collab config worker_turn_gap 5` governs
 actual model calls, while existing attempt budgets and retries remain in force.
 Provider call duration still contributes to reply time. See
 [worker behavior](docs/conversation-worker.md) for the delivery model.
+
+### Shared public tunnel
+
+Hosting uses one machine proxy by default: sessions receive `/s/<id>` links
+under the shared domain. The primary session retains old bare-domain links.
+Use `collab host --tunnel own` for a separate session tunnel or `--no-tunnel`
+for local-only hosting. See [proxy hosting and migration](docs/proxy-hosting.md).
