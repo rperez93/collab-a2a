@@ -164,3 +164,37 @@ def test_a3_publish_refuses_a_bundle_no_peer_could_review(skill_dir, monkeypatch
                               file=["huge.md"])
     assert cli.cmd_skills(args) == 1
     assert "too large for a peer to review" in capsys.readouterr().err
+
+
+def test_the_count_is_refused_before_any_file_is_read(skill_dir, monkeypatch):
+    opened = []
+    real = os.open
+    monkeypatch.setattr(os, "open", lambda *a, **k: opened.append(a[0]) or real(*a, **k))
+    from collab.skill_sharing import read_supporting
+    with pytest.raises(ValueError, match="at most"):
+        read_supporting(skill_dir, [f"f{i}.md" for i in range(MAX_FILES + 1)])
+    assert opened == []
+
+
+def test_a_manifest_naming_files_the_record_dropped_is_refused(monkeypatch, tmp_path):
+    from collab import consent
+    with_files = record_with_files([{"path": "x.md", "content": "one"}])
+    stripped = {**with_files, "files": []}            # manifest kept, files gone
+    asked = []
+    monkeypatch.setattr(consent, "request", lambda *a, **k: asked.append(1))
+    class Hub:
+        def __enter__(self): return self
+        def __exit__(self, *e): return False
+        def shared_skill(self, i): return {"skill": stripped}
+    target = skills.Target("claude-code", "Claude Code", "skills", tmp_path / "skills", tmp_path)
+    monkeypatch.setattr(cli, "_require_profile", lambda a: SimpleNamespace(session_id="s", dir=tmp_path / "p"))
+    monkeypatch.setattr(cli, "_client", lambda p: Hub())
+    monkeypatch.setattr(skills, "skills_target", lambda agent=None: target)
+    args = argparse.Namespace(action="install-shared", target="sk_1", agent=None, force=False)
+    assert cli.cmd_skills(args) == 1 and asked == []
+
+
+def test_a_new_hub_publish_reply_carries_the_manifest(client, host_headers, skill_dir):
+    pub = read_selected(skill_dir, files=["checklist.md"])
+    reply = client.post("/ext/collab/v1/shared-skills", headers=host_headers, json=pub).json()["skill"]
+    assert reply["manifest_sha256"] == pub["manifest_sha256"]

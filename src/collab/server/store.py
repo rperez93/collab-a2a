@@ -542,7 +542,12 @@ class Store:
             except BaseException:
                 self._db.rollback()
                 raise
-        return {key: value for key, value in dict(row).items() if key != 'content'}
+        record = {key: value for key, value in dict(row).items() if key != 'content'}
+        if data.get('files'):
+            # Echoed so the publisher can tell this hub kept its files.
+            record['manifest_sha256'] = data['manifest_sha256']
+            record['files'] = [{k: f[k] for k in ('path', 'sha256', 'size_bytes')} for f in data['files']]
+        return record
 
     def shared_skills(self, *, after: str = '', limit: int = 100) -> list[dict[str, Any]]:
         with self._lock:
