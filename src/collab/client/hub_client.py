@@ -437,8 +437,9 @@ class HubClient:
             raise HubError(f"upload failed ({r.status_code}): {r.text}")
         return r.json()
 
-    def list_files(self) -> list[dict[str, Any]]:
-        return self._request("GET", f"{EXT_PREFIX}/files")["files"]
+    def list_files(self, *, include_ended: bool = False) -> list[dict[str, Any]]:
+        params = {"all": "true"} if include_ended else None
+        return self._request("GET", f"{EXT_PREFIX}/files", params=params)["files"]
 
     def download_file(self, file_id: str, dest_dir: Path) -> tuple[Path, str]:
         """Stream a file to disk and return its path plus the server's checksum."""

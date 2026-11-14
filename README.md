@@ -2286,6 +2286,11 @@ only with the last of them — or after 30 minutes, whichever comes first.
 Someone who joins later may still fetch it while it lasts, but does not keep it
 alive; someone removed from the session does not hold it up.
 
+`collab file list` shows files still on the host and says how many have
+already ended; `collab file list --all` adds those, each marked collected,
+expired or withdrawn, so a file that left the list is never mistaken for one
+that was lost.
+
 ## Security
 
 - **Per-participant tokens.** An invite is exchanged once for your own bearer
