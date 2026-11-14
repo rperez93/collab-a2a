@@ -8241,6 +8241,12 @@ def cmd_skills(args: argparse.Namespace) -> int:
                         raise ValueError("skills publish needs a selected SKILL.md path")
                     publication = read_selected(args.target, name=args.name, description=args.description,
                                                 files=getattr(args, "file", None) or [])
+                    from .skill_sharing import review_fits
+                    if not review_fits({"text": publication["content"],
+                                        "supporting_files": publication.get("files", []),
+                                        "padding": "x" * 2048}):  # room for the review's metadata
+                        raise ValueError("this skill and its files are too large for a peer to review "
+                                         "in full before installing; publish fewer or smaller files")
                     result = client.publish_skill(publication)
                     if publication.get("files") and not (result.get("skill") or {}).get("manifest_sha256"):
                         # An older hub validated SKILL.md and silently dropped the rest.
