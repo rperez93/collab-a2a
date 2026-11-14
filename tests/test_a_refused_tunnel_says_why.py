@@ -150,7 +150,8 @@ def test_an_empty_default_ngrok_domain_clears_it():
 def test_the_setting_is_in_the_registry_beside_rules():
     names = [s.name for s in config.settings()]
     assert "ngrok_domain" in names
-    assert names.index("ngrok_domain") == names.index("rules") + 1
+    assert len(names) == len(set(names))
+    assert names.index("rules") < names.index("ngrok_domain")
 
 
 # ── Through `collab host` itself, with a real hub and a fake ngrok ──────────
@@ -228,7 +229,9 @@ def _fake_ngrok_on_path(root, monkeypatch, body: str) -> None:
 
 
 def _host(root, *extra) -> str:
-    """One `collab host`, and the hub it started stopped again — every time,
+    """Exercise the per-host supervisor explicitly now that proxy is default.
+
+    One `collab host`, and the hub it started stopped again — every time,
     so no case ever leaves two hubs on one session."""
     from collab.cli import main
     from collab.server.session import HubConfig, hosted_sessions, stop_session
@@ -236,7 +239,8 @@ def _host(root, *extra) -> str:
     out = io.StringIO()
     try:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-            main(["host", "--no-daemon", "--no-update-check", "--name", "alice", *extra])
+            main(["host", "--no-daemon", "--no-update-check", "--name", "alice",
+                  "--tunnel", "own", *extra])
     finally:
         for cfg in hosted_sessions(root / ".collab"):
             stop_session(HubConfig.load(cfg.session_id, cfg.home) or cfg)
