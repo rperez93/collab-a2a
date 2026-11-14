@@ -122,6 +122,10 @@ class ProxyState:
     #: matching command names, which once killed a live session here.
     ngrok_pid: int = 0
     ngrok_stamp: str = ""
+    #: Descriptors the proxy could get. Recorded so `collab host` and `collab
+    #: check` can repeat the low-limit warning to the person — in the proxy's
+    #: own log nobody would see it before the outage (review of #119).
+    descriptors: int = 0
 
     @classmethod
     def load(cls) -> "ProxyState":

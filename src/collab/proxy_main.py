@@ -217,6 +217,8 @@ def main(argv: list[str] | None = None) -> int:
     state.save()
 
     door, descriptors = descriptor_budget()
+    state.descriptors = descriptors
+    state.save()
     if descriptors < DESCRIPTOR_FLOOR:
         logger.warning(
             "only %d file descriptors are available (hard limit); half-open "
