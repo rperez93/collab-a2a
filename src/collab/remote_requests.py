@@ -278,6 +278,20 @@ class Inbox:
 OFFER_PREFIX = 'Collab remote offer — pending human acceptance; do not execute:\n'
 
 
+def supports_remote_consent(metadata):
+    """Require an explicit supported receiver capability, never infer from age."""
+    value = metadata.get('remote_consent_version')
+    # A2A protobuf Struct round-trips JSON numbers as floats. Exclude bool,
+    # strings and every unsupported numeric value, including NaN/infinity.
+    return type(value) in (int, float) and value == 1
+
+
+def event_visible_to_receiver(event, supports_consent):
+    """Never replay remote payloads to a downgraded/unknown running client."""
+    guarded = (event.text or '').startswith(OFFER_PREFIX) or event.body.get('collab_expected_recipient_id') is not None
+    return supports_consent or not guarded
+
+
 def wire_text(offer):
     """Use the worker's exact-message outbox; no model rewrites the offer."""
     text = OFFER_PREFIX + json.dumps(validate(offer), ensure_ascii=True, sort_keys=True)

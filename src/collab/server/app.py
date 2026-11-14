@@ -57,6 +57,7 @@ from ..protocol import (
 )
 from .auth import BearerBackend, RateLimiter, new_secret
 from .card import build_agent_card
+from ..remote_requests import event_visible_to_receiver
 from .events import event_stream
 from .executor import CollabAgentExecutor
 from .hub import Hub
@@ -313,6 +314,9 @@ def create_app(
         # unsanitised. See collab.protocol.bounded_meta.
         requested = clip(str(body.get("name") or "agent"), MAX_NAME) or "agent"
         hello = bounded_meta(body.get("hello"))
+        from ..remote_requests import supports_remote_consent
+        # A rejoining older client must clear any capability retained in meta.
+        hello['remote_consent_version'] = 1 if supports_remote_consent(hello) else 0
 
         # A NAME CLASHES ONLY WITH SOMEBODY WHO IS HERE. Two people answering
         # to one name makes every direct message a guess, which is why this is
@@ -358,11 +362,13 @@ def create_app(
             room=DEFAULT_ROOM, text=hello.get("focus", ""), body=hello,
         ))
         offered_goal = None
+        goal_issuer_id = None
         template = await asyncio.to_thread(store.remote_goal)
-        if template:
+        if template and supports_remote_consent(hello):
             from ..remote_requests import make_offer, wire_text, RECEIVER_TARGET
             issuer = store.participant_by_id(template['sender_id'])
             if issuer is not None and issuer.is_host:
+                goal_issuer_id = issuer.id
                 offered_goal = make_offer(session_id=session_id, sender_id=issuer.id,
                                           recipient_id=person.id, target=RECEIVER_TARGET,
                                           kind="goal", text=template['text'], ttl=3600)
@@ -371,12 +377,14 @@ def create_app(
                                            text=wire_text(offered_goal)))
         return {
             "remote_goal": offered_goal,
+            # Server-validated host identity, separate from untrusted offer content.
+            "remote_goal_sender_id": goal_issuer_id,
             "token": token,
             "name": person.name,
             "id": person.id,
             "session_id": session_id,
             "host": hub.host_name,
-            "snapshot": hub.snapshot(viewer=person.id),
+            "snapshot": hub.snapshot(viewer=person.id, remote_consent=supports_remote_consent(hello)),
         }
 
     # --- extension: the live feed ---------------------------------------------
@@ -431,7 +439,7 @@ def create_app(
         items = await asyncio.to_thread(
             store.history, room=room, viewer=user.id, limit=min(limit, 500)
         )
-        return {"events": [e.to_dict() for e in items]}
+        return {"events": [e.to_dict() for e in items if event_visible_to_receiver(e, request.headers.get('Collab-Remote-Consent') == '1')]}
 
     @app.get(f"{EXT_PREFIX}/replay", tags=["collab"])
     async def replay(request: Request, after: int = 0, through: int | None = None,
@@ -446,7 +454,7 @@ def create_app(
             store.since_page, after, viewer=user.id, limit=max(1, min(limit, 500)),
             through=top,
         )
-        return {"events": [e.to_dict() for e in items], "cursor": cursor,
+        return {"events": [e.to_dict() for e in items if event_visible_to_receiver(e, request.headers.get('Collab-Remote-Consent') == '1')], "cursor": cursor,
                 "through": top}
 
     # --- extension: rooms, roster, snapshot -------------------------------------
@@ -479,7 +487,7 @@ def create_app(
     @app.get(f"{EXT_PREFIX}/snapshot", tags=["collab"])
     async def snapshot(request: Request) -> Response:
         user = _require(request)
-        return roster_response(hub.snapshot(viewer=user.id), request)
+        return roster_response(hub.snapshot(viewer=user.id, remote_consent=request.headers.get('Collab-Remote-Consent') == '1'), request)
 
     @app.post(f"{EXT_PREFIX}/stats", tags=["collab"])
     async def report_stats(request: Request) -> dict[str, Any]:

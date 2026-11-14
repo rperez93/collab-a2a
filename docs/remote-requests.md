@@ -18,6 +18,17 @@ Guarded messages use a dedicated endpoint, so older hubs refuse them instead
 of silently ignoring the identity check. A failed send remains visible in the
 worker outbox; it never falls back to ordinary unguarded sending.
 
+The recipient must advertise `remote_consent_version: 1`. The sender checks
+before queueing and the hub checks again before persisting or forwarding, so
+an old or unknown receiver cannot receive an offer through this feature. An
+older client rejoining clears its previous capability. The server does not
+offer connection goals to clients without this capability.
+Every current client request also carries `Collab-Remote-Consent: 1`.
+Without that header, remote offers are excluded from history, replay,
+snapshot and both replayed and live SSE events. This protects a saved session
+resumed by older software even if its stored capability is stale; replay
+cursors still advance past excluded events.
+
 Configure the ordinary local wake adapter first, then bind its exact command
 and local working directory to the coding session the human selected:
 
@@ -86,6 +97,9 @@ collab remote goal --clear
 The template persists across hub restarts. Each join receives a fresh, directly
 addressed goal offer, valid for one hour, and stores it pending before starting
 the listener. Joining never accepts it. The join output points to local review.
+The authenticated join response identifies the host issuer separately; the
+receiver checks the offer against that identity, its session and recipient.
+An offer's own sender field cannot establish its origin.
 The human binds their coding session, reviews the full offer, then accepts or
 declines with the same commands above. Connection goals use `receiver-selected`
 as their offered target; the human's actual local target and working directory

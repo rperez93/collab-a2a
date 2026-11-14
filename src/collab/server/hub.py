@@ -88,7 +88,12 @@ class Hub:
             raise RecipientChanged("recipient identity changed; review the destination before retrying")
         if env.kind == KIND_CHAT and (reason := message_refusal(env.text or "")):
             raise MessageRefused(reason)
-        if env.kind == KIND_HELLO and env.sender_id and env.body:
+        from ..remote_requests import OFFER_PREFIX, supports_remote_consent
+        if env.kind == KIND_CHAT and (expected_id is not None or (env.text or '').startswith(OFFER_PREFIX)):
+            recipient = self.store.participant_by_id(env.to_id) if env.to_id else None
+            if recipient is None or not supports_remote_consent(recipient.meta):
+                raise MessageRefused('recipient has not advertised supported remote consent')
+        if env.kind == KIND_HELLO and env.sender_id:
             # The host announces itself the same way a guest does, so its repo,
             # branch and focus show up in the roster like everyone else's.
             await asyncio.to_thread(self.merge_hello, env.sender_id, env.body)
@@ -173,6 +178,8 @@ class Hub:
             # straight over A2A with any body a participant likes, and it lands in
             # the roster the same way. See collab.protocol.bounded_meta.
             hello = bounded_meta(hello)
+            from ..remote_requests import supports_remote_consent
+            hello['remote_consent_version'] = 1 if supports_remote_consent(hello) else 0
             meta.update({k: v for k, v in hello.items() if v not in ("", None)})
 
 
@@ -399,11 +406,13 @@ class Hub:
 
     # --- snapshot -------------------------------------------------------------
 
-    def snapshot(self, viewer: str | None = None, *, history: int = 20) -> dict[str, Any]:
+    def snapshot(self, viewer: str | None = None, *, history: int = 20,
+                 remote_consent: bool = False) -> dict[str, Any]:
         """What a joining agent needs in order to say something useful at once.
 
         ``viewer`` is a participant id.
         """
+        from ..remote_requests import event_visible_to_receiver
         connected = self.connected()
         people = []
         for p in self.store.participants():
@@ -411,6 +420,7 @@ class Hub:
                 "id": p.id,
                 "name": p.name,
                 "is_host": p.is_host,
+                "remote_consent_version": p.meta.get("remote_consent_version", 0),
                 "connected": p.id in connected,
                 "focus": p.meta.get("focus", ""),
                 "repo": p.meta.get("repo", ""),
@@ -473,7 +483,8 @@ class Hub:
             # lower, the confusion between activity and conversation that
             # `unread_messages` had to be split off from `unread` to fix.
             "messages": self.store.count_kind(KIND_CHAT),
-            "recent": [e.to_dict() for e in self.store.history(viewer=viewer, limit=history)],
+            "recent": [e.to_dict() for e in self.store.history(viewer=viewer, limit=history)
+                       if event_visible_to_receiver(e, remote_consent)],
             "seq": self.store.max_seq(),
             "server_time": time.time(),
             "slow_subscriber_disconnects": self.slow_subscriber_disconnects,
