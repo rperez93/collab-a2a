@@ -108,8 +108,13 @@ def hints(raw):
 
 
 def load(profile):
+    # Partial profiles used by local callers have no private route namespace.
+    # Do not invent one from cwd or another agent's selected global state.
+    directory = getattr(profile, "dir", None)
+    if directory is None:
+        return {}
     try:
-        fd = os.open(profile.dir / "routes.json", os.O_RDONLY | os.O_NONBLOCK)
+        fd = os.open(directory / "routes.json", os.O_RDONLY | os.O_NONBLOCK)
         with os.fdopen(fd, "rb") as stream:
             if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
                 return {}
@@ -124,7 +129,7 @@ def load(profile):
         pem = data.get("local_certificate")
         normalized["local_certificate"] = pem if isinstance(pem, str) and len(pem) <= 8192 else ""
         return normalized if normalized["original_user_url"] else {}
-    except (OSError, ValueError, RecursionError):
+    except (OSError, ValueError, RecursionError, AttributeError, TypeError):
         return {}
 
 

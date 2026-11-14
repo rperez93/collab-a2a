@@ -19,10 +19,13 @@ You need the following:
 - Git.
 - Optional: [ngrok](https://ngrok.com/download), if you want to share a session
   with someone on another network.
-  Without it, a session is reachable on your machine and local network only.
-- Optional: OpenSSL, to create the certificate for automatic secure LAN
-  selection. Hosting preserves the public route if local TLS is unavailable.
-  See [local and public routes](local-routes.md).
+  Without it, a session stays on your machine unless the host explicitly binds
+  a reachable private interface.
+- Optional: OpenSSL, to create the session certificate. Automatic secure LAN
+  selection requires a reachable private address exposed with `collab host --bind`
+  and supplied by authenticated host metadata; a join link alone cannot authorize
+  it. The default loopback entrance stays on the host machine. Hosting preserves
+  the public route if local TLS is unavailable. See [local and public routes](local-routes.md).
 
 ### Supported platforms
 
