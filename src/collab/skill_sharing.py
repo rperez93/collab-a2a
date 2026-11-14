@@ -108,6 +108,15 @@ def validate_files(files: Any) -> list[dict[str, Any]]:
     return sorted(clean, key=lambda f: f['path'])
 
 
+#: consent.request refuses a review larger than this once JSON-encoded.
+REVIEW_LIMIT = 65536
+
+
+def review_fits(review: dict[str, Any]) -> bool:
+    """Whether the operator-terminal review can show this in full (no truncation)."""
+    return len(json.dumps(review, ensure_ascii=True, indent=2)) <= REVIEW_LIMIT
+
+
 def manifest_digest(skill_sha256: str, files: list[dict[str, Any]]) -> str:
     """One hash over SKILL.md and every supporting file: what a consent binds."""
     entries = [['SKILL.md', skill_sha256]] + [[f['path'], f['sha256']] for f in files]

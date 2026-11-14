@@ -7073,6 +7073,12 @@ def cmd_skills_install_shared(args: argparse.Namespace) -> int:
                   "supporting_files": [{"path": f["path"], "bytes": f["size_bytes"], "sha256": f["sha256"],
                                         "text": f["content"]} for f in files],
                   "manifest_sha256": bound}
+        from .skill_sharing import REVIEW_LIMIT, review_fits
+        if not review_fits(review):
+            # Checked before anything is asked or written: the human must see
+            # every byte that is installed, and the review has a hard limit.
+            raise ValueError(f"this publication is too large to review in full on the terminal "
+                             f"(over {REVIEW_LIMIT} characters once encoded); not installing it")
         heading(f"shared skill {said(record.get('name', ''))} from {said(record.get('owner', '?'))} "
                 f"(participant {owner_tag})")
         print(f"  {len(content.encode())} bytes · sha256 {digest}"
@@ -7117,6 +7123,12 @@ def cmd_skills(args: argparse.Namespace) -> int:
                         raise ValueError("skills publish needs a selected SKILL.md path")
                     publication = read_selected(args.target, name=args.name, description=args.description,
                                                 files=getattr(args, "file", None) or [])
+                    from .skill_sharing import review_fits
+                    if not review_fits({"text": publication["content"],
+                                        "supporting_files": publication.get("files", []),
+                                        "padding": "x" * 2048}):  # room for the review's metadata
+                        raise ValueError("this skill and its files are too large for a peer to review "
+                                         "in full before installing; publish fewer or smaller files")
                     result = client.publish_skill(publication)
                     if publication.get("files") and not (result.get("skill") or {}).get("manifest_sha256"):
                         # An older hub validated SKILL.md and silently dropped the rest.

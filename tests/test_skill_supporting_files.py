@@ -130,3 +130,37 @@ def test_a5_a_file_that_changed_after_the_manifest_is_refused(monkeypatch, tmp_p
     args = argparse.Namespace(action="install-shared", target="sk_1", agent=None, force=False)
     assert cli.cmd_skills(args) == 1
     assert asked == [] and not target.path.exists(), "refused before the human is asked"
+
+
+def test_a3_a_review_too_large_to_show_in_full_is_refused_before_asking(monkeypatch, tmp_path):
+    from collab import consent
+    # escaping-heavy text: every char becomes \\uXXXX under ensure_ascii
+    heavy = "é" * 14000
+    rec = record_with_files([{"path": f"f{i}.md", "content": heavy[:3000]} for i in range(3)] +
+                            [{"path": "big.md", "content": heavy}])
+    asked = []
+    monkeypatch.setattr(consent, "request", lambda *a, **k: asked.append(1))
+    class Hub:
+        def __enter__(self): return self
+        def __exit__(self, *e): return False
+        def shared_skill(self, i): return {"skill": rec}
+    target = skills.Target("claude-code", "Claude Code", "skills", tmp_path / "skills", tmp_path)
+    monkeypatch.setattr(cli, "_require_profile", lambda a: SimpleNamespace(session_id="s", dir=tmp_path / "p"))
+    monkeypatch.setattr(cli, "_client", lambda p: Hub())
+    monkeypatch.setattr(skills, "skills_target", lambda agent=None: target)
+    args = argparse.Namespace(action="install-shared", target="sk_1", agent=None, force=False)
+    assert cli.cmd_skills(args) == 1 and asked == [] and not target.path.exists()
+
+
+def test_a3_publish_refuses_a_bundle_no_peer_could_review(skill_dir, monkeypatch, capsys):
+    (skill_dir / "huge.md").write_text("é" * 20000)
+    monkeypatch.setattr(cli, "_require_own_profile", lambda a: SimpleNamespace())
+    class Hub:
+        def __enter__(self): return self
+        def __exit__(self, *e): return False
+        def publish_skill(self, publication): raise AssertionError("sent")
+    monkeypatch.setattr(cli, "_client", lambda p: Hub())
+    args = argparse.Namespace(action="publish", target=str(skill_dir), name=None, description=None,
+                              file=["huge.md"])
+    assert cli.cmd_skills(args) == 1
+    assert "too large for a peer to review" in capsys.readouterr().err
