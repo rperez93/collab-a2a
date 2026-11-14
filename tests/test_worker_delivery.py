@@ -44,3 +44,17 @@ def test_a_retried_worker_comment_is_stored_once(client, host_headers):
     comments = client.get("/ext/collab/v1/comments", headers=host_headers,
                           params={"subject": "task", "id": task_id}).json()["comments"]
     assert [c["text"] for c in comments] == ["evidence"]
+
+
+def test_a_retried_worker_upload_is_stored_once(client, host_headers):
+    """R3: a queued file whose delivery was uncertain must not be shared twice."""
+    files = {"file": ("notes.txt", b"hello", "application/octet-stream")}
+    first = client.post("/ext/collab/v1/files", headers=host_headers, files=files,
+                        params={"room": "general", "delivery": "o_file1"})
+    second = client.post("/ext/collab/v1/files", headers=host_headers,
+                         files={"file": ("notes.txt", b"hello", "application/octet-stream")},
+                         params={"room": "general", "delivery": "o_file1"})
+    assert first.status_code == second.status_code == 200
+    assert first.json()["id"] == second.json()["id"] and second.json().get("duplicate")
+    listed = client.get("/ext/collab/v1/files", headers=host_headers).json()["files"]
+    assert [f["id"] for f in listed].count(first.json()["id"]) == 1
