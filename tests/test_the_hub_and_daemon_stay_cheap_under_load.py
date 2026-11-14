@@ -158,3 +158,38 @@ def test_two_checkouts_have_two_keys(repo, tmp_path):
     subprocess.run(["git", "init", "-q", str(other)], check=True)
     assert learnings.repo_key(repo) == "example.com/owner/name"
     assert learnings.repo_key(other).startswith("local/")
+
+
+@pytest.mark.parametrize("action, state", [
+    ("claim", "TASK_STATE_WORKING"), ("complete", "TASK_STATE_COMPLETED"),
+    ("fail", "TASK_STATE_FAILED"), ("cancel", "TASK_STATE_CANCELED")])
+def test_every_task_verb_through_the_hub_is_seen_at_once(client, session, host_headers,
+                                                          action, state):
+    """Every verb that moves a task reaches the store through `upsert_task`, so
+    the cached board can never show a state the hub has already left."""
+    def post(body):
+        r = client.post("/ext/collab/v1/tasks", headers=host_headers, json=body)
+        assert r.status_code == 200, r.text
+        return r.json()["task"]
+
+    task = post({"action": "propose", "title": "move me"})
+    client.get("/ext/collab/v1/tasks", headers=host_headers)          # cache it
+    if action in ("complete", "fail"):
+        post({"action": "claim", "id": task["id"]})
+    post({"action": action, "id": task["id"]})
+    listed = client.get("/ext/collab/v1/tasks", headers=host_headers).json()
+    rows = listed["tasks"] if isinstance(listed, dict) else listed
+    assert {t["id"]: t["state"] for t in rows}[task["id"]] == state
+
+
+def test_batch_start_and_close_leave_task_rows_alone_and_figures_current(board):
+    """Opening or closing a batch writes `batches`, not `tasks`: the cached
+    rows stay valid, and the figures — read from the batch row each time —
+    follow the close."""
+    from collab.server.hub import Hub
+
+    hub = Hub(board, session_id="s", host_name="h")
+    assert hub.batch_figures()["state"] == "open"
+    board.close_batch("B_1")
+    assert hub.batch_figures()["state"] == "closed"
+    assert len(board.batch_tasks("B_1")) == 500
