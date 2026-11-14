@@ -357,7 +357,7 @@ class HubClient:
         # there is no fallback to name-addressed /messages.
         try:
             result = self._request("POST", f"{EXT_PREFIX}/messages/to-id", json={
-                "text": env.text, "to_id": expected_id, "body": env.body or {}})
+                "text": env.text, "to_id": expected_id, "thread": env.thread, "body": env.body or {}})
         except HubError as exc:
             if "404" in str(exc) and "recipient" not in str(exc):
                 raise HubError("this session's hub cannot address a participant by id; "

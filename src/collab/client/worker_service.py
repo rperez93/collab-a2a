@@ -227,7 +227,17 @@ class Conversation:
                     if attempts >= setting("worker_delivery_batch"):
                         break
                     continue
-                if message.get("kind") == "comment":
+                mode = message.get("delivery")
+                if mode not in (None, "to-id"):
+                    raise ValueError("unknown outbox delivery mode")
+                if mode == "to-id":
+                    if not message.get("to_id") or message.get("recipient_id"):
+                        raise ValueError("invalid by-ID outbox delivery")
+                    route, payload = "messages/to-id", {
+                        "text": message["text"], "to_id": message["to_id"],
+                        "thread": message.get("thread") or None,
+                        "body": {**(message.get("body") or {}), "collab_worker_delivery": message["id"]}}
+                elif message.get("kind") == "comment":
                     route, payload = "comments", {
                         "subject": message["subject"], "id": message["subject_id"],
                         "text": message["text"], "collab_worker_delivery": message["id"]}
@@ -249,7 +259,7 @@ class Conversation:
                         # A hub without the guarded endpoint cannot receive an
                         # offer safely. Retain it under ordinary bounded backoff,
                         # never retry it through the unguarded messages route.
-                        unsupported_guard = route == "remote-messages" and response.status_code == 404
+                        unsupported_guard = route in ("remote-messages", "messages/to-id") and response.status_code == 404
                         if (400 <= response.status_code < 500
                                 and response.status_code not in (401, 408, 425, 429)
                                 and not unsupported_guard):
