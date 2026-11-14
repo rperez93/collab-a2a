@@ -328,3 +328,40 @@ def test_verbatim_without_a_known_asker_is_refused(tmp_path, monkeypatch, capsys
                               awaiting_human=False, verbatim=True, instruct=False)
     assert cli.cmd_worker(args) == 2 and "cannot be sent verbatim" in capsys.readouterr().err
     assert store.pending(), "the decision stays open"
+
+
+def test_p2_the_queued_acknowledgement_is_escaped(tmp_path, monkeypatch, capsys):
+    import argparse
+    from types import SimpleNamespace
+    from collab import cli, worker
+    store = worker.Store(tmp_path)
+    store.configure({"agent": "claude", "scope": "Coordinate"})
+    decision(store)
+    decision_id = store.pending()[0]["id"]
+    monkeypatch.setattr(cli, "_require_profile", lambda a: SimpleNamespace(dir=tmp_path, session_id="s"))
+    monkeypatch.setattr(cli, "_decision_source", lambda *a: ("bob\x1b[2J", ""))
+    monkeypatch.setattr(cli.onboard, "ensure_daemon", lambda *a, **k: None)
+    args = argparse.Namespace(worker_action="reply", decision_id=decision_id, text="yes",
+                              awaiting_human=False, verbatim=True, instruct=False)
+    assert cli.cmd_worker(args) == 0
+    out = capsys.readouterr().out
+    assert "\x1b[2J" not in out and "queued for @bob" in out
+
+
+def test_p4_the_banner_reads_the_session_given_with_session(tmp_path, monkeypatch, capsys):
+    import argparse
+    from types import SimpleNamespace
+    from collab import cli, config, worker
+    chosen = tmp_path / "chosen"
+    store = worker.Store(chosen)
+    store.configure({"agent": "claude", "scope": "Coordinate"})
+    decision(store)
+    loaded = []
+    monkeypatch.setattr(config.SessionProfile, "load",
+                        classmethod(lambda cls, sid, cwd=None: loaded.append(sid) or SimpleNamespace(dir=chosen)))
+    monkeypatch.setattr(config.SessionProfile, "current",
+                        classmethod(lambda cls, cwd=None: SimpleNamespace(dir=tmp_path / "other")))
+    monkeypatch.delenv("COLLAB_BANNER", raising=False)
+    monkeypatch.delenv("COLLAB_WORKER", raising=False)
+    cli._decisions_banner(argparse.Namespace(command="who", session="s_chosen"))
+    assert loaded == ["s_chosen"] and "1 worker decision" in capsys.readouterr().err

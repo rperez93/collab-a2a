@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from collab import worker, worker_notices
+from collab import worker, worker_notices, worker_runtime
 from collab.client.inbox import Inbox
 from collab.client.worker_service import Conversation
 from collab.protocol import Envelope
@@ -688,36 +688,6 @@ def test_provider_backoff_table():
 
 
 @pytest.mark.asyncio
-async def test_a_worker_reply_repeating_an_open_question_to_someone_else_is_dropped(conversation, tmp_path, monkeypatch):
-    configure(conversation, tmp_path)
-    store = worker.Store(conversation.root)
-    incoming(conversation, 1, "May we drop the legacy API in 3.0?")
-    snap = store.snapshot()
-    store.commit_turn(expected_cursor=snap["cursor"], cursor=1, summary="", replies=[],
-                      escalations=[{"reason": "decision", "seq": 1,
-                                    "question": "Bob asks: may we drop the legacy API in 3.0?"}])
-    # a message in another room, so "ops" is a room this turn may answer in
-    conversation.daemon.inbox.record(Envelope(seq=2, kind="chat", sender="bob", sender_id="p_b",
-                                              room="ops", text="anything new?"))
-    async def run(*args, **kwargs):
-        return {"summary": "", "escalations": [], "replies": [
-            {"text": "FYI ops: Bob asks: may we drop the legacy API in 3.0? waiting", "to": "", "room": "ops"},
-            {"text": "In general: Bob asks: may we drop the legacy API in 3.0? Still open.", "to": "", "room": "general"},
-            {"text": "Still with the main agent.", "to": "bob", "room": ""}]}
-    monkeypatch.setattr("collab.worker_runtime.run_turn", run)
-    sent = []
-    async def transport(request):
-        sent.append(json.loads(request.content)["text"])
-        return httpx.Response(200, json={"seq": 3})
-    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
-        conversation.daemon._http = client
-        await conversation.turn()
-    assert sent == ["In general: Bob asks: may we drop the legacy API in 3.0? Still open.",
-                    "Still with the main agent."], "dropped in another room, kept in the asker's own"
-    assert store.status()["dropped_replies"] == 1
-
-
-@pytest.mark.asyncio
 async def test_the_worker_sees_the_open_board(conversation, tmp_path, monkeypatch):
     configure(conversation, tmp_path)
     conversation.daemon.snapshot["tasks"] = [{"id": "T_22", "title": "R22 consent primitive", "owner": "arma",
@@ -762,22 +732,22 @@ async def test_the_leak_guard_compares_participant_ids_across_a_rename(conversat
     assert sent == ["robert"], "the asker under its new name only; never the new holder of the old name"
 
 
-
-@pytest.mark.asyncio
-async def test_a_private_question_carrying_a_room_does_not_open_that_room(conversation, tmp_path, monkeypatch):
+async def _open_question_turn(conversation, tmp_path, monkeypatch, first, replies):
+    """One pending decision quoting bob's question, then a turn whose replies
+    pass through validate_result, the shape production accepts."""
     configure(conversation, tmp_path)
+    conversation.daemon.snapshot = {"participants": [{"name": n, "id": "p_" + n[0]} for n in ("alice", "bob", "carol")]}
     store = worker.Store(conversation.root)
-    conversation.daemon.inbox.record(Envelope(seq=1, kind="chat", sender="bob", sender_id="p_b",
-                                              to="alice", room="general",
-                                              text="May we drop the legacy API in 3.0?"))
+    conversation.daemon.inbox.record(first)
     snap = store.snapshot()
     store.commit_turn(expected_cursor=snap["cursor"], cursor=1, summary="", replies=[],
                       escalations=[{"reason": "decision", "seq": 1,
                                     "question": "Bob asks: may we drop the legacy API in 3.0?"}])
-    incoming(conversation, 2, "anything new?")
+    # a message in "ops" so that room is one this turn may answer in
+    conversation.daemon.inbox.record(Envelope(seq=2, kind="chat", sender="bob", sender_id="p_b",
+                                              room="ops", text="anything new?"))
     async def run(*args, **kwargs):
-        return {"summary": "", "escalations": [], "replies": [
-            {"text": "All: Bob asks: may we drop the legacy API in 3.0? Still open.", "to": "", "room": "general"}]}
+        return worker_runtime.validate_result({"summary": "", "escalations": [], "replies": replies})
     monkeypatch.setattr("collab.worker_runtime.run_turn", run)
     sent = []
     async def transport(request):
@@ -786,4 +756,33 @@ async def test_a_private_question_carrying_a_room_does_not_open_that_room(conver
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
         conversation.daemon._http = client
         await conversation.turn()
+    return store, sent
+
+
+Q = "Bob asks: may we drop the legacy API in 3.0?"
+
+
+@pytest.mark.asyncio
+async def test_a_reply_repeating_an_open_question_reaches_only_the_asker_where_they_asked(
+        conversation, tmp_path, monkeypatch):
+    public = Envelope(seq=1, kind="chat", sender="bob", sender_id="p_b", room="general",
+                      text="May we drop the legacy API in 3.0?")
+    store, sent = await _open_question_turn(conversation, tmp_path, monkeypatch, public, [
+        {"text": f"Carol, FYI: {Q}", "to": "carol", "room": ""},             # someone else: dropped
+        {"text": f"Bob, in ops: {Q}", "to": "bob", "room": "ops"},           # another room: dropped
+        {"text": f"Bob, here in general: {Q} Still open.", "to": "bob", "room": "general"},  # kept
+        {"text": f"Bob: {Q} Still open.", "to": "bob", "room": ""}])         # DM to the asker: kept
+    assert not store.status()["error"], store.status()["error"]
+    assert sent == [f"Bob, here in general: {Q} Still open.", f"Bob: {Q} Still open."]
+    assert store.status()["dropped_replies"] == 2
+
+
+@pytest.mark.asyncio
+async def test_a_private_question_carrying_a_room_does_not_open_that_room(conversation, tmp_path, monkeypatch):
+    private = Envelope(seq=1, kind="chat", sender="bob", sender_id="p_b", to="alice", room="general",
+                       text="May we drop the legacy API in 3.0?")
+    store, sent = await _open_question_turn(conversation, tmp_path, monkeypatch, private, [
+        {"text": f"Bob, in general: {Q} Still open.", "to": "bob", "room": "general"}])
+    assert not store.status()["error"], store.status()["error"]
     assert sent == [], "a DM that carried room=general stays private"
+    assert store.status()["dropped_replies"] == 1

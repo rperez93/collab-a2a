@@ -462,3 +462,14 @@ def test_an_old_decision_about_a_peer_does_not_hide_a_new_promise_to_them():
     old = [{"seq": 2, "sender": "bob", "question": "old"}]
     assert [e["seq"] for e in unrouted_deferrals(result, selected, pending=old)] == [9], \
         "an unrelated pending decision and another peer's unanchored escalation route nothing for bob"
+
+
+def test_both_routing_intents_hold_together():
+    """#100: a waiting peer's new question is routed; #113: a peer whose
+    decision is with the human gets no second decision for 'still waiting'."""
+    from collab.worker_runtime import unrouted_deferrals
+    selected = [{"seq": 9, "sender": "bob", "text": "And who reviews it?", "room": "general"}]
+    defer = {"escalations": [], "replies": [{"to": "bob", "room": "general", "text": "I'll get back to you."}]}
+    assert [a["seq"] for a in unrouted_deferrals(defer, selected, pending=[{"seq": 7, "sender": "bob"}])] == [9]
+    with_human = [{"seq": 7, "sender": "bob", "awaiting_human": True}]
+    assert unrouted_deferrals(defer, selected, pending=with_human) == []
