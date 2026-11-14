@@ -106,6 +106,9 @@ OPEN_EXCLUDES = frozenset({"TASK_STATE_COMPLETED", "TASK_STATE_CANCELED",
 def _on_auth_error(conn, exc: Exception) -> JSONResponse:
     from .auth import CompatibilityError
     incompatible = isinstance(exc, CompatibilityError)
+    from .approval_routes import PREFIX as APPROVAL_PREFIX, error_response
+    if conn.url.path.startswith(APPROVAL_PREFIX + "/"):
+        return error_response("incompatible" if incompatible else "unauthorized", 426 if incompatible else 401)
     return JSONResponse(
         {"error": "incompatible" if incompatible else "unauthorized", "detail": str(exc)},
         status_code=426 if incompatible else 401,
@@ -249,6 +252,10 @@ def create_app(
     app.state.session_id = session_id
     app.state.started_at = time.time()
     app.state.routes = routes
+    from .approval_routes import install as install_approval_routes
+    install_approval_routes(app, store, session_id)
+    from .approval_alarms import install as install_approval_alarms
+    app.state.approval_alarm_wake = install_approval_alarms(app, hub, app.state.approvals)
 
     if local_tls_config is not None:
         @app.on_event("startup")
@@ -481,9 +488,9 @@ def create_app(
         try:
             env = await hub.publish(env)
         except MessageRefused as exc:
-            # 413, and the reason as the body: the sender reads it, and it
-            # names the alternative. See protocol.MAX_MESSAGE.
-            raise HTTPException(status_code=413, detail=str(exc)) from exc
+            # Size refusals remain 413; a strong-approval policy refusal is
+            # 409 and cannot trigger a weak-consent fallback.
+            raise HTTPException(status_code=getattr(exc, "status_code", 413), detail=str(exc)) from exc
         return {"seq": env.seq, "ts": env.ts}
 
     @app.get(f"{EXT_PREFIX}/history", tags=["collab"])
