@@ -842,6 +842,14 @@ class Conversation:
             open_questions += [(entry["text"][:60], entry.get("to_id") or "unresolved", "")
                                for entry in snapshot.get("main_sent", [])
                                if entry.get("private") and len(entry.get("text", "")) >= 20]
+            # The human answers this turn carries, by the peer each one is for:
+            # a reply to that peer is how the answer is delivered.
+            answers_for = {}
+            for answer in answers:
+                if answer.get("prompt", {}).get("seq", 0) > 0:
+                    ident = (answer["prompt"].get("decision_source") or {}).get("sender_id")
+                    if ident:
+                        answers_for.setdefault(ident, set()).add(answer["id"])
             kept = []
             for reply in result["replies"]:
                 # Fine only for the asker: by DM, or addressed to them in the
@@ -857,6 +865,19 @@ class Conversation:
                 if leak is None and private_shown and (
                         reply.get("room") or who(reply["to"]) not in private_shown):
                     leak = "private send in this turn"
+                    # HELD, NEVER DROPPED, WHEN IT CARRIES A HUMAN ANSWER. bob
+                    # asked in #general, the human answered, and the main agent
+                    # had sent bob something privately: the turn is bob's alone,
+                    # so that send is shown in full and only a DM may leave — but
+                    # a broadcast question is answered in its room (#162). The
+                    # reply was withheld and the answer consumed with it, counted
+                    # as one more «dropped reply» (review of #148). The answer
+                    # stays with the main agent for local recipient review.
+                    carried = answers_for.get(who(reply["to"]), set())
+                    if carried:
+                        self._hold_model_answers(store, (carried & active_answers) or carried,
+                                                 snapshot, logged)
+                        return
                 if leak is None:
                     kept.append(reply)
             if dropped := len(result["replies"]) - len(kept):

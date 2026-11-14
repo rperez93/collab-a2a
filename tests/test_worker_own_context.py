@@ -316,3 +316,73 @@ async def test_a_redaction_after_a_swap_names_the_ids_current_holder_or_nobody(c
     await conversation.turn()
     assert seen[0]["text"] == "sent a private reply to bobby" and seen[0]["to"] == "bobby"
     assert seen[1]["text"] == "sent a private reply to another participant" and seen[1]["to"] == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("room, delivered", [("general", False), ("", True)])
+async def test_an_answer_whose_reply_the_private_guard_withholds_is_held_not_dropped(
+        tmp_path, monkeypatch, room, delivered):
+    """bob asks a BROADCAST question in #general, the human answers, and the
+    main agent's ledger holds a private send to bob. The turn is bob's alone,
+    so that send is shown in full and the DMs-only guard lets only a DM to bob
+    leave. A reply in #general — the right delivery for a broadcast question
+    (#162) — was withheld and the human's answer consumed with it, counted as
+    one more dropped reply (review of #148, the reviewer's probe). It must be
+    HELD for the main agent, never dropped; a DM still goes out."""
+    from types import SimpleNamespace
+
+    from collab.client.inbox import Inbox
+    from collab.client.worker_service import Conversation
+
+    monkeypatch.delenv("COLLAB_NO_WORKER", raising=False)
+    inbox = Inbox(tmp_path)
+    inbox.record(Envelope(seq=1, kind="chat", sender="bob", sender_id="p_b", room="general",
+                          to=None, text="May I merge #148?"))
+    store = worker.Store(tmp_path)
+    store.configure({"agent": "claude", "scope": "Coordinate"})
+    store.send("PRIVATE: the key rotation is Friday 18:00, do not share", to="bob", to_id="p_b")
+    assert store.commit_turn(
+        expected_cursor=0, cursor=1, summary="", replies=[],
+        escalations=[{"seq": 1, "reason": "decision", "question": "May bob merge #148?"}],
+        decision_sources={1: {"sender_id": "p_b", "sender": "bob", "room": "general",
+                              "broadcast": True}})
+    store.answer(store.pending()[0]["id"], "Tell bob yes, after the gate.", verbatim=False)
+    inbox.record(Envelope(seq=2, kind="chat", sender="bob", sender_id="p_b", room="general",
+                          to=None, text="any news?"))
+    seen = {}
+
+    async def run(*a, **k):
+        seen["main_sent"] = a[2]["main_sent"]
+        return {"summary": "", "escalations": [],
+                "replies": [{"text": "Yes, after the gate.", "to": "bob", "room": room}]}
+
+    monkeypatch.setattr("collab.worker_runtime.run_turn", run)
+    sent = []
+
+    async def transport(request):
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"seq": 9})
+
+    try:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+            daemon = SimpleNamespace(
+                profile=SimpleNamespace(dir=tmp_path, name="alice", participant_id="p_a",
+                                        url="http://hub", token="t"),
+                inbox=inbox, _http=client,
+                snapshot={"participants": [{"name": "alice", "id": "p_a"},
+                                           {"name": "bob", "id": "p_b"}]})
+            await Conversation(daemon).turn()
+    finally:
+        inbox.close()
+    assert [not e.get("redacted") for e in seen["main_sent"]] == [True]
+    delivered_now = [m for m in sent if "gate" in (m.get("text") or "")]
+    with store._db() as db:
+        held = db.execute("SELECT COUNT(*) FROM records WHERE kind='quarantine'").fetchone()[0]
+    snapshot = store.snapshot()
+    assert int(snapshot.get("dropped_replies", 0)) == 0, "the answer was counted as dropped"
+    if delivered:
+        assert len(delivered_now) == 1 and not delivered_now[0].get("room")
+        assert held == 0
+    else:
+        assert delivered_now == [], "a withheld reply was sent anyway"
+        assert held == 1, "the human's answer was consumed instead of held"
