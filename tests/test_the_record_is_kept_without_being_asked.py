@@ -175,14 +175,30 @@ def test_the_plain_log_is_written_by_a_thread_and_not_by_the_caller(tmp_path):
         root.setLevel(level)
 
 
-def test_the_log_queue_drops_its_oldest_rather_than_blocking():
-    """Bounded, because a daemon sits for days; and never blocking, because the
-    caller is the thing being diagnosed."""
-    pipe = daemon_files._Bounded(2)
-    for n in range(5):
+def test_the_log_queue_drops_its_newest_and_says_so_in_place():
+    """Bounded, because a daemon sits for days; never blocking, because the
+    caller is the thing being diagnosed; and a gap is SAID where it is. The
+    queue used to drop its oldest silently, and the file then jumped from one
+    moment to a later one with nothing marking what was missing."""
+    pipe = daemon_files._Bounded(3)
+    for n in range(6):
         pipe.put_nowait(n)
-    assert [pipe.get_nowait(), pipe.get_nowait()] == [3, 4]
-    assert pipe.empty()
+    assert [pipe.get_nowait() for _ in range(3)] == [0, 1, 2]
+    pipe.put_nowait("after")
+    gap = pipe.get_nowait()
+    assert gap.getMessage().startswith("3 log lines dropped")
+    assert pipe.get_nowait() == "after"
+    assert pipe.dropped_total == 3
+
+
+def test_the_listeners_sentinel_is_never_the_record_dropped():
+    """A full queue must still take the sentinel, or `stop` waits on a join
+    from `atexit` for a record that was thrown away."""
+    pipe = daemon_files._Bounded(2)
+    pipe.put_nowait(1)
+    pipe.put_nowait(2)
+    pipe.put_nowait(daemon_files._SENTINEL)
+    assert [pipe.get_nowait(), pipe.get_nowait()] == [2, daemon_files._SENTINEL]
 
 
 def test_the_queue_is_bounded_to_something_a_daemon_can_hold():

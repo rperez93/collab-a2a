@@ -2731,11 +2731,13 @@ class Daemon:
             return  # still alive; this is a network problem, not a dead hub
 
         logger.warning("hub process %s is gone; restarting it", cfg.pid)
-        # THE CAPPED OPENER, and closed once the child has it. A bare
-        # `open("a")` here skipped the cap a hub that fails at start-up — before
-        # its own watcher runs — relies on, and leaked one descriptor per
-        # restart into this long-lived process.
-        with open_log(self.paths.root / "hub.log") as log:
+        # THE LOG OPENER, closed once the child has it: a bare `open("a")` here
+        # leaked one descriptor per restart into this long-lived process. Not
+        # trimmed HERE — this runs on the event loop, and a trim is a copy of
+        # up to a generation — but by this daemon's own `logcap` watcher
+        # thread, which on a host watches `hub.log` (see daemon_main), so a hub
+        # that dies before its own watcher starts is still capped.
+        with open_log(self.paths.root / "hub.log", trim=False) as log:
             subprocess.Popen(
                 [sys.executable, "-m", "collab.hub_main", cfg.session_id],
                 stdout=log, stderr=log, stdin=subprocess.DEVNULL,
