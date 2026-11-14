@@ -186,13 +186,12 @@ def test_shared_install_rejects_the_obsolete_approval_flag_before_dispatch(argv,
         cli.build_parser().parse_args(argv)
     assert refused.value.code == 2
     error = capsys.readouterr().err
-    assert 'does not accept --human-approved' in error
-    assert 'human operator terminal' in error
+    assert 'unrecognized arguments: --human-approved' in error
 
 
-def test_receipt_install_form_and_the_separate_legacy_accept_form_still_parse():
-    """Rejecting an install flag must not remove the held legacy accept contract."""
+def test_receipt_install_and_accept_forms_parse_without_obsolete_flags():
+    """Both consent actions use the operator ceremony instead of caller flags."""
     install = cli.build_parser().parse_args(['skills', 'install-shared', 'sk_test'])
     assert install.action == 'install-shared' and install.target == 'sk_test'
-    accept = cli.build_parser().parse_args(['skills', 'accept', 'request_test', '--human-approved'])
-    assert accept.action == 'accept' and accept.human_approved is True
+    accept = cli.build_parser().parse_args(['skills', 'accept', 'request_test'])
+    assert accept.action == 'accept' and not hasattr(accept, 'human_approved')
