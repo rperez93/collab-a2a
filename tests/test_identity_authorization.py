@@ -134,6 +134,10 @@ def test_a_legacy_private_event_without_a_proven_identity_is_not_made_public(
         # The existing pre-ID table had only recipient text. Its authorizing
         # identity cannot be recovered from whoever holds that name today.
         with store._lock:
+            # The simulated pre-identity schema also predates these indexes;
+            # SQLite correctly refuses dropping a column still indexed today.
+            store._db.execute("DROP INDEX idx_events_pair_seq")
+            store._db.execute("DROP INDEX idx_events_pair_kind_seq")
             store._db.execute("ALTER TABLE events DROP COLUMN sender_id")
             store._db.execute("ALTER TABLE events DROP COLUMN recipient_id")
             if missing_recipient:

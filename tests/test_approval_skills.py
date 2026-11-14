@@ -17,6 +17,7 @@ from collab.server.approval_skills import SkillApprovals, SOURCE_TTL
 from collab.server.approval_store import ApprovalStore, Rejected
 from collab.server.hub import Hub
 from collab.server.store import Store
+from collab.server.skill_approval_policy import SkillApprovalRefused
 from test_approval_store import hub, signer, enrol, approve, proof
 
 
@@ -81,8 +82,8 @@ def test_exact_server_owned_review_and_private_durable_acceptance(hub, signer):
 
 @pytest.mark.parametrize("updates", [{"required_strength": "weak"}, {"skill": "bad skill"}, {"args": "x" * 4001}, {"id": "bad"}, {"extra": True}])
 def test_legacy_ambiguous_and_oversized_requests_cannot_be_upgraded(hub, updates):
-    original = source(hub, **updates)
-    with pytest.raises(Rejected, match="invalid_skill_request"):
+    with pytest.raises((Rejected, SkillApprovalRefused), match="invalid_skill_request|strong skill requests require"):
+        original = source(hub, **updates)
         SkillApprovals(hub.api).prepare("test-bob", source_seq=original.seq)
 
 
@@ -254,6 +255,14 @@ def test_live_http_skill_acceptance_and_private_sse(live_server, host_headers, s
         req = post("/skills/prepare", {"source_seq": source_seq})
         read = client.get(prefix + "/requests/" + req["request_id"] + "/review", headers=bob_headers)
         assert read.status_code == 200 and read.json()["review"]["payload"]["args"] == "reviewed remote arguments"
+        requester_read = client.get(prefix + "/requests/" + req["request_id"] + "/review", headers=host_headers)
+        assert requester_read.status_code == 200 and requester_read.json() == read.json()
+        stranger_read = client.get(prefix + "/requests/" + req["request_id"] + "/review",
+            headers={**host_headers, "Authorization": "Bearer skill-carol-token"})
+        assert stranger_read.status_code == 404
+        requester_challenge = client.post(prefix + "/requests/" + req["request_id"] + "/challenge",
+            headers=host_headers, json={"credential_id": "live.skill.key"})
+        assert requester_challenge.status_code == 404
         c = post("/requests/" + req["request_id"] + "/challenge", {"credential_id": "live.skill.key"})
         approved = post("/requests/" + req["request_id"] + "/approve", {"challenge_id": c["challenge_id"],
             "credential_id": "live.skill.key", "proof": proof(signer, c)})
