@@ -18,6 +18,13 @@ authentication, never from a supplied display name. The hub checks target
 ownership for each request, challenge and credential lookup. Bearer possession
 alone cannot approve a strong request or replace an enrolled key.
 
+The authorization principal is `(session_id, participant_id)` from authenticated
+hub state. Names are labels only. A same-ID rename preserves authority; a
+reused name with a new ID or a different session grants none. Key, request,
+challenge, receipt, rate-limit and audit ownership use this pair, with atomic
+identity revalidation at approval and dispatch. Missing or ambiguous identity
+fails closed; no legacy name fallback or automatic credential migration.
+
 JSON responses carry `api_version: 1`. Unknown fields are rejected in writes.
 Binary fields use **unpadded canonical base64url**: ASCII A–Z/a–z/0–9/`-`/`_`,
 no whitespace, `=`, standard-base64 alphabet or alternate encoding. Decode with
