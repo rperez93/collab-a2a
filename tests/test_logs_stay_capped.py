@@ -1487,3 +1487,31 @@ async def test_a_provider_auth_failure_records_its_kind_and_the_decision(
     assert row["kind"] == "auth" and row["decision"] is True
     assert row["escalation_count"] == 0
     assert service.next_at - time.time() > 600, "main's provider back-off is kept"
+
+
+def test_a_restarted_hub_keeps_the_agent_kind_and_goes_through_the_log_opener(
+        tmp_path, monkeypatch):
+    """The daemon's hub restart carries main's `COLLAB_AGENT_KIND` to the new
+    hub AND opens `hub.log` through `open_log` (without a trim on the event
+    loop), closing its own handle — the two changes met in one Popen and both
+    must survive."""
+    from collab.client import daemon as d
+
+    opened = []
+    monkeypatch.setattr(d, "open_log",
+                        lambda p, **k: (opened.append(k), open(p, "a"))[1])
+    children = []
+    monkeypatch.setattr(d.subprocess, "Popen", lambda *a, **k: children.append(k))
+    monkeypatch.setattr(d.lockfile, "process_alive", lambda pid: False)
+    monkeypatch.setattr(d, "current_kind", lambda: "codex")
+    cfg = SimpleNamespace(pid=4242, session_id="s_x", home=str(tmp_path))
+    monkeypatch.setattr("collab.server.session.HubConfig.load",
+                        staticmethod(lambda *a, **k: cfg))
+    daemon = d.Daemon.__new__(d.Daemon)
+    daemon.profile = SimpleNamespace(is_host=True, session_id="s_x", home=str(tmp_path))
+    daemon.paths = d.DaemonPaths(tmp_path)
+    daemon._revive_hub_if_host()
+    assert opened == [{"trim": False}] and children
+    env = children[0]["env"]
+    assert env["COLLAB_AGENT_KIND"] == "codex" and env["COLLAB_HOME"] == str(tmp_path)
+    assert children[0]["stdout"].closed
