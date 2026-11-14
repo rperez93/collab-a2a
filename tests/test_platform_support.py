@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import io
+from pathlib import Path
 import os
 import subprocess
 import sys
@@ -231,7 +232,12 @@ def test_no_environment_can_be_read_without_proc(no_proc, sleeper):
     assert exclusive.environ(sleeper.pid) == {}
 
 
-def test_argv_survives_without_proc_through_ps(no_proc, sleeper, profile):
+@pytest.mark.parametrize('columns', ['80', '160'])
+@pytest.mark.parametrize('terminal', ['dumb', 'xterm-256color'])
+def test_argv_survives_without_proc_through_ps(no_proc, sleeper, profile, monkeypatch, columns, terminal):
+    """Terminal width must not hide the module/session in the actual host parser."""
+    monkeypatch.setenv('COLUMNS', columns)
+    monkeypatch.setenv('TERM', terminal)
     words = exclusive.argv(sleeper.pid)
     assert d.DAEMON_MODULE in words
     assert profile.session_id in words
@@ -346,3 +352,50 @@ def test_a_pid_file_of_zero_names_nobody(profile):
     assert d.is_running(profile) is None
     assert d.provably_ours(profile) is None
     assert d.stop(profile) is False
+
+
+@pytest.mark.parametrize('mode', ['flood', 'silent', 'nonzero'])
+def test_a_misbehaving_ps_is_bounded_and_proves_no_identity(tmp_path, mode):
+    """Wider ps output must not buy unbounded memory, CPU or a hung reader."""
+    code = r'''
+import json,os,resource,sys,time
+from pathlib import Path
+from collab.client import exclusive
+root=Path(sys.argv[1]); mode=sys.argv[2]
+fake=root/'ps'
+pid_file=root/'owned-ps-pid'
+body="import os,time\nfrom pathlib import Path\nPath("+repr(str(pid_file))+").write_text(str(os.getpid()))\n"
+if mode=='flood': body+="while True: os.write(1,b'x'*65536)\n"
+elif mode=='silent': body+="time.sleep(30)\n"
+else: body+="print('collab.daemon_main s_forged');raise SystemExit(1)\n"
+fake.write_text('#!'+sys.executable+'\n'+body);fake.chmod(0o700)
+os.environ['PATH']=str(root)
+scale=1024 if sys.platform=='darwin' else 1
+def rss():
+    status=Path('/proc/self/status')
+    if status.exists():
+        return int(next(line.split()[1] for line in status.read_text().splitlines() if line.startswith('VmRSS:')))
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/scale
+before_rss=rss()
+before=resource.getrusage(resource.RUSAGE_SELF); child=resource.getrusage(resource.RUSAGE_CHILDREN)
+wall=time.monotonic()
+assert exclusive._ps_argv(os.getpid())==[]
+wall=time.monotonic()-wall
+after=resource.getrusage(resource.RUSAGE_SELF); used=resource.getrusage(resource.RUSAGE_CHILDREN)
+cpu=(after.ru_utime+after.ru_stime-before.ru_utime-before.ru_stime
+     +used.ru_utime+used.ru_stime-child.ru_utime-child.ru_stime)
+current_rss=rss()
+growth=max(0,current_rss-before_rss)
+assert wall<4 and cpu<1 and growth<16*1024,(wall,cpu,growth)
+pid=int(pid_file.read_text())
+try: os.kill(pid,0)
+except ProcessLookupError: pass
+else: raise AssertionError('owned ps survived its bounded exchange')
+print(json.dumps({'mode':mode,'wall_seconds':wall,'cpu_seconds':cpu,'rss_growth_kib':growth,
+                  'rss_kib':current_rss,'process_high_water_kib':after.ru_maxrss/scale}))
+'''
+    environment = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / 'src'))
+    result = subprocess.run([sys.executable, '-c', code, str(tmp_path), mode],
+                            env=environment, capture_output=True, text=True, timeout=8)
+    assert result.returncode == 0, result.stdout + result.stderr
+    print(result.stdout.strip())
