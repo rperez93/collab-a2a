@@ -78,5 +78,19 @@ Hello prompts; the key is usable after a 10-minute cooling-off, and everyone in
 the session is told). `collab consent keys` lists it. Passkeys on other
 platforms need the passkey page, which is not in this build; and while the
 hub reports strong approval unavailable, a strong request cannot be accepted
-at all — nothing weaker is offered instead. collab still
+at all — nothing weaker is offered instead.
+
+**Only between clients that have it.** Strong approval holds only when the
+asked side runs a collab with this client half (#164 or later). An older
+collab ignores `required_strength`: its human can accept the request the
+ordinary way, with a typed «yes» or `--human-approved`, and run it. Your side
+never counts that as accepted — `collab skills sent` keeps it pending — but it
+cannot stop the older side running the skill. Ask a peer to upgrade before you
+rely on `--strong`.
+
+**A missing key is an alarm.** If the enrolled Hello key is gone from this
+machine, or a different key sits under its name, `accept` reports it: the hub
+freezes the key and tells everyone in the session. Deleting a Hello key needs
+no gesture, so if you did not remove it, treat the machine as compromised. A
+new key needs a signed key change approved by another participant. collab still
 executes nothing: accepting records the acceptance, and you run the skill.

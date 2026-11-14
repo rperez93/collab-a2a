@@ -163,6 +163,16 @@ class ApprovalClient:
     def skills_status(self, request_id: str) -> dict:
         return self._call("GET", f"/skills/{_path(request_id)}")
 
+    def report_key(self, credential_id: str, observed_spki: str | None = None) -> dict:
+        """Tell the hub this machine's key is gone (no observation) or changed
+        (the public key observed now): the hub FREEZES the credential and
+        raises a security event for the whole session. It can never install
+        or unfreeze a key."""
+        body = {"credential_id": credential_id}
+        if observed_spki is not None:
+            body["observed_spki"] = observed_spki
+        return self._call("POST", "/keys/report", body)
+
 
 def _path(identity: Any) -> str:
     """A hub-issued id as one path segment, or nothing at all."""
@@ -245,6 +255,60 @@ def strong_acceptance(env: Any, *, requester_id: str, target_id: str,
             or (request_id is not None and answer.get("id") != request_id)):
         return None
     return answer
+
+
+def local_key_state(hello: Any, key: dict) -> tuple[str, str | None]:
+    """Whether this machine still holds the enrolled Hello `key`, read without
+    a prompt: ("ok", None), ("missing", None), ("changed", observed SPKI as
+    base64url) or ("unknown", None) when Hello cannot be asked.
+
+    Compared by the hub's own fingerprint — SHA-256 of the DER public key —
+    so a key replaced under the same name is a CHANGE, not the same key."""
+    try:
+        spki = hello.public_key(key["credential_id"])
+    except hello.NotEnrolled:
+        return "missing", None
+    except hello.HelloError:
+        return "unknown", None
+    if hashlib.sha256(spki).hexdigest() == key.get("fingerprint"):
+        return "ok", None
+    from ..consent_hello import b64url
+    return "changed", b64url(spki)
+
+
+def verify_acceptance_review(answer: dict, *, me_id: str, target_id: str, seq: int,
+                             ask: dict, session_id: str = "") -> bool | None:
+    """The REQUESTER's check of an acceptance that carries the hub's
+    `canonical_review`: None when it carries none (the digest is then only
+    recorded), True when the review is of exactly the request this side sent,
+    False otherwise — an acceptance of something else, never «accepted».
+
+    The same checks the target makes before its window (`verify_review`): the
+    digest recomputed from the canonical bytes, both participant ids, the
+    authority, and the source sequence, request id, skill and arguments this
+    side actually sent."""
+    if "canonical_review" not in answer:
+        return None
+    from ..consent_hello import unb64url
+
+    try:
+        canonical = unb64url(answer["canonical_review"], limit=MAX_REVIEW)
+        review = json.loads(canonical.decode("utf-8"))
+    except (ValueError, UnicodeError, RecursionError):
+        return False
+    payload = review.get("payload") if isinstance(review, dict) else None
+    return bool(
+        hashlib.sha256(canonical).hexdigest() == answer.get("digest")
+        and isinstance(payload, dict)
+        and review.get("api_version") == 1
+        and (not session_id or review.get("session_id") == session_id)
+        and review.get("requester_id") == me_id and review.get("target_id") == target_id
+        and review.get("authority") == "skill-request:accept"
+        and review.get("destination") == "participant:" + target_id
+        and payload.get("source_seq") == seq
+        and payload.get("skill_request_id") == ask.get("id")
+        and payload.get("skill") == ask.get("skill")
+        and payload.get("args") == ask.get("args"))
 
 
 def requester_digest(source: Any) -> str | None:

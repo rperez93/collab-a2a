@@ -7695,21 +7695,50 @@ def _skill_requests_sent(client, profile) -> list[dict[str, Any]]:
                 e, requester_id=me_id, target_id=env.to_id, source_seq=env.seq,
                 request_id=ask["id"]))), None)
             expected = strong.requester_digest(env)
+            reviewed = (strong.verify_acceptance_review(
+                answer, me_id=me_id, target_id=env.to_id, seq=env.seq, ask=ask,
+                session_id=str(getattr(profile, "session_id", "") or ""))
+                if answer is not None else None)
             item["strength"] = "strong"
             if answer is None:
                 item["state"] = ("declined" if replies.get((ask["id"], env.to_id)) == "declined"
                                  else "pending")
-            elif expected is not None and expected != answer["digest"]:
+            elif reviewed is False or (expected is not None and expected != answer["digest"]):
                 item["state"] = "mismatch"       # an acceptance of something else
             else:
                 item["state"] = ("done" if replies.get((ask["id"], env.to_id)) == "done"
                                  else "accepted")
                 item["digest"] = answer["digest"]
-                item["digest_checked"] = expected is not None
+                item["digest_checked"] = reviewed is True or expected is not None
         else:
             item["state"] = replies.get((ask["id"], env.to_id), "pending")
         sent.append(item)
     return sent
+
+
+def _key_lost(api, key: dict[str, Any], state: str, observed: str | None) -> int:
+    """This machine no longer holds the enrolled key (`missing`) or holds a
+    different one under its name (`changed`). REPORTED, NEVER SWALLOWED: the
+    hub freezes the credential and raises a security event for everyone in
+    the session — a key that vanished may have been deleted by whoever wants
+    to enrol their own (deleting a Hello key needs no gesture). Printing
+    «unavailable» and moving on left the stale key active at the hub."""
+    from .client import approval as strong
+
+    what = "is gone from this machine" if state == "missing" else "has been replaced on this machine"
+    try:
+        api.report_key(key["credential_id"], observed)
+        reported = ("The hub has FROZEN it and told everyone in the session; nothing can "
+                    "be approved with it any more.")
+    except (strong.ApprovalRefused, strong.Uncertain) as exc:
+        reported = (f"Reporting it to the hub FAILED ({exc}): run this again, or tell the "
+                    "session's host, so the key is frozen.")
+    fail(f"SECURITY: your strong-approval key {said(str(key['credential_id']))} {what}. "
+         + reported)
+    print(dim("  If you did not remove it yourself, treat this machine as compromised. "
+              "A new key needs a signed key change approved by another participant; "
+              "nothing was accepted."))
+    return 1
 
 
 def _accept_strong(client, profile, match: dict[str, Any], args: argparse.Namespace) -> int:
@@ -7744,6 +7773,13 @@ def _accept_strong(client, profile, match: dict[str, Any], args: argparse.Namesp
                  f"({said(str(caps.get('reason') or 'unavailable'))}); a strong request "
                  "cannot be accepted any other way")
             return 1
+        if key["method"] == "hello":
+            # BEFORE ANYTHING IS ASKED: this machine must still hold the key
+            # the hub enrolled. A key that is gone or changed is an alarm,
+            # never a quiet «unavailable» — see `_key_lost`.
+            state, observed = strong.local_key_state(strong._hello(), key)
+            if state in ("missing", "changed"):
+                return _key_lost(api, key, state, observed)
         prepared = api.skills_prepare(source.seq)
         reviewed = strong.verify_review(api.review(prepared.get("request_id")),
                                         prepared=prepared, source=source, me_id=me,
@@ -7765,6 +7801,9 @@ def _accept_strong(client, profile, match: dict[str, Any], args: argparse.Namesp
                                                           "text": ""}}))
             ok(f"declined: {said(match['id'])}")
             return 0
+        if choice == "unavailable" and outcome.get("reason") in ("NotEnrolled", "NotFound"):
+            # The key went between the check above and the gesture.
+            return _key_lost(api, key, "missing", None)
         if choice != "approve":
             fail(f"not approved — {said(str(choice))}"
                  + (f" ({said(str(outcome.get('reason')))})" if outcome.get("reason") else "")
