@@ -442,12 +442,20 @@ def argv(pid: int) -> list[str]:
 
 
 def _ps_argv(pid: int) -> list[str]:
+    import shlex
+    from ..source_command import run
+
+    # COLUMNS=80 truncated even a 95-byte owned daemon command before its
+    # module/session markers. The 64 KiB cap is over 200 times the measured
+    # 275-byte long-interpreter command. Ask the actual ps host for wide output,
+    # but cap the whole exchange: an oversized or stalled response proves no
+    # identity. The shared runner bounds both pipes and reaps its own group.
     try:
-        out = subprocess.run(["ps", "-p", str(pid), "-o", "command="],
-                             capture_output=True, text=True, timeout=2, check=False)
+        out = run("exec " + shlex.join(["ps", "-ww", "-p", str(pid), "-o", "command="]),
+                  timeout=2, max_bytes=64 * 1024)
     except (OSError, subprocess.SubprocessError):
         return []
-    return out.stdout.split()
+    return out.stdout.split() if out.returncode == 0 else []
 
 
 def environ(pid: int) -> dict[str, str]:
