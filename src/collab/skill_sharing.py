@@ -151,35 +151,55 @@ def validate_publication(data: Any) -> dict[str, Any]:
 def read_supporting(skill_dir: Path, relative: list[str]) -> list[dict[str, Any]]:
     """Read explicitly selected supporting files, refusing anything unsafe.
 
-    Relative to the skill's directory only; no traversal, no symlink anywhere
-    on the path, regular files only, no executable bit, UTF-8 text, bounded.
+    Every path component is opened relative to its parent's descriptor with
+    O_NOFOLLOW, so swapping a directory for a symlink between check and open
+    cannot lead outside the skill. The count is refused before anything is
+    read, and the byte total while reading. Regular files only, no executable
+    bit, UTF-8 text.
     """
-    root = skill_dir.resolve()
-    files = []
-    for rel in relative:
-        if not FILE_PATH_RE.fullmatch(rel) or any(p in ('.', '..') for p in rel.split('/')):
-            raise ValueError(f'{rel!r}: select a path inside the skill directory')
-        target = skill_dir / rel
-        probe = skill_dir
-        for part in rel.split('/'):
-            probe = probe / part
-            if probe.is_symlink():
-                raise ValueError(f'{rel!r}: symlinks are not shared')
-        if not target.resolve().is_relative_to(root):
-            raise ValueError(f'{rel!r}: outside the skill directory')
-        fd = os.open(target, os.O_RDONLY | getattr(os, 'O_NONBLOCK', 0) | getattr(os, 'O_NOFOLLOW', 0))
-        with os.fdopen(fd, 'rb') as source:
-            info = os.fstat(source.fileno())
-            if not stat.S_ISREG(info.st_mode):
-                raise ValueError(f'{rel!r}: select a regular file')
-            if info.st_mode & 0o111:
-                raise ValueError(f'{rel!r}: executable files are not shared')
-            raw = source.read(MAX_FILES_BYTES + 1)
-        try:
-            content = raw.decode('utf-8')
-        except UnicodeDecodeError as exc:
-            raise ValueError(f'{rel!r}: supporting files must be UTF-8 text') from exc
-        files.append({'path': rel, 'content': content})
+    if len(relative) > MAX_FILES:
+        raise ValueError(f'a skill may carry at most {MAX_FILES} supporting files')
+    nofollow = getattr(os, 'O_NOFOLLOW', 0)
+    directory = getattr(os, 'O_DIRECTORY', 0)
+    root_fd = os.open(skill_dir, os.O_RDONLY | directory)
+    files, total = [], 0
+    try:
+        for rel in relative:
+            if not FILE_PATH_RE.fullmatch(rel) or any(p in ('.', '..') for p in rel.split('/')):
+                raise ValueError(f'{rel!r}: select a path inside the skill directory')
+            parts = rel.split('/')
+            fd = os.dup(root_fd)
+            try:
+                for part in parts[:-1]:
+                    try:
+                        nxt = os.open(part, os.O_RDONLY | directory | nofollow, dir_fd=fd)
+                    except OSError as exc:
+                        raise ValueError(f'{rel!r}: not a plain directory path (symlinks are not shared)') from exc
+                    os.close(fd)
+                    fd = nxt
+                try:
+                    leaf = os.open(parts[-1], os.O_RDONLY | nofollow | getattr(os, 'O_NONBLOCK', 0), dir_fd=fd)
+                except OSError as exc:
+                    raise ValueError(f'{rel!r}: not a regular file here (symlinks are not shared)') from exc
+            finally:
+                os.close(fd)
+            with os.fdopen(leaf, 'rb') as source:
+                info = os.fstat(source.fileno())
+                if not stat.S_ISREG(info.st_mode):
+                    raise ValueError(f'{rel!r}: select a regular file')
+                if info.st_mode & 0o111:
+                    raise ValueError(f'{rel!r}: executable files are not shared')
+                raw = source.read(MAX_FILES_BYTES - total + 1)
+            total += len(raw)
+            if total > MAX_FILES_BYTES:
+                raise ValueError(f'supporting files exceed {MAX_FILES_BYTES // 1024} KiB in total')
+            try:
+                content = raw.decode('utf-8')
+            except UnicodeDecodeError as exc:
+                raise ValueError(f'{rel!r}: supporting files must be UTF-8 text') from exc
+            files.append({'path': rel, 'content': content})
+    finally:
+        os.close(root_fd)
     return validate_files(files)
 
 
