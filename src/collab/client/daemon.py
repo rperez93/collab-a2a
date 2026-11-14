@@ -1658,11 +1658,13 @@ class Daemon:
                            act_name, share, detail)
 
     async def _receive_remote_offer(self, env: Envelope) -> None:
-        from ..remote_requests import OFFER_PREFIX, receive_envelope
+        from ..remote_requests import OFFER_PREFIX, RemoteQueueFull, receive_envelope
         if env.kind != 'chat' or not env.text.startswith(OFFER_PREFIX):
             return
         try:
             await asyncio.to_thread(receive_envelope, self.profile, env)
+        except RemoteQueueFull:
+            logger.warning('remote offer intake refused: receiver queue or sender limit reached')
         except (ValueError, OSError, sqlite3.Error) as exc:
             # No peer content or local paths in diagnostics. Receipt never
             # authorizes or starts delivery; the human accepts locally.

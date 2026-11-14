@@ -170,7 +170,13 @@ def join_session(
     profile.save()
     if not follow:
         ownership.keep(profile.dir)
-    pending_goal = receive_connection_goal(profile, result)
+    from ..remote_requests import RemoteQueueFull
+    goal_refusal = None
+    try:
+        pending_goal = receive_connection_goal(profile, result)
+    except RemoteQueueFull:
+        pending_goal = None
+        goal_refusal = 'connection goal refused: local receiver queue or sender limit reached'
     from ..worker import Store
     Store(profile.dir).ensure_default()
     from ..telemetry_setup import ensure
@@ -179,4 +185,6 @@ def join_session(
     status = ensure_daemon(profile, follow=follow) if start_daemon else {}
     if pending_goal:
         status["remote_goal_pending"] = pending_goal
+    if goal_refusal or result.get('remote_goal_refusal'):
+        status['remote_goal_refusal'] = goal_refusal or 'connection goal withheld: remote offer rate exceeded'
     return profile, result.get("snapshot", {}), status

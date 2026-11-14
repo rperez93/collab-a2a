@@ -155,3 +155,65 @@ def test_a2a_host_hello_preserves_numeric_capability_and_clears_legacy(client, s
     answer = _rpc(client, host_headers, {'collab': 'v1', 'kind': 'hello', 'body': {}})
     assert 'error' not in answer
     assert session['store'].participant_by_id(host.id).meta['remote_consent_version'] == 0
+
+
+def test_remote_rate_limit_covers_rest_and_a2a_without_persistence(client, session, monkeypatch):
+    import time
+    from types import SimpleNamespace
+    from collab.server import auth
+    headers, _ = _join(client, session, 'limited-sender')
+    _, receiver = _join(client, session, 'limited-receiver')
+    with session['store'].edit_meta(receiver['id']) as meta:
+        meta['remote_consent_version'] = 1
+    hub = session['app'].state.hub
+    hub._remote_senders.limit = 1
+    body = {'to': 'limited-receiver', 'text': 'guarded payload',
+            'body': {'collab_expected_recipient_id': receiver['id']}}
+    assert client.post('/ext/collab/v1/remote-messages', headers=headers, json=body).status_code == 200
+    before = session['store'].max_seq()
+    response = client.post('/ext/collab/v1/remote-messages', headers=headers, json=body)
+    assert response.status_code == 429 and response.headers['retry-after'] == '60'
+    assert 'rate exceeded' in response.text
+    assert 'error' in _rpc(client, headers, {'collab': 'v1', 'kind': 'chat', **body})
+    assert session['store'].max_seq() == before
+    future = time.time() + 61
+    monkeypatch.setattr(auth, 'time', SimpleNamespace(time=lambda: future))
+    assert client.post('/ext/collab/v1/remote-messages', headers=headers, json=body).status_code == 200
+
+
+def test_receiver_rate_budget_is_shared_across_senders(client, session):
+    first, _ = _join(client, session, 'first-sender')
+    second, _ = _join(client, session, 'second-sender')
+    _, receiver = _join(client, session, 'shared-receiver')
+    with session['store'].edit_meta(receiver['id']) as meta:
+        meta['remote_consent_version'] = 1
+    session['app'].state.hub._remote_receivers.limit = 1
+    body = {'to': 'shared-receiver', 'text': 'guarded payload',
+            'body': {'collab_expected_recipient_id': receiver['id']}}
+    assert client.post('/ext/collab/v1/remote-messages', headers=first, json=body).status_code == 200
+    assert client.post('/ext/collab/v1/remote-messages', headers=second, json=body).status_code == 429
+    assert client.post('/ext/collab/v1/messages', headers=second,
+                       json={'to': 'shared-receiver', 'text': 'ordinary chat'}).status_code == 200
+
+
+def test_worker_throttle_is_visible_and_waits_at_least_a_minute(tmp_path):
+    import asyncio
+    import time
+    from types import SimpleNamespace
+    import httpx
+    from collab.client.worker_service import Conversation
+    from collab.worker import Store
+    store = Store(tmp_path)
+    store.configure({'agent': 'command', 'command': ['unused-test-adapter'], 'scope': 'test'})
+    store.send('offer', to='recipient', recipient_id='p_recipient')
+    daemon = SimpleNamespace(profile=SimpleNamespace(dir=tmp_path, url='http://hub', token='test'), _http=None)
+    service = Conversation(daemon)
+    before = time.time()
+    async def flush():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(429))) as client:
+            daemon._http = client
+            await service._flush(store, store.snapshot()['generation'])
+    asyncio.run(flush())
+    queued = store.outbox()[0]
+    assert queued['retry_at'] >= before + 60
+    assert '429' in queued['error']

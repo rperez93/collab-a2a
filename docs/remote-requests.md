@@ -81,9 +81,34 @@ The local command has a maximum five-minute delivery timeout and bounded output;
 its process group is reaped on failure or cancellation.
 
 Offers expire within one hour and the local queue is bounded to 128 records.
+At most 16 retained records may belong to one sender, including completed or
+declined records until compaction. Duplicate receipt does not consume another
+slot. The hub permits 16 explicit offers per authenticated sender and 32 per
+recipient in a rolling 60-second window. Automatic connection goals have a
+separate 16-per-minute host budget, so guest joins cannot spend the host's
+explicit-send allowance. Hub counters restart with the hub; receiver record
+limits persist. Ordinary chat is unaffected. REST refusal returns HTTP 429
+with `Retry-After: 60`; the worker keeps the offer queued, reports the throttle,
+and waits at least a minute. A throttled or full-queue connection goal is
+reported without aborting the connection.
 Expired records are compacted after another hour, except ambiguous dispatching
 records, which remain non-replayable. Pending/show expose current states and
 hashes without terminal control sequences from peer content.
+
+The private shared consent audit records offer receipt and quota refusal,
+operator approval or decline, receipt consumption, requested acceptance and
+dispatch, observed adapter results, and revocation reasons (expiry, changed
+configuration, legacy approval or local decline). It stores IDs and digests,
+not raw prompt text, challenge codes or delivery tokens. Audit records survive
+queue compaction and reject application-level updates and deletion.
+
+Audit and queue storage use separate transactions. Events ending in
+`_requested` record an attempted transition, not proof that the queue commit
+completed. `delivery_result` records the observed adapter result; an interrupted
+queue commit may still leave the queue dispatching. Audit failure prevents
+new dispatch. Revocation is committed even if its audit write fails, so an
+unavailable audit cannot restore permission; that failure is reported to the
+caller. A crash after dispatch reservation remains non-replayable.
 
 ## Offer a goal to joining participants
 

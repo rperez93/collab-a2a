@@ -19,8 +19,13 @@ import uuid
 
 MAX_TEXT_BYTES = 6000
 MAX_RECORDS = 128
+MAX_SENDER_RECORDS = 16
 MAX_TTL = 3600
 RECEIVER_TARGET = "receiver-selected"
+
+
+class RemoteQueueFull(ValueError):
+    """A bounded receiver queue refused further offers without evicting any."""
 FIELDS = frozenset({'id', 'session_id', 'sender_id', 'recipient_id', 'target',
                     'kind', 'text', 'created_at', 'expires_at'})
 TERMINAL = ('declined', 'expired', 'delivered', 'failed', 'uncertain')
@@ -102,6 +107,27 @@ class Inbox:
         self.root = Path(root) / 'remote-requests'
         self.path = self.root / 'inbox.sqlite'
 
+    def _audit(self, event, offer, *, binding='', details=None):
+        from . import consent
+        consent.audit(self.root.parent, event=event, subject='remote',
+                      request_id=offer['id'], digest=digest(offer), binding=binding,
+                      details={'session_id': offer['session_id'],
+                               'sender_id': offer['sender_id'],
+                               'recipient_id': offer['recipient_id'], **(details or {})})
+
+    def _revoke(self, db, rows, *, now, reason, state='failed'):
+        rows = list(rows)
+        for row in rows:
+            db.execute('UPDATE offers SET state=?,updated=? WHERE id=?', (state, now, row['id']))
+        try:
+            for row in rows:
+                self._audit('revocation_requested', json.loads(row['payload']),
+                            binding=row['binding'] or '', details={'reason': reason})
+        except BaseException:
+            # Losing audit storage must never resurrect a revoked approval.
+            db.commit()
+            raise
+
     @contextmanager
     def _db(self):
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -123,7 +149,8 @@ class Inbox:
             if 'approval_version' not in columns:
                 db.execute('ALTER TABLE offers ADD COLUMN approval_version INTEGER NOT NULL DEFAULT 0')
             # Old flag/hash approvals cannot survive migration to terminal receipts.
-            db.execute("UPDATE offers SET state='failed' WHERE state='accepted' AND approval_version=0")
+            self._revoke(db, db.execute("SELECT * FROM offers WHERE state='accepted' AND approval_version=0"),
+                         now=time.time(), reason='legacy_approval')
             yield db
             db.commit()
         except BaseException:
@@ -132,18 +159,17 @@ class Inbox:
         finally:
             db.close()
 
-    @staticmethod
-    def _expire(db, now):
-        for row in db.execute('SELECT id,payload,state FROM offers'):
+    def _expire(self, db, now):
+        for row in list(db.execute('SELECT * FROM offers')):
             expires = json.loads(row['payload'])['expires_at']
             # Keep expired tombstones for one maximum offer lifetime. Receipt
             # independently rejects expired offers, so compaction cannot turn
             # the original content into a valid fresh approval. Never discard
             # an ambiguous in-flight dispatch as a side effect of intake.
+            if row['state'] in ('pending', 'accepted') and expires <= now:
+                self._revoke(db, [row], now=now, reason='expired', state='expired')
             if row['state'] != 'dispatching' and expires + MAX_TTL <= now:
                 db.execute('DELETE FROM offers WHERE id=?', (row['id'],))
-            elif row['state'] in ('pending', 'accepted') and expires <= now:
-                db.execute("UPDATE offers SET state='expired',updated=? WHERE id=?", (now, row['id']))
 
     def receive(self, value, *, session_id, sender_id, recipient_id, now=None):
         """IDs must come from authenticated transport, never the offer body."""
@@ -162,7 +188,14 @@ class Inbox:
                     raise ValueError('request id reused with different content')
                 return False
             if db.execute('SELECT COUNT(*) FROM offers').fetchone()[0] >= MAX_RECORDS:
-                raise ValueError('remote request queue is full; wait for expired records to be compacted')
+                self._audit('offer_refused', offer, details={'reason': 'queue_full'})
+                raise RemoteQueueFull('remote request queue is full; wait for expired records to be compacted')
+            sender_count = sum(json.loads(row[0])['sender_id'] == sender_id
+                               for row in db.execute('SELECT payload FROM offers'))
+            if sender_count >= MAX_SENDER_RECORDS:
+                self._audit('offer_refused', offer, details={'reason': 'sender_queue_full'})
+                raise RemoteQueueFull('remote sender queue limit reached; wait for expiry and compaction')
+            self._audit('offer_received', offer)
             db.execute('INSERT INTO offers(id,digest,payload,state,binding,receipt,updated) VALUES (?,?,?,?,NULL,NULL,?)',
                        (offer['id'], fingerprint, json.dumps(offer), 'pending', now))
         return True
@@ -186,8 +219,8 @@ class Inbox:
             old = db.execute('SELECT target,digest FROM local_binding WHERE singleton=1').fetchone()
             if old and (old['target'], old['digest']) == (target, fingerprint):
                 return
-            db.execute("UPDATE offers SET state='failed',updated=? WHERE state='accepted'",
-                       (time.time(),))
+            self._revoke(db, db.execute("SELECT * FROM offers WHERE state='accepted'"),
+                         now=time.time(), reason='local_binding_changed')
             db.execute('INSERT OR REPLACE INTO local_binding VALUES (1,?,?)',
                        (target, fingerprint))
 
@@ -203,8 +236,8 @@ class Inbox:
                 matches = False
             if matches:
                 return row['target']
-            db.execute("UPDATE offers SET state='failed',updated=? WHERE state='accepted'",
-                       (time.time(),))
+            self._revoke(db, db.execute("SELECT * FROM offers WHERE state='accepted'"),
+                         now=time.time(), reason='local_binding_changed')
         raise ValueError('local delivery command changed; bind and review again')
 
     def accept(self, request_id, *, reviewed_digest, session_id, recipient_id,
@@ -229,16 +262,18 @@ class Inbox:
                 raise ValueError('reviewed content changed')
             consent.consume(self.root.parent, approval, subject='remote',
                             request_id=request_id, digest=reviewed_digest, binding=binding)
+            self._audit('acceptance_requested', offer, binding=binding)
             db.execute("UPDATE offers SET state='accepted',approval_version=1,binding=?,updated=? WHERE id=?",
                        (binding, now, request_id))
 
     def decline(self, request_id, *, now=None):
         now = time.time() if now is None else now
         with self._db() as db:
-            changed = db.execute("UPDATE offers SET state='declined',updated=? WHERE id=? AND state IN ('pending','accepted')",
-                                 (now, request_id)).rowcount
-            if not changed:
+            row = db.execute("SELECT * FROM offers WHERE id=? AND state IN ('pending','accepted')",
+                             (request_id,)).fetchone()
+            if not row:
                 raise ValueError('request cannot be declined in its current state')
+            self._revoke(db, [row], now=now, reason='local_decline', state='declined')
 
     def claim(self, *, session_id, recipient_id, target, command, now=None, cwd=None):
         """Reserve at most one delivery; never reissue a dispatching request."""
@@ -248,8 +283,8 @@ class Inbox:
             self._expire(db, now)
             selected = db.execute('SELECT target,digest FROM local_binding WHERE singleton=1').fetchone()
             if not selected or (selected['target'], selected['digest']) != (target, binding):
-                db.execute("UPDATE offers SET state='failed',updated=? WHERE state='accepted'",
-                           (now,))
+                self._revoke(db, db.execute("SELECT * FROM offers WHERE state='accepted'"),
+                             now=now, reason='local_binding_changed')
                 return None
             for row in db.execute("SELECT * FROM offers WHERE state='accepted' ORDER BY updated,id"):
                 offer = json.loads(row['payload'])
@@ -258,9 +293,10 @@ class Inbox:
                         or (offer['target'] != target and not goal_choice)):
                     continue
                 if row['binding'] != binding or digest(offer) != row['digest']:
-                    db.execute("UPDATE offers SET state='failed',updated=? WHERE id=?", (now, row['id']))
+                    self._revoke(db, [row], now=now, reason='binding_or_content_changed')
                     continue
                 receipt = uuid.uuid4().hex
+                self._audit('dispatch_requested', offer, binding=binding)
                 db.execute("UPDATE offers SET state='dispatching',receipt=?,updated=? WHERE id=?", (receipt, now, row['id']))
                 return {**offer, 'receipt': receipt, 'sha256': row['digest'], 'delivery_target': target}
         return None
@@ -269,6 +305,12 @@ class Inbox:
         now = time.time() if now is None else now
         with self._db() as db:
             state = 'delivered' if delivered else 'uncertain'
+            row = db.execute("SELECT payload,binding FROM offers WHERE id=? AND receipt=? AND state='dispatching'",
+                             (request_id, receipt)).fetchone()
+            if not row:
+                raise ValueError('no matching in-flight delivery')
+            self._audit('delivery_result', json.loads(row['payload']), binding=row['binding'],
+                        details={'result': state})
             changed = db.execute("UPDATE offers SET state=?,updated=? WHERE id=? AND receipt=? AND state='dispatching'",
                                  (state, now, request_id, receipt)).rowcount
             if not changed:

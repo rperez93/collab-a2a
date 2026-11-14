@@ -1295,6 +1295,8 @@ def cmd_join(args: argparse.Namespace) -> int:
     if status.get("remote_goal_pending"):
         print("A remote goal is pending human review. Run `collab remote pending`; "
               "accept or decline it locally. Joining does not authorize execution.")
+    if status.get('remote_goal_refusal'):
+        warn(status['remote_goal_refusal'])
     if _is_listening(profile, status):
         ok("listening")
     elif not args.no_daemon:

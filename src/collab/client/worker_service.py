@@ -182,8 +182,11 @@ class Conversation:
             except Exception as exc:
                 # A departed peer must not hold every other conversation behind
                 # its outbox entry. Keep the entry, retry later, and report it.
-                store.defer(message["id"], retry_at=time.time() + setting("worker_retry_delay"),
-                            error=type(exc).__name__)
+                response = getattr(exc, 'response', None)
+                throttled = getattr(response, 'status_code', None) == 429
+                store.defer(message["id"], retry_at=time.time() +
+                            (max(60, setting("worker_retry_delay")) if throttled else setting("worker_retry_delay")),
+                            error='delivery rate exceeded (HTTP 429)' if throttled else type(exc).__name__)
             if attempts >= setting("worker_delivery_batch"):
                 break
 
