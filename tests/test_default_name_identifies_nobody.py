@@ -179,16 +179,20 @@ def test_agents_holding_a_stale_machine_config_still_adopt_it_once(person, tmp_p
         assert len(set(names)) == 4, (round_, names)
 
 
-def test_an_agent_that_named_itself_meanwhile_does_not_claim_the_legacy_name(person):
-    """Between the cached «legacy» answer and the lock, this agent was given a
-    name of its own. The claim re-reads the agent's file inside the lock and
-    leaves the machine name for an agent that has none."""
+def test_an_agent_that_named_itself_meanwhile_does_not_claim_the_legacy_name(
+        person, monkeypatch):
+    """Between the «legacy» answer and the lock, this agent was given a name
+    of its own. The claim re-reads the agent's file inside the lock and leaves
+    the machine name for an agent that has none. The answer before the lock is
+    held at «legacy» here — the window — since a fresh read would already see
+    the new name and never reach the lock."""
     _machine({"display_name": "friday"})
-    assert config.setting_source("display_name") == "legacy"      # cached now
+    monkeypatch.setattr(config, "setting_source", lambda key: "legacy")
     config.agent_config_path().write_text(json.dumps({"display_name": "cortana"}))
     assert config.adopt_legacy_name() is None
     machine = json.loads(config.global_config_path().read_text())
     assert machine.get("display_name") == "friday", "not retired for nobody"
+    assert json.loads(config.agent_config_path().read_text())["display_name"] == "cortana"
 
 
 def test_two_agents_racing_for_the_legacy_name_get_it_once(person, tmp_path):
