@@ -10,6 +10,14 @@ import sys
 def test_three_agents_share_a_checkout_without_sharing_session_state(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    # NO CONVERSATION WORKER. These are real `collab` processes, and with the
+    # default `worker_auto_start` the host's daemon started a worker that ran
+    # one real `codex exec … --model gpt-5.6-luna` turn on the developer's own
+    # account in EVERY full-suite run — caught with logging stand-ins for the
+    # provider CLIs on PATH (2026-11-14). Nothing here is about the worker.
+    config_path = Path(os.environ["COLLAB_CONFIG"])
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps({"worker_auto_start": False}))
     env = {**os.environ, "COLLAB_HOME": "", "COLLAB_NO_UPDATE_CHECK": "1",
            "COLLAB_NO_TUNNEL": "1", "NO_COLOR": "1"}
 
