@@ -228,6 +228,18 @@ conditional delegation estimates. `collab recv --repair` performs bounded,
 authenticated visible-history repair. `listen --kind` and `--no-activity` filter
 full transcript consumers; compact notices remain the default.
 
+Later than the pin (2026-11-14): each participant's skill list — names and
+one-line descriptions only, never skill text — is published by its own listener
+and shared by default (`share_skill_list`, opt-out; it is withdrawn on every
+switch-off). `collab skills peers` reads everyone's lists. `collab skills ask
+--to NAME` sends a skill request, and the receiver's `requests`, `accept`,
+`decline` and `done` answer it. Acceptance is gated on the human: without a
+terminal `accept` is refused unless `--human-approved` is passed, which is the
+agent's own statement that its human agreed; requests expire after 24 hours,
+and a worker never accepts — it escalates every request to its main agent.
+Peer-supplied names, ids and arguments are validated on receipt and printed
+scrubbed, on their own line marked untrusted.
+
 
 Later than the pin: 2.0.1 adds `worker send --to NAME` for durable explicit
 messages and `worker stats` for separate native/canonical worker telemetry and
