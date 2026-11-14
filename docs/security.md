@@ -309,6 +309,38 @@ Be clear-eyed about the limits.
 - Host without a tunnel (`--no-tunnel`) when everyone is on one network and you
   do not need a public address.
 
+## Strong approval with Windows Hello (adapter)
+
+An approval a peer can trust has to rest on something the agent cannot do, not
+on something it cannot be seen doing. On Windows, and on WSL through
+`powershell.exe`, that is a signature by a Windows Hello key: the key lives in
+the TPM, and Windows asks for a fingerprint, a face or a PIN before every
+signature. An agent can ask for a signature; it cannot complete one.
+
+`collab.consent_hello` is the adapter for that. The hub-side registry,
+challenges and verification arrive with the strong-approval core; until that
+merges, nothing in collab calls the adapter. When it does:
+
+- **Approvals start in collab's own window**, not from a command the agent could
+  type. The window shows who is asking — the participant id the hub assigned
+  first, then the name the requester chose for itself, marked as such — a
+  one-line summary of what is asked, and the full review marked as untrusted
+  text, with control and invisible characters shown as `\u{XXXX}` rather than
+  obeyed. Its buttons are **Approve with Windows Hello**, **Decline** and **Use
+  a passkey instead**; Enter and Esc decline. Approve is followed by the Hello
+  prompt; a cancelled prompt is a decline, and a window nobody answers within
+  ten minutes lets the request expire.
+- **The window is the front door; the gesture is the lock.** A same-user
+  process can redraw a window or drive it, so what proves the approval is the
+  signature, checked by the hub against the key enrolled for you.
+- **Prefer a fingerprint or face to a PIN.** The Hello prompt does not appear on
+  the secure desktop, so a PIN typed there may be observable by another
+  program running as you. A captured PIN is still useless without this
+  machine's TPM key, and every signature needs the gesture again.
+- **Deleting a Hello key needs no gesture.** An agent can delete yours. That
+  denies approvals rather than forging one, and the hub treats a key that has
+  gone as an alarm, never as a reason to fall back silently.
+
 ## Version 2 boundaries
 
 Both peers validate the compatibility advertisement before admission; a guest
