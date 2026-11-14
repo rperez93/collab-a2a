@@ -614,6 +614,48 @@ def whole_picture(figures: dict[str, Any]) -> dict[str, Any]:
     return {**figures, "quotas": {}}
 
 
+#: The published model summary, derived on the hub from what was merged. The
+#: names are a contract with the dashboard: `main_model`, `worker_model`, and
+#: `model_changed_at` beside the existing `model_observed_at`. Null is unknown.
+MODEL_SUMMARY = ("main_model", "worker_model", "model_changed_at")
+
+
+def model_summary(previous: dict[str, Any], merged: dict[str, Any],
+                  now: float) -> dict[str, Any]:
+    """Both models in use, and when the pair was last seen to change.
+
+    DERIVED, NEVER REPORTED. Whatever a participant posts under these names is
+    overwritten here: they restate `model` and the worker block's own model, so
+    a separately reported value could only ever disagree with them.
+
+    `model_changed_at` IS THE HUB'S CLOCK at the merge where the pair first
+    differed from the pair it replaced. The first observation is not a change —
+    nothing was seen before it — so it is null until a second model is seen,
+    rather than a «changed just now» that never happened. A model going from
+    known to unknown is a change; it is exactly what a withdrawn model is.
+    """
+    def name(value: Any) -> str | None:
+        return value.strip()[:150] if isinstance(value, str) and value.strip() else None
+
+    worker = merged.get("worker") if isinstance(merged.get("worker"), dict) else {}
+    pair = (name(merged.get("model")),
+            # A worker that is OFF has no model in use; `worker.enabled` says
+            # off, and this says unknown rather than the last one it ran.
+            None if worker.get("enabled") is False
+            else name(worker.get("last_model") or worker.get("model")))
+    seen_before = "main_model" in previous or "worker_model" in previous
+    before = (previous.get("main_model"), previous.get("worker_model"))
+    changed = previous.get("model_changed_at")
+    if seen_before and pair != before:
+        changed = now
+    return {"main_model": pair[0], "worker_model": pair[1],
+            "model_changed_at": changed if isinstance(changed, (int, float)) else None,
+            "model_observed_at": (merged.get("model_observed_at")
+                                  if isinstance(merged.get("model_observed_at"), (int, float))
+                                  and not isinstance(merged.get("model_observed_at"), bool)
+                                  else None)}
+
+
 def sanitise(reported: dict[str, Any]) -> dict[str, Any]:
     """What is safe to put on everyone else's roster.
 

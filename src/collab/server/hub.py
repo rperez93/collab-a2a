@@ -324,6 +324,14 @@ class Hub:
             # agent last spoke, and «no quota» was what it said then.
             if incoming:
                 merged["reported_at"] = time.time()
+                # THE MODELS, derived after the merge so they describe what the
+                # roster now holds — a report carrying only cost still has a
+                # model, the one merged from before. Only when something was
+                # reported: four nulls on a participant who said nothing would
+                # read as figures and flip the «nobody has shared usage» banner.
+                from ..stats import model_summary
+                merged.update(model_summary(dict(meta.get("stats") or {}), merged,
+                                            merged["reported_at"]))
             if merged:
                 meta["stats"] = merged
             for key in ("machine", "machine_id", "user"):
