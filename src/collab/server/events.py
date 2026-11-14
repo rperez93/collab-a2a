@@ -16,6 +16,7 @@ from sse_starlette.sse import EventSourceResponse
 from starlette.requests import Request
 
 from ..protocol import Envelope
+from ..remote_requests import event_visible_to_receiver
 from .hub import Hub
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ async def event_stream(request: Request, hub: Hub, participant: str,
         resume_from = None
 
     sub = await hub.subscribe(participant)
+    supports_consent = request.headers.get('Collab-Remote-Consent') == '1'
 
     async def generator():
         try:
@@ -60,7 +62,8 @@ async def event_stream(request: Request, hub: Hub, participant: str,
                         hub.store.since_page, cursor, viewer=participant, through=top
                     )
                     for env in missed:
-                        yield _frame(env)
+                        if event_visible_to_receiver(env, supports_consent):
+                            yield _frame(env)
                     if moved <= cursor:
                         break
                     cursor = moved
@@ -94,7 +97,8 @@ async def event_stream(request: Request, hub: Hub, participant: str,
                     break
                 if resume_from is not None and resume_from <= top and item.seq <= cursor:
                     continue  # a publish during replay was also queued live
-                yield _frame(item)
+                if event_visible_to_receiver(item, supports_consent):
+                    yield _frame(item)
         except asyncio.CancelledError:
             raise
         except Exception:
