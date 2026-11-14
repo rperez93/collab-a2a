@@ -8,7 +8,7 @@ TEXT = {'last_model', 'source', 'cost_kind', 'cost_scope'}
 NESTED = {
  'subagents': {'active', 'total', 'source', 'observed_at'},
  'worker': {'enabled', 'running', 'agent', 'model', 'turns', 'attempts', 'pending', 'errors',
-            'budget_remaining', 'budget_reset_at', 'awaiting_human', 'awaiting_since',
+            'budget_remaining', 'budget_reset_at', 'awaiting_human', 'awaiting_since', 'awaiting_age', 'dropped_replies',
             'tokens_in', 'tokens_out', 'tokens_cached', 'tokens_cache_write', 'cost_usd', 'cost_kind', 'cost_scope', 'usage_model', 'last_model', 'observed_at', 'source',
             'context_pct', 'context_tokens', 'context_limit', 'quotas', 'quota_scope', 'quota_observed_at',
             'quota_used_pct', 'quota_five_hour', 'quota_seven_day', 'quota_reset_at',
@@ -94,7 +94,7 @@ def worker_report(data):
         out['quotas'] = {'allowance': {'used_pct': out['quota_used_pct']}}
         if out.get('quota_reset_at'):
             out['quotas']['allowance']['resets_at'] = out['quota_reset_at']
-    for field in ('turns', 'attempts', 'pending', 'errors', 'budget_remaining', 'budget_reset_at', 'awaiting_human', 'awaiting_since'):
+    for field in ('turns', 'attempts', 'pending', 'errors', 'budget_remaining', 'budget_reset_at', 'awaiting_human', 'awaiting_since', 'awaiting_age', 'dropped_replies'):
         # Allow-listed worker counters are kept on their own merits: the
         # generic extra-field cap in sanitise must not drop one for another.
         if number(allowed.get(field)) is not None:
