@@ -84,6 +84,11 @@ class ProxyState:
     primary: str = ""
     started_at: float = 0.0
     stamp: str = ""
+    #: The one ngrok agent this proxy started, stamped like the proxy itself,
+    #: so resource accounting (R16) can count it by identity — never by
+    #: matching command names, which once killed a live session here.
+    ngrok_pid: int = 0
+    ngrok_stamp: str = ""
 
     @classmethod
     def load(cls) -> "ProxyState":
