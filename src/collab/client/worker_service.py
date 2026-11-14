@@ -161,13 +161,18 @@ class Conversation:
                 # a total deadline also bounds slow trickles, not only silence.
                 timeout = setting("worker_delivery_timeout")
                 async def acknowledge():
+                    expected_id = message.get("recipient_id")
+                    route = "remote-messages" if expected_id else "messages"
+                    body = {"collab_worker_delivery": message["id"]}
+                    if expected_id:
+                        body["collab_expected_recipient_id"] = expected_id
                     async with self.daemon._http.stream(
-                        "POST", f"{self.daemon.profile.url}{EXT_PREFIX}/messages",
+                        "POST", f"{self.daemon.profile.url}{EXT_PREFIX}/{route}",
                         headers=request_headers(self.daemon.profile.token),
                         json={"kind": "chat", "text": message["text"],
                               "to": message.get("to") or None,
                               "room": message.get("room") or None,
-                              "body": {"collab_worker_delivery": message["id"]}}, timeout=timeout) as response:
+                              "body": body}, timeout=timeout) as response:
                         response.raise_for_status()
                 # wait_for retains the total deadline on supported Python 3.10.
                 await asyncio.wait_for(acknowledge(), timeout=timeout)
@@ -225,7 +230,10 @@ class Conversation:
             events = self.daemon.inbox.after(snapshot["cursor"], limit=setting("worker_page_size"))
             selected = []
             size = 0
+            from ..remote_requests import OFFER_PREFIX
             for event in events:
+                if event.text.startswith(OFFER_PREFIX):
+                    continue  # separate human consent, never model conversation input
                 own = (event.sender_id == self.daemon.profile.participant_id
                        if event.sender_id and self.daemon.profile.participant_id
                        else event.sender == self.daemon.profile.name)

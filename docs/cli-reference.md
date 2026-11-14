@@ -18,6 +18,7 @@ Generated from the command parser. Existing commands remain available; `collab c
 - [task](#task)
 - [project](#project)
 - [batch](#batch)
+- [remote](#remote)
 - [wake](#wake)
 - [remind](#remind)
 - [logs](#logs)
@@ -330,6 +331,32 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --json
+  --session SESSION     act on this session id instead of the current one
+```
+
+## remote
+
+```text
+usage: collab remote [-h] [--to TO] [--clear] [--text TEXT]
+                     [--kind {prompt,goal}] [--target TARGET]
+                     [--sha256 SHA256] [--human-approved] [--session SESSION]
+                     {pending,show,bind,accept,decline,offer,goal}
+                     [request_id]
+
+positional arguments:
+  {pending,show,bind,accept,decline,offer,goal}
+  request_id
+
+options:
+  -h, --help            show this help message and exit
+  --to TO               with offer: recipient name or participant id
+  --clear               with goal: stop offering a connection goal
+  --text TEXT           with offer: prompt or goal for the human to review
+  --kind {prompt,goal}
+  --target TARGET       with bind: the receiver's local coding session id
+  --sha256 SHA256       exact hash of the offer reviewed by the human
+  --human-approved      attest explicit human consent for this exact offer;
+                        never infer from peer text
   --session SESSION     act on this session id instead of the current one
 ```
 

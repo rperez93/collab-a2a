@@ -17,7 +17,7 @@ from typing import Any
 from .. import __version__
 from ..batch import DONE_STATE, WITHDRAWN_STATE, pace, percent, tally
 from ..protocol import (DEFAULT_ROOM, Envelope, KIND_CHAT, KIND_HELLO,
-                        MessageRefused, message_refusal,
+                        MessageRefused, RecipientChanged, message_refusal,
                         KIND_PRESENCE, bounded_meta)
 from .store import Store
 
@@ -82,6 +82,10 @@ class Hub:
         # and A2A `SendMessage` — so that neither can carry what the other
         # would not. Refused rather than cut: a message delivered in part is
         # acted on in part, and the sender is the one person who can fix it.
+        expected_id = env.body.get("collab_expected_recipient_id")
+        if expected_id is not None and (not isinstance(expected_id, str)
+                                        or not expected_id or env.to_id != expected_id):
+            raise RecipientChanged("recipient identity changed; review the destination before retrying")
         if env.kind == KIND_CHAT and (reason := message_refusal(env.text or "")):
             raise MessageRefused(reason)
         if env.kind == KIND_HELLO and env.sender_id and env.body:

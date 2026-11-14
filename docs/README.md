@@ -38,3 +38,5 @@ The repository root carries three more references that these pages build on:
 - [Performance](performance.md): reproducible CPU/RAM samples and leak-check limits.
 
 [Reproduce the documentation screenshots](screenshots.md) with isolated terminal captures.
+
+- [Remote prompts and connection goals](remote-requests.md): explicit receiver consent and single-use delivery.

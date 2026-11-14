@@ -854,6 +854,9 @@ class Waker:
         news — without that floor, arming in a busy session immediately
         delivered the entire replayed history as one enormous first turn.
         """
+        from .remote_requests import OFFER_PREFIX
+        if env.text.startswith(OFFER_PREFIX):
+            return False  # only the receiver-consent dispatcher may deliver offers
         if env.kind not in WAKE_KINDS:
             return False
         if own_name and env.sender == own_name:
@@ -1059,6 +1062,35 @@ class Waker:
             return False, f"letting the burst finish ({int(config.settle - age)}s)"
         return True, "unread messages and nobody reading"
 
+    def _exclude_remote_offers(self, path: Path) -> None:
+        """Quarantine protocol offers from queues written by older listeners.
+
+        The human transcript and consent inbox retain them. Ordinary wake
+        queues must never turn them into adapter input before acceptance.
+        """
+        from .remote_requests import OFFER_PREFIX
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        except FileNotFoundError:
+            return
+        kept = []
+        for line in lines:
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                kept.append(line)
+                continue
+            if not str(entry.get("text") or "").startswith(OFFER_PREFIX):
+                kept.append(line)
+        if len(kept) == len(lines):
+            return
+        if not kept:
+            path.unlink()
+            return
+        temporary = path.with_suffix(".consent-filter")
+        temporary.write_text("".join(kept), encoding="utf-8")
+        os.replace(temporary, path)
+
     def take(self) -> Batch | None:
         """Cut the pending events into a batch, or return one already cut.
 
@@ -1074,6 +1106,9 @@ class Waker:
         flight, and right because the retry should carry everything unread, not
         a snapshot of the moment it first failed.
         """
+        self._exclude_remote_offers(self.pending)
+        for queued in self.outstanding():
+            self._exclude_remote_offers(queued.path)
         existing = self.outstanding()
         if existing:
             if self.waiting():
@@ -1338,6 +1373,7 @@ class Waker:
         cut to fit here, where it can say that it was cut, rather than being
         rejected there, where nobody finds out.
         """
+        self._exclude_remote_offers(batch.path)
         if self.config().delivery == "notice":
             events = [e for e in batch.events()
                       if e.get("kind") in WAKE_KINDS

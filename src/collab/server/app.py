@@ -45,7 +45,7 @@ from ..protocol import (
     MAX_NAME,
     MAX_ROOM,
     MAX_TITLE,
-    MessageRefused,
+    MessageRefused, RecipientChanged,
     REST_PREFIX,
     ROOM_FILE_TTL_SECONDS,
     RPC_PATH,
@@ -261,6 +261,27 @@ def create_app(
         from ..compatibility import advertisement
         return advertisement()
 
+    @app.put(f"{EXT_PREFIX}/remote-goal", tags=["collab"])
+    async def remote_goal(request: Request):
+        user = _require(request)
+        if not user.is_host:
+            raise HTTPException(status_code=403, detail="only the host can offer a connection goal")
+        body = await request.json()
+        from ..remote_requests import make_offer, wire_text, RECEIVER_TARGET
+        if body.get("clear") is True:
+            value = {}
+        else:
+            try:
+                template = make_offer(session_id=session_id, sender_id=user.id,
+                                      recipient_id=user.id, target=RECEIVER_TARGET,
+                                      kind="goal", text=body.get("text"))
+                wire_text(template)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            value = {"sender_id": user.id, "text": template["text"]}
+        await asyncio.to_thread(store.remote_goal, set_value=value)
+        return {"configured": bool(value), "requires_receiver_consent": True}
+
     # --- extension: join ------------------------------------------------------
 
     @app.post(f"{EXT_PREFIX}/join", tags=["collab"])
@@ -336,7 +357,20 @@ def create_app(
             kind=KIND_HELLO, sender=person.name, sender_id=person.id,
             room=DEFAULT_ROOM, text=hello.get("focus", ""), body=hello,
         ))
+        offered_goal = None
+        template = await asyncio.to_thread(store.remote_goal)
+        if template:
+            from ..remote_requests import make_offer, wire_text, RECEIVER_TARGET
+            issuer = store.participant_by_id(template['sender_id'])
+            if issuer is not None and issuer.is_host:
+                offered_goal = make_offer(session_id=session_id, sender_id=issuer.id,
+                                          recipient_id=person.id, target=RECEIVER_TARGET,
+                                          kind="goal", text=template['text'], ttl=3600)
+                await hub.publish(Envelope(kind=KIND_CHAT, sender=issuer.name, sender_id=issuer.id,
+                                           to=person.name, to_id=person.id,
+                                           text=wire_text(offered_goal)))
         return {
+            "remote_goal": offered_goal,
             "token": token,
             "name": person.name,
             "id": person.id,
@@ -355,6 +389,7 @@ def create_app(
 
     # --- extension: messaging --------------------------------------------------
 
+    @app.post(f"{EXT_PREFIX}/remote-messages", tags=["collab"])
     @app.post(f"{EXT_PREFIX}/messages", tags=["collab"])
     async def post_message(request: Request) -> dict[str, Any]:
         """Convenience path — the same fan-out A2A SendMessage performs."""
@@ -382,6 +417,8 @@ def create_app(
         )
         try:
             env = await hub.publish(env)
+        except RecipientChanged as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except MessageRefused as exc:
             # 413, and the reason as the body: the sender reads it, and it
             # names the alternative. See protocol.MAX_MESSAGE.
