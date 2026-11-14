@@ -50,6 +50,12 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_room ON events(room, seq);
 
+CREATE TABLE IF NOT EXISTS shared_skill_files (
+    skill_id TEXT PRIMARY KEY,
+    files TEXT NOT NULL,
+    manifest_sha256 TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS shared_skills (
     id TEXT PRIMARY KEY,
     owner_id TEXT NOT NULL,
@@ -513,7 +519,8 @@ class Store:
                 room = self._db.execute("SELECT COUNT(*) FROM shared_skills").fetchone()[0]
                 if old is None and (totals['n'] >= MAX_PER_OWNER or room >= MAX_ROOM_SKILLS):
                     raise ValueError('shared skill inventory is full; withdraw a skill first')
-                if totals['bytes'] - (old['size_bytes'] if old else 0) + data['size_bytes'] > MAX_OWNER_BYTES:
+                extra = sum(f['size_bytes'] for f in data.get('files', []))
+                if totals['bytes'] - (old['size_bytes'] if old else 0) + data['size_bytes'] + extra > MAX_OWNER_BYTES:
                     raise ValueError('shared skills exceed the 512 KiB owner budget')
                 skill_id = old['id'] if old else 'sk_' + uuid.uuid4().hex[:20]
                 self._db.execute(
@@ -522,8 +529,12 @@ class Store:
                     "sha256=excluded.sha256, size_bytes=excluded.size_bytes, "
                     "content=excluded.content, updated_at=excluded.updated_at",
                     (skill_id, owner_id, data['name'], data['description'], data['sha256'],
-                     data['size_bytes'], data['content'], time.time()),
+                     data['size_bytes'] + extra, data['content'], time.time()),
                 )
+                self._db.execute("DELETE FROM shared_skill_files WHERE skill_id=?", (skill_id,))
+                if data.get('files'):
+                    self._db.execute("INSERT INTO shared_skill_files VALUES (?,?,?)",
+                                     (skill_id, json.dumps(data['files']), data['manifest_sha256']))
                 row = self._db.execute("SELECT s.*, p.name AS owner FROM shared_skills s "
                                        "JOIN participants p ON p.id=s.owner_id WHERE s.id=?",
                                        (skill_id,)).fetchone()
@@ -531,7 +542,12 @@ class Store:
             except BaseException:
                 self._db.rollback()
                 raise
-        return {key: value for key, value in dict(row).items() if key != 'content'}
+        record = {key: value for key, value in dict(row).items() if key != 'content'}
+        if data.get('files'):
+            # Echoed so the publisher can tell this hub kept its files.
+            record['manifest_sha256'] = data['manifest_sha256']
+            record['files'] = [{k: f[k] for k in ('path', 'sha256', 'size_bytes')} for f in data['files']]
+        return record
 
     def shared_skills(self, *, after: str = '', limit: int = 100) -> list[dict[str, Any]]:
         with self._lock:
@@ -549,12 +565,22 @@ class Store:
                 "SELECT s.*, p.name AS owner FROM shared_skills s JOIN participants p ON p.id=s.owner_id "
                 "WHERE s.id=? AND p.revoked=0", (skill_id,),
             ).fetchone()
-        return dict(row) if row else None
+            extra = self._db.execute("SELECT files, manifest_sha256 FROM shared_skill_files WHERE skill_id=?",
+                                     (skill_id,)).fetchone() if row else None
+        if not row:
+            return None
+        record = dict(row)
+        if extra:
+            record['files'] = json.loads(extra['files'])
+            record['manifest_sha256'] = extra['manifest_sha256']
+        return record
 
     def withdraw_skill(self, skill_id: str, owner_id: str) -> bool:
         with self._lock:
             removed = self._db.execute("DELETE FROM shared_skills WHERE id=? AND owner_id=?",
                                        (skill_id, owner_id)).rowcount
+            if removed:
+                self._db.execute("DELETE FROM shared_skill_files WHERE skill_id=?", (skill_id,))
             self._db.commit()
         return bool(removed)
 

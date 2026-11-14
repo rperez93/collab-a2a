@@ -73,6 +73,56 @@ def _field(frontmatter: str, name: str) -> str:
     return ''
 
 
+MAX_FILES = 16
+MAX_FILES_BYTES = 256 * 1024
+FILE_PATH_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9._-]{0,99}(/[A-Za-z0-9_][A-Za-z0-9._-]{0,99}){0,7}')
+
+
+def validate_files(files: Any) -> list[dict[str, Any]]:
+    """Supporting files of a publication: bounded, relative, text, sorted (R19b)."""
+    if files in (None, []):
+        return []
+    if not isinstance(files, list) or len(files) > MAX_FILES:
+        raise ValueError(f'a skill may carry at most {MAX_FILES} supporting files')
+    clean, seen, total = [], set(), 0
+    for item in files:
+        if not isinstance(item, dict):
+            raise ValueError('each supporting file needs a path and content')
+        path, content = item.get('path'), item.get('content')
+        if (not isinstance(path, str) or not FILE_PATH_RE.fullmatch(path)
+                or any(part in ('.', '..') for part in path.split('/')) or path == 'SKILL.md'):
+            raise ValueError(f'invalid supporting file path {path!r}')
+        if path in seen:
+            raise ValueError(f'duplicate supporting file {path!r}')
+        if not isinstance(content, str):
+            raise ValueError(f'{path}: supporting files must be UTF-8 text')
+        raw = content.encode('utf-8')
+        total += len(raw)
+        if total > MAX_FILES_BYTES:
+            raise ValueError(f'supporting files exceed {MAX_FILES_BYTES // 1024} KiB in total')
+        digest = hashlib.sha256(raw).hexdigest()
+        if item.get('sha256') not in (None, digest):
+            raise ValueError(f'{path}: SHA-256 does not match its content')
+        seen.add(path)
+        clean.append({'path': path, 'content': content, 'sha256': digest, 'size_bytes': len(raw)})
+    return sorted(clean, key=lambda f: f['path'])
+
+
+#: consent.request refuses a review larger than this once JSON-encoded.
+REVIEW_LIMIT = 65536
+
+
+def review_fits(review: dict[str, Any]) -> bool:
+    """Whether the operator-terminal review can show this in full (no truncation)."""
+    return len(json.dumps(review, ensure_ascii=True, indent=2)) <= REVIEW_LIMIT
+
+
+def manifest_digest(skill_sha256: str, files: list[dict[str, Any]]) -> str:
+    """One hash over SKILL.md and every supporting file: what a consent binds."""
+    entries = [['SKILL.md', skill_sha256]] + [[f['path'], f['sha256']] for f in files]
+    return hashlib.sha256(json.dumps(entries, separators=(',', ':')).encode()).hexdigest()
+
+
 def validate_publication(data: Any) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError('expected a skill object')
@@ -89,12 +139,72 @@ def validate_publication(data: Any) -> dict[str, Any]:
     digest = hashlib.sha256(raw).hexdigest()
     if data.get('sha256') != digest:
         raise ValueError('skill SHA-256 does not match its UTF-8 content')
-    return {'name': name, 'description': description, 'content': content,
-            'sha256': digest, 'size_bytes': len(raw)}
+    files = validate_files(data.get('files'))
+    result = {'name': name, 'description': description, 'content': content,
+              'sha256': digest, 'size_bytes': len(raw)}
+    if files:
+        result['files'] = files
+        result['manifest_sha256'] = manifest_digest(digest, files)
+    return result
+
+
+def read_supporting(skill_dir: Path, relative: list[str]) -> list[dict[str, Any]]:
+    """Read explicitly selected supporting files, refusing anything unsafe.
+
+    Every path component is opened relative to its parent's descriptor with
+    O_NOFOLLOW, so swapping a directory for a symlink between check and open
+    cannot lead outside the skill. The count is refused before anything is
+    read, and the byte total while reading. Regular files only, no executable
+    bit, UTF-8 text.
+    """
+    if len(relative) > MAX_FILES:
+        raise ValueError(f'a skill may carry at most {MAX_FILES} supporting files')
+    nofollow = getattr(os, 'O_NOFOLLOW', 0)
+    directory = getattr(os, 'O_DIRECTORY', 0)
+    root_fd = os.open(skill_dir, os.O_RDONLY | directory)
+    files, total = [], 0
+    try:
+        for rel in relative:
+            if not FILE_PATH_RE.fullmatch(rel) or any(p in ('.', '..') for p in rel.split('/')):
+                raise ValueError(f'{rel!r}: select a path inside the skill directory')
+            parts = rel.split('/')
+            fd = os.dup(root_fd)
+            try:
+                for part in parts[:-1]:
+                    try:
+                        nxt = os.open(part, os.O_RDONLY | directory | nofollow, dir_fd=fd)
+                    except OSError as exc:
+                        raise ValueError(f'{rel!r}: not a plain directory path (symlinks are not shared)') from exc
+                    os.close(fd)
+                    fd = nxt
+                try:
+                    leaf = os.open(parts[-1], os.O_RDONLY | nofollow | getattr(os, 'O_NONBLOCK', 0), dir_fd=fd)
+                except OSError as exc:
+                    raise ValueError(f'{rel!r}: not a regular file here (symlinks are not shared)') from exc
+            finally:
+                os.close(fd)
+            with os.fdopen(leaf, 'rb') as source:
+                info = os.fstat(source.fileno())
+                if not stat.S_ISREG(info.st_mode):
+                    raise ValueError(f'{rel!r}: select a regular file')
+                if info.st_mode & 0o111:
+                    raise ValueError(f'{rel!r}: executable files are not shared')
+                raw = source.read(MAX_FILES_BYTES - total + 1)
+            total += len(raw)
+            if total > MAX_FILES_BYTES:
+                raise ValueError(f'supporting files exceed {MAX_FILES_BYTES // 1024} KiB in total')
+            try:
+                content = raw.decode('utf-8')
+            except UnicodeDecodeError as exc:
+                raise ValueError(f'{rel!r}: supporting files must be UTF-8 text') from exc
+            files.append({'path': rel, 'content': content})
+    finally:
+        os.close(root_fd)
+    return validate_files(files)
 
 
 def read_selected(path: str | Path, *, name: str | None = None,
-                  description: str | None = None) -> dict[str, Any]:
+                  description: str | None = None, files: list[str] | None = None) -> dict[str, Any]:
     """Read exactly the selected SKILL.md, never a private catalog or helpers."""
     selected = Path(path).expanduser()
     if selected.is_dir():
@@ -117,7 +227,8 @@ def read_selected(path: str | Path, *, name: str | None = None,
     frontmatter = parts[1] if not parts[0].strip() and len(parts) == 3 else ''
     return validate_publication({'name': name or _field(frontmatter, 'name'),
                                  'description': description or _field(frontmatter, 'description'),
-                                 'content': content, 'sha256': hashlib.sha256(raw).hexdigest()})
+                                 'content': content, 'sha256': hashlib.sha256(raw).hexdigest(),
+                                 'files': read_supporting(selected.parent, files or [])})
 
 
 def register_routes(app, store, require_user) -> None:

@@ -7060,8 +7060,99 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_skills_install_shared(args: argparse.Namespace) -> int:
+    """Review a peer's published skill, get the human's yes, install it (R19).
+
+    Consent is the R22 operator-terminal primitive: the human reviews the exact
+    text, publisher, hash and destination on their own controlling terminal,
+    outside the coding agent, and types a one-time code. No flag, stdin or hash
+    can stand in for it, and the receipt binds the reviewed bytes and the
+    destination: a republished text or a changed destination is refused.
+    """
+    import hashlib
+    import os
+    from . import consent
+    from . import skills as sk
+    try:
+        if args.action == "uninstall-shared":
+            if not args.target:
+                raise ValueError("skills uninstall-shared needs the installed name (see `collab skills status`)")
+            removed = sk.uninstall_shared(args.target, target=sk.skills_target(args.agent))
+            ok(f"removed {removed}")
+            return 0
+        if not args.target:
+            raise ValueError("skills install-shared needs a publication ID from `collab skills shared`")
+        if os.environ.get("COLLAB_WORKER") == "1":
+            raise ValueError("a conversation worker cannot install skills")
+        profile = _require_profile(args)
+        target = sk.skills_target(args.agent)
+        with _client(profile) as client:
+            record = client.shared_skill(args.target).get("skill") or {}
+        content = record.get("content")
+        digest = hashlib.sha256(content.encode()).hexdigest() if isinstance(content, str) else ""
+        if not digest or digest != record.get("sha256"):
+            raise ValueError("the publication's text does not match its SHA-256; not installing it")
+        files = record.get("files") or []
+        from .skill_sharing import manifest_digest
+        bound = manifest_digest(digest, files) if files else digest
+        stated = record.get("manifest_sha256")
+        # Any stated manifest must match exactly, including one that names
+        # files the record no longer carries.
+        if (files or stated) and stated != (manifest_digest(digest, files) if files else None):
+            raise ValueError("the supporting files do not match the publication's manifest; not installing it")
+        dest = sk.check_installable(record, target=target, force=args.force)  # before asking
+        owner_tag = hashlib.sha256(str(record.get("owner_id", "")).encode()).hexdigest()[:8]
+        # The full destination, hashed: truncating it let two long paths share a binding.
+        fields = dict(subject="skill-install", request_id=str(record.get("id", ""))[:200],
+                      digest=bound, binding=hashlib.sha256(str(dest).encode()).hexdigest())
+        review = {"operation": "install a peer's shared skill into this agent",
+                  "publisher": str(record.get("owner", "")), "participant": owner_tag,
+                  "skill": str(record.get("name", "")), "description": str(record.get("description", "")),
+                  "destination": str(dest), "installed_name": dest.name,
+                  "front_matter_dropped": sk.dropped_keys(content),
+                  "bytes": len(content.encode()), "sha256": digest,
+                  "authority": "the agent will load this text as one of its skills",
+                  "text": content,
+                  "supporting_files": [{"path": f["path"], "bytes": f["size_bytes"], "sha256": f["sha256"],
+                                        "text": f["content"]} for f in files],
+                  "manifest_sha256": bound}
+        from .skill_sharing import REVIEW_LIMIT, review_fits
+        if not review_fits(review):
+            # Checked before anything is asked or written: the human must see
+            # every byte that is installed, and the review has a hard limit.
+            raise ValueError(f"this publication is too large to review in full on the terminal "
+                             f"(over {REVIEW_LIMIT} characters once encoded); not installing it")
+        heading(f"shared skill {said(record.get('name', ''))} from {said(record.get('owner', '?'))} "
+                f"(participant {owner_tag})")
+        print(f"  {len(content.encode())} bytes · sha256 {digest}"
+              + (f" · {len(files)} supporting file(s), manifest {bound}" if files else ""))
+        print(f"  would install as {said(str(dest))}")
+        try:
+            receipt = consent.request(profile.dir, review=review, **fields)
+        except consent.ConsentRefused as exc:
+            consent.audit(profile.dir, event="refused", details={"reason": str(exc)[:200]}, **fields)
+            fail(f"not installed: {exc}")
+            print(dim(f"  your human approves it from their own terminal, outside this agent: "
+                      f"collab skills install-shared {said(str(record.get('id', '')))}"))
+            return 1
+        # Revalidate, then consume immediately before the install.
+        sk.check_installable(record, target=target, force=args.force)
+        consent.consume(profile.dir, receipt, **fields)
+        dest = sk.install_shared(record, target=target, session_id=profile.session_id, force=args.force)
+        consent.audit(profile.dir, event="installed", **fields)
+        ok(f"installed {dest}")
+        print(dim(f"  provenance in {dest / sk.PROVENANCE}; remove with `collab skills uninstall-shared {dest.name}`"))
+        return 0
+    except (HubError, OSError, ValueError) as exc:
+        fail(str(exc))
+        return 1
+
+
 def cmd_skills(args: argparse.Namespace) -> int:
     from . import skills as sk
+
+    if args.action in ("install-shared", "uninstall-shared"):
+        return cmd_skills_install_shared(args)
 
     if args.action in ("peers", "ask", "requests", "accept", "decline", "done"):
         return cmd_skills_remote(args)
@@ -7073,7 +7164,19 @@ def cmd_skills(args: argparse.Namespace) -> int:
                 if args.action == "publish":
                     if not args.target:
                         raise ValueError("skills publish needs a selected SKILL.md path")
-                    result = client.publish_skill(read_selected(args.target, name=args.name, description=args.description))
+                    publication = read_selected(args.target, name=args.name, description=args.description,
+                                                files=getattr(args, "file", None) or [])
+                    from .skill_sharing import review_fits
+                    if not review_fits({"text": publication["content"],
+                                        "supporting_files": publication.get("files", []),
+                                        "padding": "x" * 2048}):  # room for the review's metadata
+                        raise ValueError("this skill and its files are too large for a peer to review "
+                                         "in full before installing; publish fewer or smaller files")
+                    result = client.publish_skill(publication)
+                    if publication.get("files") and not (result.get("skill") or {}).get("manifest_sha256"):
+                        # An older hub validated SKILL.md and silently dropped the rest.
+                        raise ValueError("the hub stored SKILL.md but not its supporting files "
+                                         "(an older hub); withdraw it or publish without --file")
                 elif args.action == "shared":
                     result = client.shared_skills(after=args.after, limit=args.limit)
                 elif args.action == "show":
@@ -7109,6 +7212,15 @@ def cmd_skills(args: argparse.Namespace) -> int:
         heading("bundled capabilities")
         for entry in report.get("bundled", []):
             print(f"  {entry['name']:<24} {entry['description']}")
+        try:
+            installs = sk.shared_installs(sk.skills_target(args.agent))
+        except ValueError:
+            installs = []
+        if installs:
+            heading("skills installed from peers")
+            for item in installs:
+                print(f"  {said(item['dir']):<32} from {said(str(item.get('publisher', '?')))} "
+                      f"{dim('sha256 ' + str(item.get('sha256', ''))[:12])}")
         print()
         return 0
 
@@ -7943,7 +8055,8 @@ Esc cancels a draft, q quits. Editor commands run without a shell.""")
     sk = sub.add_parser("skills",
                         help="teach your coding agents to use collab")
     sk.add_argument("action", choices=["install", "uninstall", "status", "publish", "shared", "show", "withdraw",
-                                       "peers", "ask", "requests", "accept", "decline", "done"])
+                                       "peers", "ask", "requests", "accept", "decline", "done",
+                                       "install-shared", "uninstall-shared"])
     sk.add_argument("target", nargs="?", help="selected SKILL.md path, shared publication ID, skill name (ask) or request ID")
     sk.add_argument("--to", help="with ask: the participant to ask")
     sk.add_argument("--args", help="with ask: arguments for the requested skill")
@@ -7951,6 +8064,8 @@ Esc cancels a draft, q quits. Editor commands run without a shell.""")
     sk.add_argument("--human-approved", action="store_true",
                     help="with accept, without a terminal: your human has explicitly consented")
     sk.add_argument("--name", help="published skill name override")
+    sk.add_argument("--file", action="append", metavar="REL",
+                    help="with publish: a supporting file, relative to the skill directory (repeatable)")
     sk.add_argument("--description", help="published skill description override")
     sk.add_argument("--after", default="", help="shared inventory page cursor")
     sk.add_argument("--limit", type=int, default=100, help="shared inventory page size")

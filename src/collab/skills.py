@@ -172,6 +172,8 @@ def installed_list(env: dict[str, str] | None = None) -> list[dict[str, str]]:
         return []
     found = []
     for entry in sorted(target.path.iterdir()):
+        if entry.name.startswith(".") or entry.name.endswith(".collab-old"):
+            continue  # an interrupted install's scratch is not a skill to publish
         if not (entry / "SKILL.md").is_file():
             continue
         try:
@@ -180,6 +182,208 @@ def installed_list(env: dict[str, str] | None = None) -> list[dict[str, str]]:
             continue
         found.append({"name": info["name"], "description": info["description"]})
     return sanitise_list(found)
+
+
+PROVENANCE = ".collab-provenance.json"
+
+
+def _slug(text: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return slug[:32] or "peer"
+
+
+def shared_install_name(publisher: str, name: str) -> str:
+    """Namespaced so a peer's skill can never shadow one of the user's own."""
+    return f"shared-{_slug(publisher)}-{name}"[:64]
+
+
+def skills_target(agent: str | None = None) -> Target:
+    """The skills directory of the named agent, or of the one running collab."""
+    from .hosttool import detect
+    key = agent or detect()
+    target = next((t for t in known_targets() if t.key == key and t.kind == "skills"), None)
+    if target is None:
+        raise ValueError("no skills directory for this coding agent; pass --agent "
+                         + "|".join(t.key for t in known_targets() if t.kind == "skills"))
+    return target
+
+
+FRONT_KEY = re.compile(r"""^\s*["']?([A-Za-z0-9_-]+)["']?\s*:""")
+# Characters that render as nothing or as something else: a review would differ
+# from what is installed. Controls other than newline/tab, format characters,
+# variation selectors and the blank-looking fillers.
+INVISIBLE = {0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x2800, 0x3164, 0xFFA0}
+
+
+def hidden_characters(text: str) -> list[str]:
+    import unicodedata
+    found = []
+    for ch in text.lstrip("\ufeff"):
+        cp = ord(ch)
+        if ((unicodedata.category(ch) == "Cc" and ch not in "\n\t")
+                or unicodedata.category(ch) == "Cf" or cp in INVISIBLE
+                or 0xFE00 <= cp <= 0xFE0F or 0xE0100 <= cp <= 0xE01EF or 0x180B <= cp <= 0x180F):
+            found.append(f"U+{cp:04X}")
+    return sorted(set(found))
+
+
+def split_front_matter(content: str) -> tuple[list[str], str]:
+    """(front-matter lines, body); no front matter gives ([], content)."""
+    lines = content.split("\n")
+    if lines and lines[0].strip() == "---" and "---" in [l.strip() for l in lines[1:]]:
+        end = 1 + [l.strip() for l in lines[1:]].index("---")
+        return lines[1:end], "\n".join(lines[end + 1:])
+    return [], content
+
+
+def dropped_keys(content: str) -> list[str]:
+    """Front-matter keys the install will NOT keep (only name and description are)."""
+    head, _ = split_front_matter(content)
+    keys = {m.group(1) for line in head if (m := FRONT_KEY.match(line))}
+    return sorted(keys - {"name", "description"})
+
+
+def installed_text(content: str, install_name: str, description: str) -> str:
+    """The text as installed, its front matter REBUILT from parsed fields.
+
+    Only the namespaced name and the publication's description survive. A
+    peer's `name : commit`, a duplicate name key, or `allowed-tools: Bash(*)`
+    (which pre-grants tools in Claude Code) can no longer ride along.
+    """
+    import json as _json
+    _, body = split_front_matter(content)
+    return (f"---\nname: {install_name}\ndescription: {_json.dumps(description, ensure_ascii=False)}\n---\n"
+            + body)
+
+
+def check_installable(record: dict, *, target: Target, force: bool) -> Path:
+    """Where the skill would go, refused before the human is asked when it cannot.
+
+    --force replaces only an earlier install of the SAME publication name from
+    the SAME publisher: never a directory of the user's own, never another
+    peer's skill whose namespaced name happens to collide.
+    """
+    import json as _json
+    content = str(record.get("content") or "")
+    if hidden := hidden_characters(content + str(record.get("description") or "")):
+        raise ValueError("the text contains invisible or control characters ("
+                         + ", ".join(hidden[:6]) + ") that can make the review differ from "
+                         "what is installed; not installing it")
+    dest = target.path / shared_install_name(str(record.get("owner") or "peer"), str(record.get("name") or ""))
+    if dest.is_symlink() or (dest.exists() and not dest.is_dir()):
+        raise ValueError(f"{dest} exists and is not a skill directory")
+    if dest.exists():
+        meta = dest / PROVENANCE
+        try:
+            previous = _json.loads(meta.read_text(encoding="utf-8")) if meta.is_file() and not meta.is_symlink() else None
+        except (OSError, ValueError):
+            previous = None
+        if not isinstance(previous, dict):
+            raise ValueError(f"{dest.name} exists and was not installed by collab; not touching it")
+        if (previous.get("publisher_id"), previous.get("name")) != (record.get("owner_id"), record.get("name")):
+            raise ValueError(f"{dest.name} holds another publisher's skill; not replacing it")
+        if not force:
+            raise ValueError(f"{dest.name} is already installed; pass --force to replace it")
+    return dest
+
+
+def install_shared(record: dict, *, target: Target, session_id: str, force: bool = False) -> Path:
+    """Write a reviewed, consented peer skill and the provenance beside it (R19).
+
+    Built in a fresh directory and swapped in, so a replaced version leaves no
+    stale files and nothing is written through a symlink.
+    """
+    import hashlib
+    import json as _json
+    import shutil
+    import tempfile
+    import time as _time
+    from .skill_sharing import validate_publication
+    import fcntl
+    clean = validate_publication({k: record.get(k) for k in ("name", "description", "content", "sha256", "files")})
+    target.path.mkdir(parents=True, exist_ok=True)
+    # Check and swap under one lock: concurrent installs raced, and a second
+    # publisher could replace the first between the check and the rename.
+    lock = open(target.path / ".collab-install.lock", "a")
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    try:
+        return _install_locked(record, clean, target=target, session_id=session_id, force=force)
+    finally:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        lock.close()
+
+
+def _install_locked(record, clean, *, target: Target, session_id: str, force: bool) -> Path:
+    import hashlib
+    import json as _json
+    import shutil
+    import tempfile
+    import time as _time
+    dest = check_installable(record, target=target, force=force)
+    text = installed_text(clean["content"], dest.name, clean["description"])
+    fresh = Path(tempfile.mkdtemp(prefix=".collab-install-", dir=target.path))
+    try:
+        (fresh / "SKILL.md").write_text(text, encoding="utf-8")
+        (fresh / "SKILL.md").chmod(0o644)
+        for item in clean.get("files", []):
+            # Validated relative paths, written into a directory this call just
+            # created: nothing here can be a symlink planted by someone else.
+            path = fresh / item["path"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(item["content"], encoding="utf-8")
+            path.chmod(0o644)
+        provenance = {"session_id": session_id, "publisher": record.get("owner", ""),
+                      "publisher_id": record.get("owner_id", ""), "publication_id": record.get("id", ""),
+                      "name": clean["name"], "sha256": clean["sha256"],
+                      "installed_sha256": hashlib.sha256(text.encode()).hexdigest(),
+                      "files": [{"path": f["path"], "sha256": f["sha256"]} for f in clean.get("files", [])],
+                      "manifest_sha256": clean.get("manifest_sha256", ""),
+                      "installed_at": _time.time()}
+        (fresh / PROVENANCE).write_text(_json.dumps(provenance, indent=2), encoding="utf-8")
+        fresh.chmod(0o755)
+        if dest.exists():
+            old = dest.with_name(dest.name + ".collab-old")
+            shutil.rmtree(old, ignore_errors=True)
+            dest.rename(old)
+            fresh.rename(dest)
+            shutil.rmtree(old, ignore_errors=True)
+        else:
+            fresh.rename(dest)
+    except BaseException:
+        shutil.rmtree(fresh, ignore_errors=True)
+        raise
+    return dest
+
+
+def shared_installs(target: Target) -> list[dict]:
+    """Every skill in the directory that carries collab provenance."""
+    import json as _json
+    found = []
+    if not target.path.is_dir():
+        return found
+    for entry in sorted(target.path.iterdir()):
+        if entry.name.startswith(".") or entry.name.endswith(".collab-old"):
+            continue  # an interrupted install's scratch, never a skill
+        meta = entry / PROVENANCE
+        if entry.is_dir() and not entry.is_symlink() and meta.is_file():
+            try:
+                data = _json.loads(meta.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                data = None
+            found.append({**data, "dir": entry.name} if isinstance(data, dict)
+                         else {"dir": entry.name, "error": "unreadable provenance"})
+    return found
+
+
+def uninstall_shared(name: str, *, target: Target) -> Path:
+    """Remove a shared install; only directories collab installed qualify."""
+    import shutil
+    dest = target.path / name
+    if (not re.fullmatch(r"shared-[a-z0-9-]+", name) or dest.is_symlink()
+            or not (dest / PROVENANCE).is_file()):
+        raise ValueError(f"{name} is not a shared skill collab installed")
+    shutil.rmtree(dest)
+    return dest
 
 
 def instructions_block(skills_dir: Path, executable: str) -> str:
