@@ -29,6 +29,7 @@ Generated from the command parser. Existing commands remain available; `collab c
 - [working](#working)
 - [idle](#idle)
 - [activity](#activity)
+- [dashboard](#dashboard)
 - [stats](#stats)
 - [rules](#rules)
 - [discover](#discover)
@@ -113,7 +114,7 @@ options:
 ## resume
 
 ```text
-usage: collab resume [-h] [--home FOLDER] [--no-daemon] [--no-tunnel]
+usage: collab resume [-h] [--home FOLDER] [--keep] [--no-daemon] [--no-tunnel]
                      session_id
 
 positional arguments:
@@ -122,6 +123,7 @@ positional arguments:
 options:
   -h, --help     show this help message and exit
   --home FOLDER  explicit participant state folder
+  --keep         keep this session after the coding agent exits
   --no-daemon    do not start listening
   --no-tunnel    disable tunnel when restarting a hosted session
 ```
@@ -523,6 +525,17 @@ options:
   --session SESSION  act on this session id instead of the current one
 ```
 
+## dashboard
+
+```text
+usage: collab dashboard [-h] [--json] [--session SESSION]
+
+options:
+  -h, --help         show this help message and exit
+  --json
+  --session SESSION  act on this session id instead of the current one
+```
+
 ## stats
 
 ```text
@@ -597,9 +610,10 @@ options:
 ## watch
 
 ```text
-usage: collab watch [-h] [--tmux] [--vertical] [--percent PERCENT]
-                    [--no-follow] [--plain] [--limit N]
-                    [--layout {split,tmux,chat,roster}] [--roster-size PCT]
+usage: collab watch [-h] [--tmux | --panel [{auto,tmux,ghostty,iterm2}]]
+                    [--vertical] [--percent PERCENT] [--no-follow] [--plain]
+                    [--limit N] [--layout {split,tmux,chat,roster}]
+                    [--roster-size PCT]
                     [--roster-position {top,bottom,left,right}] [--save]
                     [--demo] [--session SESSION]
 
@@ -607,7 +621,8 @@ options:
   -h, --help            show this help message and exit
   --tmux                open it in a new tmux pane instead of here
   --panel [{auto,tmux,ghostty,iterm2}]
-                        open a tmux or native macOS terminal split
+                        open a terminal split (Ghostty 1.3+ and iTerm2 require
+                        macOS)
   --vertical            with --tmux, split below instead of to the right
   --percent PERCENT     with --tmux, how much of the window to give the pane
   --no-follow           print and exit
@@ -758,24 +773,35 @@ options:
 ## config
 
 ```text
-usage: collab config [-h] [--unset] [--edit] [--json] [--tui] [key] [value]
+usage: collab config [-h] [--unset] [--edit] [--json] [--tui] [--machine]
+                     [--kind [KIND]]
+                     [key] [value]
 
 positional arguments:
-  key         the setting to show or change
-  value       its new value
+  key            the setting to show or change
+  value          its new value
 
 options:
-  -h, --help  show this help message and exit
-  --unset     put a setting back to its default
-  --edit      edit a setting interactively; offer an external editor for text
+  -h, --help     show this help message and exit
+  --unset        put a setting back to its default
+  --edit         edit a setting interactively; offer an external editor for
+                 text
   --json
-  --tui       interactive keyboard/mouse settings editor
+  --tui          interactive keyboard/mouse settings editor
+  --machine      write an agent-scoped setting to the shared machine file
+                 (every agent here)
+  --kind [KIND]  write an agent setting for every conversation of one agent
+                 kind (default: the one running this command, e.g. claude-code
+                 or codex)
 
 Actions:
   collab config                         list settings, values and defaults
   collab config KEY                     show one setting and its actions
   collab config KEY VALUE               set directly
   collab config KEY --unset             restore the default
+  collab config KEY VALUE --machine     set an agent setting as everyone's default
+  collab config KEY VALUE --kind [KIND] keep it for every conversation of one agent kind
+                                        (not display_name or color: identity is per agent)
   collab config KEY --edit              edit interactively (terminal required)
   collab config --tui                   browse/edit; r resets to default
   collab config editor nano             choose vim, nvim, nano, or a command
@@ -885,7 +911,9 @@ options:
 ## worker reply
 
 ```text
-usage: collab worker reply [-h] [--session SESSION] decision_id text
+usage: collab worker reply [-h] [--session SESSION] [--awaiting-human]
+                           [--verbatim | --instruct]
+                           decision_id text
 
 positional arguments:
   decision_id
@@ -894,6 +922,13 @@ positional arguments:
 options:
   -h, --help         show this help message and exit
   --session SESSION  act on this session id instead of the current one
+  --awaiting-human   keep the decision open: your human is deciding; TEXT goes
+                     to the peer
+  --verbatim         send TEXT to the asking peer exactly as written and close
+                     the decision
+  --instruct         give TEXT to the worker as an instruction; it words the
+                     reply (default, except for a decision waiting on your
+                     human)
 ```
 
 ## worker context
@@ -997,18 +1032,26 @@ options:
 ## skills
 
 ```text
-usage: collab skills [-h] [--name NAME] [--description DESCRIPTION]
-                     [--after AFTER] [--limit LIMIT] [--session SESSION]
-                     [--agent NAME] [--copy] [--force] [--all] [--json]
-                     {install,uninstall,status,publish,shared,show,withdraw}
+usage: collab skills [-h] [--to TO] [--args ARGS] [--note NOTE]
+                     [--human-approved] [--name NAME]
+                     [--description DESCRIPTION] [--after AFTER]
+                     [--limit LIMIT] [--session SESSION] [--agent NAME]
+                     [--copy] [--force] [--all] [--json]
+                     {install,uninstall,status,publish,shared,show,withdraw,peers,ask,requests,accept,decline,done}
                      [target]
 
 positional arguments:
-  {install,uninstall,status,publish,shared,show,withdraw}
-  target                selected SKILL.md path or shared publication ID
+  {install,uninstall,status,publish,shared,show,withdraw,peers,ask,requests,accept,decline,done}
+  target                selected SKILL.md path, shared publication ID, skill
+                        name (ask) or request ID
 
 options:
   -h, --help            show this help message and exit
+  --to TO               with ask: the participant to ask
+  --args ARGS           with ask: arguments for the requested skill
+  --note NOTE           with accept/decline/done: a reason or the result
+  --human-approved      with accept, without a terminal: your human has
+                        explicitly consented
   --name NAME           published skill name override
   --description DESCRIPTION
                         published skill description override
