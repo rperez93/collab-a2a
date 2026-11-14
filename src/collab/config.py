@@ -506,7 +506,7 @@ def agent_scoped(key: str) -> bool:
 
 _AGENT_CACHE: dict[str, Any] = {}
 AGENT_SETTINGS = "agent-settings.json"
-_AGENT_PATH: dict[tuple, Path | None] = {}
+_AGENT_PATH: dict[tuple, tuple[Path | None, float]] = {}
 #: Set by `collab config --machine`: write agent-scoped keys to the shared file.
 WRITE_MACHINE = {"on": False}
 
@@ -522,19 +522,22 @@ def agent_config_path() -> Path | None:
     env = (os.environ.get("COLLAB_AGENT_CONFIG"), os.environ.get("COLLAB_HOME"),
            os.environ.get("COLLAB_STATE_DIR"), str(Path.cwd()),
            *(os.environ.get(k) for k in AGENT_SESSION_KEYS))
-    if env not in _AGENT_PATH:
+    cached = _AGENT_PATH.get(env)
+    # Re-resolved every few seconds: `--home`/bind_home can select another
+    # profile during a process's life, and the file must follow the selection.
+    if cached is None or time.monotonic() - cached[1] > 2.0:
         if env[0]:
             path: Path | None = Path(env[0])
         elif env[1]:
             path = Path(env[1]).expanduser() / AGENT_SETTINGS
         else:
             try:
-                path = base_home() / AGENT_SETTINGS
+                path = collab_home() / AGENT_SETTINGS  # the selected home, not the default
             except Exception:  # no workspace or agent identity: machine file only
                 path = None
         _AGENT_PATH.clear()
-        _AGENT_PATH[env] = path
-    return _AGENT_PATH[env]
+        _AGENT_PATH[env] = cached = (path, time.monotonic())
+    return cached[0]
 
 
 def load_machine_config() -> dict[str, Any]:
@@ -603,9 +606,14 @@ def save_config(cfg: dict[str, Any]) -> None:
     current = {**machine, **{k: v for k, v in agent.items() if agent_scoped(k)}}
     changed_machine = changed_agent = False
     for key in set(cfg) | set(current):
-        if key in cfg and key in current and cfg[key] == current[key]:
-            continue
         to_agent = agent_scoped(key) and agent_path is not None and not WRITE_MACHINE["on"]
+        # Compared with the layer being written: --machine must set the shared
+        # value even when it equals this agent's own override.
+        base = machine if (WRITE_MACHINE["on"] and agent_scoped(key)) else current
+        if key in cfg and key in base and cfg[key] == base[key]:
+            continue
+        if key not in cfg and key not in base:
+            continue
         if key in cfg:
             (agent if to_agent else machine)[key] = cfg[key]
         elif to_agent:
