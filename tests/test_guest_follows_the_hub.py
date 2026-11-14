@@ -85,7 +85,7 @@ def _restamp_where(*, session_id, **changes):
             f.write_text(json.dumps(data))
 
 
-# --- the host is unchanged --------------------------------------------------
+# --- the host follows its own local entrance ------------------------------
 
 def test_a_host_still_reads_its_own_hub_file(tmp_path, monkeypatch):
     """It owns the hub; it wrote the new address down itself."""
@@ -98,14 +98,20 @@ def test_a_host_still_reads_its_own_hub_file(tmp_path, monkeypatch):
     assert _daemon(profile)._hub_address() == "http://127.0.0.1:9999"
 
 
-def test_a_public_url_wins_over_the_local_one_for_the_host(tmp_path, monkeypatch):
+def test_a_host_keeps_its_local_route_while_the_tunnel_is_published(tmp_path, monkeypatch):
+    """Public-first recovery undid local selection again on every outage."""
     profile = _profile(tmp_path, name="alice", is_host=True, url="http://old")
     monkeypatch.setattr(
         "collab.server.session.HubConfig.load",
         classmethod(lambda cls, sid, home: types.SimpleNamespace(
             public_url="https://tunnel.example", local_url="http://127.0.0.1:1")))
 
-    assert _daemon(profile)._hub_address() == "https://tunnel.example"
+    daemon = _daemon(profile)
+    assert daemon._hub_address() == "http://127.0.0.1:1"
+    daemon._follow_url_change()
+    assert profile.url == "http://127.0.0.1:1"
+    daemon._follow_url_change()
+    assert profile.url == "http://127.0.0.1:1", "recovery must not flip back to the sharing URL"
 
 
 # --- the guest, which is the fix --------------------------------------------
