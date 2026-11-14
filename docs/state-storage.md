@@ -77,6 +77,8 @@ a process's own stderr — an interpreter traceback on a crash; warnings and
 uncaught thread exceptions are routed through the capped logging — and a watcher
 thread in the daemon and the hub, looking once a second, trims it if it ever
 matters; for that path alone the overshoot is what arrives within one second.
+The shared machine proxy keeps its `proxy/proxy.log`, in the peer registry,
+under the same cap and the same watcher.
 
 ## Existing sessions and explicit homes
 

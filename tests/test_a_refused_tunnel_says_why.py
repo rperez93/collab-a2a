@@ -748,3 +748,109 @@ def test_primary_is_refused_with_a_per_session_tunnel(hosting, monkeypatch, caps
                      *extra]) == 2
     assert "--primary" in capsys.readouterr().err
     assert not hosted_sessions(hosting / ".collab")
+
+
+def test_moving_a_running_kept_session_leaves_one_hub_on_the_proxy(
+        hosting, monkeypatch):
+    """M1's real state: the session's hub is UP, kept (`--keep`), and its own
+    ngrok holds the domain. The move must not be refused by the ownership
+    checks ahead of it, must see the old hub and its ngrok both gone before
+    the proxy's ngrok starts, and must leave exactly one hub for the session."""
+    import signal
+    import subprocess
+
+    from collab import proxy
+    from collab.cli import main
+    from collab.client import exclusive
+    from collab.server.session import (HubConfig, hosted_sessions, stop_session,
+                                       update_fields)
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        assert main(["host", "--no-daemon", "--no-update-check", "--name", "alice",
+                     "--no-tunnel", "--keep", "--domain", "live.ngrok.app"]) == 0
+    cfg = hosted_sessions(hosting / ".collab")[0]
+    old_hub = cfg.hub_stamp()
+    assert old_hub.alive()
+    held = int(subprocess.run(
+        ["sh", "-c", "sleep 120 >/dev/null 2>&1 & echo $!"],
+        capture_output=True, text=True, check=True).stdout)
+    old_tunnel = exclusive.stamp_for(held)
+    update_fields(cfg.dir, tunnel="ngrok", tunnel_pid=held,
+                  tunnel_stamp=old_tunnel.encode())
+
+    _fake_ngrok_on_path(
+        hosting, monkeypatch,
+        f"for p in {old_hub.pid} {held}; do kill -0 $p 2>/dev/null && "
+        f"echo $p >> '{hosting}/clash.txt'; done\nexit 1\n")
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            code = main(["host", "--no-daemon", "--no-update-check", "--name", "alice",
+                         "--resume", cfg.session_id, "--tunnel", "proxy",
+                         "--primary", "--keep"])
+        assert code == 0, out.getvalue()
+        assert not old_hub.alive() and not old_tunnel.alive()
+        assert (hosting / "argv.txt").exists(), out.getvalue()
+        assert not (hosting / "clash.txt").exists(), (
+            "the proxy's ngrok started while the old hub or its ngrok was up")
+        assert _domains(hosting) == ["live.ngrok.app"]
+        hubs = _hubs_of(hosting / ".collab")
+        assert len(hubs) == 1, f"{len(hubs)} hubs for one session"
+        latest = HubConfig.load(cfg.session_id, cfg.home)
+        assert hubs == [latest.pid] and latest.tunnel == "proxy"
+        assert proxy.ProxyState.load().primary == cfg.session_id
+    finally:
+        latest = HubConfig.load(cfg.session_id, cfg.home)
+        if latest is not None:
+            stop_session(latest)
+        _stop_the_proxy_it_recorded()
+        if old_tunnel.alive():
+            os.kill(held, signal.SIGKILL)
+
+
+def test_a_session_asking_for_a_held_primary_is_told_and_does_not_get_it(
+        hosting, monkeypatch):
+    """End to end against a live proxy: the primary reaches its session at the
+    bare domain, and a second session's `--primary` is refused out loud —
+    `collab host` names the holder rather than leaving it to hub.log."""
+    import httpx
+
+    from collab import proxy
+
+    _fake_ngrok_on_path(hosting, monkeypatch, "exit 1\n")
+    shared, base = _a_proxy_without_ngrok(hosting)
+    try:
+        assert proxy.claim_primary("s_already") == "s_already"
+        said = _host(hosting, "--tunnel", "proxy", "--primary", "--fresh")
+        assert "primary session is s_already" in said
+        assert proxy.ProxyState.load().primary == "s_already"
+    finally:
+        shared.terminate()
+        shared.wait(timeout=10)
+
+    # And the converse on a fresh registry: the session that asked first is
+    # the one the bare domain serves.
+    monkeypatch.setenv("COLLAB_PEERS_DIR", str(hosting / "peers2"))
+    shared, base = _a_proxy_without_ngrok(hosting)
+    from collab.cli import main
+    from collab.server.session import HubConfig, hosted_sessions, stop_session
+    try:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            assert main(["host", "--no-daemon", "--no-update-check", "--name", "bob",
+                         "--tunnel", "proxy", "--primary", "--fresh"]) == 0
+        mine = HubConfig.load(proxy.ProxyState.load().primary,
+                              hosted_sessions(hosting / ".collab")[0].home)
+        assert mine is not None
+        deadline = time.monotonic() + 10
+        while True:
+            got = httpx.get(base + "/ext/collab/v1/health", timeout=1)
+            if got.status_code == 200 or time.monotonic() > deadline:
+                break
+            time.sleep(0.1)
+        assert got.json()["session_id"] == mine.session_id
+    finally:
+        for cfg in hosted_sessions(hosting / ".collab"):
+            stop_session(HubConfig.load(cfg.session_id, cfg.home) or cfg)
+        shared.terminate()
+        shared.wait(timeout=10)
