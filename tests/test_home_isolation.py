@@ -38,40 +38,93 @@ def _mine() -> list[int]:
     return lockfile.ancestry()
 
 
+def _pid_max() -> int:
+    try:
+        with open("/proc/sys/kernel/pid_max", encoding="ascii") as fh:
+            return int(fh.read())
+    except (OSError, ValueError):
+        return 4_194_304            # Linux's ceiling; macOS pids stay far below it
+
+
+#: A pid no process can have: one past the kernel's ceiling. The fixed numbers
+#: these tests used before — 111 111 and 999 999 — are ordinary pids on a host
+#: whose ceiling is 4 194 304, and a heavy suite reaches them.
+STRANGER = _pid_max() + 1
+
+
+@pytest.fixture
+def chain(monkeypatch):
+    """Give `resolve_home` a process chain of our choosing, nearest first.
+
+    THE REAL CHAIN IS NOT THE POINT OF THE TESTS THAT USE THIS, and it was what
+    made one of them flaky. Its shape is whatever launched pytest: five deep
+    from an interactive shell, but only `[python3, flock]` when the suite was
+    started by a shell that has since exited, leaving `flock` reparented to
+    init. A test that built «our process» as `chain[1]` and «the shared
+    terminal» as `chain[-1]` then named ONE pid twice; alice's claim and bob's
+    met the chain at the same distance, and the tie correctly decided nothing.
+    Reproduced with `setsid sh -c 'flock … pytest … &'`: fails every time.
+
+    The numbers sit above the pid ceiling, so none of them can be anything real.
+    """
+    def use(pids: list[int]) -> list[int]:
+        monkeypatch.setattr(lockfile, "ancestry", lambda limit=12: list(pids))
+        return pids
+    return use
+
+
 def test_the_default_holder_keeps_the_default(repo):
-    """The reported regression, in one line."""
+    """The reported regression, in one line.
+
+    The REAL chain on purpose, and safe at any depth: it always begins with
+    this process, so alice meets it at distance 0 and the stranger not at all.
+    """
     _claim(base_home(), "alice", _mine())
-    _claim(repo / ".collab-bob", "bob", [999_999])
+    _claim(repo / ".collab-bob", "bob", [STRANGER])
 
     assert resolve_home() == base_home()
 
 
 def test_the_sibling_holder_keeps_the_sibling(repo):
-    _claim(base_home(), "alice", [999_999])
+    _claim(base_home(), "alice", [STRANGER])
     _claim(repo / ".collab-bob", "bob", _mine())
 
     assert resolve_home() == repo / ".collab-bob"
 
 
-def test_agents_sharing_a_terminal_are_still_told_apart(repo):
+def test_agents_sharing_a_terminal_are_still_told_apart(repo, chain):
     """Two agents started from one shell share everything above it.
 
     So "shares an ancestor" answers yes for every claim in the repo. What
     separates them is where the sharing starts: each meets its own process
     first.
     """
-    chain = _mine()
-    shared_ancestor = chain[-1]
+    command, ours, shell, terminal = chain([STRANGER + 1, STRANGER + 2,
+                                            STRANGER + 3, STRANGER + 4])
 
-    _claim(base_home(), "alice", [111_111, shared_ancestor])   # theirs
-    _claim(repo / ".collab-bob", "bob", [chain[1], shared_ancestor])  # ours
+    _claim(base_home(), "alice", [STRANGER, terminal])        # theirs
+    _claim(repo / ".collab-bob", "bob", [ours, terminal])     # ours
 
     assert resolve_home() == repo / ".collab-bob"
 
 
-def test_an_equal_claim_from_both_decides_nothing(repo):
+def test_the_two_agents_are_told_apart_however_shallow_the_chain(repo, chain):
+    """The flaky case itself: our process right under the shared one.
+
+    `[python3, flock]` with flock reparented to init is the shallowest chain a
+    suite can have. The two claims must still differ by where they meet it.
+    """
+    ours, shared = chain([STRANGER + 1, STRANGER + 2])
+
+    _claim(base_home(), "alice", [STRANGER, shared])
+    _claim(repo / ".collab-bob", "bob", [ours, shared])
+
+    assert resolve_home() == repo / ".collab-bob"
+
+
+def test_an_equal_claim_from_both_decides_nothing(repo, chain):
     """If the only thing shared is shared equally, it is not evidence."""
-    shared = _mine()[-1]
+    *_, shared = chain([STRANGER + 1, STRANGER + 2, STRANGER + 3])
     _claim(base_home(), "alice", [shared])
     _claim(repo / ".collab-bob", "bob", [shared])
 
