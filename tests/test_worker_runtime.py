@@ -395,3 +395,27 @@ def test_provider_exits_are_classified_without_keeping_their_text():
     assert classify_exit(b"model claude-x not found")[0] == "model"
     assert classify_exit(b"connect ECONNREFUSED 127.0.0.1:443")[0] == "network"
     assert classify_exit(b"segfault")[0] == "other"
+
+
+
+def test_exit_patterns_do_not_misfire_and_waits_are_capped():
+    from collab.worker_runtime import MAX_PROVIDER_WAIT, classify_exit
+    assert classify_exit(b"processed 14290 tokens; done")[0] == "other"
+    assert classify_exit(b"error at line 512 of config")[0] == "other"
+    assert classify_exit(b"HTTP 503 Service Unavailable")[0] == "network"
+    assert classify_exit(b"429 Too Many Requests, retry after 2 hours") == ("rate_limit", MAX_PROVIDER_WAIT)
+    assert classify_exit(b"rate limited; try again in 30 min") == ("rate_limit", 1800.0)
+
+
+def test_a_new_configuration_may_escalate_the_same_failure_again(tmp_path):
+    from collab import worker
+    store = worker.Store(tmp_path)
+    store.configure({"agent": "claude", "scope": "Coordinate"})
+    g1 = store.snapshot()["generation"]
+    store.escalate_once("provider-auth", "fix login", expected_generation=g1)
+    store.escalate_once("provider-auth", "fix login", expected_generation=g1)
+    store.configure({"agent": "claude", "scope": "Coordinate"})
+    g2 = store.snapshot()["generation"]
+    store.escalate_once("provider-auth", "fix login", expected_generation=g1)   # stale turn: ignored
+    store.escalate_once("provider-auth", "fix login", expected_generation=g2)
+    assert sorted(p["once"] for p in store.pending()) == [f"provider-auth@{g1}", f"provider-auth@{g2}"]

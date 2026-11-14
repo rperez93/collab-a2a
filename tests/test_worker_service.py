@@ -646,4 +646,19 @@ async def test_a_rate_limited_provider_waits_and_an_auth_failure_escalates_once(
     for _ in range(2):
         conversation.next_at = 0
         await conversation.turn()
-    assert [p["once"] for p in store.pending()] == ["provider-auth"], "escalated once, not per retry"
+    assert [p["once"].split("@")[0] for p in store.pending()] == ["provider-auth"], "escalated once, not per retry"
+
+
+
+@pytest.mark.asyncio
+async def test_an_escalation_naming_a_message_outside_the_turn_keeps_its_question(conversation, tmp_path, monkeypatch):
+    configure(conversation, tmp_path)
+    async def run(*args, **kwargs):
+        return {"summary": "", "replies": [], "escalations": [
+            {"reason": "decision", "seq": 999, "question": "Which branch?"}]}
+    monkeypatch.setattr("collab.worker_runtime.run_turn", run)
+    incoming(conversation, 1, "Question")
+    await conversation.turn()
+    store = worker.Store(conversation.root)
+    assert [(p["seq"], p["question"]) for p in store.pending()] == [(1, "Which branch?")]
+    assert not store.status()["error"]
