@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import os
+import uuid
 import sqlite3
 import time
 from pathlib import Path
@@ -1122,7 +1124,12 @@ def create_app(
             file_id = new_id("f")
         digest = hashlib.sha256()
         size = 0
-        target = _blob(file_id)
+        # Written to a private temporary blob and moved into place only by the
+        # upload whose record insert wins: two concurrent retries of one
+        # delivery could otherwise interleave into one blob that matches
+        # neither recorded hash.
+        final = _blob(file_id)
+        target = final.with_name(f"{file_id}.{uuid.uuid4().hex}.part")
         try:
             with target.open("wb") as out:
                 while chunk := await file.read(1024 * 256):
@@ -1153,11 +1160,24 @@ def create_app(
         audience = () if to_id else [
             p.id for p in await asyncio.to_thread(store.participants)
             if p.id != user.id]
-        record = await asyncio.to_thread(
-            store.add_file, file_id, name=name, size=size, sha256=digest.hexdigest(),
-            sender=user.name, recipient=to_name or None, room=room or DEFAULT_ROOM,
-            audience=audience,
-        )
+        try:
+            record = await asyncio.to_thread(
+                store.add_file, file_id, name=name, size=size, sha256=digest.hexdigest(),
+                sender=user.name, recipient=to_name or None, room=room or DEFAULT_ROOM,
+                audience=audience,
+            )
+        except sqlite3.IntegrityError:
+            with contextlib.suppress(OSError):
+                target.unlink()
+            existing = store.get_file(file_id)
+            if existing is None:
+                raise
+            return {**_file_view(existing), "duplicate": True}
+        except BaseException:
+            with contextlib.suppress(OSError):
+                target.unlink()
+            raise
+        os.replace(target, final)
         await hub.publish(Envelope(
             kind=KIND_FILE, sender=user.name, sender_id=user.id,
             to=to_name or None, to_id=to_id,
