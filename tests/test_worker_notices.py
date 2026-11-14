@@ -19,7 +19,8 @@ def configured(root):
 def decision(store, text="private peer question"):
     snap = store.snapshot()
     assert store.commit_turn(expected_cursor=snap["cursor"], cursor=snap["cursor"],
-        summary="", replies=[], escalations=[{"reason": "decision", "question": text, "seq": 0}])
+        summary="", replies=[], escalations=[{"reason": "decision", "question": text, "seq": 0}],
+        decision_sources={0: {"sender": "bob", "sender_id": "p_bob", "room": "", "broadcast": False}})
 
 
 def test_a_healthy_worker_produces_no_notices_even_with_unread_peer_chatter(tmp_path):

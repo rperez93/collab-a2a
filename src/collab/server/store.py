@@ -361,23 +361,53 @@ class Store:
                     (f"{row['name']}~{str(row['id'])[2:10]}", row["id"]),
                 )
 
-        # Events carried names only. Resolve them to the ids just assigned, so
-        # old direct messages stay visible to exactly the two people involved.
+        # Old private history has no durable principal evidence. Today's
+        # participant_names entry may be a replacement who took the old name;
+        # treating an unresolved recipient as NULL also made it room-public.
+        # Preserve the private boundary with a non-participant sentinel instead
+        # of assigning historical secrets to today's label holder. Host-side
+        # recovery requires explicit provenance, not a replay-time name lookup.
         events = self._columns("events")
+        added = []
         if events:
-            added = [col for col in ("sender_id", "recipient_id")
-                     if col not in events]
+            added = [col for col in ("sender_id", "recipient_id") if col not in events]
             for col in added:
                 self._db.execute(f"ALTER TABLE events ADD COLUMN {col} TEXT")
-            if added:
-                self._db.execute(
-                    "UPDATE events SET sender_id = (SELECT participant_id FROM"
-                    " participant_names WHERE name = events.sender)"
-                    " WHERE sender_id IS NULL")
-                self._db.execute(
-                    "UPDATE events SET recipient_id = (SELECT participant_id FROM"
-                    " participant_names WHERE name = events.recipient)"
-                    " WHERE recipient_id IS NULL AND recipient IS NOT NULL")
+            self._db.execute(
+                "UPDATE events SET recipient_id='unresolved:legacy-private'"
+                " WHERE recipient IS NOT NULL AND recipient<>''"
+                " AND (recipient_id IS NULL OR recipient_id='')")
+
+        # File labels were re-resolved at each download: after bob renamed,
+        # another participant taking «bob» inherited his private uploads. Freeze
+        # identities once. Recover old rows only from an already ID-bearing
+        # shared event, never from today's mutable name map. Missing/conflicting
+        # evidence stays NULL and private authorization fails closed. Do not
+        # retry this migration at each open after names have changed again.
+        file_columns = self._columns("files")
+        missing_file_ids = [key for key in ("sender_id", "recipient_id") if key not in file_columns]
+        for key in missing_file_ids:
+            self._db.execute(f"ALTER TABLE files ADD COLUMN {key} TEXT")
+        if missing_file_ids and events and not added:
+            self._db.execute("""
+                CREATE TEMP TABLE file_identity_migration AS
+                SELECT json_extract(payload, '$.body.id') AS file_id,
+                       MIN(sender_id) AS sender_id, MIN(recipient_id) AS recipient_id
+                  FROM events
+                 WHERE kind='file' AND json_valid(payload)
+                   AND json_extract(payload, '$.body.action')='shared'
+                 GROUP BY json_extract(payload, '$.body.id')
+                HAVING COUNT(*)=COUNT(sender_id) AND MIN(sender_id)=MAX(sender_id)
+                   AND (COUNT(recipient_id)=0 OR
+                        (COUNT(*)=COUNT(recipient_id) AND MIN(recipient_id)=MAX(recipient_id)))
+            """)
+            for key in missing_file_ids:
+                self._db.execute(f"""
+                    UPDATE files SET {key}=(SELECT {key} FROM file_identity_migration m
+                                            WHERE m.file_id=files.id)
+                     WHERE {key} IS NULL
+                """)
+            self._db.execute("DROP TABLE file_identity_migration")
 
         # A batch is a denominator: which tasks it holds is the whole of what
         # is being counted. A session recorded before batches existed has a
@@ -429,19 +459,15 @@ class Store:
             self._db.execute("ALTER TABLE projects ADD COLUMN archived_at REAL")
         if made and "owner_id" not in made:
             self._db.execute("ALTER TABLE projects ADD COLUMN owner_id TEXT")
-            # BACK-FILLED FROM THE LIVE ROSTER ONLY, which is the whole of the
-            # care here. Resolving through `participant_names` — the way
-            # `events.sender_id` above is back-filled — would resolve a name
-            # its original holder has since given up, and hand a project to
-            # whoever took it: the exact transfer this column exists to
-            # prevent. A name still held by somebody who has not been revoked
-            # is the ordinary case and is safe; anything else stays NULL and
-            # falls back to the name, which is what it had before.
-            self._db.execute(
-                "UPDATE projects SET owner_id = ("
-                "  SELECT id FROM participants p"
-                "   WHERE p.name = projects.owner AND p.revoked = 0)"
-                " WHERE owner_id IS NULL AND owner IS NOT NULL")
+        if made and "created_by_id" not in made:
+            # Project IDs can be deleted and reused, and event publication can
+            # lag the row write. Neither a first/last event nor wall time proves
+            # the surviving incarnation's creator. Leave legacy ACLs unresolved.
+            self._db.execute("ALTER TABLE projects ADD COLUMN created_by_id TEXT")
+        if tasks and "owner_id" not in tasks:
+            # A last recorded claim may precede a committed but unannounced
+            # newer claim. Today's label and old events cannot fill that gap.
+            self._db.execute("ALTER TABLE tasks ADD COLUMN owner_id TEXT")
         if self._columns("tasks"):
             self._db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project)")
@@ -592,7 +618,7 @@ class Store:
                     "INSERT INTO events (kind, room, sender, recipient, sender_id,"
                     " recipient_id, ts, payload) VALUES (?,?,?,?,?,?,?,?)",
                     (env.kind, env.room, env.sender, env.to,
-                     env.sender_id, env.to_id, env.ts, ""),
+                     env.sender_id, env.to_id or ("unresolved:private" if env.to else None), env.ts, ""),
                 )
                 env.seq = int(cur.lastrowid)
                 self._db.execute("UPDATE events SET payload=? WHERE seq=?",
@@ -1015,6 +1041,7 @@ class Store:
     def upsert_task(self, task_id: str, *, title: str, state: str, owner: str | None,
                     room: str | None, created_by: str, detail: str | None = None,
                     join_open_batch: bool = False, claim_owner: str | None = None,
+                    owner_id: str | None = None, claim_owner_id: str | None = None,
                     expected_updated_at: float | None = None,
                     project: str | None = None) -> dict[str, Any]:
         """Create or update one task.
@@ -1054,7 +1081,7 @@ class Store:
             if claim_owner is not None and (
                     existing is None
                     or existing["state"] in {"TASK_STATE_COMPLETED", "TASK_STATE_CANCELED"}
-                    or (existing["owner"] and existing["owner"] != claim_owner)):
+                    or (existing["owner"] and (not claim_owner_id or existing["owner_id"] != claim_owner_id))):
                 raise TaskClaimConflict("Task changed or is already claimed; refresh the board")
             # This timestamp also serves as the mutation revision. Preserve a
             # distinct value under a frozen/coarse or backwards wall clock.
@@ -1082,10 +1109,10 @@ class Store:
                     batch = str(open_now["id"]) if open_now else None
                 self._db.execute(
                     "INSERT INTO tasks (id,title,state,owner,room,created_by,"
-                    "created_at,updated_at,detail,batch,project,completed_at)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "created_at,updated_at,detail,batch,project,completed_at,owner_id)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (task_id, title, state, owner, room, created_by, now, now,
-                     detail or "", batch, project, completed_at),
+                     detail or "", batch, project, completed_at, owner_id),
                 )
             else:
                 # `batch` is deliberately absent from this list. Which batch a
@@ -1110,12 +1137,12 @@ class Store:
                 # mistake can then never be unfiled.
                 self._db.execute(
                     "UPDATE tasks SET title=?, state=?, owner=?, updated_at=?,"
-                    " detail=?, project=?, completed_at=? WHERE id=?",
+                    " detail=?, project=?, completed_at=?, owner_id=? WHERE id=?",
                     (title or existing["title"], state, owner, now,
                      existing["detail"] if detail is None else detail,
                      (None if project == "" else
                       project if project is not None else existing["project"]),
-                     completed_at, task_id),
+                     completed_at, owner_id, task_id),
                 )
             self._db.commit()
             row = self._db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
@@ -1146,7 +1173,7 @@ class Store:
     def upsert_project(self, project_id: str, *, title: str,
                        detail: str | None = None,
                        owner: str | None, created_by: str,
-                       owner_id: str | None = None) -> dict[str, Any]:
+                       owner_id: str | None = None, created_by_id: str | None = None) -> dict[str, Any]:
         """Create a project, or change the one that is there.
 
         `owner` is not `or existing` on update, unlike `title` and `detail`.
@@ -1169,10 +1196,10 @@ class Store:
             if existing is None:
                 self._db.execute(
                     "INSERT INTO projects (id,title,detail,owner,owner_id,"
-                    "created_by,created_at,updated_at)"
-                    " VALUES (?,?,?,?,?,?,?,?)",
+                    "created_by,created_at,updated_at,created_by_id)"
+                    " VALUES (?,?,?,?,?,?,?,?,?)",
                     (project_id, title, detail or "", owner, owner_id,
-                     created_by, now, now),
+                     created_by, now, now, created_by_id),
                 )
             else:
                 # `detail is None` LEAVES IT; `""` CLEARS IT. `detail or
@@ -1210,9 +1237,9 @@ class Store:
         owner_id=?` re-opened the hole the id column was added to close: a
         recycled «alice» listed the previous alice's projects, so the guard was
         right and the listing was still wrong. The name is looked up in the
-        live roster and the id is what is compared; a project whose owner_id is
-        NULL — written before the column, by somebody no longer here — is
-        matched by name, because for those the name is all there is.
+        live roster and the id is what is compared. An unresolved legacy
+        owner_id stays outside a participant-specific filter; matching its
+        old label would silently transfer the project after a rename swap.
         """
         clauses: list[str] = []
         params: list[Any] = []
@@ -1224,8 +1251,8 @@ class Store:
                     "SELECT id FROM participants WHERE name=? AND revoked=0",
                     (owner,)).fetchone()
             wanted = str(row["id"]) if row else owner
-            clauses.append("(owner_id=? OR (owner_id IS NULL AND owner=?))")
-            params += [wanted, owner]
+            clauses.append("owner_id=?")
+            params += [wanted]
         sql = "SELECT * FROM projects"
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
@@ -1542,7 +1569,8 @@ class Store:
 
     def add_file(self, file_id: str, *, name: str, size: int, sha256: str, sender: str,
                  recipient: str | None, room: str | None,
-                 audience: Iterable[str] = ()) -> dict[str, Any]:
+                 audience: Iterable[str] = (), sender_id: str | None = None,
+                 recipient_id: str | None = None) -> dict[str, Any]:
         """Record an upload, and for a room file, who it is waiting for.
 
         ``audience`` is the participant ids the file is held for — the people in
@@ -1554,9 +1582,9 @@ class Store:
         with self._lock:
             try:
                 self._db.execute(
-                    "INSERT INTO files (id,name,size,sha256,sender,recipient,room,created_at)"
-                    " VALUES (?,?,?,?,?,?,?,?)",
-                    (file_id, name, size, sha256, sender, recipient, room, now),
+                    "INSERT INTO files (id,name,size,sha256,sender,recipient,room,created_at,sender_id,recipient_id)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (file_id, name, size, sha256, sender, recipient, room, now, sender_id, recipient_id),
                 )
             except sqlite3.IntegrityError:
                 self._db.rollback()  # a concurrent retry of the same delivery won

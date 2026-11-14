@@ -166,17 +166,11 @@ def _may_change(user, project: dict[str, Any]) -> bool:
     """
     if getattr(user, "is_host", False):
         return True
-    # THE ID FIRST, and the name only where there is no id to ask. A name freed
-    # by a rename or a kick is free for somebody else to claim, so authorising
-    # on the name alone hands the guard to whoever takes the name next — they
-    # would pass the owner check on a project they never owned. Projects
-    # written before the id was kept have none, and fall back to the name they
-    # do have rather than becoming unmanageable.
-    owner_id = project.get("owner_id")
-    if owner_id:
-        return getattr(user, "id", None) == owner_id or user.name == project.get(
-            "created_by")
-    return user.name in (project.get("owner"), project.get("created_by"))
+    # Display names can be recycled. A legacy row with no trustworthy identity
+    # is host-managed until recovered; a matching label grants no authority.
+    return getattr(user, "id", None) in tuple(
+        value for value in (project.get("owner_id"), project.get("created_by_id")) if value)
+
 
 
 def _require(request: Request):
@@ -300,19 +294,31 @@ def create_app(
     )
 
     join_limiter = RateLimiter(limit=10, window=60.0)
-    def resolve_target(name: str | None) -> tuple[str, str]:
+
+    def resolve_target(name: str | None, participant_id: str | None = None) -> tuple[str, str]:
         """Turn a DM target into ``(display_name, participant_id)``.
 
         The name may be one the sender captured before the recipient renamed
         themselves, so it is looked up across every name they have held.
         """
+        if participant_id is not None:
+            # A reply binds its original principal, not whichever participant
+            # later takes the displayed label. Normalize that label here.
+            if not isinstance(participant_id, str) or not participant_id or len(participant_id) > 128:
+                raise HTTPException(status_code=400, detail="invalid target participant ID")
+            person = store.participant_by_id(participant_id)
+            if person is None or person.revoked:
+                raise HTTPException(status_code=404, detail="no active target participant ID")
+            return person.name, person.id
         if not name:
             return "", ""
         pid = store.resolve_name(name)
         if pid is None:
             raise HTTPException(status_code=404, detail=f"no participant called {name!r}")
         person = store.participant_by_id(pid)
-        return (person.name if person else name), pid
+        if person is None or person.revoked:
+            raise HTTPException(status_code=404, detail="no active target participant")
+        return person.name, pid
 
     @app.get(f"{EXT_PREFIX}/compatibility", tags=["collab"])
     async def compatibility() -> dict[str, Any]:
@@ -417,6 +423,7 @@ def create_app(
     # --- extension: messaging --------------------------------------------------
 
     @app.post(f"{EXT_PREFIX}/messages", tags=["collab"])
+    @app.post(f"{EXT_PREFIX}/messages/by-id", tags=["collab"])
     async def post_message(request: Request) -> dict[str, Any]:
         """Convenience path — the same fan-out A2A SendMessage performs."""
         user = _require(request)
@@ -428,7 +435,14 @@ def create_app(
         kind = str(body.get("kind") or KIND_CHAT)
         if reason := client_kind_refusal(kind):
             raise HTTPException(status_code=400, detail=reason)
-        to_name, to_id = resolve_target(body.get("to"))
+        if request.url.path.endswith("/messages/by-id") and not ("to_id" in body or "toId" in body):
+            raise HTTPException(status_code=400, detail="an explicit target participant ID is required")
+        if "to_id" in body and "toId" in body and body["to_id"] != body["toId"]:
+            raise HTTPException(status_code=400, detail="conflicting target participant IDs")
+        explicit_target = body.get("to_id", body.get("toId"))
+        if ("to_id" in body or "toId" in body) and not isinstance(explicit_target, str):
+            raise HTTPException(status_code=400, detail="invalid target participant ID")
+        to_name, to_id = resolve_target(body.get("to"), explicit_target)
         env = Envelope(
             kind=kind,
             text=str(body.get("text") or ""),
@@ -669,7 +683,7 @@ def create_app(
                 # and only one of them is worth acting on: «ask alice before
                 # taking it over» sends an agent to negotiate over work that is
                 # already done.
-                if owner and owner != user.name:
+                if owner and existing.get("owner_id") != user.id:
                     raise HTTPException(
                         status_code=409,
                         detail=f"{task_id} is already claimed by {owner}"
@@ -708,6 +722,9 @@ def create_app(
                         if "detail" in body else None),
                 join_open_batch=joins_a_batch,
                 claim_owner=user.name if action == "claim" else None,
+                owner_id=(user.id if action == "claim" else existing.get("owner_id")
+                          if action != "propose" else None),
+                claim_owner_id=user.id if action == "claim" else None,
                 expected_updated_at=existing["updated_at"] if action != "propose" else None,
                 project=(project or None) if action == "propose" else project,
             )
@@ -902,7 +919,7 @@ def create_app(
         record = await asyncio.to_thread(
             store.upsert_project, project_id, title=title,
             detail=detail, owner=owner, owner_id=owner_id,
-            created_by=user.name,
+            created_by=user.name, created_by_id=user.id,
         )
         await hub.publish(Envelope(
             kind=KIND_PROJECT, sender=user.name, sender_id=user.id,
@@ -1154,23 +1171,24 @@ def create_app(
         return view
 
     def _may_touch(record: dict[str, Any], who: str) -> bool:
-        """Compare by id where we have one, so a rename cannot lock you out."""
+        """Stored principals survive renames; unresolved private rows deny access."""
         if not record["recipient"]:
             return True
-        recipient_id = store.resolve_name(record["recipient"])
-        sender_id = store.resolve_name(record["sender"])
-        return who in (recipient_id, sender_id)
+        return who in (record.get("recipient_id"), record.get("sender_id"))
 
     def _download_url(file_id: str) -> str:
         return f"{live_url().rstrip('/')}{EXT_PREFIX}/files/{file_id}/content"
 
     @app.post(f"{EXT_PREFIX}/files", tags=["collab"])
+    @app.post(f"{EXT_PREFIX}/files/by-id", tags=["collab"])
     async def upload_file(request: Request, file: UploadFile = File(...),
                           to: str | None = None, room: str | None = None,
-                          delivery: str | None = None) -> dict[str, Any]:
+                          delivery: str | None = None, to_id: str | None = None) -> dict[str, Any]:
         user = _require(request)
         _sweep_expired()
-        to_name, to_id = resolve_target(to)
+        if request.url.path.endswith("/files/by-id") and not to_id:
+            raise HTTPException(status_code=400, detail="an explicit target participant ID is required")
+        to_name, to_id = resolve_target(to, to_id)
 
         # A worker-delivered upload carries its outbox id: the file id is
         # derived from it per sender, so an uncertain retry shares it once.
@@ -1229,7 +1247,7 @@ def create_app(
             record = await asyncio.to_thread(
                 store.add_file, file_id, name=name, size=size, sha256=digest.hexdigest(),
                 sender=user.name, recipient=to_name or None, room=room or DEFAULT_ROOM,
-                audience=audience,
+                sender_id=user.id, recipient_id=to_id or None, audience=audience,
             )
         except sqlite3.IntegrityError:
             # A concurrent retry of this delivery won the insert (store.add_file
@@ -1272,7 +1290,11 @@ def create_app(
         if not _blob(file_id).exists():
             return
         to_name = record.get("recipient")
-        to_id = resolve_target(to_name)[1] if to_name else None
+        to_id = record.get("recipient_id") if to_name else None
+        if to_name and not to_id:
+            # A legacy private upload without trustworthy identity evidence is
+            # not a room announcement and cannot be readdressed by its label.
+            return
         await hub.publish(Envelope(
             kind=KIND_FILE, sender=user.name, sender_id=user.id,
             to=to_name or None, to_id=to_id,
@@ -1325,7 +1347,7 @@ def create_app(
             await asyncio.to_thread(_remove, file_id, "collected", acked_by=user.name)
             await hub.publish(Envelope(
                 kind=KIND_FILE, sender=user.name, sender_id=user.id,
-                to=record["sender"], to_id=store.resolve_name(record["sender"]) or "",
+                to=record["sender"], to_id=record.get("sender_id") or "",
                 body={"action": "received", "id": file_id, "name": record["name"],
                       "by": user.name, "collected": 1, "remaining": 0, "deleted": True},
             ))
@@ -1335,7 +1357,7 @@ def create_app(
         # The sender's own ack is not a collection: they have the file already,
         # and counting them would let a file shared with an empty room be
         # completed by the one person who never needed it.
-        new = user.name != record["sender"] and await asyncio.to_thread(
+        new = user.id != record.get("sender_id") and await asyncio.to_thread(
             store.record_collection, file_id, user.id)
         progress = await asyncio.to_thread(store.file_progress, file_id)
         # Complete when everyone awaited has it — and only when somebody WAS
@@ -1363,7 +1385,7 @@ def create_app(
         record = store.get_file(file_id)
         if record is None:
             raise HTTPException(status_code=404, detail="no such file")
-        if record["sender"] != user.name and not user.is_host:
+        if record.get("sender_id") != user.id and not user.is_host:
             raise HTTPException(status_code=403, detail="only the sender or the host can withdraw a file")
         with contextlib.suppress(OSError):
             _blob(file_id).unlink()

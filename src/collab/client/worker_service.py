@@ -136,7 +136,7 @@ class Conversation:
             # `worker off` holds its queue, so only an enabled worker's is sent.
             if ((cfg or {}).get("enabled") and self.daemon._http is not None
                     and (self.delivery is None or self.delivery.done())
-                    and any(r.get("retry_at", 0) <= time.time() for r in store.outbox())):
+                    and any(not r.get("identity_quarantined") and r.get("retry_at", 0) <= time.time() for r in store.outbox())):
                 self.delivery = asyncio.create_task(self._flush_outbox_only(store, generation))
             return
         if not cfg or not cfg.get("enabled") or generation != self.generation:
@@ -156,7 +156,7 @@ class Conversation:
                                            type(self.delivery.exception()).__name__)
                     self.delivery = None
                 if (self.delivery is None and self.daemon._http is not None
-                        and any(row.get("retry_at", 0) <= time.time() for row in store.outbox())):
+                        and any(not row.get("identity_quarantined") and row.get("retry_at", 0) <= time.time() for row in store.outbox())):
                     self.delivery = asyncio.create_task(self._flush(store, generation))
                 return
             # turn() records failures; retrieving the result prevents a silent
@@ -177,7 +177,7 @@ class Conversation:
             # Provider backoff and the model budget govern inference, not
             # delivery. A main-agent handoff must still leave the outbox while
             # the model is unavailable or its next allowance is an hour away.
-            if any(row.get("retry_at", 0) <= time.time() for row in store.outbox()):
+            if any(not row.get("identity_quarantined") and row.get("retry_at", 0) <= time.time() for row in store.outbox()):
                 self.task = asyncio.create_task(self._deliver_only(store, generation))
             return
         self.task = asyncio.create_task(self.turn())
@@ -201,6 +201,8 @@ class Conversation:
     async def _flush_locked(self, store, generation, *, require_enabled: bool = True) -> None:
         attempts = 0
         for message in store.outbox():
+            if message.get("identity_quarantined"):
+                continue
             if message.get("retry_at", 0) > time.time():
                 continue
             current = store.snapshot()
@@ -209,6 +211,16 @@ class Conversation:
                 return
             attempts += 1
             try:
+                if message.get("to") and not message.get("to_id"):
+                    # Old explicit sends and old human answers were persisted
+                    # identically. Recovering an identity from today's holder
+                    # of that name would leak either; retain both for review.
+                    people = getattr(self.daemon, "snapshot", {}).get("participants", [])
+                    observed = {person.get("id") for person in people[:500]
+                                if isinstance(person, dict) and person.get("name") == message["to"]
+                                and isinstance(person.get("id"), str) and person["id"]}
+                    store.quarantine_target(message["id"], current_id=next(iter(observed)) if len(observed) == 1 else "")
+                    continue
                 # The success status is the acknowledgement. Eager .post()
                 # buffered an unbounded body from a broken hub, although no
                 # response field was used. Close the stream after its headers;
@@ -216,7 +228,8 @@ class Conversation:
                 timeout = setting("worker_delivery_timeout")
                 if message.get("kind") == "file":
                     status = await self._upload(message, timeout=setting("worker_delivery_timeout") * 8)
-                    if 400 <= status < 500 and status not in (401, 408, 425, 429):
+                    if (400 <= status < 500 and status not in (401, 408, 425, 429)
+                            and not (status == 404 and message.get("to_id"))):
                         store.reject(message["id"], reason=f"hub answered {status}")
                     elif status >= 400:
                         raise RuntimeError(f"upload answered {status}")
@@ -230,6 +243,10 @@ class Conversation:
                         "subject": message["subject"], "id": message["subject_id"],
                         "text": message["text"], "collab_worker_delivery": message["id"]}
                 else:
+                    public_decision = (message.get("decision_public") is True
+                                       and message.get("room") and not message.get("to"))
+                    if message.get("decision_delivery") and not (message.get("to_id") or public_decision):
+                        raise ValueError("decision delivery has no verified peer identity")
                     route, payload = "messages", {
                         "kind": "chat", "text": message["text"],
                         "to": message.get("to") or None,
@@ -237,12 +254,17 @@ class Conversation:
                         "thread": message.get("thread") or None,
                         "body": {**(message.get("body") or {}),
                                  "collab_worker_delivery": message["id"]}}
+                    if message.get("to_id"):
+                        payload["to_id"] = message["to_id"]
+                        route = "messages/by-id"
                 async def acknowledge():
                     async with self.daemon._http.stream(
                         "POST", f"{self.daemon.profile.url}{EXT_PREFIX}/{route}",
                         headers=request_headers(self.daemon.profile.token),
                         json=payload, timeout=timeout) as response:
-                        if 400 <= response.status_code < 500 and response.status_code not in (401, 408, 425, 429):
+                        if (400 <= response.status_code < 500
+                                and response.status_code not in (401, 408, 425, 429)
+                                and not (route == "messages/by-id" and response.status_code == 404)):
                             store.reject(message["id"], reason=f"hub answered {response.status_code}")
                             return
                         response.raise_for_status()
@@ -274,9 +296,13 @@ class Conversation:
             if data is None:
                 return 422  # the private copy changed: never send different bytes
             params = {k: message[k] for k in ("to", "room") if message.get(k)}
+            route = "files"
+            if message.get("to_id"):
+                params["to_id"] = message["to_id"]
+                route = "files/by-id"
             params["delivery"] = message["id"]  # the hub stores a retried upload once
             response = await self.daemon._http.post(
-                f"{self.daemon.profile.url}{EXT_PREFIX}/files",
+                f"{self.daemon.profile.url}{EXT_PREFIX}/{route}",
                 headers=request_headers(self.daemon.profile.token), params=params,
                 files={"file": (message["name"], data, "application/octet-stream")}, timeout=timeout)
             return response.status_code
@@ -351,7 +377,12 @@ class Conversation:
                         summary=snapshot["summary"], replies=[], escalations=[{
                             "reason": "scope", "seq": event.seq,
                             "question": f"Message #{event.seq} exceeds the worker input limit. Inspect it with collab recv before answering; supply a concise decision and valid reply routing."}],
-                        expected_generation=snapshot["generation"], expected_turn=snapshot["turn"])
+                        expected_generation=snapshot["generation"], expected_turn=snapshot["turn"],
+                        decision_sources={event.seq: {
+                            "sender_id": getattr(event, "sender_id", "") or "",
+                            "sender": event.sender, "room": event.room or "",
+                            "broadcast": not (event.to or getattr(event, "to_id", None)),
+                        }})
                     self._delivery_health(store, snapshot["generation"])
                     return
                 size += candidate_size
@@ -365,6 +396,12 @@ class Conversation:
             cursor = events[-1].seq if events else snapshot["cursor"]
             contexts = _page(snapshot["context"])
             answers = _page([self._source(row) for row in snapshot["answers"]])
+            if any(answer.get("prompt", {}).get("seq", 0)
+                   and not (answer.get("prompt", {}).get("decision_source") or {}).get("sender_id")
+                   for answer in answers):
+                # Never spend a model turn or consume a legacy answer before
+                # its original private recipient can be established.
+                raise ValueError("human answer has no verified original peer identity")
             if not selected and not contexts and not answers:
                 if cursor != snapshot["cursor"]:
                     store.commit_turn(expected_cursor=snapshot["cursor"], cursor=cursor,
@@ -431,10 +468,26 @@ class Conversation:
                 store.budget(limit=setting("worker_max_attempts"), window=setting("worker_budget_window")),
                 limit=setting("worker_max_attempts"), gap=setting("worker_turn_gap"))
             store.health(running=True, expected_generation=snapshot["generation"])
+            # Freeze the principal mapping before the awaited model call. A
+            # rename while it runs must not redirect its queued private text.
+            prompt_targets = {}
+            prompt_sequences = {}
+            for person in self.daemon.snapshot.get("participants", []):
+                if person.get("name") and person.get("id"):
+                    prompt_targets.setdefault(person["name"], set()).add(person["id"])
+            selected_seqs = {entry["seq"] for entry in selected}
+            for event in events:
+                if event.seq in selected_seqs:
+                    prompt_targets.setdefault(event.sender, set()).add(getattr(event, "sender_id", "") or "")
+                    prompt_sequences.setdefault(event.sender, set()).add(event.seq)
+            for answer in answers:
+                source = answer.get("prompt", {}).get("decision_source") or {}
+                prompt_targets.setdefault(source.get("sender", ""), set()).add(source.get("sender_id") or "")
+                prompt_sequences.setdefault(source.get("sender", ""), set()).add(answer.get("prompt", {}).get("seq", 0))
             result = await worker_runtime.run_turn(
                 cfg["agent"], (setting(f"worker_{cfg['agent']}_model") if cfg.get("model_default") else cfg.get("model", "")), payload, self.root / "worker-runtime",
                 command=cfg.get("command") or None, timeout=setting("worker_timeout"), on_usage=store.record_usage)
-            known = {p.get("name") for p in self.daemon.snapshot.get("participants", [])}
+            known = set(prompt_targets)
             known.update(e["sender"] for e in selected)
             known.update(a["source"]["sender"] for a in answers if "source" in a)
             valid_seqs = {0, *(e["seq"] for e in selected),
@@ -495,6 +548,33 @@ class Conversation:
                 result, selected, pending_now,
                 answered={a["source"]["sender"]: int(a["source"].get("seq") or 0)
                           for a in answers if a.get("source", {}).get("sender")})
+            for reply in result["replies"]:
+                candidates = prompt_targets.get(reply.get("to"), set())
+                if len(candidates) != 1 or not next(iter(candidates), ""):
+                    raise ValueError("worker reply has no unique original peer identity")
+                sequences = prompt_sequences.get(reply.get("to"), set())
+                reply.update(to_id=next(iter(candidates)), decision_delivery=True,
+                             source_seq=next(iter(sequences)) if len(sequences) == 1 else 0)
+            if answers and result["replies"]:
+                # A human instruction can contain private text too. Match its
+                # original event identity, not the current roster's name map.
+                # Missing or conflicting provenance leaves answers durable;
+                # refusing this turn is safer than guessing which peer owns it.
+                targets = {}
+                source_rooms = {}
+                for answer in answers:
+                    source = answer.get("prompt", {}).get("decision_source") or {}
+                    name, ident = source.get("sender"), source.get("sender_id")
+                    if not name or not ident:
+                        raise ValueError("human answer has no verified original peer identity")
+                    targets.setdefault(name, set()).add(ident)
+                    source_rooms.setdefault(name, set()).add(source.get("room") or "")
+                for reply in result["replies"]:
+                    candidates = targets.get(reply.get("to"), set())
+                    if (len(candidates) != 1 or (reply.get("room")
+                            and reply["room"] not in source_rooms.get(reply.get("to"), set()))):
+                        raise ValueError("human answer reply has ambiguous or unrelated routing")
+                    reply.update(to_id=next(iter(candidates)), decision_delivery=True)
             committed = store.commit_turn(
                 expected_cursor=snapshot["cursor"], cursor=cursor,
                 summary=result["summary"], replies=result["replies"],
@@ -503,7 +583,13 @@ class Conversation:
                     self.daemon.profile.name, self.daemon.profile.participant_id),
                 context_ids=[row["id"] for row in contexts],
                 answer_ids=[row["id"] for row in answers],
-                expected_generation=snapshot["generation"], expected_turn=snapshot["turn"])
+                expected_generation=snapshot["generation"], expected_turn=snapshot["turn"],
+                decision_sources={event.seq: {
+                    "sender_id": getattr(event, "sender_id", "") or "",
+                    "sender": event.sender,
+                    "room": event.room or "",
+                    "broadcast": not (event.to or getattr(event, "to_id", None)),
+                } for event in events if event.seq <= cursor})
             if not committed:
                 return
             await self._flush(store, snapshot["generation"])

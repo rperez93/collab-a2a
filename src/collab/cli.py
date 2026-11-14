@@ -1432,19 +1432,16 @@ def cmd_send(args: argparse.Namespace) -> int:
     from .worker import Store
     store = Store(profile.dir)
     if store.enabled():
-        if args.to:
-            # A direct post failed at once on an unknown name; a queued one
-            # would retry forever. Ask the hub first; offline still queues.
-            try:
-                with _client(profile) as client:
-                    names = {p.get("name") for p in client.participants().get("participants", [])}
-                if names and args.to not in names:
-                    fail(f"no participant named {args.to!r} in this session")
-                    return 1
-            except HubError:
-                pass
+        target_id = ""
         try:
-            record_id = store.send(text, to=args.to or "",
+            if args.to:
+                with _client(profile) as client:
+                    target_id = client.resolve_recipient(args.to)
+        except HubError as exc:
+            fail(str(exc))
+            return 1
+        try:
+            record_id = store.send(text, to=args.to or "", to_id=target_id,
                                    room="" if args.to else (args.room or profile.room or ""),
                                    thread=args.thread or "")
         except ValueError as exc:
@@ -3737,7 +3734,8 @@ def cmd_file(args: argparse.Namespace) -> int:
                 if getattr(profile, "dir", None) and Store(profile.dir).enabled():
                     # R3: the worker is this participant's one voice while it is on.
                     record_id = Store(profile.dir).queue_file(
-                        path, to=args.to or "", room="" if args.to else (args.room or profile.room or "general"))
+                        path, to=args.to or "", to_id=client.resolve_recipient(args.to) if args.to else "",
+                        room="" if args.to else (args.room or profile.room or "general"))
                     try:
                         onboard.ensure_daemon(profile, wait=False)
                     except (OSError, RuntimeError, HubError):
@@ -6390,6 +6388,13 @@ def cmd_worker(args: argparse.Namespace) -> int:
                 try:
                     with _client(profile) as client:
                         for record in queued:
+                            if record.get("to") and not record.get("to_id"):
+                                try:
+                                    observed_id = client.resolve_recipient(record["to"])
+                                except HubError:
+                                    observed_id = ""
+                                store.quarantine_target(record["id"], current_id=observed_id)
+                                raise HubError("legacy targeted delivery was quarantined for explicit recipient reconfirmation")
                             if record.get("kind") == "file":
                                 import hashlib
                                 stash = Path(record["stash"])
@@ -6397,7 +6402,7 @@ def cmd_worker(args: argparse.Namespace) -> int:
                                     raise HubError(f"queued file {record.get('name')!r} changed since it "
                                                    "was queued; not sending different bytes")
                                 client.upload_file(stash, to=record.get("to") or None,
-                                                   room=None if record.get("to") else (record.get("room") or None),
+                                                   to_id=record.get("to_id") or None, room=None if record.get("to") else (record.get("room") or None),
                                                    delivery=record["id"])
                                 store.acknowledge(record["id"])
                                 continue
@@ -6407,8 +6412,11 @@ def cmd_worker(args: argparse.Namespace) -> int:
                                     "text": record["text"], "collab_worker_delivery": record["id"]})
                                 store.acknowledge(record["id"])
                                 continue
+                            if record.get("decision_delivery") and not (record.get("to_id") or (
+                                    record.get("decision_public") and not record.get("to") and record.get("room"))):
+                                raise HubError("decision reply has no bound participant ID; queued text was not sent")
                             client.send(Envelope(kind=KIND_CHAT, text=record["text"], sender=profile.name,
-                                                 to=record.get("to") or None,
+                                                 to=record.get("to") or None, to_id=record.get("to_id") or None,
                                                  room=None if record.get("to") else (record.get("room") or None),
                                                  thread=record.get("thread") or None,
                                                  body={**(record.get("body") or {}),
@@ -6458,7 +6466,11 @@ def cmd_worker(args: argparse.Namespace) -> int:
             store.context(args.text)
             ok("context queued for the collaboration worker")
         elif args.worker_action == "send":
-            record_id = store.send(args.text, to=args.to, room=args.room or '')
+            target_id = ""
+            if args.to:
+                with _client(profile) as client:
+                    target_id = client.resolve_recipient(args.to)
+            record_id = store.send(args.text, to=args.to, to_id=target_id, room=args.room or '')
             onboard.ensure_daemon(profile)
             ok(f"message queued for worker delivery: {record_id}")
             print("  `collab worker status` shows pending delivery and retry errors")
@@ -7360,7 +7372,7 @@ def _skill_requests(client, profile) -> list[dict[str, Any]]:
     for env in events:
         reply = (env.body or {}).get("skill_response")
         if mine(env, "sender", "sender_id") and isinstance(reply, dict) and reply.get("state") in SKILL_STATES:
-            states[(str(reply.get("id")), env.to)] = reply["state"]
+            states[(str(reply.get("id")), env.to_id)] = reply["state"]
     from datetime import datetime, timezone
     from .skill_sharing import NAME_RE
     found, seen = [], set()
@@ -7376,7 +7388,7 @@ def _skill_requests(client, profile) -> list[dict[str, Any]]:
                 or not isinstance(skill, str) or not NAME_RE.fullmatch(skill)
                 or not isinstance(args, str)):
             continue
-        key = (request_id, env.sender)
+        key = (request_id, env.sender_id)
         if key in seen:
             continue
         seen.add(key)
@@ -7388,7 +7400,7 @@ def _skill_requests(client, profile) -> list[dict[str, Any]]:
         state = states.get(key, "pending")
         if state == "pending" and age > SKILL_REQUEST_TTL:
             state = "expired"
-        found.append({"id": request_id, "from": env.sender, "skill": skill,
+        found.append({"id": request_id, "from": env.sender, "from_id": env.sender_id, "skill": skill,
                       "args": args[:4000], "seq": env.seq, "state": state})
     return found
 
@@ -7488,6 +7500,8 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
                 raise ValueError("only an accepted request can be reported done")
             if args.action in ("accept", "decline") and match["state"] != "pending":
                 raise ValueError(f"request {args.target} is already {match['state']}")
+            if not match.get("from_id"):
+                raise ValueError("request has no verified requester identity; ask the peer to resend")
             if args.action == "accept" and not _human_consents(match, args):
                 return 1
             state = {"accept": "accepted", "decline": "declined", "done": "done"}[args.action]
@@ -7495,7 +7509,7 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
                      "declined": f"declined your request to run `{match['skill']}`",
                      "done": f"ran `{match['skill']}`"}[state]
             client.send(Envelope(kind=KIND_CHAT, text=words + (f": {rest}" if rest else "."),
-                                 sender=profile.name, to=match["from"],
+                                 sender=profile.name, to=match["from"], to_id=match["from_id"],
                                  body={"skill_response": {"id": match["id"], "state": state,
                                                           "text": rest[:4000]}}))
             ok(f"{state}: {said(match['id'])}")

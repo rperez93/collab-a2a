@@ -338,6 +338,10 @@ def test_main_send_while_worker_enabled_is_queued_not_posted(tmp_path, monkeypat
         def __enter__(self): return self
         def __exit__(self, *exc): return False
         def participants(self): return {'participants': [{'name': 'alice'}, {'name': 'bob'}]}
+        def resolve_recipient(self, name):
+            if name != 'bob':
+                raise cli.HubError('unknown synthetic recipient')
+            return 'p_bob'
         def send(self, env): raise AssertionError('posted directly')
     monkeypatch.setattr(cli, '_client', lambda p: Hub())
     store = worker.Store(profile.dir)
@@ -401,7 +405,7 @@ def test_worker_off_delivers_queued_sends_first(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, '_client', lambda p: Hub())
     store = worker.Store(profile.dir)
     store.configure({'agent': 'claude', 'scope': 'Coordinate'})
-    record = store.send('last word', to='bob')
+    record = store.send('last word', to='bob', to_id='p_bob')
     assert cli.cmd_worker(argparse.Namespace(worker_action='off')) == 0
     assert [e.text for e in sent] == ['last word']
     assert sent[0].body['collab_worker_delivery'] == record
@@ -431,7 +435,7 @@ def test_file_send_while_worker_enabled_is_queued_as_a_private_copy(tmp_path, mo
     monkeypatch.setattr(cli, '_require_own_profile', lambda a: profile)
     monkeypatch.setattr(cli, '_require_profile', lambda a: profile)
     monkeypatch.setattr(onboard, 'ensure_daemon', lambda p, **kw: None)
-    client = SimpleNamespace(upload_file=lambda *a, **k: (_ for _ in ()).throw(AssertionError('posted directly')))
+    client = SimpleNamespace(resolve_recipient=lambda name: 'p_bob', upload_file=lambda *a, **k: (_ for _ in ()).throw(AssertionError('posted directly')))
     monkeypatch.setattr(cli, '_client', lambda p: contextlib.nullcontext(client))
     store = worker.Store(profile.dir)
     store.configure({'agent': 'claude', 'scope': 'Coordinate'})
@@ -473,7 +477,8 @@ def test_reply_awaiting_human_tells_the_asking_peer_and_keeps_the_decision(tmp_p
     store.configure({'agent': 'claude', 'scope': 'Coordinate'})
     snap = store.snapshot()
     store.commit_turn(expected_cursor=snap['cursor'], cursor=7, summary='', replies=[],
-                      escalations=[{'reason': 'decision', 'question': 'Bob asks to merge', 'seq': 7}])
+                      escalations=[{'reason': 'decision', 'question': 'Bob asks to merge', 'seq': 7}],
+                      decision_sources={7: {'sender': 'bob', 'sender_id': 'p_bob', 'room': '', 'broadcast': False}})
     decision_id = store.pending()[0]['id']
     args = argparse.Namespace(worker_action='reply', decision_id=decision_id,
                               text='My human is deciding.', awaiting_human=True)
@@ -499,7 +504,8 @@ def test_awaiting_human_on_a_room_question_answers_in_that_room(tmp_path, monkey
     store.configure({'agent': 'claude', 'scope': 'Coordinate'})
     snap = store.snapshot()
     store.commit_turn(expected_cursor=snap['cursor'], cursor=4, summary='', replies=[],
-                      escalations=[{'reason': 'decision', 'question': 'Ship today?', 'seq': 4}])
+                      escalations=[{'reason': 'decision', 'question': 'Ship today?', 'seq': 4}],
+                      decision_sources={4: {'sender': 'bob', 'sender_id': 'p_bob', 'room': 'ops', 'broadcast': True}})
     args = argparse.Namespace(worker_action='reply', decision_id=store.pending()[0]['id'],
                               text='Deciding with my human.', awaiting_human=True)
     assert cli.cmd_worker(args) == 0
@@ -540,7 +546,8 @@ def test_reply_verbatim_and_instruct_choose_who_words_the_answer(tmp_path, monke
     for _ in range(2):
         snap = store.snapshot()
         store.commit_turn(expected_cursor=snap['cursor'], cursor=3, summary='', replies=[],
-                          escalations=[{'reason': 'decision', 'question': f'Ship? {_}', 'seq': 3}])
+                          escalations=[{'reason': 'decision', 'question': f'Ship? {_}', 'seq': 3}],
+                          decision_sources={3: {'sender': 'bob', 'sender_id': 'p_bob', 'room': '', 'broadcast': False}})
     first, second = [p['id'] for p in store.pending()]
     def reply(i, text, **flags):
         args = argparse.Namespace(worker_action='reply', decision_id=i, text=text, awaiting_human=False,
