@@ -284,3 +284,56 @@ def test_the_hub_validates_and_names_participants_by_id(client, host_headers):
     tag = first.headers["etag"]
     again = client.get("/ext/collab/v1/participant-skills", headers={**host_headers, "If-None-Match": tag})
     assert again.status_code == 304
+
+
+def test_a_future_quota_stamp_cannot_make_an_old_report_fresh():
+    import time
+    now = time.time()
+    snap = {"participants": [{"name": "p", "stats": {"reported_at": now - 7 * 3600,
+                                                      "quota_observed_at": now + 3600,
+                                                      "quotas": {"5h": {"used_pct": 10}}}}]}
+    assert dashboard_rows(snap, None)[0]["quota_stale"]
+
+
+def test_staleness_follows_the_configured_threshold():
+    import time
+    from collab import runtime_settings, config
+    config.set_stats_stale_after(60) if hasattr(config, "set_stats_stale_after") else \
+        runtime_settings.set_value("stats_stale_after", 60)
+    snap = {"participants": [{"name": "p", "stats": {"reported_at": time.time() - 120,
+                                                      "quotas": {"5h": {"used_pct": 10}}}}]}
+    assert dashboard_rows(snap, None)[0]["quota_stale"], "120 s old is stale under a 60 s threshold"
+
+
+@pytest.mark.asyncio
+async def test_the_read_limit_holds_without_content_length_and_is_checked_from_the_header(tmp_path, monkeypatch):
+    import httpx
+    from types import SimpleNamespace
+    from collab.client import daemon as d
+    from collab.client.daemon_files import DaemonPaths
+    paths = DaemonPaths(tmp_path)
+    paths.root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(d, "SKILLS_MAX_BYTES", 64)
+    seen = []
+    def streamed(request):
+        seen.append(dict(request.headers))
+        async def chunks():
+            yield b'{"participants": [' + b'1,' * 40
+            yield b'1,' * 40 + b'1]}'
+        return httpx.Response(200, content=chunks())        # no Content-Length
+    fake = SimpleNamespace(profile=SimpleNamespace(url="http://hub", token="t"), paths=paths,
+                           _skills_etag='W/"stale"')
+    async with httpx.AsyncClient(transport=httpx.MockTransport(streamed)) as client:
+        await d.Daemon._fetch_skills(fake, client, ("s",))
+    assert not paths.skills.exists() and fake._skills_retry_at > 0, "cap enforced while streaming"
+    assert seen[0].get("accept-encoding") == "identity"
+    assert "if-none-match" not in seen[0], "no cache on disk: no ETag sent"
+    declared = lambda r: httpx.Response(200, content=b'{"participants": []}',
+                                        headers={"content-length": "999999"})
+    fake._skills_retry_at = 0
+    async with httpx.AsyncClient(transport=httpx.MockTransport(declared)) as client:
+        try:
+            await d.Daemon._fetch_skills(fake, client, ("s",))
+        except Exception:
+            pass
+    assert not paths.skills.exists(), "a declared size over the limit is refused before reading"
