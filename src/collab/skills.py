@@ -300,7 +300,7 @@ def install_shared(record: dict, *, target: Target, session_id: str, force: bool
     import time as _time
     from .skill_sharing import validate_publication
     import fcntl
-    clean = validate_publication({k: record.get(k) for k in ("name", "description", "content", "sha256")})
+    clean = validate_publication({k: record.get(k) for k in ("name", "description", "content", "sha256", "files")})
     target.path.mkdir(parents=True, exist_ok=True)
     # Check and swap under one lock: concurrent installs raced, and a second
     # publisher could replace the first between the check and the rename.
@@ -325,10 +325,19 @@ def _install_locked(record, clean, *, target: Target, session_id: str, force: bo
     try:
         (fresh / "SKILL.md").write_text(text, encoding="utf-8")
         (fresh / "SKILL.md").chmod(0o644)
+        for item in clean.get("files", []):
+            # Validated relative paths, written into a directory this call just
+            # created: nothing here can be a symlink planted by someone else.
+            path = fresh / item["path"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(item["content"], encoding="utf-8")
+            path.chmod(0o644)
         provenance = {"session_id": session_id, "publisher": record.get("owner", ""),
                       "publisher_id": record.get("owner_id", ""), "publication_id": record.get("id", ""),
                       "name": clean["name"], "sha256": clean["sha256"],
                       "installed_sha256": hashlib.sha256(text.encode()).hexdigest(),
+                      "files": [{"path": f["path"], "sha256": f["sha256"]} for f in clean.get("files", [])],
+                      "manifest_sha256": clean.get("manifest_sha256", ""),
                       "installed_at": _time.time()}
         (fresh / PROVENANCE).write_text(_json.dumps(provenance, indent=2), encoding="utf-8")
         fresh.chmod(0o755)

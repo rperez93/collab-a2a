@@ -182,7 +182,7 @@ class HubClient:
     def publish_skill(self, publication: dict[str, Any]) -> dict[str, Any]:
         from ..skill_sharing import validate_publication
         return self._bounded_request("POST", f"{EXT_PREFIX}/shared-skills",
-                                     body=validate_publication(publication), maximum=64 * 1024,
+                                     body=validate_publication(publication), maximum=1024 * 1024,
                                      label='skill publication')
 
     def participant_skills(self) -> dict[str, Any]:
@@ -199,8 +199,10 @@ class HubClient:
             raise ValueError("invalid shared skill ID")
         from ..skill_sharing import validate_publication
         data = self._bounded_get(f"{EXT_PREFIX}/shared-skills/{skill_id}", params={},
-                                 maximum=512 * 1024, label='shared skill')
-        validate_publication(data.get('skill'))
+                                 maximum=2 * 1024 * 1024, label='shared skill')
+        # The normalized record (computed hashes, sorted files) is what the
+        # manifest, the review and the consent binding must all see.
+        data['skill'] = {**data['skill'], **validate_publication(data.get('skill'))}
         return data
 
     def withdraw_skill(self, skill_id: str) -> dict[str, Any]:
