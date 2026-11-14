@@ -2154,7 +2154,7 @@ def _describe_pr_evidence(pr: dict) -> None:
         if pr.get(field):
             print(f"    {field}: {said(pr[field])}")
     if pr.get("head_observed_at"):
-        print(f"    head observed at: {said(pr['head_observed_at'])}")
+        print(f"    head observed at: {said(str(pr['head_observed_at']))}")
 
 
 def _task_review_warning(task: dict) -> None:
