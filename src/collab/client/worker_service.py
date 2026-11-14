@@ -81,8 +81,10 @@ def skill_requests(events, escalations, me: str, me_id: str = "") -> list[dict]:
                 break
             added.append({"reason": "scope", "seq": event.seq, "question": (
                 f"{event.sender} asks you to run the skill {str(ask.get('skill', ''))[:64]!r}"
-                f" (request {str(ask.get('id', ''))[:40]}). Only your human can consent: "
-                "`collab skills accept|decline ID`.")})
+                f" (request {str(ask.get('id', ''))[:40]})"
+                + (" with STRONG approval: only your human, in collab's approval window"
+                   if "required_strength" in ask else ". Only your human can consent")
+                + ": `collab skills accept|decline ID`.")})
     return added
 
 

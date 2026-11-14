@@ -1031,11 +1031,25 @@ options:
   --session SESSION     act on this session id instead of the current one
 ```
 
+## consent
+
+```text
+usage: collab consent [-h] [--json] [--session SESSION] {enrol,keys}
+
+positional arguments:
+  {enrol,keys}
+
+options:
+  -h, --help         show this help message and exit
+  --json             with keys: structured output
+  --session SESSION  act on this session id instead of the current one
+```
+
 ## skills
 
 ```text
 usage: collab skills [-h] [--to TO] [--args ARGS] [--note NOTE]
-                     [--human-approved] [--name NAME]
+                     [--human-approved] [--strong] [--name NAME]
                      [--description DESCRIPTION] [--after AFTER]
                      [--limit LIMIT] [--session SESSION] [--agent NAME]
                      [--copy] [--force] [--all] [--json]
@@ -1053,7 +1067,10 @@ options:
   --args ARGS           with ask: arguments for the requested skill
   --note NOTE           with accept/decline/done: a reason or the result
   --human-approved      with accept, without a terminal: your human has
-                        explicitly consented
+                        explicitly consented (never enough for a strong
+                        request)
+  --strong              with ask: require strong approval, a human gesture
+                        checked by the hub
   --name NAME           published skill name override
   --description DESCRIPTION
                         published skill description override

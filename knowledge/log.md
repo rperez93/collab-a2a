@@ -1,5 +1,8 @@
 # Bundle Update Log
 
+## 2026-11-14 (R22b client)
+* **Update (later than the pin)**: Recorded in [the command surface](operating/cli-surface.md) the client half of strong approval — `collab consent enrol|keys`, `collab skills ask --strong`, and that a strong request is accepted only through the hub's review and a Hello gesture, never `--human-approved` or a chat reply. The pin and verification stamps are unchanged.
+
 ## 2026-11-14 (default name)
 * **Update (later than the pin)**: Recorded in [state ownership](architecture/state-ownership.md) that the default display name no longer comes from git's `user.name` or `$USER` — a legacy machine name is adopted once, else the agent kind and a stable suffix. The pin and verification stamps are unchanged.
 
