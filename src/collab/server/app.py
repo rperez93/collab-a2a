@@ -1305,10 +1305,13 @@ def create_app(
         ))
 
     @app.get(f"{EXT_PREFIX}/files", tags=["collab"])
-    async def list_files(request: Request) -> dict[str, Any]:
+    async def list_files(request: Request, all: bool = False) -> dict[str, Any]:
         user = _require(request)
         _sweep_expired()
-        visible = [f for f in store.files()
+        # `all` adds files that already ended (collected, expired, withdrawn),
+        # each with its state: a sender who no longer sees a file in the list
+        # can learn why instead of suspecting it was lost.
+        visible = [f for f in store.files(include_gone=all)
                    if _may_touch(f, user.id)]
         return {"files": [_file_view(f) for f in visible]}
 

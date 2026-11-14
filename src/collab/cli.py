@@ -3766,21 +3766,29 @@ def cmd_file(args: argparse.Namespace) -> int:
                 return 0
 
             if args.action == "list":
-                files = client.list_files()
+                show_all = bool(getattr(args, "all", False))
+                everything = client.list_files(include_ended=True)
+                # An older hub ignores the flag and returns only available files.
+                ended = [f for f in everything if f.get("state", "available") != "available"]
+                files = everything if show_all else [f for f in everything if f not in ended]
                 if args.json:
                     print(json.dumps(files, indent=2))
                     return 0
                 if not files:
                     print(dim("  no files waiting"))
-                    return 0
                 for f in files:
                     # The name, sender, recipient and room all come from the
                     # hub and are printed straight to the terminal, so they are
                     # scrubbed of control characters first. See protocol.scrub.
                     who = (f"→ {scrub(str(f['recipient']))}" if f["recipient"]
                            else f"#{scrub(str(f['room']))}")
+                    state = f.get("state", "available")
+                    gone = "" if state == "available" else dim(f"  [{scrub(str(state))}]")
                     print(f"  {f['id']}  {scrub(str(f['name']))}  "
-                          f"{_file_size(f['size'])}  from {scrub(str(f['sender']))} {who}")
+                          f"{_file_size(f['size'])}  from {scrub(str(f['sender']))} {who}{gone}")
+                if ended and not show_all:
+                    print(dim(f"  {len(ended)} more ended (collected, expired or withdrawn) — "
+                              "`collab file list --all` shows them"))
                 return 0
 
             if args.action == "get":
@@ -8266,6 +8274,8 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--output", "-o", help="directory to save into (default: here)")
     f.add_argument("--keep", action="store_true",
                    help="do not confirm receipt, so the host keeps its copy")
+    f.add_argument("--all", action="store_true",
+                   help="list: include files that already ended (collected, expired, withdrawn)")
     f.add_argument("--json", action="store_true")
     add_session_flag(f)
     f.set_defaults(func=cmd_file)
