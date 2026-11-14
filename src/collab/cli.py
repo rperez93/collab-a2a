@@ -714,7 +714,7 @@ def cmd_host(args: argparse.Namespace) -> int:
     if getattr(args, 'tunnel', None):
         cfg.tunnel_mode = args.tunnel
         cfg.save()
-    env = {**os.environ, "COLLAB_HOME": cfg.home}
+    env = {**os.environ, "COLLAB_HOME": cfg.home, **config_module_kind_env()}
     if args.no_tunnel:
         env["COLLAB_NO_TUNNEL"] = "1"
 
@@ -6159,6 +6159,26 @@ def _shown(value: Any) -> str:
     return str(value)
 
 
+def config_module_kind_env() -> dict[str, str]:
+    """Spawned daemons and hubs must resolve the same agent kind as this CLI."""
+    from .config import current_kind
+    kind = current_kind()
+    return {"COLLAB_AGENT_KIND": kind} if kind else {}
+
+
+def _layer_note(name: str) -> str:
+    """Which layer a setting comes from, and an explicit empty said as such."""
+    from . import config as config_module
+    value, layer = config_module.resolve(name)
+    note = {"agent": "this agent", "kind": f"agent kind {config_module.current_kind() or '?'}",
+            "machine": ("shared by every agent here" if config_module.agent_scoped(name) else "machine"),
+            "legacy": "machine file has a legacy value it no longer applies",
+            "default": "default"}[layer]
+    if layer in ("agent", "kind", "machine") and value in ("", None):
+        note += ": disabled (explicit empty)"
+    return note
+
+
 def _say_if_a_retired_key_is_still_there() -> None:
     """One line for a key that was renamed, if the file still holds it.
 
@@ -6209,6 +6229,10 @@ def _cmd_config(args: argparse.Namespace) -> int:
     if kind is not None and args.key and not config_module.agent_scoped(args.key):
         fail(f"{args.key} belongs to the machine, not to an agent kind; drop --kind")
         return 2
+    if kind is not None and args.key in ("display_name", "color"):
+        # Identity is per agent: a kind-wide name renamed every agent of that kind.
+        fail(f"{args.key} is this agent's identity and cannot be shared by a kind; drop --kind")
+        return 2
     config_module.WRITE_KIND.update(on=kind is not None, key=getattr(args, "key", None),
                                     kind=(kind or config_module.current_kind()) if kind is not None else None)
     if getattr(args, "tui", False):
@@ -6240,13 +6264,7 @@ def _cmd_config(args: argparse.Namespace) -> int:
             line = f"  {item.name:<24}{_shown(value)}"
             if value != item.default:
                 line += dim(f"   (default {_shown(item.default)})")
-            source = config_module.setting_source(item.name)
-            if source == "legacy":
-                line += dim("   [machine file has a legacy value it no longer applies]")
-            elif config_module.agent_scoped(item.name) and source == "machine":
-                line += dim("   [shared by every agent here]")
-            elif source == "agent":
-                line += dim("   [this agent]")
+            line += dim(f"   [{_layer_note(item.name)}]")
             print(line)
             print(dim(f"      {item.about}"))
         print()
@@ -6322,6 +6340,7 @@ def _cmd_config(args: argparse.Namespace) -> int:
     if args.value is None:
         # Bare, on its own line, so `$(collab config theme)` is worth writing.
         print(_shown(item.read()))
+        print(dim(f"  from: {_layer_note(item.name)}"))
         print(dim(f"  {item.about}"))
         print(dim(f"  default {_shown(item.default)}"))
         print(dim(f"  collab config {item.name} <value>   set directly"))
@@ -8536,6 +8555,7 @@ def build_parser() -> argparse.ArgumentParser:
   collab config KEY --unset             restore the default
   collab config KEY VALUE --machine     set an agent setting as everyone's default
   collab config KEY VALUE --kind [KIND] keep it for every conversation of one agent kind
+                                        (not display_name or color: identity is per agent)
   collab config KEY --edit              edit interactively (terminal required)
   collab config --tui                   browse/edit; r resets to default
   collab config editor nano             choose vim, nvim, nano, or a command

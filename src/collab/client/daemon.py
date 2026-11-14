@@ -28,7 +28,7 @@ from httpx_sse import aconnect_sse
 from .. import (__version__, activity as act, diagnostics, lockfile,
                owner as ownership, peers, roster_clocks, wake)
 from ..batch import DELTA_SHOWN_FOR
-from ..config import (SessionProfile, follow_agent_enabled, repo_for_home,
+from ..config import (current_kind, SessionProfile, follow_agent_enabled, repo_for_home,
                       share_stats_enabled, stats_source)
 from ..compatibility import request_headers, check_host
 from ..protocol import (EXT_PREFIX, KIND_CHAT, KIND_HELLO, KIND_PRESENCE, KIND_ACTIVITY,
@@ -2933,7 +2933,8 @@ class Daemon:
             [sys.executable, "-m", "collab.hub_main", cfg.session_id],
             stdout=log, stderr=log, stdin=subprocess.DEVNULL,
             start_new_session=True,
-            env={**os.environ, "COLLAB_HOME": cfg.home},
+            env={**os.environ, "COLLAB_HOME": cfg.home,
+                 **({"COLLAB_AGENT_KIND": k} if (k := current_kind()) else {})},
         )
 
     # --- the feed --------------------------------------------------------------

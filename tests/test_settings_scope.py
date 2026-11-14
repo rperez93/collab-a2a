@@ -354,3 +354,96 @@ def test_kind_is_refused_for_a_machine_setting(capsys):
                               edit=False, machine=False, kind="codex")
     assert cli.cmd_config(args) == 2
     assert "belongs to the machine" in capsys.readouterr().err
+
+
+def _write_kind(key, value, kind="codex"):
+    config.WRITE_KIND.update(on=True, key=key, kind=kind)
+    try:
+        config.save_config({**config.load_config(), key: value})
+    finally:
+        config.WRITE_KIND.update(on=False, key=None, kind=None)
+
+
+def test_resolve_is_the_single_source_for_value_layer_and_explicitness(monkeypatch):
+    monkeypatch.setenv("COLLAB_AGENT_KIND", "codex")
+    config._KIND_CACHE.clear()
+    _write_kind("stats_command", "")       # explicit empty at the kind layer (M30)
+    assert config.resolve("stats_command") == ("", "kind")
+    assert config.set_by_this_agent("stats_command"), "present-but-empty is a choice, not an absence"
+    assert config.setting_source("stats_command") == "kind"
+    assert config.load_config()["stats_command"] == ""
+
+
+def test_kind_refused_for_identity_keys(capsys):
+    import argparse
+    from collab import cli
+    for key in ("display_name", "color"):
+        args = argparse.Namespace(key=key, value="x", unset=False, json=False, tui=False,
+                                  edit=False, machine=False, kind="codex")
+        assert cli.cmd_config(args) == 2
+        assert "identity" in capsys.readouterr().err
+
+
+def test_flags_reset_even_when_the_command_fails(monkeypatch):
+    """M29: WRITE_MACHINE/WRITE_KIND never leak into the next command."""
+    import argparse
+    from collab import cli
+    monkeypatch.setattr(cli, "_cmd_config", lambda a: (config.WRITE_KIND.update(on=True),
+                                                        config.WRITE_MACHINE.update(on=True),
+                                                        1 / 0))
+    with pytest.raises(ZeroDivisionError):
+        cli.cmd_config(argparse.Namespace())
+    assert not config.WRITE_KIND["on"] and not config.WRITE_MACHINE["on"]
+
+
+def test_editing_a_loaded_view_does_not_touch_the_cache(monkeypatch):
+    """M7: load_config hands out a copy; mutating it must not change the next load."""
+    first = config.load_config()
+    first["worker_retry_delay"] = 12345
+    first.setdefault("_nested", {})["x"] = 1
+    again = config.load_config()
+    assert again.get("worker_retry_delay") != 12345 and "_nested" not in again
+
+
+def test_the_layer_is_printed_including_explicit_empty(monkeypatch, capsys):
+    import argparse
+    from collab import cli
+    monkeypatch.setenv("COLLAB_AGENT_KIND", "codex")
+    config._KIND_CACHE.clear()
+    _write_kind("stats_command", "")
+    args = argparse.Namespace(key="stats_command", value=None, unset=False, json=False, tui=False,
+                              edit=False, machine=False, kind=None)
+    assert cli.cmd_config(args) == 0
+    assert "agent kind codex: disabled (explicit empty)" in capsys.readouterr().out
+
+
+def test_spawned_daemons_carry_the_agent_kind(monkeypatch, tmp_path):
+    from collab.client import onboard
+    monkeypatch.setenv("COLLAB_AGENT_KIND", "codex")
+    seen = {}
+    class P:
+        pid = 1
+    monkeypatch.setattr(onboard.subprocess, "Popen", lambda *a, **k: seen.update(k["env"]) or P())
+    from types import SimpleNamespace
+    # The composed resume path reads working_path before spawning. A fixture
+    # without it raised before Popen, hidden by the former broad except.
+    profile = SimpleNamespace(home=str(tmp_path), dir=tmp_path, session_id="s_test",
+                              working_path=str(tmp_path))
+    onboard.spawn_daemon(profile, follow=False)
+    assert seen.get("COLLAB_AGENT_KIND") == "codex"
+
+
+def test_the_agent_settings_path_is_reused_inside_two_seconds_and_re_resolved_after(tmp_path, monkeypatch):
+    """M12: a home selected mid-process is followed, within the 2 s cache window."""
+    for key in ("COLLAB_AGENT_CONFIG", "COLLAB_HOME", "COLLAB_STATE_DIR", *config.AGENT_SESSION_KEYS):
+        monkeypatch.delenv(key, raising=False)
+    homes = [tmp_path / "a", tmp_path / "b"]
+    current = {"home": homes[0], "now": 100.0}
+    monkeypatch.setattr(config, "collab_home", lambda: current["home"])
+    monkeypatch.setattr(config.time, "monotonic", lambda: current["now"])
+    config._AGENT_PATH.clear()
+    assert config.agent_config_path() == homes[0] / config.AGENT_SETTINGS
+    current.update(home=homes[1], now=101.5)
+    assert config.agent_config_path() == homes[0] / config.AGENT_SETTINGS, "reused inside the window"
+    current["now"] = 102.6
+    assert config.agent_config_path() == homes[1] / config.AGENT_SETTINGS, "re-resolved after it"
