@@ -879,3 +879,33 @@ async def test_a_local_skip_that_did_not_commit_writes_no_line(conversation, tmp
     await service.turn()
     row = json.loads(_worker_log(tmp_path).splitlines()[-1])
     assert (row["outcome"], row["escalation_count"]) == ("skipped-local", 1)
+
+
+@pytest.mark.asyncio
+async def test_every_ledger_line_names_its_attempt_with_an_opaque_id(
+        conversation, tmp_path, monkeypatch):
+    """R15 ties ledger lines to attempts by `attempt`: twelve hex characters,
+    present on every line — model attempts and local skips alike — different
+    for every attempt, and derived from nothing (no pid, no time, no content)."""
+    import re as _re
+    from collab.protocol import Envelope
+
+    service = conversation
+    _configure(service, tmp_path)
+
+    async def provider(*args, **kwargs):
+        return {"summary": "s", "replies": [], "escalations": []}
+
+    monkeypatch.setattr("collab.worker_runtime.run_turn", provider)
+    for seq in (1, 2, 3):
+        _incoming(service, seq, f"Question {seq}")
+        service.next_at = 0
+        await service.turn()
+    service.daemon.inbox.record(Envelope(seq=4, kind="chat", sender="alice",
+                                         sender_id="p_a", text="mine"))
+    await service.turn()                                  # a skipped-local line
+    rows = [json.loads(x) for x in _worker_log(tmp_path).splitlines()]
+    assert len(rows) >= 3 and any(r["outcome"] == "skipped-local" for r in rows)
+    ids = [r["attempt"] for r in rows]
+    assert all(_re.fullmatch(r"[0-9a-f]{12}", i) for i in ids)
+    assert len(set(ids)) == len(ids), "every attempt its own id"
