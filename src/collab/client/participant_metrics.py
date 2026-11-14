@@ -6,6 +6,8 @@ not promise. These deliberately remain separate labelled rows.
 """
 from __future__ import annotations
 
+import time
+
 import math
 from typing import Any
 
@@ -106,6 +108,14 @@ def metric_lines(person: dict[str, Any], fields: list[str] | tuple[str, ...],
             elif worker:
                 state = "running" if worker.get("running") is True else "idle" if worker.get("running") is False else "state unknown"
                 line = f"worker {state} · {_count(worker.get('turns'))} turns"
+                waiting = worker.get("awaiting_human")
+                if isinstance(waiting, (int, float)) and not isinstance(waiting, bool) and waiting > 0:
+                    since = worker.get("awaiting_since")
+                    age = ""
+                    if isinstance(since, (int, float)) and not isinstance(since, bool):
+                        minutes = max(0, int((time.time() - since) // 60))
+                        age = f" · {minutes}m" if minutes < 120 else f" · {minutes // 60}h"
+                    line += f" · waiting on their human ({int(waiting)}){age}"
             else:
                 line = "worker unknown"
             if detailed and worker:

@@ -480,3 +480,43 @@ def test_reply_awaiting_human_tells_the_asking_peer_and_keeps_the_decision(tmp_p
     assert cli.cmd_worker(args) == 0
     assert [(r['to'], r['text']) for r in store.outbox()] == [('bob', 'My human is deciding.')]
     assert store.pending()[0]['awaiting_human']
+
+
+def test_awaiting_human_on_a_room_question_answers_in_that_room(tmp_path, monkeypatch):
+    import argparse
+    from collab.config import SessionProfile
+    from collab.client import onboard
+    from collab.client.inbox import Inbox
+    from collab.protocol import Envelope
+    profile = SessionProfile(session_id='test', url='http://hub.invalid', name='alice',
+                             host_name='bob', token='t', home=str(tmp_path), room='general')
+    monkeypatch.setattr(cli, '_require_own_profile', lambda a: profile)
+    monkeypatch.setattr(onboard, 'ensure_daemon', lambda p, **kw: None)
+    inbox = Inbox(profile.dir)
+    inbox.record(Envelope(kind='chat', sender='bob', room='ops', text='Ship today?', seq=4))
+    inbox.close()
+    store = worker.Store(profile.dir)
+    store.configure({'agent': 'claude', 'scope': 'Coordinate'})
+    snap = store.snapshot()
+    store.commit_turn(expected_cursor=snap['cursor'], cursor=4, summary='', replies=[],
+                      escalations=[{'reason': 'decision', 'question': 'Ship today?', 'seq': 4}])
+    args = argparse.Namespace(worker_action='reply', decision_id=store.pending()[0]['id'],
+                              text='Deciding with my human.', awaiting_human=True)
+    assert cli.cmd_worker(args) == 0
+    assert [(r['to'], r['room']) for r in store.outbox()] == [('', 'ops')]
+
+
+def test_any_collab_command_mentions_decisions_waiting(tmp_path, monkeypatch, capsys):
+    from collab.config import SessionProfile
+    profile = SessionProfile(session_id='test', url='http://hub.invalid', name='alice',
+                             host_name='bob', token='t', home=str(tmp_path), room='general')
+    monkeypatch.setattr(SessionProfile, 'current', classmethod(lambda cls, *a, **k: profile))
+    store = worker.Store(profile.dir)
+    store.configure({'agent': 'claude', 'scope': 'Coordinate'})
+    snap = store.snapshot()
+    store.commit_turn(expected_cursor=snap['cursor'], cursor=0, summary='', replies=[],
+                      escalations=[{'reason': 'decision', 'question': 'q?', 'seq': 0}])
+    cli._decisions_banner(SimpleNamespace(command='who'))
+    assert 'await your answer' in capsys.readouterr().err
+    cli._decisions_banner(SimpleNamespace(command='worker'))
+    assert capsys.readouterr().err == ''

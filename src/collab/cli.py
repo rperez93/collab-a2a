@@ -8274,11 +8274,33 @@ Esc cancels a draft, q quits. Editor commands run without a shell.""")
     return p
 
 
+def _decisions_banner(args: argparse.Namespace) -> None:
+    """One line on stderr when the worker waits on this agent (R18).
+
+    A main agent with no wake or monitor heard nothing until it happened to
+    run `collab worker pending`; any collab command it runs now says so.
+    """
+    if args.command == "worker" or os.environ.get("COLLAB_WORKER") == "1":
+        return
+    try:
+        from .worker import Store
+        profile = SessionProfile.current()
+        if profile is None:
+            return
+        waiting = [r for r in Store(profile.dir).pending() if not r.get("awaiting_human")]
+    except Exception:  # never let the banner break a command
+        return
+    if waiting:
+        print(c(f"collab: {len(waiting)} worker decision(s) await your answer — "
+                "`collab worker pending`", "33"), file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if not getattr(args, "command", None):
         print_overview()
         return 0
+    _decisions_banner(args)
     try:
         return int(args.func(args) or 0)
     except HomeSelectionError as exc:
