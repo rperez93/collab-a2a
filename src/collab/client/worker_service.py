@@ -296,6 +296,7 @@ class Conversation:
         if events and events[0].seq == seq:
             event = events[0]
             return {**record, "source": {"seq": seq, "sender": event.sender,
+                    "sender_id": getattr(event, "sender_id", "") or "",
                     "room": event.room if isinstance(event.room, str) and len(event.room) <= 200 else "",
                     "routing_unavailable": bool(event.room and (not isinstance(event.room, str) or len(event.room) > 200)),
                     "text": _excerpt(event.text or "", 2000),
@@ -461,12 +462,22 @@ class Conversation:
                            for row in store.pending()]
             # An open question is the main agent's: the worker may answer its
             # asker, never repeat it to anyone else (a room, another peer).
-            open_questions = [(row["question"][:60], row["sender"]) for row in pending_now
+            # Compared by participant id: a rename must neither let an open
+            # question through to someone else nor block its own asker.
+            ids = {p.get("name"): p.get("id") for p in self.daemon.snapshot.get("participants", [])
+                   if p.get("name") and p.get("id")}
+            def who(name):
+                return ids.get(name) or ("name:" + (name or ""))
+            asker_ids = {}
+            for row in pending_now:
+                source = (self._source(row).get("source") or {})
+                asker_ids[row["id"]] = source.get("sender_id") or who(row["sender"])
+            open_questions = [(row["question"][:60], asker_ids[row["id"]]) for row in pending_now
                               if len(row.get("question", "")) >= 20]
             kept = []
             for reply in result["replies"]:
                 leak = next((q for q, asker in open_questions
-                             if q in reply["text"] and reply["to"] != asker), None)
+                             if q in reply["text"] and who(reply["to"]) != asker), None)
                 if leak is None:
                     kept.append(reply)
             if len(kept) != len(result["replies"]):
