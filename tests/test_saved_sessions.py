@@ -293,7 +293,7 @@ def test_sidecar_replace_failure_keeps_previous_path(saved, monkeypatch):
 
 @pytest.mark.parametrize('ownership', ['unowned', 'dead', 'foreign', 'own', 'shell', 'kept-shell', 'kept-dead', 'own-shell'])
 def test_same_session_resume_distinguishes_owner_from_live_listener(
-        saved, monkeypatch, ownership):
+        saved, monkeypatch, ownership, capsys):
     """A kept listener can outlive its agent without locking out explicit resume."""
     import subprocess
     import sys
@@ -352,6 +352,8 @@ def test_same_session_resume_distinguishes_owner_from_live_listener(
         result = cli.main(['resume', p.session_id, '--no-daemon'])
         if ownership in ('foreign', 'shell', 'kept-shell'):
             assert result == 1
+            output = capsys.readouterr()
+            assert f'blocking owner PID {agent.pid}' in output.out + output.err
             assert calls == []
             assert (home / 'current').read_text() == 's_previous\n'
             assert (home / 'agent.lock').read_bytes() == before_lock
