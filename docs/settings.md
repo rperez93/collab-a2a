@@ -41,7 +41,7 @@ hubs started by the CLI inherit its agent kind, so they read the same layer. A v
 split keeps applying until an agent sets its own, except for the identity keys
 `display_name`, `color`, `stats_command` and `stats_auto_setup`: those are never
 inherited (a machine value is shown as legacy, and host and join say how to
-adopt it), and `--machine` cannot set them. Writes to the shared file are locked
+adopt it), and `--machine` cannot set them, except a telemetry opt-out (`stats_auto_setup false` or an empty `stats_command`), which stays in force for every agent. Writes to the shared file are locked
 against a concurrent agent, and a write always resolves this agent's currently
 selected home.
 

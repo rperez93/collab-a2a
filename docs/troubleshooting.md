@@ -523,7 +523,7 @@ For any other detected agent, «your quota is unknown — …» in `collab check
 the expected answer, not a fault: collab has no local source it can read.
 Explicit `stats_command`, including an empty string, takes precedence. Unset it
 to restore automatic routing. `stats_auto_setup false` disables auto setup and
-polling; `share_stats off` stops main and worker publication. An existing daemon
+polling (machine-wide when set with `--machine`); `share_stats off` stops main and worker publication. An existing daemon
 keeps its loaded code until restarted after an upgrade. A hub must also run the
 new version to receive the atomic metadata-update fix.
 

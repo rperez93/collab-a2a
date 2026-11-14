@@ -106,6 +106,12 @@ A display name resolves in this order:
 `--name` → `$COLLAB_NAME` → this agent's `identity.json` → the global config's
 `display_name` → `git config user.name` → `$USER` → `agent`.[^config-src]
 
+> **Update (later than the pin)**: identity settings (`display_name`, `color`,
+> `stats_command`, `stats_auto_setup`) now resolve agent → agent kind → machine,
+> and are never inherited from the machine file except a telemetry opt-out
+> (`stats_auto_setup false` or an empty `stats_command`), which applies to
+> every agent. No pin or verified stamp changed.
+
 # Related
 
 - [The daemon lock](/architecture/daemon-lock.md) — a different lock answering a

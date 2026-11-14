@@ -42,6 +42,10 @@ Explicit `stats_command` settings override automatic routing. Clearing with
 stats_command` restores automatic routing for a configured participant.
 `collab config stats_auto_setup false` disables automatic sources and future
 hook setup; it does not uninstall a hook already in Claude's settings.
+A telemetry opt-out set machine-wide (`collab config stats_auto_setup false
+--machine`, or an empty `stats_command` there) applies to every agent; a
+non-empty `stats_command` is per agent, and one left in the machine file stops
+applying with a one-time notice at host, join and `collab check`.
 `share_stats off` stops main and worker publication. Existing explicit adapters
 and manual reports remain available.
 

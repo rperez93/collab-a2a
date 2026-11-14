@@ -131,3 +131,8 @@ polling is cancellable and bounded. The pin remains unchanged.
   classified (rate limit, auth, model, network, other) with per-class back-off,
   a one-hour cap on stated waits, and one decision per worker configuration for
   auth or model errors. No pin or verified stamp changed.
+
+- **Update (later than the pin)**: settings resolve per agent, agent kind and
+  machine (R21); identity settings are no longer inherited from the machine
+  file, except a telemetry opt-out, which stays machine-wide. Recorded in
+  architecture/state-ownership.md. No pin or verified stamp changed.

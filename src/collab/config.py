@@ -608,8 +608,17 @@ def _resolve(key: str, agent: dict, kind: dict, machine: dict) -> tuple[Any, str
             if key in values:
                 return values[key], layer
     if key in machine:
-        return (None, "legacy") if key in IDENTITY_KEYS else (machine[key], "machine")
+        value = machine[key]
+        # A machine-level telemetry OPT-OUT is not an identity: it stays in
+        # force for every agent. Only a non-empty machine probe is per-agent.
+        if key in IDENTITY_KEYS and not _telemetry_opt_out(key, value):
+            return None, "legacy"
+        return value, "machine"
     return None, "default"
+
+
+def _telemetry_opt_out(key: str, value: Any) -> bool:
+    return (key == "stats_auto_setup" and value is False) or (key == "stats_command" and value == "")
 
 
 def set_by_this_agent(key: str) -> bool:
@@ -682,8 +691,11 @@ def save_config(cfg: dict[str, Any]) -> None:
     Removing an agent-scoped key removes THIS agent's value only: the shared
     default other agents use is changed only with --machine.
     """
-    if WRITE_MACHINE["on"] and WRITE_MACHINE.get("key") in IDENTITY_KEYS:
-        raise ValueError(f"{WRITE_MACHINE['key']} is each agent's own and has no shared default")
+    key = WRITE_MACHINE.get("key")
+    # An opt-out is the one shared telemetry value: it may be set for everyone.
+    if WRITE_MACHINE["on"] and key in IDENTITY_KEYS and not _telemetry_opt_out(key, cfg.get(key)):
+        raise ValueError(f"{key} is each agent's own and has no shared default"
+                         + (" (only an opt-out can be shared)" if key.startswith("stats_") else ""))
     # The caller edited the view it READ, possibly under an earlier selection:
     # only the keys it changed relative to that view are its change. They are
     # applied to the identity selected NOW, and nothing else of the old view
@@ -741,7 +753,7 @@ def _save_locked(cfg: dict[str, Any], machine_path: Path, agent_path: Path | Non
                  changed: set[str], kind_path: Path | None = None) -> None:
     machine, agent = _read_raw(machine_path), _read_raw(agent_path)
     kind = _read_raw(kind_path)
-    current = {k: v for k, v in machine.items() if k not in IDENTITY_KEYS}
+    current = {k: v for k, v in machine.items() if k not in IDENTITY_KEYS or _telemetry_opt_out(k, v)}
     current.update({k: v for k, v in _read_raw(kind_config_path()).items() if agent_scoped(k)})
     current.update({k: v for k, v in agent.items() if agent_scoped(k)})
     changed_machine = changed_agent = changed_kind = False
