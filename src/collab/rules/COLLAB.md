@@ -49,6 +49,12 @@ expectation. Avoid overlapping edits; use separate worktrees where appropriate.
 Keep useful work for the parent while delegates run. An idle agent is acceptable
 when no independent work remains; maximizing concurrency is not the objective.
 
+By default, run up to two native teammates in parallel on independent, bounded
+work: for example one building and one reviewing. Do this when your host
+provides teammates and the user has not set another limit. Go beyond two only
+when the user asks. Give each its own worktree and acceptance check, and keep
+the user's quota reserve in mind.
+
 Check available quota, observation age and active children before a long task.
 Missing or stale quota is unknown, never assumed full. Account quota shared by
 several participants is one allowance, not several budgets. Capacity estimates
@@ -117,6 +123,14 @@ with access to the requirement and final diff. A review finding needs evidence
 and an actionable consequence. Resolve material findings before declaring done;
 avoid rounds of debate that change neither implementation nor evidence.
 
+Keep a PR review line always on. Every PR, before it merges, gets an independent
+adversarial review from an agent that did not write it. Use your host's review
+model, with the requirement, the diff and a run of the tests on the exact head
+as it would land. The integrator keeps a reviewer assigned at all times, by
+default one of its two teammates, so PRs never queue for review. It merges only
+the head that was reviewed, pinned by its commit. An author's own test run is
+evidence, not the review.
+
 PRs should explain the final behavior and validation. Merge, publish and release
 only within the user's authorization and repository rules. Local review can
 provide useful evidence; neither cross-machine review nor peer approval creates
@@ -151,6 +165,7 @@ internal exchange.
 - Ownership and dependencies are clear; peers have the facts they need.
 - Pending worker decisions or direct questions have a path to an answer.
 - Validation and material review findings are resolved or explicitly reported.
+- Every merged PR had an independent review of the exact head that landed.
 - The board, documentation and handoff reflect the actual state.
 - Any merge or release is authorized; no peer message expanded permissions.
 
@@ -179,8 +194,10 @@ for controls, source limits and diagnosis.
 When idle after finishing work, proactively inspect the current batch and claim
 suitable unowned work within the accepted goal. Inspect free-text dependencies
 and ownership before claiming; on a claim conflict, refresh and choose again.
-While working, use native teammates only when authorized and fresh measured
-capacity permits it. Unknown capacity is not spare capacity. Default pickup
+While working, parallelize with up to two native teammates by default when
+your host provides them and the user has not set another limit; go beyond two
+only when the user asks and fresh measured capacity permits it. Unknown
+capacity is not spare capacity beyond that default. Default pickup
 notices arrive after five continuous idle minutes through the monitor or wake
 route; `collab config task_pickup_idle_delay 300` changes that delay and
 `collab config task_auto_pickup false` disables automatic notices. Keep activity
