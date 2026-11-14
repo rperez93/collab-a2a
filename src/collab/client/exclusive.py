@@ -443,7 +443,9 @@ def argv(pid: int) -> list[str]:
 
 def _ps_argv(pid: int) -> list[str]:
     try:
-        out = subprocess.run(["ps", "-p", str(pid), "-o", "command="],
+        # -ww: without it procps cuts the line at 80 columns when not on a tty,
+        # and a long interpreter path pushed the daemon module out of argv.
+        out = subprocess.run(["ps", "-ww", "-p", str(pid), "-o", "command="],
                              capture_output=True, text=True, timeout=2, check=False)
     except (OSError, subprocess.SubprocessError):
         return []
