@@ -3,14 +3,18 @@ name: collab-share-skills
 description: Publish a specifically selected skill to the current Collab session, discover peers' published skills, or review and withdraw shared skill text. Use when the user asks to share or find a capability across participants.
 ---
 
-Publish only the skill the user selected. Do not upload their private skill
+Publish only the skill the user selected, and only the supporting files the user
+selected with `--file` (paths inside the skill's directory; at most 16 files and
+256 KiB, UTF-8 text, no symlinks or executables). A manifest hash covers
+SKILL.md and every file; installing verifies it, shows every file in the review,
+and writes them inside the namespaced install. Do not upload their private skill
 catalog; the only exception is the name list below, which is names and one-line
 descriptions, never text. This shares the selected `SKILL.md` entrypoint, including
 its name, description, byte length and SHA-256; referenced scripts and assets
 need separate explicit file sharing.
 
 ```bash
-collab skills publish /path/to/selected-skill/SKILL.md
+collab skills publish /path/to/selected-skill/SKILL.md [--file checklist.md --file lib/notes.txt]
 collab skills shared --limit 100
 collab skills show sk_0123456789abcdef0123
 collab skills withdraw sk_0123456789abcdef0123

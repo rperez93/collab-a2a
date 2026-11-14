@@ -8224,12 +8224,18 @@ def cmd_skills_install_shared(args: argparse.Namespace) -> int:
         if not digest or digest != record.get("sha256"):
             raise ValueError("the publication's text does not match its SHA-256; not installing it")
         sk.install_lock()  # before asking: never approve what this platform cannot install
+        files = record.get("files") or []
+        from .skill_sharing import manifest_digest
+        bound = manifest_digest(digest, files) if files else digest
+        if files and record.get("manifest_sha256") != bound:
+            raise ValueError("the supporting files do not match the publication's manifest; not installing it")
         dest = sk.check_installable(record, target=target, force=args.force)  # before asking
         terminal = sys.stdin.isatty() and sys.stdout.isatty()
         owner_tag = sk.publisher_tag(str(record.get("owner_id", "")))
         heading(f"shared skill {said(record.get('name', ''))} from {said(record.get('owner', '?'))} "
                 f"(participant {owner_tag})")
-        print(f"  {len(content.encode())} bytes · sha256 {digest}")
+        print(f"  {len(content.encode())} bytes · sha256 {digest}"
+              + (f" · {len(files)} supporting file(s), manifest {bound}" if files else ""))
         # What is installed: the description inside the reviewed text, never the
         # publication's separate (unhashed) field.
         shown = sk.front_description(content)
@@ -8238,22 +8244,28 @@ def cmd_skills_install_shared(args: argparse.Namespace) -> int:
         print(f"  would install as {said(str(dest))}, renamed `{said(dest.name)}` in its front matter")
         if dropped := sk.dropped_keys(content):
             print(f"  front-matter keys dropped on install: {', '.join(said(k) for k in dropped)}")
-        print(dim("  only SKILL.md is installed; files it refers to are not"))
+        for f in files:
+            print(f"  + {said(f['path'])}  {f['size_bytes']} bytes · sha256 {f['sha256']}")
+        if not files:
+            print(dim("  only SKILL.md is installed; files it refers to are not"))
+        # The whole bundle is what the human approves: SKILL.md and every file,
+        # bound by the manifest hash when there are files.
+        bundle = content + "".join(f"\n\n---- {f['path']} ----\n{f['content']}" for f in files)
         if terminal:
             print(dim("  ---- peer-authored text (untrusted): read it before agreeing ----"))
-            print(scrub_block(content))
+            print(scrub_block(bundle))
             print(dim("  ---- end of text ----"))
         if args.human_approved:
-            if args.sha256 != digest:
+            if args.sha256 != bound:
                 raise ValueError("--human-approved needs --sha256 with the hash your human reviewed; "
-                                 "the text now has a different one, so it was not installed")
+                                 "the publication now has a different one, so it was not installed")
         elif not terminal:
-            review = profile.dir / "skill-reviews" / f"{args.target}-{digest[:12]}.md"  # validated id only
+            review = profile.dir / "skill-reviews" / f"{args.target}-{bound[:12]}.md"  # validated id only
             review.parent.mkdir(parents=True, exist_ok=True)
-            review.write_text(content, encoding="utf-8")
+            review.write_text(bundle, encoding="utf-8")
             print(f"  full text for your human to read: {review}")
             fail("not installed: your human reviews that file and decides; "
-                 f"their approval is `--human-approved --sha256 {digest}`")
+                 f"their approval is `--human-approved --sha256 {bound}`")
             return 1
         else:
             try:
@@ -8289,7 +8301,13 @@ def cmd_skills(args: argparse.Namespace) -> int:
                 if args.action == "publish":
                     if not args.target:
                         raise ValueError("skills publish needs a selected SKILL.md path")
-                    result = client.publish_skill(read_selected(args.target, name=args.name, description=args.description))
+                    publication = read_selected(args.target, name=args.name, description=args.description,
+                                                files=getattr(args, "file", None) or [])
+                    result = client.publish_skill(publication)
+                    if publication.get("files") and not (result.get("skill") or {}).get("manifest_sha256"):
+                        # An older hub validated SKILL.md and silently dropped the rest.
+                        raise ValueError("the hub stored SKILL.md but not its supporting files "
+                                         "(an older hub); withdraw it or publish without --file")
                 elif args.action == "shared":
                     result = client.shared_skills(after=args.after, limit=args.limit)
                 elif args.action == "show":
@@ -9220,6 +9238,8 @@ Esc cancels a draft, q quits. Editor commands run without a shell.""")
     sk.add_argument("--strong", action="store_true",
                     help="with ask: require strong approval, a human gesture checked by the hub")
     sk.add_argument("--name", help="published skill name override")
+    sk.add_argument("--file", action="append", metavar="REL",
+                    help="with publish: a supporting file, relative to the skill directory (repeatable)")
     sk.add_argument("--description", help="published skill description override")
     sk.add_argument("--after", default="", help="shared inventory page cursor")
     sk.add_argument("--limit", type=int, default=100, help="shared inventory page size")
