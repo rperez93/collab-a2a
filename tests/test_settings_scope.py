@@ -248,3 +248,85 @@ def test_a_view_saved_after_its_cache_expired_still_carries_only_its_own_change(
     assert json.loads((home_b / config.AGENT_SETTINGS).read_text()) == {
         "worker_instructions": "B only", "worker_max_attempts": 11}
     assert json.loads((home_a / config.AGENT_SETTINGS).read_text()) == {"worker_instructions": "A only"}
+
+
+def _write(flag, key):
+    flag.update(on=True, key=key)
+
+
+def test_a_kind_setting_outlives_a_conversation_and_stays_with_its_kind(tmp_path, monkeypatch):
+    """machine → kind → agent: a Codex name or probe persists for Codex, not Claude."""
+    monkeypatch.setenv("COLLAB_AGENT_KIND", "codex")
+    config.WRITE_KIND.update(on=True, key="display_name", kind="codex")
+    try:
+        config.setting("display_name").write("friday")
+    finally:
+        config.WRITE_KIND.update(on=False, key=None, kind=None)
+    config.WRITE_KIND.update(on=True, key="stats_command", kind="codex")
+    try:
+        config.save_config({**config.load_config(), "stats_command": "codex-probe"})
+    finally:
+        config.WRITE_KIND.update(on=False, key=None, kind=None)
+    assert config.load_config()["display_name"] == "friday"
+    assert config.setting_source("display_name") == "kind"
+    # a new conversation of the same kind (fresh agent file) keeps them
+    monkeypatch.setenv("COLLAB_AGENT_CONFIG", str(tmp_path / "next-conversation.json"))
+    config._AGENT_CACHE.clear(); config._AGENT_PATH.clear()
+    assert config.load_config()["display_name"] == "friday"
+    assert config.load_config()["stats_command"] == "codex-probe"
+    # another kind does not see them
+    monkeypatch.setenv("COLLAB_AGENT_KIND", "claude-code")
+    config._KIND_CACHE.clear()
+    assert "display_name" not in config.load_config() and "stats_command" not in config.load_config()
+    # this agent's own value still wins over its kind
+    monkeypatch.setenv("COLLAB_AGENT_KIND", "codex")
+    config._KIND_CACHE.clear()
+    config.setting("display_name").write("friday-2")
+    assert config.load_config()["display_name"] == "friday-2"
+
+
+def test_identity_keys_are_exactly_these():
+    """M24: removing the incident keys from the identity set must fail a test."""
+    assert {"display_name", "color", "stats_command", "stats_auto_setup"} <= config.IDENTITY_KEYS
+    config.global_config_path().parent.mkdir(parents=True, exist_ok=True)
+    config.global_config_path().write_text(json.dumps({"stats_command": "someone-elses-probe",
+                                                       "stats_auto_setup": False}))
+    config._CACHE.clear()
+    view = config.load_config()
+    assert "stats_command" not in view and "stats_auto_setup" not in view
+
+
+def test_two_writers_never_lose_each_others_change(tmp_path):
+    """M19: concurrent read-modify-write of the shared file keeps both keys."""
+    import threading
+    def writer(key, value):
+        for i in range(25):
+            config.WRITE_MACHINE.update(on=False, key=None)
+            cfg = config.load_config()
+            cfg[key] = f"{value}{i}"
+            config.save_config(cfg)
+    threads = [threading.Thread(target=writer, args=("theme", "t")),
+               threading.Thread(target=writer, args=("editor", "e"))]
+    for t in threads: t.start()
+    for t in threads: t.join()
+    data = json.loads(config.global_config_path().read_text())
+    assert data.get("editor") == "e24" and data.get("theme") == "t24"
+
+
+def test_a_view_is_a_copy_not_the_cache():
+    """M7: editing a nested value in a view must not edit the cached settings."""
+    runtime_settings.set_value("watch_participant_fields", ["model"])
+    view = config.load_config()
+    view["watch_participant_fields"].append("quota")
+    assert config.load_config()["watch_participant_fields"] == ["model"]
+
+
+def test_machine_confirmation_says_what_was_written_and_its_scope(capsys):
+    import argparse
+    from collab import cli
+    runtime_settings.set_value("worker_max_attempts", 10)
+    args = argparse.Namespace(key="worker_max_attempts", value="20", unset=False, json=False, tui=False,
+                              edit=False, machine=True, kind=None)
+    assert cli.cmd_config(args) == 0
+    out = capsys.readouterr().out
+    assert "set to 20 for every agent here" in out and "still uses its own 10" in out
