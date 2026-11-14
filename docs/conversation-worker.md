@@ -42,6 +42,13 @@ repeating, and the worker figures show `awaiting_human` to everyone.
 `--no-daemon` prepares the worker but does not run it. Provider failures remain
 visible in `collab worker status`; there is no automatic provider fallback.
 
+Upgrading past the identity-bound decision routing (#146) with an answer
+already queued is handled on the next turn: an answer whose original asker
+can be read from the authenticated inbox event in the same session is
+repaired (sender id, room, private or broadcast); any other is set aside
+intact as quarantined, never sent, and one decision names it so you can
+resend it yourself. The worker never stops on such an answer.
+
 Provider failures are classified. A rate limit waits for the provider's
 stated retry time, at least 15 minutes and at most one hour, and status shows
 `(rate limit)`. Network and other failures use the normal retry delay; a wait
