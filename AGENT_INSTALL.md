@@ -83,14 +83,15 @@ by contrast, lives outside the checkout, isolated by repository and agent sessio
 .venv/bin/collab host --focus "<what you are working on>"
 ```
 
-**If this repo has hosted a session before, ask the user first.** By default
+**Honor the user’s session choice; ask only when the choice is ambiguous.** By default
 this resumes the last one, keeping its conversation and task board:
 
 > There's a previous session here — "auth refactor", 142 messages and 3 open
 > tasks. Carry on with it, or start a fresh one?
 
 ```bash
-.venv/bin/collab sessions            # what is there, and what each holds
+.venv/bin/collab sessions            # saved hosts and guests, including working paths
+.venv/bin/collab resume <id>        # reconnect saved identity from its working path
 .venv/bin/collab host                # resume the most recent (default)
 .venv/bin/collab host --fresh        # start empty instead
 .venv/bin/collab host --resume <id>  # resume a particular one

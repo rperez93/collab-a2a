@@ -7,6 +7,7 @@ Generated from the command parser. Existing commands remain available; `collab c
 - [host](#host)
 - [kill](#kill)
 - [sessions](#sessions)
+- [resume](#resume)
 - [lock](#lock)
 - [join](#join)
 - [send](#send)
@@ -101,11 +102,28 @@ options:
 ## sessions
 
 ```text
-usage: collab sessions [-h] [--json]
+usage: collab sessions [-h] [--json] [--home FOLDER]
 
 options:
-  -h, --help  show this help message and exit
+  -h, --help     show this help message and exit
   --json
+  --home FOLDER  explicit participant state folder
+```
+
+## resume
+
+```text
+usage: collab resume [-h] [--home FOLDER] [--no-daemon] [--no-tunnel]
+                     session_id
+
+positional arguments:
+  session_id     saved session id from `collab sessions`
+
+options:
+  -h, --help     show this help message and exit
+  --home FOLDER  explicit participant state folder
+  --no-daemon    do not start listening
+  --no-tunnel    disable tunnel when restarting a hosted session
 ```
 
 ## lock

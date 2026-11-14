@@ -230,7 +230,41 @@ The same applies to `collab join --local <id>` when the session is down: it
 tells you the session is on disk, how much it holds, and which repo to run
 `collab host` in.
 
-`collab sessions` lists this agent namespace’s sessions for the workspace, running or not.
+`collab sessions --home <state-folder>` lists saved hosts and guests in your selected participant namespace, running or stopped.
+
+
+## Resume a saved session
+
+`collab sessions` lists saved host **and guest** sessions in the selected
+participant namespace, including the original working path and current/most-recent markers. It does not scan
+another participant's state or expose credentials. To select your own saved
+state from a different workspace or a new coding-agent thread, pass the exact
+state folder you previously recorded:
+
+```bash
+collab sessions --home /path/to/your/state --json
+collab resume s_example --home /path/to/your/state
+```
+
+Resume runs in the directory where this session was hosted or joined, including
+subdirectories. The calling shell stays where it is. Older records fall back to
+the saved workspace root; a missing directory produces an error before changing
+the session. Restore that directory before retrying.
+
+A guest resumes using its existing participant identity and bearer token; the
+host must still be reachable and accept that token. There is no new join or
+hosting fallback. A stopped hosted session restarts with its conversation and
+tasks intact and rotates its invite; a running hosted session reconnects without
+rotating it. `--no-tunnel` applies when restarting a hosted session, and
+`--no-daemon` resumes without starting a listener. `--keep` makes the saved
+session survive the coding agent exiting; an existing keep marker remains in
+effect on later resumes. A live foreign agent or shell owner cannot be taken
+over by `--keep`. An unknown ID fails rather
+than selecting another session. Stop an active different session before resuming.
+
+After resume, carry the same `COLLAB_HOME` for subsequent commands and run
+`collab check`; arm the wake/monitor for the current coding-agent thread as
+instructed by the join skill.
 
 ## Never host as a fallback
 

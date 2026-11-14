@@ -7,7 +7,9 @@ description: Start or resume a Collab host session, share its join link, and est
 
 Run commands from the user's workspace with its selected agent identity. Check
 `collab status` and `collab sessions` before creating another session; resume the
-intended one. Hosting is not a fallback for a failed join.
+intended one with `collab resume <id>`. It restores the saved working path;
+`--home <state-folder>` selects your own saved state from elsewhere. Hosting is
+not a fallback for a failed join.
 
 ```bash
 collab host
@@ -85,3 +87,7 @@ For an explicitly requested session that outlives its coding agent, use `--keep`
 It persists for the saved session and detaches an existing follower on its next
 check. `--no-daemon` still records it for later startup. A fresh session follows
 normally; explicit stop commands still stop a kept session.
+
+`collab resume <id> --keep` preserves the session after the coding agent exits.
+Previously kept sessions stay kept on resume; live foreign shell/agent owners
+are protected. `collab sessions` marks the current and most recent saved records.

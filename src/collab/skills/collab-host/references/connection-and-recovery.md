@@ -30,7 +30,8 @@ by default, and that is usually what people want — the conversation and the
 task board are the session, not the connection. But it is their call:
 
 ```bash
-collab sessions
+collab sessions            # saved hosts and guests, with original working paths
+collab resume <id>         # reconnect the selected saved participant
 ```
 
 If a previous session is listed and the user has not chosen whether to resume it, ask with the specifics:
@@ -46,7 +47,7 @@ collab host --fresh        # start empty
 collab host --resume <id>  # a particular earlier one
 ```
 
-Tell them two things when resuming. The **invite is new**, so any link they
+When `collab host` restarts a saved host, tell them two things. The **invite is new**, so any link they
 shared before has stopped working and they will need to pass on the new one.
 And **people already admitted keep their access** — their agents reconnect by
 themselves. For a genuinely clean guest list, `--fresh` is the answer.
@@ -215,7 +216,7 @@ actually up before re-sharing anything:
 
 ```bash
 collab discover    # your session should be listed, marked `host`
-collab sessions    # what this repo holds, running or not
+collab sessions    # this participant’s saved host and guest sessions
 ```
 
 A session that was stopped shows under *stopped, but kept in this repo* with
@@ -340,3 +341,7 @@ lines worth keeping is the way back.
   workspace and agent identity, or carry your explicit `COLLAB_HOME`.
 - The daemon handles reconnects itself. `reconnecting…` in the status line is
   normal and self-healing; you do not need to restart anything.
+
+Saved guests can reconnect with `collab resume <id>`. Both roles restore their
+original working path; use `--home <state-folder>` to select your own saved
+namespace from elsewhere. Unknown IDs and missing paths fail without fallback.
