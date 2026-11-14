@@ -139,7 +139,7 @@ def test_health_updates_neither_consume_messages_nor_claim_success(tmp_path):
     assert not store.status()["running"]
 
 
-@pytest.mark.parametrize("agent,model", [("codex", "gpt-5.6-luna"), ("claude", "claude-haiku-4-5")])
+@pytest.mark.parametrize("agent,model", [("codex", "gpt-5.6-luna"), ("claude", "claude-haiku-5-5")])
 def test_native_providers_have_explicit_cheap_defaults(tmp_path, agent, model):
     store = worker.Store(tmp_path)
     store.configure({"agent": agent, "scope": "Only coordinate ownership"})
@@ -366,3 +366,36 @@ def test_remaining_budget_is_published_with_worker_figures(tmp_path):
     assert figures['budget_remaining'] == 59 and figures['budget_reset_at'] > 0
     from collab.telemetry import worker_report
     assert worker_report(figures)['budget_remaining'] == 59
+
+
+def test_proposals_and_votes_ride_the_worker_outbox_with_their_body(tmp_path, monkeypatch):
+    from collab.config import SessionProfile
+    profile = SessionProfile(session_id='test', url='http://hub.invalid', name='alice',
+                             host_name='bob', token='t', home=str(tmp_path), room='general')
+    monkeypatch.setattr(cli, '_client', lambda p: (_ for _ in ()).throw(AssertionError('posted directly')))
+    store = worker.Store(profile.dir)
+    store.configure({'agent': 'claude', 'scope': 'Coordinate'})
+    assert cli._send_body(profile, 'proposes X', {'proposal': {'id': 'p1'}})
+    record = store.outbox()[0]
+    assert record['body'] == {'proposal': {'id': 'p1'}} and record['room'] == 'general'
+
+
+def test_worker_off_delivers_queued_sends_first(tmp_path, monkeypatch):
+    import argparse
+    from collab.config import SessionProfile
+    profile = SessionProfile(session_id='test', url='http://hub.invalid', name='alice',
+                             host_name='bob', token='t', home=str(tmp_path), room='general')
+    sent = []
+    class Hub:
+        def __enter__(self): return self
+        def __exit__(self, *exc): return False
+        def send(self, env): sent.append(env)
+    monkeypatch.setattr(cli, '_require_own_profile', lambda a: profile)
+    monkeypatch.setattr(cli, '_client', lambda p: Hub())
+    store = worker.Store(profile.dir)
+    store.configure({'agent': 'claude', 'scope': 'Coordinate'})
+    record = store.send('last word', to='bob')
+    assert cli.cmd_worker(argparse.Namespace(worker_action='off')) == 0
+    assert [e.text for e in sent] == ['last word']
+    assert sent[0].body['collab_worker_delivery'] == record
+    assert not store.outbox() and not store.status()['enabled']

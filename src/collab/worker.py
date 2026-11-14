@@ -18,7 +18,7 @@ from typing import Any
 
 MAX_TEXT = 16000
 MAX_PENDING = 1000
-DEFAULT_MODELS = {"codex": "gpt-5.6-luna", "claude": "claude-haiku-4-5"}
+DEFAULT_MODELS = {"codex": "gpt-5.6-luna", "claude": "claude-haiku-5-5"}
 # Automatic delegation has no private task context. Permit coordination only;
 # promises about code, scope, and progress must come from the main agent.
 DEFAULT_SCOPE = (
@@ -28,30 +28,25 @@ DEFAULT_SCOPE = (
 )
 SUPPORTED_AGENTS = ("codex", "claude", "opencode", "cursor", "command")
 # The coding agent running collab (hosttool.detect) and the worker provider of
-# the same family. Tools without a worker provider fall back to codex.
+# the same family. R3: the worker runs on the SAME agent, so there is no
+# cross-provider fallback; an unrecognised host gets no automatic worker.
 HOST_PROVIDERS = {"claude-code": "claude", "codex": "codex", "opencode": "opencode",
                   "cursor": "cursor"}
+NO_PROVIDER = ("Worker not configured: the coding agent was not recognised; "
+               "run `collab worker start --agent …` or set worker_agent")
 
 
 def host_provider(env: dict[str, str] | None = None) -> str:
-    """The host's own worker provider, or '' when unknown or not runnable.
-
-    A provider with no default model (OpenCode, Cursor until configured) would
-    give a worker that cannot run; a working fallback beats a matching one.
-    """
+    """The host's own worker provider, or '' when the host is not recognised."""
     from .hosttool import detect
-    from .runtime_settings import get
-    provider = HOST_PROVIDERS.get(detect(env), "")
-    return provider if provider and get(f"worker_{provider}_model") else ""
+    return HOST_PROVIDERS.get(detect(env), "")
 
 
 def default_agent(env: dict[str, str] | None = None) -> str:
-    """The provider automatic setup uses: the host's own family when known."""
+    """The provider automatic setup uses, or '' when there is none to use."""
     from .runtime_settings import get
     chosen = get("worker_agent")
-    if chosen != "auto":
-        return chosen
-    return host_provider(env) or "codex"
+    return chosen if chosen != "auto" else host_provider(env)
 
 
 def _text(value: Any, label: str, *, empty: bool = False) -> str:
@@ -166,15 +161,14 @@ class Store:
                 # A config automatic setup chose, still untouched, follows the
                 # coding agent: a Claude main must not keep a Codex worker
                 # because its first setup ran from a plain shell or before the
-                # default changed. Unknown hosts, hosts whose provider has no
-                # model, and explicit choices stay as they are.
+                # default changed. Unknown hosts and explicit choices stay.
                 config = state["config"] or {}
                 # States written before the flag existed: generation 1 with
                 # the untouched default scope and model is automatic setup.
                 auto = state.get("auto", state["generation"] == 1
                                  and config.get("scope") == DEFAULT_SCOPE
                                  and config.get("model_default"))
-                if (auto and config.get("enabled") and host_provider()
+                if (auto and config.get("enabled") and agent
                         and get("worker_agent") == "auto" and config.get("agent") != agent):
                     config = _config({"agent": agent, "scope": config["scope"]},
                                      allow_empty_model=True)
@@ -182,6 +176,11 @@ class Store:
                                  error="" if config["model"] else
                                  "Worker requires a model; set worker_" + agent + "_model")
                     self._save(db, state)
+                return
+            if not agent:
+                # Retried on the next join, which may come from a known host.
+                state.update(error=NO_PROVIDER)
+                self._save(db, state)
                 return
             # Empty model settings are valid (other providers require a local
             # choice). Automatic setup must not turn that into a failed join:
@@ -231,7 +230,8 @@ class Store:
         with self._db() as db:
             return self._add(db, "context", {"text": text})
 
-    def send(self, text: str, *, to: str, room: str = "", thread: str = "") -> str:
+    def send(self, text: str, *, to: str, room: str = "", thread: str = "",
+             body: dict[str, Any] | None = None) -> str:
         """Queue the main agent's exact message without asking a model to repeat it.
 
         Context supplies facts and can legitimately produce no reply. Treating
@@ -258,7 +258,28 @@ class Store:
             data = {"text": text, "to": to, "room": room}
             if thread:
                 data["thread"] = thread
+            if body:
+                if len(json.dumps(body)) > MAX_TEXT:
+                    raise ValueError("message body is too large to queue")
+                data["body"] = body
             return self._add(db, "outbox", data)
+
+    def reject(self, record_id: str, *, reason: str) -> None:
+        """A send the hub refused for good: drop it and tell the main agent.
+
+        Retrying a 4xx forever only filled the outbox (and MAX_PENDING) with
+        a message that can never arrive; the main agent decides what to do.
+        """
+        with self._db() as db:
+            row = db.execute("SELECT data FROM records WHERE id=? AND kind='outbox'", (record_id,)).fetchone()
+            if row is None:
+                return
+            data = json.loads(row[0])
+            db.execute("DELETE FROM records WHERE id=?", (record_id,))
+            target = "@" + data["to"] if data.get("to") else "#" + (data.get("room") or "general")
+            self._add(db, "escalation", {"reason": "blocker", "seq": 0, "question": (
+                f"Your message to {target} could not be delivered ({reason}): "
+                f"{data['text'][:300]!r}. Resend it to a valid address or drop it.")})
 
     def enabled(self) -> bool:
         if not self.path.exists():

@@ -288,7 +288,8 @@ and the status is the first step rather than an afterthought.
 - **Do not leave `working` behind.** Say `idle` when you stop. If you are about
   to end a turn with nothing running, you are idle.
 - **Do not use it for messages.** It answers *what are you doing*; anything you
-  want them to read, act on or reply to is `collab send`.
+  want them to read, act on or reply to is `collab send` (queued through your
+  conversation worker while it is enabled, so it stays your one voice).
 - **Do not ask an agent what it is doing** when `collab activity` will say.
 - **Do not state a percentage of your own.** "About 80% there" alongside a
   batch at 3/12 is two numbers where the session had one, and the other agent

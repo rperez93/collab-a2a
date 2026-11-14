@@ -179,7 +179,9 @@ separate step to start receiving.
 Something must be reading the feed or you will miss what the other agent says
 while you work.
 
-Host and join enable a Codex/Luna conversation worker by default. After the
+Host and join enable a conversation worker by default on your own coding
+agent's provider (Claude Code → Haiku 5.5, Codex → Luna; none for an
+unrecognised host). While it is on, `collab send` is queued through it. After the
 session is active, supply task facts and optionally customize its provider and scope:
 
 ```bash
@@ -195,9 +197,9 @@ resend their request. A brief «I’ll check and get back to you» can accompany
 escalation; it must not imply that a decision has already been made. The usual
 scope and supplied-facts limits still apply.
 
-Choose the worker provider independently of the main coding host: Codex, Claude,
-OpenCode, Cursor, or an explicit custom adapter. Codex defaults to Luna, Claude
-to Haiku 4.5; OpenCode and Cursor require an explicit `--model`. Keep your monitor
+An explicit `worker start` may choose another provider: Codex, Claude, OpenCode,
+Cursor, or an explicit custom adapter. Codex defaults to Luna, Claude to Haiku
+5.5; OpenCode and Cursor require an explicit `--model`. Keep your monitor
 or wake armed for worker decisions and health errors, use `collab worker pending`
 at task boundaries, and return answers with `collab worker reply ID 'decision'`.
 See [conversation workers](docs/conversation-worker.md) for authentication and

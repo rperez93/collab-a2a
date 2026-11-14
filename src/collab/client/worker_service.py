@@ -200,11 +200,15 @@ class Conversation:
                               "to": message.get("to") or None,
                               "room": message.get("room") or None,
                               "thread": message.get("thread") or None,
-                              "body": {"collab_worker_delivery": message["id"]}}, timeout=timeout) as response:
+                              "body": {**(message.get("body") or {}),
+                                       "collab_worker_delivery": message["id"]}}, timeout=timeout) as response:
+                        if 400 <= response.status_code < 500 and response.status_code not in (401, 408, 425, 429):
+                            store.reject(message["id"], reason=f"hub answered {response.status_code}")
+                            return
                         response.raise_for_status()
                 # wait_for retains the total deadline on supported Python 3.10.
                 await asyncio.wait_for(acknowledge(), timeout=timeout)
-                store.acknowledge(message["id"])
+                store.acknowledge(message["id"])  # no-op after a reject
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -376,7 +380,7 @@ class Conversation:
                 if reply["room"] and reply["room"] not in rooms:
                     raise ValueError("worker proposed an unknown room")
             escalations = result["escalations"] + worker_runtime.unrouted_deferrals(
-                result, selected, store.pending())
+                result, selected, store.pending(), answers=[a.get("text", "") for a in answers])
             committed = store.commit_turn(
                 expected_cursor=snapshot["cursor"], cursor=cursor,
                 summary=result["summary"], replies=result["replies"],
