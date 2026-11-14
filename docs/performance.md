@@ -361,9 +361,14 @@ Validation and compression cost CPU per request; the separate reduction in
 request count supplies the client CPU savings. There is no claimed server
 CPU speedup. [All server measurements](performance-roster-server.json).
 
-ETags exclude exactly the sampling clocks `server_time` and
-`batch.counted_at`; full responses retain both. Open and closed batch
-regressions confirm one 200 followed by 304 responses until real state changes.
+ETags exclude the sampling clocks `server_time` and `batch.counted_at`.
+Clients offering `Collab-Roster-Clocks: 1` additionally exclude supported
+derived pace clocks, receiving current authoritative pace and count time in
+bounded headers on 304 responses. This avoids active-batch clock churn without
+resetting freshness over an old ETA. Pace state, counted completions and overdue
+transitions still invalidate; older clients keep full pace in their validators.
+Full responses retain every field. Open, closed, running and overdue batch
+regressions check both conditional transport and real progress invalidation.
 The serializer encodes field values once and reuses those chunks for digest
 and wire bytes. On identical changing 2.03 MB fixtures this reduces CPU from
 the first PR implementation's 0.3130 s to 0.2077 s. Plain JSON without hashing
@@ -384,3 +389,24 @@ explicit `--url` to compare loopback and tunnel routes. It uses temporary
 daemon files, never joins again and never prints the invite, bearer, session
 id or target URL. Request counts vary with RTT and scheduling; the recorded
 42-to-2 observation is one run rather than an exact reproducibility promise.
+
+### Active pace with conditional rosters
+
+A synthetic overdue batch previously forced a full response on every clock
+tick. Negotiated authoritative pace headers changed 100 stable-board reads
+from 100 full bodies to one body and 99 validations. Compressed body bytes fell
+from 130,276 to 1,302, with 16,850 additional clock-header bytes. Controller CPU
+was 0.0402 / 0.0372 s and peak RSS 26,068 / 25,684 KiB. For 20 reads of a board
+near 2 MiB, body plus clock-header bytes fell from 345,580 to 20,495.
+
+Changing boards still returned every full body: 100 reads took 0.0468 / 0.0377 s
+CPU; the near-2-MiB case took 0.2171 / 0.2401 s for 20 reads, with peak RSS
+31,520 / 31,748 KiB. These single fresh-process samples show the metadata
+tradeoff; they do not establish a general CPU speedup. Clock-header counts
+include their names and framing, while other HTTP headers and TLS are excluded.
+[Raw clock-path measurements](performance-roster-clocks.json).
+
+Reproduce with `benchmarks/roster_clocks.py synthetic unchanged clock_headers`
+and `legacy_pace`, or choose `near_2mib` / `changing`, under an absolute branch
+`PYTHONPATH`. No network, session state or model calls are used. Regression
+tests separately enforce resource bounds and exact live-clock transitions.
