@@ -6,6 +6,36 @@ endpoint exists. Clients must remain visibly unavailable until the capability
 endpoint and the corresponding implementation tests exist. Do not fall back to
 terminal approval when strong approval was requested.
 
+### Implementation checkpoint (not production readiness)
+
+`server/approval_crypto.py` now verifies Hello and passkey assertion signatures,
+and `server/approval_challenge.py` builds bounded canonical review bytes and
+fresh contextual challenges. These are pure internal primitives: they neither
+enroll a key nor consume a challenge or issue a receipt. The durable state
+machine, authentication checks, API routes, operation adoption and real human
+ceremonies remain outstanding. The capability endpoint must not advertise
+availability based on these helpers alone.
+
+The current verifier profile requires RSA-2048/e=65537 for RS256 or P-256 for
+ES256. V1 requests no authenticator extensions and rejects assertions carrying
+AT/ED data rather than accepting unparsed CBOR. It requires a top-level local
+browser origin, UP and UV, and preserves the original signed client bytes.
+The origin has an explicit non-default port; browser default-port aliases are
+not accepted. Counterless credentials (0 to 0) are supported; otherwise counters
+must increase. Stored backup eligibility must not change. Counter comparison
+and persistence must occur atomically with challenge consumption in the later
+state-machine implementation. A failed counter check is not proof of cloning.
+
+Review JSON is limited to 64 KiB of canonical bytes, depth 16 and 2048 nodes.
+Strings cannot contain unpaired surrogates; integers must fit the exact JSON
+integer range ±(2^53−1), and floats must be finite. Challenges preserve opaque
+credential IDs: native Hello key names need not be base64url; binary passkey
+IDs are validated by their enrollment path. This does not change the binary
+wire fields' canonical unpadded base64url requirement.
+
+Primary references: [WebAuthn assertion verification](https://www.w3.org/TR/webauthn-3/#sctn-verifying-assertion)
+and [cryptography RSA signing/verification](https://cryptography.io/en/latest/hazmat/primitives/asymmetric/rsa/).
+
 Core owner: Arma; Hello/front-door owner: Jarvis; passkey adapter owner: Friday.
 Source design: shared artifact `f_bcb2c024e2892f9067f1`, SHA-256
 `41abc56ea8bda4ea24214ab9ac6c6b57f83e2532a6ba00f7c2a297abc63eb9d9`.
