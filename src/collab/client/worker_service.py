@@ -139,13 +139,17 @@ _PREFLIGHT = ("Background workers require", "Worker requires an explicit",
 def classify(exc: BaseException) -> tuple[str, str]:
     """(outcome, error class) for a turn that raised. Never the text.
 
-    The class is the exception's type name — the provider's own words, which
+    The class is a fixed typed provider category or exception type name.
+    The provider's own words, which
     can carry the prompt, a credential-bearing URL or hostile text, never reach
     this file. A recipient or room the worker invented is `invalid`: the
     provider answered, and the answer was refused.
     """
     name = type(exc).__name__
     if isinstance(exc, worker_runtime.WorkerRuntimeError):
+        provider = getattr(exc, "kind", "")
+        if provider in ("rate_limit", "auth", "model", "network", "other"):
+            return "failed", "provider-" + provider
         return ("invalid" if str(exc).startswith(_INVALID) else "failed"), name
     if isinstance(exc, ValueError):
         return "invalid", name
@@ -201,6 +205,15 @@ def turn_record(*, phase: str, outcome: str, attempt: str, agent: str = "",
     if error:
         line["error"] = _safe(error)[:80]
     return json.dumps(line, ensure_ascii=False)
+
+
+def provider_backoff(kind: str, said: float, base: float) -> float:
+    """Seconds before the next model call, by why the provider failed."""
+    if kind == "rate_limit":
+        return max(said, 900.0)
+    if kind in ("auth", "model"):
+        return 3600.0
+    return max(said, base)
 
 
 class Conversation:
@@ -665,12 +678,10 @@ class Conversation:
             known.update(a["source"]["sender"] for a in answers if "source" in a)
             valid_seqs = {0, *(e["seq"] for e in selected),
                           *(a["source"]["seq"] for a in answers if "source" in a)}
-            # A wrong seq used to throw the whole paid turn away and back off;
-            # the question is still worth routing, so keep it unanchored.
+            # Keep a valid question even if its source anchor was mistaken.
             only = {e["seq"] for e in selected}
             for escalation in result["escalations"]:
                 if escalation["seq"] not in valid_seqs:
-                    # One message in the turn can only be the one it meant.
                     escalation["seq"] = next(iter(only)) if len(only) == 1 else 0
             for reply in result["replies"]:
                 if reply["to"] and reply["to"] not in known:
@@ -735,12 +746,21 @@ class Conversation:
             # Exception details can include a bearer URL or provider output;
             # status needs a class of failure, not private subprocess logs.
             detail = str(exc) if isinstance(exc, worker_runtime.WorkerRuntimeError) else type(exc).__name__
-            outcome, kind = classify(exc)
+            outcome, error_class = classify(exc)
             if (logged and isinstance(exc, worker_runtime.WorkerRuntimeError)
                     and str(exc).startswith(_PREFLIGHT)):
                 logged["phase"] = "reserved"
-            self._log_turn(logged, outcome, error=kind)
-            self.next_at = time.time() + setting("worker_retry_delay")
+            self._log_turn(logged, outcome, error=error_class)
+            kind = getattr(exc, "kind", "")
+            self.next_at = time.time() + provider_backoff(kind, getattr(exc, "retry_after", 0.0),
+                                                          setting("worker_retry_delay"))
+            if kind in ("auth", "model"):
+                # Retrying cannot fix these; the main agent (and its human) can.
+                store.escalate_once(f"provider-{kind}", (
+                    "Your conversation worker's provider failed with an "
+                    + ("authentication" if kind == "auth" else "model") + " error; it will not "
+                    "recover by retrying. Check `collab worker status`, the provider CLI's login, "
+                    "or the configured model."), expected_generation=snapshot["generation"])
             store.health(error=detail[:300], retry_at=self.next_at, running=False, expected_generation=snapshot["generation"])
 
 

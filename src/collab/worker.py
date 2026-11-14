@@ -333,6 +333,18 @@ class Store:
             stash.unlink(missing_ok=True)
             raise
 
+    def escalate_once(self, key: str, question: str, *, expected_generation: int) -> None:
+        """Raise once per kind only for the configuration that launched the turn."""
+        once = f"{key}@{expected_generation}"  # a new configuration may need telling again
+        with self._db() as db:
+            if self._state(db)["generation"] != expected_generation:
+                return
+            for row in self._records(db, "escalation"):
+                if row.get("once") == once:
+                    return
+            self._add(db, "escalation", {"reason": "blocker", "seq": 0, "question": question,
+                                         "once": once})
+
     def queue_comment(self, subject: str, subject_id: str, text: str) -> str:
         """A task or project comment from the main agent, delivered in order (R3)."""
         if subject not in ("task", "project"):
