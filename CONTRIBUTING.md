@@ -453,6 +453,12 @@ locking only the read and write separately loses concurrent activity/usage.
 Keep daemon refresh operations independent and bounded to one task per route,
 and refuse new tasks once shutdown begins.
 
+Panel launch tests must drop both tmux variables, and also test a retained
+server with its pane variable missing. Keep another window active to prove
+the split targets the caller. Run quoted commands through real tmux, bound
+silent/flooding clients, and never retry an uncertain split timeout. Pending
+decision rendering must not borrow token/cost timestamps for status freshness.
+
 Roster invalidations share a fixed 100 ms window and retain one pending bit
 during an in-flight read. Test both periodic/event overlap and silent-peer
 cancellation. Validators belong to the authenticated URL; a 304 renews the

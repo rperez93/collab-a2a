@@ -6,10 +6,14 @@ The screenshots use the released terminal renderer with synthetic participants
 and usage figures. The combined view above is 90 columns wide; the full
 [coding-agent and viewer window](../assets/demo.png) is 168×38.
 
-Each collapsed participant occupies exactly one padded, participant-coloured line:
+Each collapsed participant keeps a padded, participant-coloured heading:
 identity, `m:` main model, `w` worker state/model, and working/idle duration.
 Both model columns remain present when expanded field filters change. Long names
 are shortened to fit; expansion shows full model names and every selected stat.
+A known positive worker decision count adds one warning row beneath the
+heading, even when metric fields are filtered. Missing counts never imply
+zero. An absent status timestamp says «age unknown» or «undated»; offline or
+stale observations say «last». Token/cost timestamps cannot freshen the count.
 Up/Down (or J/K) selects participants. Right opens, Left closes, and Enter/Space
 or clicking a header toggles details. Page Up/Down, j/k and the mouse wheel scroll
 long details. In the combined view, Tab or Shift+Tab changes panes; `1` focuses Participants
@@ -19,6 +23,15 @@ pane-switching keys. End/G in the conversation resumes live following.
 The legend reads «● working ○ idle ◌ unknown × offline»; the worker uses
 its own dot, with «off» when disabled. The legend abbreviates in narrow panes
 and is hidden when the roster is too short. Unknown activity is never called idle.
+
+`collab watch --tmux` targets the exact socket and pane, rather than whichever
+window currently has focus. If a coding host strips tmux variables on Linux,
+the launcher can match its nearest ancestor terminal to a pane on an owned
+private tmux server. A partial environment still requires a pane match. Missing,
+ambiguous or incomplete evidence leaves the terminal untouched and reports
+that the pane could not be identified; open `collab watch` in a separate pane
+when the sandbox hides both the tty and socket. Lookup and split commands have
+output caps and deadlines, and an uncertain split timeout is not retried.
 Participant colours are dealt randomly without reuse while colours remain, and
 stay stable while present. Automatic colours adapt for contrast on known theme
 backgrounds; a terminal default background without COLORFGBG cannot be measured.

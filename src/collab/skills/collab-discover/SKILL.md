@@ -341,13 +341,10 @@ found. A statusline hook without thread markers can recover state only from a
 unique, fully stamped matching parent agent process.
 
 **`TMUX` may be missing from your environment** even while the user's tmux is
-running. `collab watch --tmux` then says *not inside a tmux session*. Split the
-pane yourself from any shell, carrying the directory, or tell the user to open
-`collab watch` in a second terminal:
-
-```bash
-tmux split-window -d "COLLAB_HOME=/home/perez/.local/state/collab/repositories/WORKSPACE_HASH/agents/AGENT_HASH/.collab collab watch --session s_bb9c59a3"
-```
+running. The launcher can recover an exact pane from a coding host's tty on
+Linux when private socket evidence is visible. It refuses ambiguous matches
+instead of using another active window. If the context is hidden, run
+`collab watch` in a separate terminal pane; do not infer tmux is absent.
 
 ## Notes
 

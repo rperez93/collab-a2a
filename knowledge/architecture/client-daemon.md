@@ -118,6 +118,12 @@ renews the local fetch timestamp on a valid 304; a URL or token change discards
 the validator. Finite roster JSON negotiates gzip, while SSE stays unbuffered.
 The original bundle pin and verification stamps are unchanged.
 
+Later than the pin: the human viewer exposes explicit positive worker decision
+counts beneath collapsed participant headings. Only a pure worker status
+timestamp can date that alert. Pane launch can recover stripped tmux variables
+from the coding host's terminal, but cannot substitute the server's active
+window when exact evidence is missing. No bundle pin or stamp changed.
+
 # `status.json`, and why the status line never touches the network
 
 The daemon writes one file the status line reads, atomically, via a temporary

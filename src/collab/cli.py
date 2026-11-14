@@ -3585,9 +3585,8 @@ def cmd_watch(args: argparse.Namespace) -> int:
             if not w.tmux_available():
                 print(dim("  install tmux, or just run `collab watch` in a second terminal"))
             elif not w.in_tmux():
-                print(dim("  start tmux first, then re-run this inside it:"))
-                joined = " ".join(argv)
-                print(dim(f"    tmux new-session -s collab '{joined}'"))
+                print(dim("  run `collab watch` in a separate terminal pane, or re-run"
+                          " from a shell with its tmux context"))
             return 1
         ok(where)
         print(dim("  the conversation will appear there as it happens"))

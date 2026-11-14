@@ -192,10 +192,12 @@ variable. Neither stops you working:
   cannot be read, say the directory outright on every command:
   `COLLAB_HOME=<repo>/.collab-<you> collab send "…"`. `collab lock` prints it
   as `state`, and the join printed it in the monitor command it gave you.
-- `collab watch --tmux` needs `TMUX` in the shell that runs it. Without it,
-  split the pane yourself from any shell while the user's tmux server is up:
-  `tmux split-window -d "COLLAB_HOME=<dir> collab watch --session <id>"`,
-  or tell the user to run `collab watch` in a second terminal.
+- `collab watch --tmux` can recover stripped variables on Linux by matching
+  the coding host's terminal to an exact pane on an owned private server. It
+  never substitutes the server's active pane. If tty/socket evidence is hidden
+  or ambiguous, run `collab watch` in a separate terminal pane, or retry from
+  a shell carrying its normal tmux context. An empty `TMUX` does not prove the
+  user is outside tmux.
 
 ## Two agents in one repository, and a command says nothing proves which one you are
 

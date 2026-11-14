@@ -185,7 +185,8 @@ def watch(profile: SessionProfile, *, follow: bool = True, limit: int = 200) -> 
 # --- tmux -------------------------------------------------------------------
 
 def in_tmux() -> bool:
-    return bool(os.environ.get("TMUX"))
+    from .tmux_context import detect
+    return detect() is not None
 
 
 def tmux_available() -> bool:
@@ -201,6 +202,11 @@ POSITIONS = {
 }
 
 
+def _tmux_command(argv):
+    from ..source_command import run
+    return run("exec " + shlex.join(argv), timeout=2, max_bytes=64 * 1024)
+
+
 def open_tmux_pane(argv: list[str], *, env: dict[str, str] | None = None,
                    percent: int = 35, horizontal: bool = True,
                    position: str | None = None, focus: bool = False) -> str:
@@ -211,7 +217,7 @@ def open_tmux_pane(argv: list[str], *, env: dict[str, str] | None = None,
     if not tmux_available():
         raise RuntimeError("tmux is not installed")
     if not in_tmux():
-        raise RuntimeError("not inside a tmux session")
+        raise RuntimeError("could not identify this terminal's tmux pane")
 
     # A new pane inherits the tmux *server's* environment, not this shell's, so
     # anything that located this session (COLLAB_HOME) has to be passed along
@@ -226,7 +232,14 @@ def open_tmux_pane(argv: list[str], *, env: dict[str, str] | None = None,
     else:
         direction, before = ("-h" if horizontal else "-v"), False
 
-    base = ["tmux", "split-window", direction]
+    from .tmux_context import detect
+    target = detect()
+    base = ["tmux"]
+    if target is not None and target.socket:
+        base.extend(["-S", target.socket])
+    base.extend(["split-window", direction])
+    if target is not None and target.pane:
+        base.extend(["-t", target.pane])
     if before:
         base.append("-b")  # put the new pane above/left of this one
     if not focus:
@@ -241,10 +254,16 @@ def open_tmux_pane(argv: list[str], *, env: dict[str, str] | None = None,
     last: subprocess.CalledProcessError | None = None
     for candidate in attempts:
         try:
-            subprocess.run(candidate, check=True, capture_output=True, text=True)
+            response = _tmux_command(candidate)
+            if response.returncode:
+                raise subprocess.CalledProcessError(response.returncode, candidate, stderr=response.stderr)
             break
         except subprocess.CalledProcessError as exc:
             last = exc
+        except (OSError, subprocess.SubprocessError) as exc:
+            # The first split may already have committed before a timeout or
+            # broken response. Retrying it could create two viewer panes.
+            raise RuntimeError("tmux split did not complete within its bounded response budget") from exc
     else:
         detail = (last.stderr or "").strip() if last else "unknown error"
         raise RuntimeError(f"tmux refused to split the window: {detail}")

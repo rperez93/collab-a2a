@@ -8,6 +8,7 @@
 
 ## 2026-11-14
 * **Update (later than the pin)**: Recorded the shared skill list and consented skill requests (`collab skills peers|ask|requests|accept|decline|done`) in [the CLI surface](operating/cli-surface.md). The pin and verification stamps are unchanged.
+* **Update (later than the pin)**: Recorded collapsed pending-decision alerts and exact terminal-pane recovery in the existing [client-daemon page](architecture/client-daemon.md). No pin or verification stamp moved.
 
 ## 2026-11-13
 * **Update (later than the pin):** Recorded conditional roster pace observations
@@ -19,6 +20,7 @@
   authenticated local TLS metadata, private registry trust and reconnect
   provenance in the existing client-daemon page. No pin or verification stamp
   changed.
+
 
 ## 2026-09-20
 * **Update (2.1.1, later than the pin)**: Recorded shared participant identity and internal decision routing in the wake page; the bundle pin is unchanged.

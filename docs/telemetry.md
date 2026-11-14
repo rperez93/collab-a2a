@@ -106,8 +106,11 @@ account. Context is one model window; it cannot be added across children.
 
 The conversation worker publishes its own attempts, completed processing turns,
 pending decisions, health and available provider-envelope usage. It is not a
-coding subagent. Codex/Claude/OpenCode worker envelopes can provide tokens;
-Claude/OpenCode may provide cost. Cursor CLI and custom adapters leave usage
+coding subagent. Known positive pending counts are visible beneath collapsed participant
+headings. Only an explicit worker status `reported_at` dates that alert;
+missing status time stays unknown even if token or cost observations are new.
+Codex/Claude/OpenCode worker envelopes can provide tokens; Claude/OpenCode may
+provide cost. Cursor CLI and custom adapters leave usage
 unknown unless separately instrumented. Recorded worker cost covers observed
 provider usage; a failed call can consume unreported usage. It is not a billing
 ledger. Overall `share_stats off` suppresses publishing both kinds of usage.
