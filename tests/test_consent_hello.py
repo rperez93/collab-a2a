@@ -128,15 +128,52 @@ def test_availability_is_asked_without_a_prompt_and_never_raises(fake, monkeypat
 
 def test_enrolment_returns_what_the_hub_registers(fake):
     spki = base64.b64encode(REAL_SPKI).decode()
-    fake.plan(create={"status": "Success", "spki": spki})
-    record = hello.enrol("collab-alice")
+    fake.plan(create={"status": "Success", "spki": spki},
+              sign={"status": "Success",
+                    "signature": base64.b64encode(REAL_SIGNATURE).decode()})
+    record = hello.enrol("collab-alice", hello.b64url(REAL_MESSAGE))
     # Exactly the hub's `/enrol/finish` names, which rejects unknown fields;
-    # the key as unpadded base64url.
+    # the key and the proof as unpadded base64url.
     assert record == {"credential_id": "collab-alice", "method": "hello",
-                      "algorithm": -257, "public_key_spki": hello.b64url(REAL_SPKI)}
-    assert "=" not in record["public_key_spki"]
+                      "algorithm": -257, "public_key_spki": hello.b64url(REAL_SPKI),
+                      "proof": {"type": "hello",
+                                "signature": hello.b64url(REAL_SIGNATURE)}}
     assert hello.unb64url(record["public_key_spki"], limit=4096) == REAL_SPKI
-    assert fake.calls()[-1]["req"] == {"op": "create", "name": "collab-alice"}
+    ops = [c["req"] for c in fake.calls()]
+    assert ops[0] == {"op": "create", "name": "collab-alice"}
+    # The proof is a signature over exactly the hub's enrolment challenge.
+    assert [o["op"] for o in ops] == ["create", "sign"]
+    assert base64.b64decode(ops[1]["challenge"]) == REAL_MESSAGE
+
+
+def test_enrolment_proves_possession_or_does_not_enrol(fake):
+    """R22b: the key alone proves nothing about who holds its private half.
+    A proof that does not verify against the key just created is an error,
+    a cancelled proof is a refusal, and a bad challenge costs no gesture."""
+    spki = base64.b64encode(REAL_SPKI).decode()
+    fake.plan(create={"status": "Success", "spki": spki},
+              sign={"status": "Success", "signature": base64.b64encode(b"\0" * 256).decode()})
+    with pytest.raises(hello.HelloError) as raised:
+        hello.enrol("collab-alice", hello.b64url(REAL_MESSAGE))
+    assert raised.value.status == "SignatureMismatch"
+    fake.plan(create={"status": "Success", "spki": spki}, sign={"status": "UserCanceled"})
+    with pytest.raises(hello.Refused):
+        hello.enrol("collab-alice", hello.b64url(REAL_MESSAGE))
+    before = len(fake.calls())
+    for bad in ("", "not base64!", base64.b64encode(REAL_MESSAGE).decode(), None):
+        with pytest.raises(ValueError):
+            hello.enrol("collab-alice", bad)
+    assert len(fake.calls()) == before, "refused before any prompt"
+
+
+def test_a_key_whose_proof_was_cancelled_is_proven_without_a_new_key(fake):
+    """`prove` reads the existing key's public half (no prompt) and signs the
+    hub's challenge with it (one gesture) — no second `create`."""
+    fake.plan(pubkey={"status": "Success", "spki": base64.b64encode(REAL_SPKI).decode()},
+              sign={"status": "Success", "signature": base64.b64encode(REAL_SIGNATURE).decode()})
+    record = hello.prove("collab-alice", hello.b64url(REAL_MESSAGE))
+    assert record["proof"] == {"type": "hello", "signature": hello.b64url(REAL_SIGNATURE)}
+    assert [c["req"]["op"] for c in fake.calls()] == ["pubkey", "sign"]
 
 
 @pytest.mark.parametrize("status, error", [
@@ -149,7 +186,7 @@ def test_every_status_hello_can_give_has_its_meaning(fake, status, error):
     is unavailability — and anything else is an error naming the status."""
     fake.plan(create={"status": status}, sign={"status": status})
     with pytest.raises(error) as raised:
-        hello.enrol("collab-alice")
+        hello.enrol("collab-alice", hello.b64url(b"challenge"))
     assert raised.value.status == status
     with pytest.raises(error):
         hello.sign("collab-alice", b"challenge")
@@ -173,7 +210,7 @@ def test_nothing_the_caller_supplies_reaches_powershell_as_code(fake):
     with pytest.raises(ValueError):
         hello.sign("x'; Remove-Item C:\\ -Recurse; '", b"c")
     with pytest.raises(ValueError):
-        hello.enrol("a\nb")
+        hello.enrol("a\nb", hello.b64url(b"challenge"))
     with pytest.raises(ValueError):
         hello.sign("ok", b"")
     assert fake.calls() == [], "refused before any process"
@@ -246,7 +283,7 @@ def test_a_flood_is_cut_at_the_output_cap_cheaply(fake):
 def _request(**extra):
     base = {"request_id": "q_1", "requester_id": "p_bob", "requester_name": "bob",
             "subject": "remote prompt", "destination": "alice's agent",
-            "authority": "run one prompt", "digest": "ab" * 32,
+            "authority": "run one prompt", "digest": hello.b64url(b"\xab" * 32),
             "review_text": "please run: make test", "credential_id": "collab-alice",
             "challenge": hello.b64url(REAL_MESSAGE)}
     base.update(extra)
@@ -363,7 +400,11 @@ def test_a_request_that_could_not_be_signed_never_reaches_a_human(fake):
                 {"challenge": ""}, {"credential_id": None}, {"challenge": None},
                 # The hub's own encoding only: the same bytes in standard,
                 # padded base64 are refused, not decoded to the same value.
-                {"challenge": base64.b64encode(REAL_MESSAGE).decode()}):
+                {"challenge": base64.b64encode(REAL_MESSAGE).decode()},
+                # The digest as the hub sends it, or not at all: hex, padded,
+                # or a length that is not a SHA-256 never reaches a human.
+                {"digest": "ab" * 32}, {"digest": hello.b64url(b"\xab" * 31)},
+                {"digest": base64.b64encode(b"\xab" * 32).decode()}, {"digest": None}):
         assert hello.open_window(_request(**bad)) == {"choice": "unavailable",
                                                       "reason": "BadRequest"}
     assert fake.calls() == []
