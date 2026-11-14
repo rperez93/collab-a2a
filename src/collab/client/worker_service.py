@@ -304,10 +304,16 @@ class Conversation:
         async def upload():
             nonlocal status, warning
             async with self.daemon._http.stream("POST", f"{self.daemon.profile.url}{EXT_PREFIX}/files",
-                    headers=request_headers(self.daemon.profile.token), params=params,
+                    headers=request_headers(self.daemon.profile.token, {"Accept-Encoding": "identity"}), params=params,
                     files={"file": (message["name"], data, "application/octet-stream")}, timeout=timeout) as response:
                 status = response.status_code
                 if not 200 <= status < 300:
+                    return
+                # HTTPX inflates aiter_bytes before our decoded-byte cap. A
+                # 32KiB gzip body expanded to32MiB and allocated65MiB in review.
+                # The request preference is not proof: reject an encoded reply
+                # before touching its stream, preserving the known-success warning.
+                if response.headers.get("content-encoding", "").strip().lower() not in ("", "identity"):
                     return
                 async def confirm():
                     raw = bytearray()

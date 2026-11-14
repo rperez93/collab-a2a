@@ -155,3 +155,47 @@ def test_actual_temporary_upload_warns_when_ack_is_wrong_or_malformed(tmp_path,m
         assert 'retention unconfirmed' in output.out
         assert 'kept until withdrawal' not in output.out
         assert 'withdraw explicitly' not in output.out
+
+
+@pytest.mark.parametrize('manual',[False,True])
+@pytest.mark.parametrize('encoding',['gzip','br','deflate','identity, gzip'])
+def test_encoded_confirmation_is_not_iterated_or_reuploaded(tmp_path,monkeypatch,manual,encoding):
+    """A stream-generated32MiB gzip bomb must be refused before HTTPX can inflate it."""
+    import zlib
+    monkeypatch.delenv('COLLAB_NO_WORKER',raising=False)
+    profile=SessionProfile('s_test','http://old','alice','alice','synthetic',home=str(tmp_path))
+    box=worker.Store(profile.dir);box.configure({'agent':'command','command':['unused'],'scope':'test'})
+    path=tmp_path/'review.md';path.write_text('review');box.queue_file(path,to='bob',keep=True)
+    iterations=[];posts=[]
+    class Bomb(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            iterations.append(True)
+            compressor=zlib.compressobj(wbits=31)
+            encoded=bytearray()
+            block=b'x'*65536
+            for _ in range(512):
+                encoded.extend(compressor.compress(block))
+            encoded.extend(compressor.flush())
+            assert len(encoded)<40000  # no preallocated32MiB plaintext fixture
+            yield bytes(encoded)
+    async def transport(request):
+        assert request.headers['Accept-Encoding']=='identity'
+        posts.append(request)
+        return httpx.Response(200,headers={'Content-Encoding':encoding},stream=Bomb())
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as http:
+            service=Conversation(SimpleNamespace(profile=profile,_http=http))
+            await service._flush(box,box.snapshot()['generation'])
+            await service._flush(box,box.snapshot()['generation'])
+    if manual:
+        original_client=httpx.AsyncClient
+        monkeypatch.setattr(httpx,'AsyncClient',lambda **kw:original_client(transport=httpx.MockTransport(transport),**kw))
+        monkeypatch.setattr(cli,'_require_own_profile',lambda args:profile)
+        monkeypatch.setattr(cli,'_client',lambda p:contextlib.nullcontext(SimpleNamespace()))
+        assert cli.cmd_worker(cli.build_parser().parse_args(['worker','off']))==0
+        assert cli.cmd_worker(cli.build_parser().parse_args(['worker','off']))==0
+    else:
+        asyncio.run(go())
+    assert not iterations, 'encoded confirmations must be rejected before body iteration'
+    assert len(posts)==1 and not box.outbox()
+    assert len(box.pending())==1 and 'unconfirmed' in box.pending()[0]['question']
