@@ -35,6 +35,8 @@ def person(tmp_path, monkeypatch):
     home = tmp_path / "agent-home" / ".collab"
     home.mkdir(parents=True)
     monkeypatch.setenv("COLLAB_HOME", str(home))
+    # Each home its own agent settings file, as in a real agent's state.
+    monkeypatch.setenv("COLLAB_AGENT_CONFIG", str(home / "agent-settings.json"))
     monkeypatch.setattr(config, "_agent_name", lambda: "")
     config._AGENT_CACHE.clear()
     config._AGENT_PATH.clear()
@@ -53,7 +55,7 @@ def test_the_default_is_the_agent_kind_and_a_suffix_never_the_person(person):
     """With git's user.name and $USER both saying who the human is, the name
     an agent with no name of its own publishes says neither."""
     name = config.resolve_name()
-    assert re.fullmatch(r"claude-[0-9a-f]{4}", name), name
+    assert re.fullmatch(r"claude-[0-9a-f]{8}", name), name
     for leak in ("rafael", "perez"):
         assert leak not in name
     assert config._name_fallback() == name, "the settings listing shows the same default"
@@ -75,6 +77,7 @@ def test_the_default_is_stable_for_one_home_and_differs_for_another(person, tmp_
     other = tmp_path / "second-agent" / ".collab"
     other.mkdir(parents=True)
     monkeypatch.setenv("COLLAB_HOME", str(other))
+    monkeypatch.setenv("COLLAB_AGENT_CONFIG", str(other / "agent-settings.json"))
     config._AGENT_PATH.clear()
     config._AGENT_CACHE.clear()
     assert config.resolve_name() != first
@@ -84,7 +87,7 @@ def test_an_unknown_kind_is_called_an_agent_not_a_person(person, monkeypatch):
     monkeypatch.setenv("COLLAB_AGENT_KIND", "")
     monkeypatch.setattr("collab.hosttool.detect", lambda: "")
     name = config.resolve_name()
-    assert re.fullmatch(r"agent-[0-9a-f]{4}", name), name
+    assert re.fullmatch(r"agent-[0-9a-f]{8}", name), name
 
 
 def test_a_legacy_machine_name_is_adopted_once_into_the_agents_own_layer(person, capsys):
@@ -117,3 +120,49 @@ def test_an_explicit_name_wins_and_adopts_nothing(person):
     _machine({"display_name": "friday"})
     assert config.resolve_name("jarvis") == "jarvis"
     assert config.setting_source("display_name") == "legacy", "nothing was adopted"
+
+
+def test_only_the_first_agent_on_the_machine_takes_the_legacy_name(person, tmp_path,
+                                                                   monkeypatch):
+    """Every nameless agent home used to adopt the one machine name: two homes
+    both became «friday», joined as ONE participant, and with the first
+    offline the second took over its identity. The first agent claims it — the
+    key is retired from the machine file in the same locked step — and the
+    next agent answers to its own non-identifying default."""
+    _machine({"display_name": "friday", "theme": "matrix"})
+    assert config.resolve_name() == "friday"
+    machine = json.loads(config.global_config_path().read_text())
+    assert "display_name" not in machine and machine["display_name_adopted"] == "friday"
+    assert machine["theme"] == "matrix", "nothing else in the machine file moved"
+
+    second = tmp_path / "second-agent" / ".collab"
+    second.mkdir(parents=True)
+    monkeypatch.setenv("COLLAB_HOME", str(second))
+    monkeypatch.setenv("COLLAB_AGENT_CONFIG", str(second / "agent-settings.json"))
+    config._AGENT_PATH.clear()
+    config._AGENT_CACHE.clear()
+    config._CACHE.clear()
+    other = config.resolve_name()
+    assert other != "friday" and re.fullmatch(r"claude-[0-9a-f]{8}", other), other
+    assert config.setting_source("display_name") == "default"
+
+
+def test_two_agents_racing_for_the_legacy_name_get_it_once(person, tmp_path):
+    """Two processes in two homes resolving their names at the same moment:
+    the settings lock lets exactly one of them claim the machine name."""
+    _machine({"display_name": "friday"})
+    probe = ("from collab import config\n"
+             "config._agent_name = lambda: ''\n"
+             "print(config.resolve_name())\n")
+    env = {**os.environ, "PYTHONPATH": os.path.dirname(os.path.dirname(config.__file__))}
+    procs = []
+    for n in range(4):
+        home = tmp_path / f"racer-{n}" / ".collab"
+        home.mkdir(parents=True)
+        procs.append(subprocess.Popen([sys.executable, "-c", probe], text=True,
+                                      stdout=subprocess.PIPE,
+                                      env={**env, "COLLAB_HOME": str(home),
+                                           "COLLAB_AGENT_CONFIG": str(home / "agent-settings.json")}))
+    names = [p.communicate(timeout=60)[0].strip() for p in procs]
+    assert names.count("friday") == 1, names
+    assert len(set(names)) == 4, "and the others are all distinct"

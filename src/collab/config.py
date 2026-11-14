@@ -851,16 +851,36 @@ def adopt_legacy_name() -> str | None:
     agent with no name of its own takes the legacy one into ITS layer, the
     first time it needs a name, and a marker beside its settings lets the CLI
     say so once. Returns the adopted name, or None when nothing was adopted.
+
+    ONCE PER MACHINE, not once per agent. Every agent home without a name used
+    to adopt the one machine name: two homes both became «rafa», joined as the
+    same participant, and with the first offline the second took over its
+    identity. So the first agent to adopt it CLAIMS it — under the settings
+    lock, in the same critical section, the key is retired from the machine
+    file (kept as `display_name_adopted`, for the record) — and every later
+    agent falls through to `default_name`.
     """
     if setting_source("display_name") != "legacy":
         return None
     own = agent_config_path()
     if own is None:
         return None
-    legacy = str(load_machine_config().get("display_name") or "").strip()
-    if not legacy:
-        return None
-    pin_agent_value("display_name", legacy)
+    machine_path = global_config_path()
+    with settings_lock(machine_path):
+        machine = _read_raw(machine_path)
+        legacy = str(machine.get("display_name") or "").strip()
+        if not legacy:
+            return None                   # another agent claimed it first
+        agent = _read_raw(own)
+        if str(agent.get("display_name") or "").strip():
+            return None                   # this agent named itself meanwhile
+        agent["display_name"] = legacy
+        _write_json(own, agent)
+        machine.pop("display_name", None)
+        machine["display_name_adopted"] = legacy
+        _write_json(machine_path, machine)
+    _AGENT_CACHE.clear()
+    _CACHE.clear()
     try:
         own.parent.mkdir(parents=True, exist_ok=True)
         own.with_name(LEGACY_NAME_ADOPTED).write_text(legacy)
@@ -874,8 +894,9 @@ def default_name() -> str:
 
     The fallback used to be git's `user.name`, then `$USER` — the person's
     real name or their account, published to every peer of every session. It
-    is now the agent kind and four hex of a hash of this agent's home: «claude-
-    3f2a», «codex-91c0». Stable for as long as the home is, so an agent keeps
+    is now the agent kind and eight hex of a hash of this agent's home:
+    «claude-3f2a91c0». Eight, not four: two agents with one name join as one
+    participant, and at four hex ten agents collide 0.07 % of the time. Stable for as long as the home is, so an agent keeps
     its name across restarts and resumes; different for two agents of one kind
     in two homes; and derived from nothing a peer could read a person out of.
     """
@@ -886,7 +907,7 @@ def default_name() -> str:
         home = str(collab_home().resolve())
     except Exception:                                     # noqa: BLE001
         return kind
-    return f"{kind}-{hashlib.sha256(home.encode()).hexdigest()[:4]}"
+    return f"{kind}-{hashlib.sha256(home.encode()).hexdigest()[:8]}"
 
 
 def resolve_name(explicit: str | None = None) -> str:
