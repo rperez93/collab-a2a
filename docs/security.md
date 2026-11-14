@@ -307,7 +307,12 @@ Be clear-eyed about the limits.
 - Review an armed wake with `collab wake show`, and keep to the reviewed recipes
   unless you have a reason not to.
 - Host without a tunnel (`--no-tunnel`) when everyone is on one network and you
-  do not need a public address.
+  do not need a public address. The choice is kept with the session, so a hub
+  the daemon revives after a crash, or a `collab resume` after a reboot, stays
+  local too; `collab host --resume` without the flag publishes it again. A
+  shared machine proxy started by hand (`collab.proxy_main`) routes every hosted
+  session on the machine, local-only ones included, so do not run one beside a
+  session you keep local.
 
 ## Version 2 boundaries
 

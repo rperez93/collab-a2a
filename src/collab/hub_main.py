@@ -196,11 +196,15 @@ def main() -> int:
     # anybody could read it as one.
     diagnostics.begin(cfg.dir, "hub")
     diagnostics.sweep(force=True)
-    diagnostics.log("start", version=__version__, tunnel=bool(
-        os.environ.get("COLLAB_NO_TUNNEL") != "1"))
+    # The session's own record decides as well as the environment: a hub the
+    # daemon revives does not inherit `collab host`'s environment, and must not
+    # publish a session its host chose to keep local (`HubConfig.no_tunnel`).
+    tunnel_wanted = (os.environ.get("COLLAB_NO_TUNNEL") != "1"
+                     and not cfg.no_tunnel)
+    diagnostics.log("start", version=__version__, tunnel=tunnel_wanted)
 
     supervisor = None
-    if os.environ.get("COLLAB_NO_TUNNEL") != "1":
+    if tunnel_wanted:
         supervisor = TunnelSupervisor(
             cfg.port,
             log_path=str(cfg.dir / "ngrok.log"),

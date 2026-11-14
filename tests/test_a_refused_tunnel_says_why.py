@@ -453,3 +453,101 @@ def test_a_hub_left_running_by_a_test_is_stopped_by_the_fixture(tmp_path, monkey
     finally:
         if stray.poll() is None:
             stray.kill()
+
+
+def _revive_like_the_daemon(root):
+    """Start the session's hub again the way the host daemon revives a dead
+    one: from the saved session only, with the daemon's own environment, which
+    never carried `collab host`'s COLLAB_NO_TUNNEL.
+
+    Waits first for the OLD hub to be gone — `stop_session` signals and
+    returns, and a dying hub still answers /health, which once made this
+    report «up» after 0.0 s about the wrong process (adversarial review of
+    #159). «Up» then means hub.json names the revived pid: the hub records
+    itself only after its tunnel decision, so ngrok's launch, if any, has
+    already happened by then."""
+    import subprocess
+    import sys
+
+    from collab.server.session import HubConfig, hosted_sessions
+
+    deadline = time.monotonic() + 15
+    while _hubs_of(root / ".collab") and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not _hubs_of(root / ".collab"), "the previous hub never went away"
+
+    cfg = hosted_sessions(root / ".collab")[0]
+    env = {k: v for k, v in os.environ.items() if k != "COLLAB_NO_TUNNEL"}
+    env["COLLAB_HOME"] = cfg.home
+    proc = subprocess.Popen([sys.executable, "-m", "collab.hub_main", cfg.session_id],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            stdin=subprocess.DEVNULL, start_new_session=True, env=env)
+    deadline = time.monotonic() + 30
+    up = False
+    while time.monotonic() < deadline and not up:
+        latest = HubConfig.load(cfg.session_id, cfg.home)
+        up = bool(latest and latest.pid == proc.pid)
+        if not up:
+            time.sleep(0.1)
+    return proc, up
+
+
+def test_a_local_only_session_stays_local_when_its_daemon_revives_the_hub(
+        hosting, monkeypatch):
+    """A hub revived by the host daemon inherits the daemon's environment, not
+    `collab host`'s, so `--no-tunnel` lived nowhere it could see: the revived
+    hub started ngrok and tried to publish a session its host had kept local
+    (an R17 load run, stopped only by ERR_NGROK_334). The choice now travels
+    with the session."""
+    from collab.server.session import HubConfig, hosted_sessions, stop_session
+
+    _fake_ngrok_on_path(hosting, monkeypatch, "exit 1\n")
+    _host(hosting, "--no-tunnel")
+    cfg = hosted_sessions(hosting / ".collab")[0]
+    assert cfg.no_tunnel is True
+    assert not (hosting / "argv.txt").exists()
+
+    proc, up = _revive_like_the_daemon(hosting)
+    try:
+        assert up, "the revived hub did not come up"
+        assert not (hosting / "argv.txt").exists(), "the revived hub started ngrok"
+    finally:
+        stop_session(HubConfig.load(cfg.session_id, cfg.home) or cfg)
+        with contextlib.suppress(Exception):
+            proc.wait(timeout=10)
+
+
+def test_a_published_session_is_published_again_when_its_hub_is_revived(
+        hosting, monkeypatch):
+    """The converse, so the guard above cannot pass by never tunnelling at all:
+    a host that did not ask for --no-tunnel gets its tunnel back on revival,
+    and a later plain `collab host` clears an earlier --no-tunnel."""
+    from collab.server.session import HubConfig, hosted_sessions, stop_session
+
+    _fake_ngrok_on_path(hosting, monkeypatch, "exit 1\n")
+    _host(hosting, "--no-tunnel")
+    _host(hosting, "--resume", hosted_sessions(hosting / ".collab")[0].session_id)
+    cfg = hosted_sessions(hosting / ".collab")[0]
+    assert cfg.no_tunnel is False
+    (hosting / "argv.txt").unlink(missing_ok=True)
+
+    proc, up = _revive_like_the_daemon(hosting)
+    try:
+        assert up
+        assert (hosting / "argv.txt").exists(), "a published session lost its tunnel"
+    finally:
+        stop_session(HubConfig.load(cfg.session_id, cfg.home) or cfg)
+        with contextlib.suppress(Exception):
+            proc.wait(timeout=10)
+
+
+def test_the_no_tunnel_variable_alone_is_recorded_like_the_flag(hosting, monkeypatch):
+    """README: COLLAB_NO_TUNNEL=1 is «same as `collab host --no-tunnel`». It
+    was not recorded, so a daemon restarted from another shell revived that
+    hub with a tunnel (adversarial review of #159, mutant M4)."""
+    from collab.server.session import hosted_sessions
+
+    _fake_ngrok_on_path(hosting, monkeypatch, "exit 1\n")
+    monkeypatch.setenv("COLLAB_NO_TUNNEL", "1")
+    _host(hosting)
+    assert hosted_sessions(hosting / ".collab")[0].no_tunnel is True
