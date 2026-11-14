@@ -285,12 +285,38 @@ def _skill_list_notice() -> None:
 
 
 def _name_source_note() -> None:
-    """Point at a legacy shared name, which no longer names this agent (R21)."""
+    """Point at legacy shared identity values, which no longer apply (R21)."""
     from .config import load_machine_config, setting_source
     if setting_source("display_name") == "legacy":
         legacy = str(load_machine_config().get("display_name"))
         print(dim(f"  the machine file still names every agent here {said(legacy)!r}; it no longer "
                   f"applies. `collab config display_name {said(legacy)}` adopts it for this agent"))
+    if (note := _legacy_probe_note()) is not None:
+        print(dim("  " + note))
+
+
+def _legacy_probe_note(*, once: bool = True) -> str | None:
+    """A non-empty machine stats_command stopped applying (R21): say so once.
+
+    A custom probe (say, a Gemini adapter) silently going quiet after an
+    upgrade is the kind of breakage nobody notices; the marker in this agent's
+    state keeps the notice to one per agent.
+    """
+    from . import config as config_module
+    if config_module.setting_source("stats_command") != "legacy":
+        return None
+    own = config_module.agent_config_path()
+    marker = own.with_name("legacy-probe-noticed") if own is not None else None
+    if once and marker is not None and marker.exists():
+        return None
+    if marker is not None:
+        with contextlib.suppress(OSError):
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.touch()
+    probe = str(config_module.load_machine_config().get("stats_command"))
+    return (f"the machine file's stats_command {said(probe)!r} no longer reports for this agent; "
+            f"`collab config stats_command {shlex.quote(probe)}` keeps it for this agent "
+            f"(or `--kind` for every conversation of this agent kind)")
 
 
 def _monitor_hint(profile: SessionProfile, status: dict[str, Any]) -> None:
@@ -4985,6 +5011,8 @@ def cmd_check(args: argparse.Namespace) -> int:
         return 1
 
     results = _checks(profile)
+    if (note := _legacy_probe_note()) is not None:
+        results.append({"check": "settings", "verdict": CHECK_WARN, "detail": note, "fix": ""})
     worst = (CHECK_FAIL if any(r["verdict"] == CHECK_FAIL for r in results)
              else CHECK_WARN if any(r["verdict"] == CHECK_WARN for r in results)
              else CHECK_OK)

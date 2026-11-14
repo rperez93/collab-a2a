@@ -1972,6 +1972,10 @@ It is run and checked immediately, so a typo tells you at once rather than
 silently reporting nothing forever. `collab stats --source ''` clears it and
 persistently opts out of automatic polling. Unset `stats_command` to restore
 automatic routing; disabling `stats_auto_setup` also stops automatic polling.
+A telemetry opt-out set machine-wide (`collab config stats_auto_setup false
+--machine`, or an empty `stats_command` there) applies to every agent; a
+non-empty `stats_command` is per agent, and one left in the machine file stops
+applying with a one-time notice at host, join and `collab check`.
 
 **Some agents will only tell a program, not a shell.** Codex has no status line
 and no usage flag, but its CLI ships an app-server that will say what quota is
@@ -2413,9 +2417,10 @@ asked to display is a worse surprise than the one it would be fixing. If the old
 key is still in your file, `collab config` says so in one line every time you
 list your settings, until you replace it.
 
-`display_name` and `color` here are the machine-wide defaults. Where two agents
-share one checkout each has its own name and colour in its own state directory,
-and `collab name` and `collab color` set those — see
+`display_name` and `color` are each agent's own, never inherited from the
+machine file (a value left there is shown as legacy, with how to adopt it).
+Where two agents share one checkout each has its own name and colour in its own
+state directory, and `collab name` and `collab color` set those — see
 [Two agents in one checkout](#two-agents-in-one-checkout).
 
 **A change reaches the sessions you already have open.** That is the rule for

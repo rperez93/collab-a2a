@@ -290,10 +290,51 @@ def test_identity_keys_are_exactly_these():
     assert {"display_name", "color", "stats_command", "stats_auto_setup"} <= config.IDENTITY_KEYS
     config.global_config_path().parent.mkdir(parents=True, exist_ok=True)
     config.global_config_path().write_text(json.dumps({"stats_command": "someone-elses-probe",
-                                                       "stats_auto_setup": False}))
+                                                       "stats_auto_setup": True}))
     config._CACHE.clear()
     view = config.load_config()
     assert "stats_command" not in view and "stats_auto_setup" not in view
+
+
+def test_a_machine_telemetry_opt_out_stays_in_force(tmp_path):
+    """S7: an opt-out is not an identity; upgrading must not switch telemetry back on."""
+    config.global_config_path().parent.mkdir(parents=True, exist_ok=True)
+    for machine in ({"stats_auto_setup": False}, {"stats_command": ""}):
+        config.global_config_path().write_text(json.dumps(machine))
+        config._CACHE.clear()
+        (key, value), = machine.items()
+        assert config.resolve(key) == (value, "machine")
+        assert config.load_config()[key] == value
+
+
+def test_a_machine_opt_out_keeps_ensure_from_setting_up_telemetry(tmp_path, monkeypatch):
+    from collab import hosttool, telemetry_setup
+    from collab.config import SessionProfile
+    monkeypatch.setattr(hosttool, "detect", lambda: "claude-code")
+    monkeypatch.setattr(telemetry_setup, "share_stats_enabled", lambda: True)
+    profile = SessionProfile("s_opt", "http://hub", "me", "host", "token", home=str(tmp_path / "home"))
+    profile.dir.mkdir(parents=True, exist_ok=True)
+    config.global_config_path().parent.mkdir(parents=True, exist_ok=True)
+    config.global_config_path().write_text(json.dumps({"stats_auto_setup": False}))
+    config._CACHE.clear()
+    telemetry_setup.ensure(profile)
+    assert not (profile.dir / "telemetry-setup.json").exists(), "the machine opt-out holds"
+    config.global_config_path().write_text("{}")
+    config._CACHE.clear()
+    telemetry_setup.ensure(profile)
+    assert (profile.dir / "telemetry-setup.json").exists(), "and without it, setup runs"
+
+
+def test_a_legacy_machine_probe_is_noticed_once(tmp_path, monkeypatch):
+    from collab import cli
+    monkeypatch.setenv("COLLAB_HOME", str(tmp_path / "home"))
+    config._AGENT_PATH.clear()
+    config.global_config_path().parent.mkdir(parents=True, exist_ok=True)
+    config.global_config_path().write_text(json.dumps({"stats_command": "gemini-usage --json"}))
+    config._CACHE.clear()
+    first = cli._legacy_probe_note()
+    assert first and "gemini-usage --json" in first and "no longer reports" in first
+    assert cli._legacy_probe_note() is None, "once per agent"
 
 
 def test_two_writers_never_lose_each_others_change(tmp_path):
@@ -419,17 +460,18 @@ def test_the_layer_is_printed_including_explicit_empty(monkeypatch, capsys):
 
 def test_spawned_daemons_carry_the_agent_kind(monkeypatch, tmp_path):
     from collab.client import onboard
+    from collab.config import SessionProfile
     monkeypatch.setenv("COLLAB_AGENT_KIND", "codex")
     seen = {}
-    class P:
-        pid = 1
-    monkeypatch.setattr(onboard.subprocess, "Popen", lambda *a, **k: seen.update(k["env"]) or P())
-    from types import SimpleNamespace
-    profile = SimpleNamespace(home=str(tmp_path), dir=tmp_path, session_id="s_test")
-    try:
+    class Spawned(Exception):
+        pass
+    def popen(*args, **kwargs):
+        seen.update(kwargs["env"])
+        raise Spawned  # stop right after the spawn: what follows is not under test
+    monkeypatch.setattr(onboard.subprocess, "Popen", popen)
+    profile = SessionProfile("s_kind", "http://hub", "me", "host", "token", home=str(tmp_path))
+    with pytest.raises(Spawned):
         onboard.spawn_daemon(profile, follow=False)
-    except Exception:
-        pass  # whatever follows the spawn is not under test
     assert seen.get("COLLAB_AGENT_KIND") == "codex"
 
 
@@ -447,3 +489,16 @@ def test_the_agent_settings_path_is_reused_inside_two_seconds_and_re_resolved_af
     assert config.agent_config_path() == homes[0] / config.AGENT_SETTINGS, "reused inside the window"
     current["now"] = 102.6
     assert config.agent_config_path() == homes[1] / config.AGENT_SETTINGS, "re-resolved after it"
+
+
+
+def test_only_an_opt_out_can_be_set_for_every_agent():
+    config.WRITE_MACHINE.update(on=True, key="stats_auto_setup")
+    try:
+        config.save_config({**config.load_config(), "stats_auto_setup": False})
+        assert json.loads(config.global_config_path().read_text())["stats_auto_setup"] is False
+        config.WRITE_MACHINE.update(key="stats_command")
+        with pytest.raises(ValueError, match="only an opt-out"):
+            config.save_config({**config.load_config(), "stats_command": "my-probe"})
+    finally:
+        config.WRITE_MACHINE.update(on=False, key=None)

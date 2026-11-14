@@ -100,6 +100,10 @@ it, nearest first; otherwise the quota is «nested tools; cannot attribute».
 A stale inherited marker therefore reads as unknown – the accepted cost.
 Explicit sources and cleared sources take precedence. `stats_auto_setup false` disables
 future automatic setup and automatic polling, without removing existing hooks.
+A telemetry opt-out set machine-wide (`collab config stats_auto_setup false
+--machine`, or an empty `stats_command` there) applies to every agent; a
+non-empty `stats_command` is per agent, and one left in the machine file stops
+applying with a one-time notice at host, join and `collab check`.
 Main and worker usage remain separate; native worker usage continues to collect.
 Roster/activity refresh and chat delivery do not wait for slow usage commands.
 The roster refreshes every three seconds and becomes unknown after 30 seconds
