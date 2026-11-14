@@ -83,3 +83,55 @@ def test_legacy_join_never_receives_goal_text(client, session, host_headers):
     assert joined['remote_goal'] is None
     assert joined['remote_goal_sender_id'] is None
     assert all('not for legacy model' not in event.text for event in session['store'].since(0))
+
+
+def test_goal_rate_limit_preserves_join_and_reports_refusal(client, session, host_headers):
+    session['app'].state.hub._remote_goals.limit = 0
+    client.put('/ext/collab/v1/remote-goal', headers=host_headers, json={'text': 'host goal'})
+    _, joined = _join(client, session, 'throttled-goal')
+    assert joined['remote_goal'] is None
+    assert joined['remote_goal_sender_id'] is None
+    assert 'rate exceeded' in joined['remote_goal_refusal']
+    assert not any(e.kind == 'chat' and 'host goal' in e.text for e in session['store'].since(0))
+
+
+def test_local_goal_queue_refusal_does_not_abort_onboarding(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from collab.client import onboard
+    from collab import remote_requests, telemetry_setup, worker
+    from collab.config import SessionProfile
+    result = {'session_id': 's_test', 'name': 'receiver', 'id': 'p_receiver',
+              'token': 'test-token', 'host': 'host', 'snapshot': {}}
+    goal = remote_requests.make_offer(session_id='s_test', sender_id='p_host',
+                                     recipient_id='p_receiver', target=RECEIVER_TARGET,
+                                     kind='goal', text='pending goal')
+    result.update(remote_goal=goal, remote_goal_sender_id='p_host')
+    class Client:
+        def __init__(self, *args): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def join(self, *args): return result
+    monkeypatch.setattr(onboard, 'HubClient', Client)
+    monkeypatch.setattr(onboard.ctx, 'gather', lambda *a, **kw: {})
+    monkeypatch.setattr(remote_requests, 'MAX_SENDER_RECORDS', 0)
+    monkeypatch.setattr(telemetry_setup, 'ensure', lambda profile: None)
+    started = []
+    monkeypatch.setattr(onboard, 'ensure_daemon', lambda profile, **kw: started.append(profile) or {})
+    profile, _, status = onboard.join_session('http://test.invalid#invite', name='receiver')
+    assert started == [profile]
+    assert 'local receiver queue' in status['remote_goal_refusal']
+    assert 'remote_goal_pending' not in status
+    assert Inbox(profile.dir).list() == []
+
+
+def test_connection_goals_do_not_spend_hosts_explicit_send_budget(client, session, host_headers):
+    hub = session['app'].state.hub
+    hub._remote_goals.limit = 0
+    hub._remote_senders.limit = 1
+    client.put('/ext/collab/v1/remote-goal', headers=host_headers, json={'text': 'goal'})
+    _, joined = _join(client, session, 'host-target')
+    assert joined['remote_goal'] is None
+    response = client.post('/ext/collab/v1/remote-messages', headers=host_headers,
+                           json={'to': joined['name'], 'text': 'explicit offer',
+                                 'body': {'collab_expected_recipient_id': joined['id']}})
+    assert response.status_code == 200
