@@ -99,3 +99,17 @@ def test_all_never_reveals_another_pairs_private_file(client, session, host_head
         assert (private["id"] in [f["id"] for f in every["files"]]) is sees
         plain = client.get("/ext/collab/v1/files", headers=who).json()
         assert plain["ended"] == (1 if sees else 0), "the count respects privacy too"
+
+
+def test_the_ended_count_follows_participant_ids_across_a_rename(client, session, host_headers):
+    """#146 rule: a rename neither hides an ended private file from its recipient
+    nor shows it to whoever takes the old name."""
+    bob = _join(client, session, "bob")
+    private = client.post("/ext/collab/v1/files", headers=host_headers,
+                          files={"file": ("secret.txt", b"s", "application/octet-stream")},
+                          params={"to": "bob"}).json()
+    client.delete(f"/ext/collab/v1/files/{private['id']}", headers=host_headers)
+    client.post("/ext/collab/v1/rename", json={"name": "roberto"}, headers=bob)
+    newcomer = _join(client, session, "bob")
+    assert client.get("/ext/collab/v1/files", headers=bob).json()["ended"] == 1
+    assert client.get("/ext/collab/v1/files", headers=newcomer).json()["ended"] == 0

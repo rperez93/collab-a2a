@@ -1692,11 +1692,18 @@ class Store:
             row = self._db.execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
         return dict(row) if row else None
 
-    def ended_file_parties(self) -> list[tuple[str | None, str]]:
-        """(recipient, sender) of every file that ended: enough to count what a viewer may see."""
+    def ended_files_visible_to(self, participant_id: str) -> int:
+        """How many ended files this participant may see, by the stored principals (#146).
+
+        The same rule as listing: a room file is everyone's, a private one only
+        its recipient's and sender's by participant id; an unresolved private
+        row counts for nobody.
+        """
         with self._lock:
-            return [tuple(r) for r in self._db.execute(
-                "SELECT recipient, sender FROM files WHERE state != 'available'").fetchall()]
+            return self._db.execute(
+                "SELECT COUNT(*) FROM files WHERE state != 'available' AND "
+                "(recipient IS NULL OR recipient = '' OR recipient_id = ? OR sender_id = ?)",
+                (participant_id, participant_id)).fetchone()[0]
 
     def files(self, *, viewer: str | None = None, include_gone: bool = False) -> list[dict[str, Any]]:
         sql = "SELECT * FROM files"
