@@ -243,3 +243,76 @@ async def test_a_rename_swap_never_shows_bobbys_private_text_to_the_new_bob(conv
     conversation.daemon.inbox.record(Envelope(seq=1, kind="chat", sender="bob", sender_id="p_c", text="hi"))
     await conversation.turn()
     assert seen and seen[0]["redacted"] is True, "the name matches, the frozen id does not"
+
+
+async def _turn_with_private_send(conversation, tmp_path, monkeypatch, *, incoming_event, replies, people=None):
+    configure(conversation, tmp_path)
+    conversation.daemon.snapshot = {"participants": people or [
+        {"name": "alice", "id": "p_a"}, {"name": "bob", "id": "p_b"}, {"name": "carol", "id": "p_c"}]}
+    store = worker.Store(conversation.root)
+    store.send("key rotation Friday 18:00, do not share", to="bob", to_id="p_b")
+    for record in store.outbox():
+        store.acknowledge(record["id"])
+    conversation.daemon.inbox.record(incoming_event)
+    async def run(*args, **kwargs):
+        return worker_runtime.validate_result({"summary": "", "escalations": [], "replies": replies})
+    monkeypatch.setattr("collab.worker_runtime.run_turn", run)
+    sent = []
+    async def transport(request):
+        sent.append(json.loads(request.content).get("text"))
+        return httpx.Response(200, json={"seq": 9})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        conversation.daemon._http = client
+        await conversation.turn()
+    return store, sent
+
+
+@pytest.mark.asyncio
+async def test_p5_a_paraphrase_of_a_shown_private_send_never_reaches_a_room(conversation, tmp_path, monkeypatch):
+    """bob asks in #general, the turn sees bob's private text in full; a paraphrase to the room is withheld."""
+    store, sent = await _turn_with_private_send(
+        conversation, tmp_path, monkeypatch,
+        incoming_event=Envelope(seq=1, kind="chat", sender="bob", sender_id="p_b", room="general", text="when?"),
+        replies=[{"text": "Rotation is set for the end of the week, evening.", "to": "bob", "room": "general"}])
+    assert sent == [] and store.status()["dropped_replies"] == 1
+
+
+@pytest.mark.asyncio
+async def test_p6_bobs_dm_answered_in_a_room_is_withheld_while_a_dm_to_bob_passes(conversation, tmp_path, monkeypatch):
+    store, sent = await _turn_with_private_send(
+        conversation, tmp_path, monkeypatch,
+        incoming_event=Envelope(seq=1, kind="chat", sender="bob", sender_id="p_b", to="alice", text="when?"),
+        replies=[{"text": "End of the week.", "to": "bob", "room": "general"},
+                 {"text": "Friday evening, as I said.", "to": "bob", "room": ""}])
+    assert sent == ["Friday evening, as I said."]
+
+
+@pytest.mark.asyncio
+async def test_p7_the_guard_follows_to_id_not_the_stored_name(conversation, tmp_path, monkeypatch):
+    """After a swap, 'bob' is carol (p_c): a DM to 'bob' repeating p_b's private text is withheld."""
+    people = [{"name": "alice", "id": "p_a"}, {"name": "bobby", "id": "p_b"}, {"name": "bob", "id": "p_c"}]
+    store, sent = await _turn_with_private_send(
+        conversation, tmp_path, monkeypatch, people=people,
+        incoming_event=Envelope(seq=1, kind="chat", sender="bob", sender_id="p_c", to="alice", text="any news?"),
+        replies=[{"text": "FYI: key rotation Friday 18:00, do not share", "to": "bob", "room": ""}])
+    assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_a_redaction_after_a_swap_names_the_ids_current_holder_or_nobody(conversation, tmp_path, monkeypatch):
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    store.send("key rotation Friday 18:00, do not share", to="bob", to_id="p_b")
+    seen = []
+    async def run(*args, **kwargs):
+        seen.append(args[2]["main_sent"][0])
+        return {"summary": "", "replies": [], "escalations": []}
+    monkeypatch.setattr("collab.worker_runtime.run_turn", run)
+    conversation.daemon.snapshot = {"participants": [{"name": "bobby", "id": "p_b"}, {"name": "bob", "id": "p_c"}]}
+    conversation.daemon.inbox.record(Envelope(seq=1, kind="chat", sender="bob", sender_id="p_c", text="hi"))
+    await conversation.turn()
+    conversation.daemon.snapshot = {"participants": [{"name": "bob", "id": "p_c"}]}   # p_b has left
+    conversation.daemon.inbox.record(Envelope(seq=2, kind="chat", sender="bob", sender_id="p_c", text="hi again"))
+    await conversation.turn()
+    assert seen[0]["text"] == "sent a private reply to bobby" and seen[0]["to"] == "bobby"
+    assert seen[1]["text"] == "sent a private reply to another participant" and seen[1]["to"] == ""
