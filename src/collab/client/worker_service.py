@@ -396,7 +396,7 @@ class Conversation:
             cursor = events[-1].seq if events else snapshot["cursor"]
             contexts = _page(snapshot["context"])
             answers = _page([self._source(row) for row in snapshot["answers"]])
-            if any(answer.get("prompt", {}).get("seq", 0)
+            if any(answer.get("prompt", {}).get("seq", 0) > 0
                    and not (answer.get("prompt", {}).get("decision_source") or {}).get("sender_id")
                    for answer in answers):
                 # Never spend a model turn or consume a legacy answer before
@@ -481,6 +481,8 @@ class Conversation:
                     prompt_targets.setdefault(event.sender, set()).add(getattr(event, "sender_id", "") or "")
                     prompt_sequences.setdefault(event.sender, set()).add(event.seq)
             for answer in answers:
+                if answer.get("prompt", {}).get("seq", 0) <= 0:
+                    continue  # Internal guidance is context, never recipient evidence.
                 source = answer.get("prompt", {}).get("decision_source") or {}
                 prompt_targets.setdefault(source.get("sender", ""), set()).add(source.get("sender_id") or "")
                 prompt_sequences.setdefault(source.get("sender", ""), set()).add(answer.get("prompt", {}).get("seq", 0))
@@ -555,14 +557,15 @@ class Conversation:
                 sequences = prompt_sequences.get(reply.get("to"), set())
                 reply.update(to_id=next(iter(candidates)), decision_delivery=True,
                              source_seq=next(iter(sequences)) if len(sequences) == 1 else 0)
-            if answers and result["replies"]:
+            peer_answers = [answer for answer in answers if answer.get("prompt", {}).get("seq", 0) > 0]
+            if peer_answers and result["replies"]:
                 # A human instruction can contain private text too. Match its
                 # original event identity, not the current roster's name map.
                 # Missing or conflicting provenance leaves answers durable;
                 # refusing this turn is safer than guessing which peer owns it.
                 targets = {}
                 source_rooms = {}
-                for answer in answers:
+                for answer in peer_answers:
                     source = answer.get("prompt", {}).get("decision_source") or {}
                     name, ident = source.get("sender"), source.get("sender_id")
                     if not name or not ident:

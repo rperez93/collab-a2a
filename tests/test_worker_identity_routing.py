@@ -439,7 +439,7 @@ async def test_an_old_hub_refusal_keeps_the_id_bound_file_and_stash_without_fall
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reply", [False, True])
-async def test_an_internal_unanchored_answer_can_update_context_but_cannot_authorize_a_peer_reply(
+async def test_an_internal_unanchored_answer_is_context_and_does_not_stall_normal_replies(
         tmp_path, monkeypatch, reply):
     """A budget/quarantine instruction is local coordination, never guessed peer authority."""
     state = worker.Store(tmp_path)
@@ -458,9 +458,44 @@ async def test_an_internal_unanchored_answer_can_update_context_but_cannot_autho
             profile=SimpleNamespace(dir=tmp_path, name="alice", participant_id="p_me"),
             inbox=inbox, _http=None, snapshot={"participants": [{"name": "bob", "id": "p_bob"}]}))
         await service.turn()
-        assert bool(state.snapshot()["answers"]) is reply
-        assert not state.outbox()
+        assert not state.snapshot()["answers"]
+        assert bool(state.outbox()) is reply
+        if reply:
+            assert state.outbox()[0]["to_id"] == "p_bob", "normal prompt-time identity routes the reply"
         if not reply:
             assert state.snapshot()["summary"] == "Local coordination updated"
     finally:
         inbox.close()
+
+
+@pytest.mark.asyncio
+async def test_answering_an_internal_decision_does_not_stall_later_conversation_turns(tmp_path, monkeypatch):
+    """A sequence-zero instruction must be consumed once while later chats progress."""
+    state=worker.Store(tmp_path)
+    state.configure({"agent":"command","command":["never-executed"],"scope":"Synthetic only"})
+    state.commit_turn(expected_cursor=0,cursor=0,summary="",replies=[],
+                      escalations=[{"seq":0,"reason":"scope","question":"Synthetic internal guidance"}])
+    state.answer(state.pending()[0]["id"],"Continue ordinary peer coordination",verbatim=False)
+    inbox=Inbox(tmp_path)
+    sent=[]
+    def accept(request):
+        import json
+        sent.append(json.loads(request.content))
+        return httpx.Response(200,json={})
+    async def model(*args,**kwargs):
+        return {"summary":"Continued","escalations":[],"replies":[{"to":"bob","room":"","text":"Synthetic reply"}]}
+    from collab.client import worker_service as module
+    original_setting=module.setting
+    monkeypatch.setattr(module,"setting",lambda key:0 if key=="worker_turn_gap" else original_setting(key))
+    monkeypatch.setattr("collab.worker_runtime.run_turn",model)
+    try:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(accept)) as http:
+            service=Conversation(SimpleNamespace(profile=SimpleNamespace(dir=tmp_path,name="alice",participant_id="p_me",token="synthetic",url="http://owned"),inbox=inbox,_http=http,snapshot={"participants":[{"name":"bob","id":"p_bob"}]}))
+            for seq in range(1,4):
+                inbox.record(Envelope(kind="chat",sender="bob",sender_id="p_bob",to="alice",to_id="p_me",seq=seq,text="Synthetic incoming"))
+                await service.turn()
+                assert state.snapshot()["cursor"]==seq
+                assert not state.snapshot()["answers"]
+            assert len(sent)==3
+            assert all(row["to_id"]=="p_bob" for row in sent)
+    finally:inbox.close()

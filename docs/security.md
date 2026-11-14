@@ -54,6 +54,15 @@ requires that token.
   taken from the message, so a participant cannot attribute a message to someone
   else.
 
+### Outstanding offline identity recovery gate
+
+The separate offline-recovery correction is still required before release:
+an invite holder can currently request an offline participant's name and the
+hub may rebind that participant ID without the old credential. Stable file and
+message IDs do not prevent takeover of the identity itself. Treat invitations
+as access to this outstanding recovery boundary until credential-proven rebind
+or an explicit host-approved recovery path is implemented and validated.
+
 ### Attributable, isolated messages
 
 Delivery and visibility are decided on a stable participant id, not a display
