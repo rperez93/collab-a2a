@@ -518,7 +518,7 @@ def create_app(
         if person is None or getattr(person, "revoked", False):
             raise HTTPException(status_code=404, detail="the expected recipient is not in this session")
         env = Envelope(kind=KIND_CHAT, text=str(body.get("text") or ""), room=None,
-                       to=person.name, to_id=person.id, sender=user.name, sender_id=user.id,
+                       thread=body.get("thread"), to=person.name, to_id=person.id, sender=user.name, sender_id=user.id,
                        body=dict(body.get("body") or {}))
         try:
             env = await hub.publish(env)

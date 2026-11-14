@@ -254,7 +254,7 @@ class Store:
             return self._add(db, "context", {"text": text})
 
     def send(self, text: str, *, to: str, room: str = "", thread: str = "",
-             body: dict[str, Any] | None = None, recipient_id: str = "") -> str:
+             body: dict[str, Any] | None = None, recipient_id: str = "", to_id: str = "") -> str:
         """Queue the main agent's exact message without asking a model to repeat it.
 
         Context supplies facts and can legitimately produce no reply. Treating
@@ -278,10 +278,19 @@ class Store:
         if recipient_id:
             from .remote_requests import _identifier
             _identifier(recipient_id, "expected recipient")
+        # R4 replies use by-ID delivery; R7 offers have a separate guarded
+        # capability route. These authorities must never collapse into one mode.
+        if to_id:
+            from .remote_requests import _identifier
+            _identifier(to_id, "stable recipient")
+            if recipient_id or room:
+                raise ValueError("by-ID delivery cannot also address a remote offer or room")
         with self._db() as db:
             if not (self._state(db)["config"] or {}).get("enabled"):
                 raise ValueError("start the worker before queueing a message")
             data = {"text": text, "to": to, "room": room}
+            if to_id:
+                data.update(delivery="to-id", to_id=to_id)
             if recipient_id:
                 data["recipient_id"] = recipient_id
             if thread:

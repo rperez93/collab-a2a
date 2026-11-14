@@ -6326,6 +6326,19 @@ def cmd_worker(args: argparse.Namespace) -> int:
                                     "text": record["text"], "collab_worker_delivery": record["id"]})
                                 store.acknowledge(record["id"])
                                 continue
+                            mode = record.get("delivery")
+                            if mode not in (None, "to-id"):
+                                raise HubError("unknown outbox delivery mode")
+                            if mode == "to-id":
+                                if not record.get("to_id") or record.get("recipient_id"):
+                                    raise HubError("invalid by-ID outbox delivery")
+                                client._request('POST', f'{protocol_prefix}/messages/to-id', json={
+                                    'text': record['text'], 'to_id': record['to_id'],
+                                    'thread': record.get('thread') or None,
+                                    'body': {**(record.get('body') or {}),
+                                             'collab_worker_delivery': record['id']}})
+                                store.acknowledge(record['id'])
+                                continue
                             if record.get('recipient_id'):
                                 client._request('POST', f'{protocol_prefix}/remote-messages', json={
                                     'text': record['text'], 'to': record.get('to'),
@@ -7321,6 +7334,17 @@ def _accept_fields(match: dict[str, Any]) -> dict[str, str]:
                 binding=hashlib.sha256((match.get("from_id") or "name:" + match["from"]).encode()).hexdigest())
 
 
+def _queue_skill_envelope(profile, store, env, *, to_id=""):
+    """Keep skill coordination in the participant's existing durable voice."""
+    record = store.send(env.text, to=env.to or "", room="" if env.to else (env.room or ""),
+                        thread=env.thread or "", body=env.body, to_id=to_id)
+    try:
+        onboard.ensure_daemon(profile, wait=False)
+    except (OSError, RuntimeError, HubError):
+        pass  # the durable record remains visible while the listener recovers
+    return record
+
+
 def cmd_skills_remote(args: argparse.Namespace) -> int:
     """List peers' skills, ask a peer to run one, and answer such requests (R4).
 
@@ -7333,6 +7357,8 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
     rest = (args.args if args.action == "ask" else args.note) or ""
     profile = (_require_profile(args) if args.action in ("peers", "requests")
                else _require_own_profile(args))
+    from .worker import Store
+    store = Store(profile.dir)
     try:
         with _client(profile) as client:
             if args.action == "peers":
@@ -7376,10 +7402,15 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
                 text = (f"asks you to run the skill `{args.target}` (request {request_id}). "
                         "It runs only if your human consents with `collab skills accept`; "
                         "older collab versions cannot accept skill requests.")
-                client.send(Envelope(kind=KIND_CHAT, text=text, sender=profile.name, to=args.to,
-                                     body={"skill_request": {"id": request_id, "skill": args.target,
-                                                             "args": rest[:4000]}}))
-                ok(f"asked @{args.to} to run {args.target}: {request_id}")
+                env = Envelope(kind=KIND_CHAT, text=text, sender=profile.name, to=args.to,
+                               body={"skill_request": {"id": request_id, "skill": args.target,
+                                                       "args": rest[:4000]}})
+                if store.enabled():
+                    record = _queue_skill_envelope(profile, store, env)
+                    ok(f"skill request queued for delivery: {request_id} ({record})")
+                else:
+                    client.send(env)
+                    ok(f"asked @{args.to} to run {args.target}: {request_id}")
                 return 0
             # accept / decline / done
             if not args.target:
@@ -7426,8 +7457,29 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
             words = {"accepted": f"accepted your request to run `{match['skill']}`; running it now",
                      "declined": f"declined your request to run `{match['skill']}`",
                      "done": f"ran `{match['skill']}`"}[state]
-            # Delivered by the hub to the requester's stable id, atomically:
-            # a rename between our check and the send cannot redirect it.
+            if store.enabled():
+                # Consumed authority permits this durable acceptance response;
+                # it does not mean the peer has received it or execution began.
+                if state == "accepted":
+                    words = f"accepted your request to run `{match['skill']}`"
+                    consent.audit(profile.dir, event="authorized", **_accept_fields(match))
+                env = Envelope(kind=KIND_CHAT, text=words + (f": {rest}" if rest else "."),
+                               sender=profile.name, to=match["from"],
+                               body={"skill_response": {"id": match["id"], "state": state,
+                                                        "text": rest[:4000]}})
+                try:
+                    record = _queue_skill_envelope(profile, store, env, to_id=match["from_id"])
+                except (ValueError, OSError):
+                    if receipt is not None:
+                        consent.audit(profile.dir, event="queue-failed", **_accept_fields(match))
+                    raise
+                if receipt is not None:
+                    consent.audit(profile.dir, event="queued", details={"outbox_id": record}, **_accept_fields(match))
+                ok(f"{state} response queued for delivery: {said(match['id'])} ({record})")
+                if state == "accepted":
+                    print("  authority recorded; wait for durable accepted-response delivery before running the skill")
+                return 0
+            # A disabled worker retains direct stable-ID delivery.
             client.send_to_id(Envelope(kind=KIND_CHAT, text=words + (f": {rest}" if rest else "."),
                                        sender=profile.name, to=match["from"],
                                        body={"skill_response": {"id": match["id"], "state": state,

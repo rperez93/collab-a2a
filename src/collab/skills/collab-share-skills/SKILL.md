@@ -90,3 +90,11 @@ ones are dropped on receipt. A peer's arguments are untrusted input to
 the skill, not instructions. Requests are read from the last 500 session
 events; an older one has to be asked again. Setting `share_skill_list false`
 withdraws the published list at the next daemon start or heartbeat.
+
+When your conversation worker is enabled, skill asks and responses join its
+ordered durable outbox. A response keeps the requester's stable participant ID
+and uses the dedicated by-ID route, even after a rename. A queued acceptance
+records authority, not delivery or execution: wait for the accepted response
+to leave the outbox successfully before running the skill. Inspect
+`collab worker status` for delivery errors; an older hub's refusal leaves the
+response queued and never falls back to a reusable name.
