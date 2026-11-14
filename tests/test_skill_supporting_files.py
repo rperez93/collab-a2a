@@ -198,3 +198,35 @@ def test_a_new_hub_publish_reply_carries_the_manifest(client, host_headers, skil
     pub = read_selected(skill_dir, files=["checklist.md"])
     reply = client.post("/ext/collab/v1/shared-skills", headers=host_headers, json=pub).json()["skill"]
     assert reply["manifest_sha256"] == pub["manifest_sha256"]
+
+
+def test_the_client_hands_on_the_normalized_record(monkeypatch):
+    from collab.client.hub_client import HubClient
+    content = "---\nname: review\ndescription: d\n---\nbody\n"
+    raw = {"skill": {"id": "sk_" + "1" * 20, "owner": "Bob", "name": "review", "description": "d",
+                     "content": content, "sha256": hashlib.sha256(content.encode()).hexdigest(),
+                     "files": [{"path": "x.md", "content": "one", "sha256": None}]}}
+    raw["skill"]["manifest_sha256"] = manifest_digest(raw["skill"]["sha256"],
+                                                      validate_files(raw["skill"]["files"]))
+    client = HubClient.__new__(HubClient)
+    monkeypatch.setattr(HubClient, "_bounded_get", lambda self, *a, **k: json.loads(json.dumps(raw)))
+    got = client.shared_skill("sk_" + "1" * 20)["skill"]
+    assert got["files"][0]["sha256"] == hashlib.sha256(b"one").hexdigest()
+    assert got["owner"] == "Bob"
+
+
+def test_skill_md_and_its_files_come_from_one_anchored_directory(skill_dir, tmp_path, monkeypatch):
+    """Swapping the skill directory after SKILL.md is opened cannot change where files come from."""
+    from collab import skill_sharing
+    decoy = tmp_path / "decoy"
+    decoy.mkdir()
+    (decoy / "checklist.md").write_text("STOLEN")
+    real = skill_sharing.read_supporting
+    def swap_then_read(anchor, rel):
+        moved = tmp_path / "moved"
+        skill_dir.rename(moved)
+        skill_dir.symlink_to(decoy)
+        return real(anchor, rel)
+    monkeypatch.setattr(skill_sharing, "read_supporting", swap_then_read)
+    pub = read_selected(skill_dir, files=["checklist.md"])
+    assert pub["files"][0]["content"] == "- tests\n- docs\n"

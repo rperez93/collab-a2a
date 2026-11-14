@@ -148,7 +148,7 @@ def validate_publication(data: Any) -> dict[str, Any]:
     return result
 
 
-def read_supporting(skill_dir: Path, relative: list[str]) -> list[dict[str, Any]]:
+def read_supporting(skill_dir: Path | int, relative: list[str]) -> list[dict[str, Any]]:
     """Read explicitly selected supporting files, refusing anything unsafe.
 
     Every path component is opened relative to its parent's descriptor with
@@ -161,7 +161,10 @@ def read_supporting(skill_dir: Path, relative: list[str]) -> list[dict[str, Any]
         raise ValueError(f'a skill may carry at most {MAX_FILES} supporting files')
     nofollow = getattr(os, 'O_NOFOLLOW', 0)
     directory = getattr(os, 'O_DIRECTORY', 0)
-    root_fd = os.open(skill_dir, os.O_RDONLY | directory)
+    # An int is a directory descriptor already anchored by the caller, so
+    # SKILL.md and its files come from the same directory even if a path
+    # component is swapped meanwhile.
+    root_fd = os.dup(skill_dir) if isinstance(skill_dir, int) else os.open(skill_dir, os.O_RDONLY | directory)
     files, total = [], 0
     try:
         for rel in relative:
@@ -209,14 +212,20 @@ def read_selected(path: str | Path, *, name: str | None = None,
     selected = Path(path).expanduser()
     if selected.is_dir():
         selected /= 'SKILL.md'
+    # The directory is opened once and everything is read relative to it.
     # O_NONBLOCK prevents a named pipe masquerading as a selected file from
     # hanging before fstat can reject it. Symlinks are valid explicit choices
-    # because installed skill directories commonly use them.
-    fd = os.open(selected, os.O_RDONLY | getattr(os, 'O_NONBLOCK', 0))
-    with os.fdopen(fd, 'rb') as source:
-        if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
-            raise ValueError('select a regular SKILL.md file')
-        raw = source.read(MAX_CONTENT_BYTES + 1)
+    # for the selection itself because installed skill directories use them.
+    root_fd = os.open(selected.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+    try:
+        fd = os.open(selected.name, os.O_RDONLY | getattr(os, 'O_NONBLOCK', 0), dir_fd=root_fd)
+        with os.fdopen(fd, 'rb') as source:
+            if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                raise ValueError('select a regular SKILL.md file')
+            raw = source.read(MAX_CONTENT_BYTES + 1)
+        supporting = read_supporting(root_fd, files or [])
+    finally:
+        os.close(root_fd)
     if len(raw) > MAX_CONTENT_BYTES:
         raise ValueError('skill content exceeds 65536 UTF-8 bytes')
     try:
@@ -228,7 +237,7 @@ def read_selected(path: str | Path, *, name: str | None = None,
     return validate_publication({'name': name or _field(frontmatter, 'name'),
                                  'description': description or _field(frontmatter, 'description'),
                                  'content': content, 'sha256': hashlib.sha256(raw).hexdigest(),
-                                 'files': read_supporting(selected.parent, files or [])})
+                                 'files': supporting})
 
 
 def register_routes(app, store, require_user) -> None:
