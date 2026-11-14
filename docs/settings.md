@@ -176,4 +176,6 @@ proceed within the accepted goal and its native delegation permissions.
 with `collab host --tunnel own` or `--tunnel proxy`; `--tunnel auto` returns to
 the setting. `--no-tunnel` wins over all modes. The selected explicit mode is
 saved with the session. Changes apply when the hub starts, not to running hubs.
+A selected domain that differs from the running proxy falls back to its own
+per-hub tunnel with a visible explanation, even with `--tunnel proxy`.
 See [shared proxy hosting](proxy-hosting.md) for legacy links and recovery.

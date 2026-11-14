@@ -1450,6 +1450,7 @@ def create_app(
                 # new pid — leaving `hub.json` naming a tunnel that had already
                 # died, which is a tunnel `collab kill` then walks past.
                 serving = supervisor.own_pid()
+                reported_failure = None
                 while True:
                     await asyncio.sleep(TUNNEL_CHECK_SECONDS)
                     try:
@@ -1457,9 +1458,19 @@ def create_app(
                     except Exception:
                         continue
                     if not url:
+                        failure = (getattr(supervisor, "last_error", ""),
+                                   getattr(supervisor, "notice", ""),
+                                   getattr(supervisor, "shared", False))
+                        if failure != reported_failure:
+                            current["url"] = local_url
+                            if on_url_change is not None:
+                                await asyncio.to_thread(on_url_change, "", changed)
+                            reported_failure = failure
                         continue
+                    recovered = reported_failure is not None
+                    reported_failure = None
                     now_serving = supervisor.own_pid()
-                    if not tunnel_worth_recording(changed, serving, now_serving):
+                    if not recovered and not tunnel_worth_recording(changed, serving, now_serving):
                         continue
                     serving = now_serving
                     current["url"] = url

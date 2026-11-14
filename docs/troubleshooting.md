@@ -50,8 +50,9 @@ stopped routed session also returns 404; confirm the intended hub is running.
 If hosting reports `ERR_NGROK_334`, the requested endpoint is already occupied.
 Coordinate with that tunnel's owner before migrating it; starting more hubs or
 killing processes by name does not resolve ownership. The hub remains available
-locally. If a running proxy uses a different domain, select that existing domain
-or explicitly choose `collab host --tunnel own` with an available endpoint.
+locally. If a running proxy uses a different domain, the host automatically
+tries a per-hub tunnel for the selected domain and explains the fallback.
+That endpoint must still be available; the other proxy remains untouched.
 
 Read the log path printed by the host diagnostic. Shared provider failures use
 `proxy-ngrok.log` in the machine peer registry; proxy startup failures use

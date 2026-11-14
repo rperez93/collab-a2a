@@ -198,3 +198,107 @@ def test_real_hubs_publish_prefixed_urls_without_owning_shared_proxy(tmp_path, m
             if child.poll() is None:
                 child.terminate()
             child.wait(timeout=10)
+
+
+@pytest.mark.parametrize('public_url,error', [
+    ('https://example.test', ''), ('', 'ERR_NGROK_334'),
+])
+def test_selected_domain_falls_back_without_taking_proxy_ownership(monkeypatch, public_url, error):
+    state = live_proxy(monkeypatch, domain='example.test', error=error)
+    state.public_url = public_url
+    calls = []
+    class Own:
+        last_error = ''
+        restarts = 0
+        def start(self):
+            calls.append('start')
+            return 'https://selected.test'
+        def own_pid(self): return 456
+        def ensure(self): return 'https://selected.test', False
+        def stop(self): calls.append('stop')
+    attach = proxy_host.SharedProxy('s_a', domain='selected.test', own_factory=Own)
+    before = vars(state).copy()
+    assert attach.start() == 'https://selected.test'
+    assert 'using --tunnel own' in attach.notice
+    assert attach.shared is False
+    assert attach.own_pid() == 456
+    assert attach.ensure() == ('https://selected.test', False)
+    attach.stop()
+    assert calls == ['start', 'stop']
+    assert vars(state) == before
+
+
+def test_restarted_proxy_cannot_move_a_pinned_session_to_another_domain(monkeypatch):
+    state = live_proxy(monkeypatch, domain='example.test')
+    own = SimpleNamespace(last_error='', restarts=0, start=lambda: 'https://example.test',
+                          own_pid=lambda: 456)
+    attach = proxy_host.SharedProxy('s_a', domain='example.test', own_factory=lambda: own)
+    assert attach.start() == 'https://example.test/s/s_a'
+    state.domain, state.public_url = 'another.test', 'https://another.test'
+    assert attach.ensure() == ('https://example.test', True)
+    assert attach.own_pid() == 456
+    assert not attach.shared
+
+
+def test_actual_proxy_hostname_wins_over_requested_domain(monkeypatch):
+    state = live_proxy(monkeypatch, domain='selected.test')
+    own = SimpleNamespace(last_error='', start=lambda: 'https://selected.test')
+    attach = proxy_host.SharedProxy('s_a', domain='selected.test', own_factory=lambda: own)
+    assert attach.start() == 'https://selected.test'
+    assert not attach.shared
+    assert 'example.test' in attach.notice
+
+
+def test_failed_runtime_fallback_clears_shared_url_and_persists_reason(tmp_path, monkeypatch):
+    import time
+    from starlette.testclient import TestClient
+    from collab import hub_main
+    from collab.server import app as appmod
+    from collab.server.session import HubConfig
+    from collab.server.store import Store
+
+    state = live_proxy(monkeypatch, domain='example.test')
+    own = SimpleNamespace(last_error='ERR_NGROK_334', restarts=0,
+                          start=lambda: '', own_pid=lambda: 0,
+                          ensure=lambda: ('', False))
+    attach = proxy_host.SharedProxy('s_a', domain='example.test', own_factory=lambda: own)
+    initial = attach.start()
+    cfg = HubConfig(session_id='s_a', host_name='alice', port=8123,
+                    bind='127.0.0.1', invite='synthetic', host_token='synthetic',
+                    home=str(tmp_path), public_url=initial, tunnel='proxy')
+    cfg.save()
+    state.public_url, state.domain = 'https://different.test', 'different.test'
+    monkeypatch.setattr(appmod, 'TUNNEL_CHECK_SECONDS', .01)
+    store = Store(tmp_path / 'watcher.db')
+    try:
+        app = appmod.create_app(
+            store=store, session_id='s_a', host_name='alice',
+            public_url=initial, local_url=cfg.local_url, supervisor=attach,
+            on_url_change=lambda url, changed: hub_main.remember_url(cfg, attach, url, changed))
+        with TestClient(app) as client:
+            for _ in range(100):
+                saved = HubConfig.load(cfg.session_id, cfg.home)
+                if saved.tunnel_notice:
+                    break
+                time.sleep(.02)
+            assert saved.public_url == ''
+            assert saved.tunnel == 'none'
+            assert saved.tunnel_error == 'ERR_NGROK_334'
+            assert 'using --tunnel own' in saved.tunnel_notice
+            assert saved.tunnel_pid == 0
+            assert saved.invite == 'synthetic'
+            assert client.get('/ext/collab/v1/health').json()['session_id'] == 's_a'
+            # A recovered reused tunnel can report the same PID (0) and no
+            # address change; it must still replace the persisted failure.
+            own.last_error = ''
+            own.ensure = lambda: ('https://example.test', False)
+            for _ in range(100):
+                saved = HubConfig.load(cfg.session_id, cfg.home)
+                if saved.public_url:
+                    break
+                time.sleep(.02)
+            assert saved.public_url == 'https://example.test'
+            assert saved.tunnel == 'ngrok' and saved.tunnel_error == ''
+            assert 'using --tunnel own' in saved.tunnel_notice
+    finally:
+        store.close()

@@ -127,6 +127,8 @@ class ProxyState:
     #: own log nobody would see it before the outage (review of #119).
     descriptors: int = 0
     error: str = ''
+    #: Selected domain survives a refused tunnel, when public_url is empty.
+    domain: str = ''
 
     @classmethod
     def load(cls) -> "ProxyState":
