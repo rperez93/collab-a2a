@@ -3767,10 +3767,14 @@ def cmd_file(args: argparse.Namespace) -> int:
 
             if args.action == "list":
                 show_all = bool(getattr(args, "all", False))
-                everything = client.list_files(include_ended=True)
-                # An older hub ignores the flag and returns only available files.
-                ended = [f for f in everything if f.get("state", "available") != "available"]
-                files = everything if show_all else [f for f in everything if f not in ended]
+                listing = client.file_listing(include_ended=show_all)
+                files = listing.get("files") or []
+                # A hub too old to report ended files sends no count, and
+                # ignores `all`: say so rather than imply nothing ended.
+                ended = listing.get("ended")
+                if show_all and ended is None:
+                    warn("this hub cannot list ended files (it predates `--all`); "
+                         "showing only the files still on it")
                 if args.json:
                     print(json.dumps(files, indent=2))
                     return 0
@@ -3782,12 +3786,12 @@ def cmd_file(args: argparse.Namespace) -> int:
                     # scrubbed of control characters first. See protocol.scrub.
                     who = (f"→ {scrub(str(f['recipient']))}" if f["recipient"]
                            else f"#{scrub(str(f['room']))}")
-                    state = f.get("state", "available")
-                    gone = "" if state == "available" else dim(f"  [{scrub(str(state))}]")
+                    state = scrub(str(f.get("state", "available")))[:20]
+                    gone = "" if state == "available" else dim(f"  [{state}]")
                     print(f"  {f['id']}  {scrub(str(f['name']))}  "
                           f"{_file_size(f['size'])}  from {scrub(str(f['sender']))} {who}{gone}")
-                if ended and not show_all:
-                    print(dim(f"  {len(ended)} more ended (collected, expired or withdrawn) — "
+                if isinstance(ended, int) and ended > 0 and not show_all:
+                    print(dim(f"  {ended} more ended (collected, expired or withdrawn) — "
                               "`collab file list --all` shows them"))
                 return 0
 

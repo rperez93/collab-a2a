@@ -438,8 +438,12 @@ class HubClient:
         return r.json()
 
     def list_files(self, *, include_ended: bool = False) -> list[dict[str, Any]]:
+        return self.file_listing(include_ended=include_ended)["files"]
+
+    def file_listing(self, *, include_ended: bool = False) -> dict[str, Any]:
+        """The hub's file list; `ended` is absent from a hub too old to report it."""
         params = {"all": "true"} if include_ended else None
-        return self._request("GET", f"{EXT_PREFIX}/files", params=params)["files"]
+        return self._request("GET", f"{EXT_PREFIX}/files", params=params)
 
     def download_file(self, file_id: str, dest_dir: Path) -> tuple[Path, str]:
         """Stream a file to disk and return its path plus the server's checksum."""
