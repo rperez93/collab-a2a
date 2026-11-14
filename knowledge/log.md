@@ -24,6 +24,10 @@
   changed.
 
 
+## 2026-11-13 (logs)
+* **Correction (later than the pin)**: [The state directory](architecture/state-directory.md)'s `hub.log` row still described the pinned two-megabyte roll at open; it now says what the pin held and what replaced it, and the note below the table gives the watcher's real bound — measured, after an adversarial review found the first version over budget under a flood.
+* **Update (later than the pin)**: Recorded in [the state directory](architecture/state-directory.md) that every session log is capped at 10 MB with its rotated generation while its writer runs, by copy and truncate, and that `worker.log` holds one content-free line per worker attempt. The pin and verification stamps are unchanged.
+
 ## 2026-09-20
 * **Update (2.1.1, later than the pin)**: Recorded shared participant identity and internal decision routing in the wake page; the bundle pin is unchanged.
 * **Update (2.1.0, later than the pin)**: Documented default worker setup and persistent opt-out in the wake page. The bundle revision is unchanged.

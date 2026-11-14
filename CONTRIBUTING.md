@@ -221,16 +221,22 @@ It is about *what the caller is exposed to*. The daemon logs from inside the
 event loop that is holding the SSE feed, and on the direct path a filesystem
 that stalls stalled the feed with it — a 9p mount over `/mnt/c`, a network
 share, a disk waking up. So a new log call must reach `logging` (which
-`daemon_files.setup_logging` has already put behind a `QueueHandler`) or
-`diagnostics.log`, and never `open(...).write(...)` on a path in a hot loop.
+`daemon_files.setup_logging` has already put behind a `QueueHandler`),
+`diagnostics.log`, or `logcap.append_line` for a line-per-event file such as
+`worker.log`, and never `open(...).write(...)` on a path in a hot loop. The
+size cap is the writer's business too: `logcap` trims on its writer and watcher
+threads, never on the caller's.
 
-Both queues are **bounded and drop their oldest** rather than growing or
-blocking: `diagnostics.BUFFER_MAX` and `daemon_files.LOG_QUEUE_MAX`. A daemon
-sits for days, and a queue that grows while the disk is unwritable turns the
-fault it was reporting into a larger one. What is dropped is counted and the
-count is written out, so a gap in the record says it is a gap. If you need to
-read a record back in a test, `diagnostics.flush()` first — writing and reading
-are two acts now.
+All three queues are **bounded** rather than growing or blocking:
+`diagnostics.BUFFER_MAX`, `daemon_files.LOG_QUEUE_MAX` and `logcap.LINES_MAX`.
+A daemon sits for days, and a queue that grows while the disk is unwritable
+turns the fault it was reporting into a larger one. The diagnostic record drops
+its oldest; the plain log and `logcap` drop the NEWEST and write one line where
+the gap is once there is room, because they are read as a sequence and a silent
+jump reads as nothing having happened. Either way what is dropped is counted
+and said. If you need to read a record back in a test, flush first —
+`diagnostics.flush()` or `logcap.flush()` — writing and reading are two acts
+now.
 
 **The diagnostic record holds events, never content.** It is written to be
 pasted into a public issue. Pass classifications rather than free text, and note

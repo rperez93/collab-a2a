@@ -31,6 +31,7 @@ import pathlib
 import subprocess
 import sys
 import threading
+import time
 from logging import handlers
 
 from collab import config as cfg
@@ -101,12 +102,19 @@ def test_the_http_commentary_is_quieted():
 
 
 def test_a_large_log_is_rolled_aside_when_a_process_opens_it(tmp_path):
+    """Rolled by copy and truncate, keeping the TAIL — at most one cap's worth.
+
+    The rolled copy used to be the whole file, which made `.1` as large as
+    the live file had been allowed to grow; bounding it is what lets the two
+    generations together promise a size (see collab.logcap)."""
     path = tmp_path / "daemon.log"
-    path.write_text("x" * 200)
+    path.write_text("".join(f"line {i:03d}\n" for i in range(25)))   # 225 bytes
     with daemon_files.open_log(path, cap=100) as fh:
         fh.write("fresh\n")
     assert path.read_text() == "fresh\n"
-    assert (tmp_path / "daemon.log.1").read_text() == "x" * 200
+    kept = (tmp_path / "daemon.log.1").read_text()
+    assert len(kept) <= 100 and kept.endswith("line 024\n")
+    assert kept.startswith("line "), "it begins at a whole line"
 
 
 def test_a_small_log_is_simply_appended_to(tmp_path):
@@ -123,7 +131,8 @@ def test_only_one_generation_is_kept(tmp_path):
     for round_ in ("first", "second"):
         path.write_text(round_ * 100)
         daemon_files.open_log(path, cap=10).close()
-    assert (tmp_path / "daemon.log.1").read_text() == "second" * 100
+    assert (tmp_path / "daemon.log.1").read_text() == ("second" * 100)[-10:]
+    assert not (tmp_path / "daemon.log.2").exists()
 
 
 def test_a_missing_log_is_created_rather_than_refused(tmp_path):
@@ -167,14 +176,33 @@ def test_the_plain_log_is_written_by_a_thread_and_not_by_the_caller(tmp_path):
         root.setLevel(level)
 
 
-def test_the_log_queue_drops_its_oldest_rather_than_blocking():
-    """Bounded, because a daemon sits for days; and never blocking, because the
-    caller is the thing being diagnosed."""
-    pipe = daemon_files._Bounded(2)
-    for n in range(5):
+def test_the_log_queue_drops_its_newest_and_says_so_in_place():
+    """Bounded, because a daemon sits for days; never blocking, because the
+    caller is the thing being diagnosed; and a gap is SAID where it is. The
+    queue used to drop its oldest silently, and the file then jumped from one
+    moment to a later one with nothing marking what was missing."""
+    pipe = daemon_files._Bounded(3)
+    for n in range(6):
         pipe.put_nowait(n)
-    assert [pipe.get_nowait(), pipe.get_nowait()] == [3, 4]
-    assert pipe.empty()
+    assert [pipe.get_nowait() for _ in range(3)] == [0, 1, 2]
+    pipe.put_nowait("after")
+    gap = pipe.get_nowait()
+    assert gap.getMessage().startswith("3 log lines dropped")
+    assert pipe.get_nowait() == "after"
+    assert pipe.dropped_total == 3
+
+
+def test_the_listeners_sentinel_is_never_the_record_dropped():
+    """A full queue must still take the sentinel, or `stop` waits on a join
+    from `atexit` for a record that was thrown away — and what it evicts to
+    get in is counted into a gap line ahead of it, not lost in silence."""
+    pipe = daemon_files._Bounded(2)
+    pipe.put_nowait(1)
+    pipe.put_nowait(2)
+    pipe.put_nowait(daemon_files._SENTINEL)
+    gap, last = pipe.get_nowait(), pipe.get_nowait()
+    assert gap.getMessage().startswith("2 log lines dropped")
+    assert last is daemon_files._SENTINEL
 
 
 def test_the_queue_is_bounded_to_something_a_daemon_can_hold():
@@ -316,3 +344,37 @@ def test_every_write_is_one_syscall_of_whole_records(tmp_path, monkeypatch):
             json.loads(line)
     finally:
         diag._root = None
+
+
+def test_a_gap_followed_by_silence_is_still_said(tmp_path):
+    """The gap line was admitted only by the NEXT record, so a burst followed by
+    a quiet daemon — or by its exit — lost lines without a word. It is said
+    when the queue empties, and the listener's stop says any gap it evicts."""
+    import logging as stdlib
+
+    path = tmp_path / "daemon.log"
+    handler = stdlib.FileHandler(path)
+    handler.setFormatter(stdlib.Formatter("%(levelname)s %(message)s"))
+    pipe = daemon_files._Bounded(3)
+    for n in range(6):
+        pipe.put_nowait(stdlib.makeLogRecord({"msg": f"line {n}", "levelname": "INFO"}))
+    listener = daemon_files._Listener(pipe, handler)
+    listener.start()
+    deadline = time.monotonic() + 2
+    while not pipe.empty() and time.monotonic() < deadline:
+        time.sleep(0.01)                  # drained, then nothing more arrives
+    time.sleep(0.05)
+    listener.stop()
+    handler.close()
+    text = path.read_text()
+    assert "line 0" in text and "line 2" in text and "line 3" not in text
+    assert "3 log lines dropped" in text
+
+    full = daemon_files._Bounded(3)
+    for n in range(3):
+        full.put_nowait(f"r{n}")
+    full.put_nowait(daemon_files._SENTINEL)
+    taken = [full.get_nowait() for _ in range(full.qsize())]
+    assert taken[-1] is daemon_files._SENTINEL
+    gaps = [t for t in taken if isinstance(t, stdlib.LogRecord)]
+    assert gaps and gaps[0].getMessage().startswith("2 log lines dropped"), taken
