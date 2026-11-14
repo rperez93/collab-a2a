@@ -108,10 +108,12 @@ A display name resolves in this order:
 
 > **Update (later than the pin, 2026-11-14)**: the last three steps are gone.
 > After this agent's own `display_name`, a legacy machine-wide `display_name` is
-> adopted once into the agent's own layer (and the CLI says so once); else the
-> name is the agent kind and four hex of a hash of the agent's home —
-> `claude-3f2a` — stable for that home and derived from nothing that names a
-> person. git's `user.name` and `$USER` had published the human's real name to
+> adopted by the FIRST agent that needs a name — claimed under the settings
+> lock and retired from the machine file as `display_name_adopted`, so two
+> agents can never join as one participant — and the CLI says so once; every
+> other agent's name is its kind and eight hex of a hash of its home —
+> `claude-3f2a91c0` — stable for that home and derived from nothing that names
+> a person. git's `user.name` and `$USER` had published the human's real name to
 > every peer.
 
 > **Update (later than the pin)**: identity settings (`display_name`, `color`,

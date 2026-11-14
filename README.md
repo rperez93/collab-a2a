@@ -2476,7 +2476,7 @@ collab config --json              # the same table, for an agent to read
 
 | Setting | What it does | Also set by | Default |
 |---|---|---|---|
-| `display_name` | the name others see | `collab name <n>` | the agent kind and a stable suffix, e.g. `claude-3f2a` (a legacy machine-wide name is adopted once) |
+| `display_name` | the name others see | `collab name <n>` | the agent kind and a stable suffix, e.g. `claude-3f2a91c0` (a legacy machine-wide name is adopted by the first agent only) |
 | `color` | the colour others see you in | `collab color <hex>` | dealt from the palette |
 | `editor` | terminal editor command; empty follows VISUAL, EDITOR, then vi | — | empty |
 | `theme` | how the conversation is laid out | `collab theme <name>` | `classic` |
