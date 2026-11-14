@@ -302,6 +302,17 @@ class Store:
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        # THE BOARD, READ ONCE PER CHANGE. Every roster read — each daemon's,
+        # several times a second in a busy session — built the whole task list
+        # and the batch's tasks from SQL rows again: measured on a scratch hub
+        # with 500 tasks and five participants, `tasks` and `batch_tasks` were
+        # 43 s of the hub's profile in ten minutes, for a board that changed
+        # once for every ten reads. Rows are kept per query, valid while
+        # neither THIS connection has written a task (`_task_rev`, bumped on
+        # every task write below) nor ANY other connection has committed
+        # (`PRAGMA data_version`, which SQLite moves for exactly that).
+        self._task_rev = 0
+        self._task_rows: dict[tuple, tuple[tuple[int, int], list[dict[str, Any]]]] = {}
         self._db = sqlite3.connect(self.path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         with self._lock:
@@ -1144,6 +1155,7 @@ class Store:
                       project if project is not None else existing["project"]),
                      completed_at, owner_id, task_id),
                 )
+            self._task_rev += 1
             self._db.commit()
             row = self._db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
         return dict(row)
@@ -1159,8 +1171,26 @@ class Store:
             sql += (" WHERE state NOT IN ('TASK_STATE_COMPLETED','TASK_STATE_CANCELED',"
                     "'TASK_STATE_FAILED','TASK_STATE_REJECTED')")
         sql += " ORDER BY created_at"
+        return self._task_query(sql, ())
+
+    def _task_query(self, sql: str, args: tuple) -> list[dict[str, Any]]:
+        """Task rows for `sql`, from the per-change cache when it still holds.
+
+        Each caller gets its OWN dicts — copies of the cached rows — because
+        callers decorate and filter what they are handed, and a cache that
+        handed out its own objects would let one roster read change the next.
+        """
         with self._lock:
-            rows = self._db.execute(sql).fetchall()
+            stamp = (self._task_rev,
+                     int(self._db.execute("PRAGMA data_version").fetchone()[0]))
+            hit = self._task_rows.get((sql, args))
+            if hit is None or hit[0] != stamp:
+                rows = [dict(r) for r in self._db.execute(sql, args).fetchall()]
+                if len(self._task_rows) >= 64:
+                    self._task_rows.clear()        # bounded: batch ids come and go
+                self._task_rows[(sql, args)] = (stamp, rows)
+            else:
+                rows = hit[1]
         return [dict(r) for r in rows]
 
     # --- projects, comments and the pull requests a task produced ----------------
@@ -1352,6 +1382,7 @@ class Store:
             self._db.execute(
                 "UPDATE tasks SET project=NULL, updated_at=? WHERE project=?",
                 (time.time(), project_id))
+            self._task_rev += 1
             self._db.execute("DELETE FROM projects WHERE id=?", (project_id,))
             self._db.execute("DELETE FROM comments WHERE subject='project'"
                              " AND subject_id=?", (project_id,))
@@ -1559,11 +1590,8 @@ class Store:
         return dict(row) if row else None
 
     def batch_tasks(self, batch_id: str) -> list[dict[str, Any]]:
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT * FROM tasks WHERE batch=? ORDER BY created_at", (batch_id,)
-            ).fetchall()
-        return [dict(r) for r in rows]
+        return self._task_query("SELECT * FROM tasks WHERE batch=? ORDER BY created_at",
+                                (batch_id,))
 
     # --- shared files -----------------------------------------------------------
 
