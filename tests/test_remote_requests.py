@@ -267,3 +267,87 @@ def test_legacy_flag_approval_is_invalidated_on_upgrade(offered):
                    (binding_digest('coding-session', ['local-adapter', '--session', 'coding-session']), offer['id']))
     assert claim(inbox) is None
     assert inbox.list(now=102)[0]['state'] == 'failed'
+
+
+def test_sender_quota_survives_restart_and_leaves_capacity_for_other_senders(offered, monkeypatch):
+    import collab.remote_requests as requests
+    inbox, offer, route = offered
+    monkeypatch.setattr(requests, 'MAX_SENDER_RECORDS', 1)
+    assert inbox.receive(offer, **route, now=100) is False  # replay is not another slot
+    inbox.decline(offer['id'], now=101)
+    restarted = Inbox(inbox.root.parent)
+    other = make_offer(**route, target='coding-session', kind='prompt', text='another', now=102)
+    with pytest.raises(requests.RemoteQueueFull, match='sender'):
+        restarted.receive(other, **route, now=102)
+    second_route = {**route, 'sender_id': 'p_other'}
+    second = make_offer(**second_route, target='coding-session', kind='prompt', text='other sender', now=102)
+    assert restarted.receive(second, **second_route, now=102)
+    assert len(restarted.list(now=103)) == 2
+
+
+def test_lifecycle_audit_links_delivery_without_prompt_or_receipt_secrets(offered):
+    inbox, offer, _ = offered
+    approve(inbox, offer)
+    delivery = claim(inbox)
+    inbox.finish(offer['id'], delivery['receipt'], delivered=True, now=103)
+    with sqlite3.connect(inbox.root.parent / 'consent' / 'audit.sqlite') as db:
+        rows = db.execute('SELECT event,request_id,digest,details FROM events ORDER BY seq').fetchall()
+    events = [r[0] for r in rows]
+    assert events == ['offer_received', 'approved', 'consumed', 'acceptance_requested', 'dispatch_requested', 'delivery_result']
+    assert all(r[1:3] == (offer['id'], digest(offer)) for r in rows)
+    assert json.loads(rows[-1][3])['result'] == 'delivered'
+    encoded = json.dumps(rows)
+    assert offer['text'] not in encoded and delivery['receipt'] not in encoded
+    # Queue compaction cannot erase the separate lifecycle record.
+    assert inbox.list(now=10000) == []
+    with sqlite3.connect(inbox.root.parent / 'consent' / 'audit.sqlite') as db:
+        assert db.execute('SELECT COUNT(*) FROM events').fetchone()[0] == len(rows)
+
+
+def test_audit_failure_cannot_start_delivery(offered, monkeypatch):
+    from collab import consent
+    inbox, offer, _ = offered
+    approve(inbox, offer)
+    def fail(*args, **kwargs):
+        raise OSError('audit unavailable')
+    monkeypatch.setattr(consent, 'audit', fail)
+    with pytest.raises(OSError, match='unavailable'):
+        claim(inbox)
+    assert inbox.list(now=102)[0]['state'] == 'accepted'
+
+
+@pytest.mark.parametrize('operation', ['rebind', 'drift', 'decline', 'expiry'])
+def test_audit_failure_cannot_resurrect_revoked_approval(offered, monkeypatch, operation):
+    from collab import consent
+    inbox, offer, _ = offered
+    approve(inbox, offer)
+    def fail(*args, **kwargs):
+        raise OSError('audit unavailable')
+    monkeypatch.setattr(consent, 'audit', fail)
+    with pytest.raises(OSError, match='unavailable'):
+        if operation == 'rebind':
+            inbox.bind('other', ['different'])
+        elif operation == 'drift':
+            inbox.bound_target([])
+        elif operation == 'decline':
+            inbox.decline(offer['id'], now=102)
+        else:
+            inbox.list(now=offer['expires_at'] + 1)
+    assert claim(inbox) is None
+    assert inbox.list(now=102)[0]['state'] in ('failed', 'declined', 'expired')
+
+
+def test_revocation_and_refusal_audit_explain_non_delivery(offered, monkeypatch):
+    import collab.remote_requests as requests
+    inbox, offer, route = offered
+    approve(inbox, offer)
+    inbox.bound_target(['local-adapter', '--session', 'coding-session'])
+    inbox.decline(offer['id'], now=102)
+    monkeypatch.setattr(requests, 'MAX_SENDER_RECORDS', 1)
+    other = make_offer(**route, target='coding-session', kind='prompt', text='no capacity', now=103)
+    with pytest.raises(requests.RemoteQueueFull):
+        inbox.receive(other, **route, now=103)
+    with sqlite3.connect(inbox.root.parent / 'consent' / 'audit.sqlite') as db:
+        rows = db.execute("SELECT event,details FROM events WHERE event IN ('revocation_requested','offer_refused')").fetchall()
+    assert [(r[0], json.loads(r[1])['reason']) for r in rows] == [
+        ('revocation_requested', 'local_decline'), ('offer_refused', 'sender_queue_full')]
