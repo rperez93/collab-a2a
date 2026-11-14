@@ -8,7 +8,7 @@ import sys
 from . import logcap
 from .config import SessionProfile
 from .client.daemon import run_daemon
-from .client.daemon_files import DaemonPaths, setup_logging
+from .client.daemon_files import DaemonPaths, capture_logging_into, setup_logging
 
 
 def main() -> int:
@@ -31,6 +31,10 @@ def main() -> int:
     # guest the two paths do not exist and cost a failed `stat` a pass.
     paths = DaemonPaths(profile.dir)
     logcap.watch(paths.log, paths.root / "hub.log", paths.root / "ngrok.log")
+    # AND CAPPED AT WRITE TIME, which the watcher is not: a burst of `logging`
+    # goes through a capped handler that rotates before the file could pass
+    # its budget. The watcher stays as the net for raw writes to stderr.
+    capture_logging_into(paths.log)
     try:
         asyncio.run(run_daemon(profile))
     except KeyboardInterrupt:

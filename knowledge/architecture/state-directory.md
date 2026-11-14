@@ -128,9 +128,12 @@ rotated copy. The daemon caps its own log and, on a host, `hub.log` and
 ngrok's as well — ngrok runs in a session of its own and outlives a hub that was
 killed — the hub caps `hub.log` and ngrok's, and the worker caps its file as it
 writes each line. The watcher looks once a second, and more often as a log's
-observed growth rate rises; that holds the budget against a runaway writer of
-about 3.7 MB/s from a standing start, and the review measured the first version,
-which went back to a slow interval after one fast pass, at 31.8 MB under 5 MB/s.
+observed growth rate rises. Since validation measured 12.58 MB after a burst of
+192 × 64 KiB in 16 ms, the cap is also applied at write time: collab's own
+logging, the worker's lines and ngrok's output (through a `collab.logpipe`
+collector process ngrok writes into) all rotate before a write would carry the
+live file past a generation, so the total cannot pass the budget; the watcher
+remains as the net for a process's raw stderr — a crash traceback.
 The diagnostic record (`diagnostics/`) is bounded by its seven-day retention,
 not by this cap. Later than the pin.
 
