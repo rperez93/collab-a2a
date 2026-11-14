@@ -7023,15 +7023,16 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
 def cmd_skills_install_shared(args: argparse.Namespace) -> int:
     """Review a peer's published skill, get the human's yes, install it (R19).
 
-    Consent binds the BYTES: a publisher can republish new text under the same
-    id, so a non-terminal approval must name the SHA-256 the human reviewed.
-    Without a terminal the text is written to a review file for the human,
-    never printed into the installing agent's context.
+    Consent is the R22 operator-terminal primitive: the human reviews the exact
+    text, publisher, hash and destination on their own controlling terminal,
+    outside the coding agent, and types a one-time code. No flag, stdin or hash
+    can stand in for it, and the receipt binds the reviewed bytes and the
+    destination: a republished text or a changed destination is refused.
     """
     import hashlib
     import os
+    from . import consent
     from . import skills as sk
-    from .protocol import scrub_block
     try:
         if args.action == "uninstall-shared":
             if not args.target:
@@ -7052,40 +7053,34 @@ def cmd_skills_install_shared(args: argparse.Namespace) -> int:
         if not digest or digest != record.get("sha256"):
             raise ValueError("the publication's text does not match its SHA-256; not installing it")
         dest = sk.check_installable(record, target=target, force=args.force)  # before asking
-        terminal = sys.stdin.isatty() and sys.stdout.isatty()
         owner_tag = hashlib.sha256(str(record.get("owner_id", "")).encode()).hexdigest()[:8]
+        fields = dict(subject="skill-install", request_id=str(record.get("id", ""))[:200],
+                      digest=digest, binding=str(dest)[:200])
+        review = {"operation": "install a peer's shared skill into this agent",
+                  "publisher": str(record.get("owner", "")), "participant": owner_tag,
+                  "skill": str(record.get("name", "")), "description": str(record.get("description", "")),
+                  "destination": str(dest), "installed_name": dest.name,
+                  "front_matter_dropped": sk.dropped_keys(content),
+                  "bytes": len(content.encode()), "sha256": digest,
+                  "authority": "the agent will load this text as one of its skills",
+                  "text": content}
         heading(f"shared skill {said(record.get('name', ''))} from {said(record.get('owner', '?'))} "
                 f"(participant {owner_tag})")
         print(f"  {len(content.encode())} bytes · sha256 {digest}")
-        print(f"  description: {said(str(record.get('description', '')))}")
-        print(f"  would install as {said(str(dest))}, renamed `{said(dest.name)}` in its front matter")
-        if dropped := sk.dropped_keys(content):
-            print(f"  front-matter keys dropped on install: {', '.join(said(k) for k in dropped)}")
-        print(dim("  only SKILL.md is installed; files it refers to are not"))
-        if terminal:
-            print(dim("  ---- peer-authored text (untrusted): read it before agreeing ----"))
-            print(scrub_block(content))
-            print(dim("  ---- end of text ----"))
-        if args.human_approved:
-            if args.sha256 != digest:
-                raise ValueError("--human-approved needs --sha256 with the hash your human reviewed; "
-                                 "the text now has a different one, so it was not installed")
-        elif not terminal:
-            review = profile.dir / "skill-reviews" / f"{said(str(record.get('id', 'skill')))}-{digest[:12]}.md"
-            review.parent.mkdir(parents=True, exist_ok=True)
-            review.write_text(content, encoding="utf-8")
-            print(f"  full text for your human to read: {review}")
-            fail("not installed: your human reviews that file and decides; "
-                 f"their approval is `--human-approved --sha256 {digest}`")
+        print(f"  would install as {said(str(dest))}")
+        try:
+            receipt = consent.request(profile.dir, review=review, **fields)
+        except consent.ConsentRefused as exc:
+            consent.audit(profile.dir, event="refused", details={"reason": str(exc)[:200]}, **fields)
+            fail(f"not installed: {exc}")
+            print(dim(f"  your human approves it from their own terminal, outside this agent: "
+                      f"collab skills install-shared {said(str(record.get('id', '')))}"))
             return 1
-        else:
-            try:
-                answer = input("  Install it? [y/N] ")
-            except EOFError:
-                return 1
-            if answer.strip().lower() not in ("y", "yes"):
-                return 1
+        # Revalidate, then consume immediately before the install.
+        sk.check_installable(record, target=target, force=args.force)
+        consent.consume(profile.dir, receipt, **fields)
         dest = sk.install_shared(record, target=target, session_id=profile.session_id, force=args.force)
+        consent.audit(profile.dir, event="installed", **fields)
         ok(f"installed {dest}")
         print(dim(f"  provenance in {dest / sk.PROVENANCE}; remove with `collab skills uninstall-shared {dest.name}`"))
         return 0
@@ -7995,9 +7990,8 @@ Esc cancels a draft, q quits. Editor commands run without a shell.""")
     sk.add_argument("--to", help="with ask: the participant to ask")
     sk.add_argument("--args", help="with ask: arguments for the requested skill")
     sk.add_argument("--note", help="with accept/decline/done: a reason or the result")
-    sk.add_argument("--sha256", help="with install-shared --human-approved: the hash your human reviewed")
     sk.add_argument("--human-approved", action="store_true",
-                    help="with accept or install-shared, without a terminal: your human has explicitly consented")
+                    help="with accept, without a terminal: your human has explicitly consented")
     sk.add_argument("--name", help="published skill name override")
     sk.add_argument("--description", help="published skill description override")
     sk.add_argument("--after", default="", help="shared inventory page cursor")
