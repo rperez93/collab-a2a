@@ -1313,16 +1313,10 @@ def create_app(
         # can learn why instead of suspecting it was lost.
         visible = [f for f in store.files(include_gone=all)
                    if _may_touch(f, user.id)]
-        # The plain list carries only a COUNT of ended files, computed from two
-        # columns with names resolved once each, so a long history costs no
-        # records on the wire and no quadratic filtering in the client.
-        ids: dict[str, str | None] = {}
-        def owner(name):
-            if name not in ids:
-                ids[name] = store.resolve_name(name)
-            return ids[name]
-        ended = sum(1 for recipient, sender in store.ended_file_parties()
-                    if not recipient or user.id in (owner(recipient), owner(sender)))
+        # The plain list carries only a COUNT of ended files, counted in SQL by
+        # the same stored-principal rule as _may_touch, so a long history costs
+        # no records on the wire and no filtering in the client.
+        ended = store.ended_files_visible_to(user.id)
         return {"files": [_file_view(f) for f in visible], "ended": ended}
 
     @app.get(f"{EXT_PREFIX}/files/{{file_id}}/content", tags=["collab"])
