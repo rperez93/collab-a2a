@@ -152,7 +152,7 @@ export function createEnrolApp(environment = globalThis) {
       phase = "ceremony";
       if (typeof options.challenge_id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(options.challenge_id) ||
           !Number.isFinite(options.expires_at) || options.expires_at * 1000 <= now() ||
-          options.expires_at * 1000 - now() > 120000) throw new Error("The ceremony is invalid or expired.");
+          options.expires_at * 1000 - now() > 150000) throw new Error("The ceremony is invalid or expired.");
       const remaining = ceremonyDeadline(operation, options.expires_at);
       const publicKey = creationOptions(options.publicKey, identity.participant_id);
       const allowed = options.publicKey.pubKeyCredParams;

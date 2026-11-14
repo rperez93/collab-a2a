@@ -467,3 +467,57 @@ with TemporaryDirectory(prefix='owned-approval-budget-') as home:
     assert result["after_kib"]["VmHWM"] < 128*1024
     if mode == "flood":assert result["chunks"] == 5 and result["closed"]
     else:assert result["cancelled"]
+
+
+@pytest.mark.parametrize("algorithm", [-8, -35])
+async def test_inventory_rejects_an_unagreed_algorithm_before_challenge_or_proof(adapter_case, algorithm):
+    hub, _, adapter = adapter_case
+    hub.overrides["keys"] = {"api_version":1,"credentials":[{
+        "credential_id":hub.credential_id,"method":"passkey","algorithm":algorithm,
+        "fingerprint":"f"*64,"usable_at":hub.now-1,"state":"active","trust":"tofu-unverified"}]}
+    try:
+        review = await adapter.review(hub.binding.request_id)
+        assert not review.enrolled
+        with pytest.raises(AdapterError):
+            await adapter.begin(hub.binding.request_id,"approve",hub.origin,review.digest)
+        assert not any(path.endswith(("/challenge","/approve")) for _,path,_ in hub.calls)
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.parametrize("skew", [-5, 5])
+async def test_a_small_hub_clock_skew_does_not_disable_a_mature_key_or_full_challenge(adapter_case, skew):
+    hub, _, adapter = adapter_case
+    hub.overrides["keys"] = {"api_version":1,"credentials":[{
+        "credential_id":hub.credential_id,"method":"passkey","algorithm":-7,
+        "fingerprint":"f"*64,"usable_at":hub.now+skew,"state":"active","trust":"tofu-unverified"}]}
+    hub.overrides[f"requests/{hub.binding.request_id}/challenge"] = {
+        "api_version":1,"request_id":hub.binding.request_id,"challenge_id":"ac_skew",
+        "credential_id":hub.credential_id,"method":"passkey","challenge":hub.challenge,
+        "expires_at":hub.now+120+skew,"digest":hub.binding.digest,"origin":hub.origin,"rp_id":"localhost"}
+    try:
+        review, ceremony = await begin(hub,adapter)
+        assert review.enrolled and ceremony.expires == hub.now+120+skew
+        assert 0 < ceremony.public_key["timeout"] <= 120000
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.parametrize("fault", ["digest", "credential_id", "challenge31", "challenge33", "future-limit", "expired"])
+async def test_a_bad_bound_challenge_never_reaches_proof_submission(adapter_case, fault):
+    hub, _, adapter = adapter_case
+    issued={"api_version":1,"request_id":hub.binding.request_id,"challenge_id":"ac_bad",
+        "credential_id":hub.credential_id,"method":"passkey","challenge":hub.challenge,
+        "expires_at":hub.now+120,"digest":hub.binding.digest,"origin":hub.origin,"rp_id":"localhost"}
+    if fault in ("digest","credential_id"): issued[fault] = "b"*64 if fault=="digest" else encode(b"different key")
+    elif fault.startswith("challenge"): issued["challenge"] = encode(b"c"*int(fault[-2:]))
+    elif fault=="future-limit": issued["expires_at"] = hub.now+160
+    else: issued["expires_at"] = hub.now-1
+    hub.overrides[f"requests/{hub.binding.request_id}/challenge"] = issued
+    try:
+        review=await adapter.review(hub.binding.request_id)
+        with pytest.raises(ValueError):
+            await adapter.begin(hub.binding.request_id,"approve",hub.origin,review.digest)
+        assert not any(path.endswith("/approve") for _,path,_ in hub.calls)
+    finally:
+        await adapter.close()

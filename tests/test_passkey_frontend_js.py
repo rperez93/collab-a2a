@@ -341,3 +341,66 @@ const expired=setup({overrides:{'approve/options':()=>new Response(JSON.stringif
 await expired.app.load();await expired.app.approve();assert.equal(expired.prompts.length,0);
 assert.match(expired.elements.status.textContent,/ceremony has expired/);expired.app.dispose();
 ''')
+
+
+def test_the_hub_identity_precedes_the_explicitly_self_chosen_label(tmp_path):
+    """A spoofed display name must not outrank the stable authenticated principal."""
+    html = (ASSETS / "index.html").read_text()
+    assert html.index('id="requester-id"') < html.index('id="requester"')
+    run_js(tmp_path, r'''
+const view=setup();
+view.review.summary.requester.display_name='<img src=x> Trusted administrator';
+await view.app.load();
+assert.equal(view.elements['requester-id'].textContent,'p_requester');
+assert.equal(view.elements.requester.textContent,'Calls itself: <img src=x> Trusted administrator (self-chosen)');
+''')
+
+
+def test_the_request_page_only_collects_get_assertions_and_never_creates_a_key(tmp_path):
+    """Request approval cannot turn an authenticator click into enrolment."""
+    run_js(tmp_path, r'''
+const view=setup({credentials:{create:async()=>assert.fail('request page tried key creation')}});
+await view.app.load();await view.app.approve();
+assert.deepEqual(view.prompts.map(row=>row[0]),['get']);
+assert.equal(view.calls.filter(row=>row[0]==='fetch'&&row[1].includes('/enrol')).length,0);
+view.app.dispose();
+''')
+
+
+def test_a_dispatcher_proof_is_reported_as_signed_waiting_and_never_approved(tmp_path):
+    """A local signed assertion does not assert the hub accepted it."""
+    run_js(tmp_path, r'''
+const view=setup({overrides:{'approve/result':async()=>new Response(JSON.stringify({status:'proof-ready',message:'Signed — waiting for the hub’s confirmation.'}),{headers:{'content-type':'application/json'}})}});
+await view.app.load();await view.app.approve();
+assert.match(view.elements.status.textContent,/Signed.*waiting for the hub/);
+assert.doesNotMatch(view.elements.status.textContent,/approved|Hub response/);
+assert.equal(view.elements.approve.disabled,true);assert.equal(view.elements.decline.disabled,true);
+view.app.dispose();
+''')
+
+
+def test_opted_in_local_cancel_releases_wait_before_any_approve_click(tmp_path):
+    """The synchronous dispatcher is cancellable before requesting a challenge."""
+    run_js(tmp_path, r'''
+const view=setup({overrides:{cancel:async()=>new Response(JSON.stringify({status:'cancelled',message:'Local only.'}),{headers:{'content-type':'application/json'}})}});
+view.review.local_cancel=true;
+await view.app.load();assert.equal(view.elements.cancel.disabled,false);
+await view.app.cancel();assert.equal(view.prompts.length,0);
+assert.match(view.elements.status.textContent,/Cancelled locally/);
+assert.doesNotMatch(view.elements.status.textContent,/Hub response/);
+assert.equal(view.calls.filter(row=>row[0]==='fetch'&&row[1].endsWith('/approve/options')).length,0);
+view.app.dispose();
+''')
+
+
+def test_local_cancel_during_options_prevents_a_late_callback_from_starting_credentials(tmp_path):
+    """Aborted options cannot revive a cancelled review when fetch settles late."""
+    run_js(tmp_path, r'''
+let release;
+const view=setup({overrides:{'approve/options':()=>new Promise(resolve=>{release=resolve;}),cancel:async()=>new Response(JSON.stringify({status:'cancelled',message:'Local only.'}),{headers:{'content-type':'application/json'}})}});
+view.review.local_cancel=true;await view.app.load();const work=view.app.approve();await flush();
+assert.equal(typeof release,'function');await view.app.cancel();
+release(new Response(JSON.stringify({ceremony_id:'c_test',publicKey,expires:view.review.summary.expires}),{headers:{'content-type':'application/json'}}));
+await work;assert.equal(view.prompts.length,0);assert.match(view.elements.status.textContent,/Cancelled locally/);
+view.app.dispose();
+''')

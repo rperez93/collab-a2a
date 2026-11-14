@@ -23,7 +23,7 @@ import httpx
 from .. import routes
 from ..compatibility import request_headers
 from ..protocol import EXT_PREFIX
-from .passkey import Ceremony, NotReady, Outcome, Requester, Review, _binary
+from .passkey import CLOCK_SKEW_SECONDS, Ceremony, NotReady, Outcome, Requester, Review, _binary
 
 PREFIX = EXT_PREFIX + "/approval/"
 MAX_RESPONSE = 256 * 1024  # 64 KiB review plus its base64 copy and bounded metadata.
@@ -387,7 +387,7 @@ class PasskeyHubAdapter:
             usable = bool(key and key.get("method") == "passkey" and key.get("algorithm") in (-7, -257)
                           and type(key.get("fingerprint")) is str and _DIGEST.fullmatch(key["fingerprint"])
                           and key.get("state") == "active" and type(key.get("usable_at")) is int
-                          and key["usable_at"] <= time.time() and key.get("trust") == "tofu-unverified")
+                          and key["usable_at"] <= time.time() + CLOCK_SKEW_SECONDS and key.get("trust") == "tofu-unverified")
             state.canonical, state.status, state.key = raw, data["state"], key if usable else None
             state.ceremony = None
             if state.status != "approved":
@@ -418,7 +418,7 @@ class PasskeyHubAdapter:
             if (data.get("request_id") != request_id or data.get("credential_id") != self.credential_id
                     or data.get("method") != "passkey" or data.get("digest") != state.binding.digest
                     or data.get("origin") != origin or data.get("rp_id") != "localhost"
-                    or expiry > time.time() + 120):
+                    or expiry > time.time() + 120 + CLOCK_SKEW_SECONDS):
                 raise AdapterError("Hub challenge binding changed")
             identity = _label(data.get("challenge_id"))
             challenge = data.get("challenge")
@@ -433,7 +433,7 @@ class PasskeyHubAdapter:
             state.uncertain = False
             return Ceremony(identity, {"challenge": challenge, "rpId": "localhost", "userVerification": "required",
                 "allowCredentials": [{"type": "public-key", "id": self.credential_id}],
-                "timeout": max(1, int((local_expiry - time.time()) * 1000))}, local_expiry, digest)
+                "timeout": min(120000, max(1, int((local_expiry - time.time()) * 1000)))}, local_expiry, digest)
 
     @_operation_budget
     async def complete(self, request_id, operation, ceremony_id, credential, origin, digest):
