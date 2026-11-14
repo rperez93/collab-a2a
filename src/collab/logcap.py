@@ -215,23 +215,182 @@ def _copy(src, dst, until: int) -> int:
     return src.tell()
 
 
-def append_line(path: Path | str, line: str, cap: int = GENERATION_CAP) -> None:
-    """One line onto a log this process writes a line at a time, capped.
+# --- the line writer: nothing waits on the disk ---------------------------------
+#
+# THE CALLER NEVER TOUCHES THE FILE. `append_line` is called from the daemon's
+# event loop — a worker turn ending — and an `open`, a `write` and a trim there
+# put every other thing the daemon does behind whatever the disk was doing: the
+# feed, the heartbeat, the next turn. So a line goes on a bounded queue and one
+# writer thread per process takes it from there, the same arrangement
+# `collab.diagnostics` has used since a paused filesystem paused the feed, and
+# the same `_chunks` so a batch is written as whole lines.
+#
+# One difference, deliberately: when the queue is full the NEWEST line is the
+# one dropped, and the gap is said in place — one `dropped` line where the lost
+# lines would have been, written once there is room again. The diagnostic
+# record drops its oldest because its newest describes the fault in progress;
+# a ledger of worker attempts is read as a sequence, and a sequence with its
+# beginning cut off and nothing saying so reads as complete.
 
-    Opened, written and closed per line: the worker writes one line per model
-    turn, minutes apart, and a handle held between them would be a handle
-    `trim` in another process cannot see. Trimmed after the write rather than
-    before, so a write that crosses the cap is rotated immediately and the
-    live file never sits past it waiting for the next line.
+#: How many lines may wait for the writer. A worker line is about 280 bytes,
+#: so a full queue holds about 280 KB — measured below in
+#: tests/test_logs_stay_capped.py — and a thousand lines is hours of worker
+#: turns, so a queue that fills is a disk that stopped, not a busy worker.
+LINES_MAX = 1000
+
+#: How long `flush` waits for the disk. Bounded because it runs on the way
+#: out, and a log that hangs the shutdown it is recording is worse than one
+#: that lost its last line.
+FLUSH_WAIT = 2.0
+
+
+class LineWriter:
+    """A bounded queue of (path, line), drained in order by one thread.
+
+    `put` never blocks and never raises; `flush` waits, bounded, for what was
+    put so far to reach the disk. The trim that keeps each file under its cap
+    runs on the writer thread, after the write — never on the caller's.
     """
-    path = Path(path)
+
+    def __init__(self, *, limit: int = LINES_MAX, cap: int = GENERATION_CAP) -> None:
+        self.limit = limit
+        self.cap = cap
+        self.dropped_total = 0
+        self._pending: list = []
+        self._dropped: dict[Path, int] = {}
+        self._queued = 0
+        self._written = 0
+        self._ready = threading.Condition()
+        self._thread: threading.Thread | None = None
+        self._registered = False
+
+    def put(self, path: Path | str, line: str) -> bool:
+        """Queue one line. False when it was dropped because the queue is full."""
+        path = Path(path)
+        with self._ready:
+            missed = self._dropped.get(path, 0)
+            room = self.limit - len(self._pending)
+            if room <= 0 or (missed and room < 2):
+                # Full, or room only for the gap's own line: this one is lost,
+                # and counted, and the gap note will carry it.
+                self._dropped[path] = missed + 1
+                self.dropped_total += 1
+                return False
+            if missed:
+                self._pending.append((path, _dropped_line(missed)))
+                self._queued += 1
+                del self._dropped[path]
+            self._pending.append((path, line.rstrip("\n")))
+            self._queued += 1
+            self._ready.notify()
+        self._start()
+        return True
+
+    def flush(self, timeout: float = FLUSH_WAIT) -> bool:
+        """Wait until everything put so far is written. True if it was.
+
+        The same contract as `collab.diagnostics.flush`, and needed for the
+        same reason: a test or a command reading `worker.log` back right after
+        something was logged must flush first, because the line may still be
+        in this queue.
+        """
+        with self._ready:
+            target = self._queued
+            if self._written >= target:
+                return True
+            self._ready.notify()
+        self._start()
+        with self._ready:
+            return self._ready.wait_for(lambda: self._written >= target, timeout)
+
+    def _start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        with self._ready:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            # A DAEMON THREAD with an `atexit` flush behind it, as in
+            # collab.diagnostics: nothing here may hold a stopping process open.
+            self._thread = threading.Thread(target=self._loop, daemon=True,
+                                            name="collab-log-writer")
+            self._thread.start()
+            if not self._registered:
+                self._registered = True
+                import atexit
+                atexit.register(self.flush)
+
+    def _loop(self) -> None:
+        while True:
+            with self._ready:
+                if not self._pending:
+                    self._ready.wait(5.0)
+                batch = self._pending
+                self._pending = []
+                # THE QUEUE IS EMPTY NOW, which is the «space returned» a gap
+                # note waits for. Without this a gap followed by silence — the
+                # last lines before an exit — would never be said at all.
+                for path, missed in self._dropped.items():
+                    batch.append((path, _dropped_line(missed)))
+                    self._queued += 1
+                self._dropped.clear()
+                upto = self._queued
+            if batch:
+                _write_lines(batch, self.cap)
+            with self._ready:
+                # AFTER THE WRITE: anything earlier tells a waiting `flush`
+                # «done» while the lines are still in this thread's hands.
+                self._written = upto
+                self._ready.notify_all()
+
+
+def _dropped_line(count: int) -> str:
+    import json
+
+    return json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                       "event": "dropped", "lines": count})
+
+
+def _write_lines(batch: list, cap: int) -> None:
+    """One batch on to the disk: grouped by file, whole lines per write, then
+    each file trimmed. On the writer thread; a failure costs the batch."""
+    from .diagnostics import _chunks
+
+    by_file: dict[Path, list[str]] = {}
+    for path, line in batch:
+        by_file.setdefault(path, []).append(line)
+    for path, lines in by_file.items():
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as fh:
+                for chunk in _chunks(lines):
+                    fh.write(chunk)
+                    fh.flush()
+        except Exception:                                     # noqa: BLE001
+            continue
+        trim(path, cap)
+
+
+#: The one writer for this process.
+WRITER = LineWriter()
+
+
+def append_line(path: Path | str, line: str) -> bool:
+    """One line onto a capped log, without waiting for the disk. Never raises.
+
+    Queued for `WRITER`'s thread, which writes it, in order, and trims the file
+    under its cap. False when the queue was full and the line was dropped —
+    counted, and said in the file once there is room. Read the file back only
+    after `flush()`.
+    """
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(line.rstrip("\n") + "\n")
-    except OSError:
-        return
-    trim(path, cap)
+        return WRITER.put(path, line)
+    except Exception:                                         # noqa: BLE001
+        return False
+
+
+def flush(timeout: float = FLUSH_WAIT) -> bool:
+    """Wait, bounded, for every queued line to reach the disk."""
+    return WRITER.flush(timeout)
 
 
 def total(path: Path | str) -> int:
@@ -303,7 +462,14 @@ class Watcher:
         return max(self.fastest, min(self.every, HEADROOM_SHARE * headroom / rate))
 
     def _run(self) -> None:
-        wait = self.every
+        # THE FIRST PASS IS HERE, on this thread, not in `watch`: a log left
+        # past its cap by the last run is a multi-megabyte copy, and `watch` is
+        # on the start-up path of the process the log belongs to.
+        try:
+            _clear_stale_spares(self.paths)
+            wait = self.check()
+        except Exception:                                    # noqa: BLE001
+            wait = self.every
         while not self._stop.wait(wait):
             try:
                 wait = self.check()
@@ -351,13 +517,11 @@ def watch(*paths: Path | str) -> Watcher | None:
     that is not capped is a smaller failure than a session that does not start.
     """
     try:
-        watcher = Watcher(paths)
-        _clear_stale_spares(watcher.paths)
-        watcher.check()
-        return watcher.start()
+        return Watcher(paths).start()
     except Exception:                                        # noqa: BLE001
         return None
 
 
-__all__ = ["BUDGET", "GENERATION_CAP", "CHECK_EVERY", "CHECK_FASTEST", "Watcher",
-           "append_line", "rotated", "spare_for", "total", "trim", "watch"]
+__all__ = ["BUDGET", "GENERATION_CAP", "CHECK_EVERY", "CHECK_FASTEST", "LINES_MAX",
+           "LineWriter", "WRITER", "Watcher", "append_line", "flush", "rotated",
+           "spare_for", "total", "trim", "watch"]

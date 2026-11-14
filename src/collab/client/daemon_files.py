@@ -90,14 +90,22 @@ _listener: handlers.QueueListener | None = None
 
 
 class _Bounded(queue.Queue):
-    """A log queue that drops its oldest record rather than blocking anybody.
+    """A log queue that drops rather than blocking anybody, and says so.
 
     The two things a log queue must never do are grow without limit and make
     the caller wait, and the stdlib's `QueueHandler` on a bounded queue does the
     second: `put_nowait` raises `Full`, `handleError` runs, and on a default
     build that prints to stderr from inside whatever was logging. So the
-    overflow is decided here — the oldest record goes, because in a burst the
-    newest lines are the ones describing what is happening now.
+    overflow is decided here.
+
+    THE NEWEST RECORD IS DROPPED, AND COUNTED, and one line saying how many
+    takes its place in the log once there is room — the same rule as
+    `collab.logcap.LineWriter`. It used to drop the OLDEST, silently: in a
+    burst the file then jumped from one moment to a later one with nothing
+    marking the gap, and a log read as a sequence reads that as nothing having
+    happened in between. The listener's sentinel is the exception: it is always
+    admitted, making room by dropping the oldest, because a sentinel that never
+    arrives leaves `stop` waiting on a join from `atexit`.
 
     `LOG_QUEUE_MAX` records of a few hundred bytes is well under a megabyte,
     which is the budget: this runs in a daemon that is expected to sit there
@@ -124,11 +132,41 @@ class _Bounded(queue.Queue):
         how the standard library intends a subclass to change this behaviour.
         """
         with self.mutex:
-            while self.maxsize > 0 and self._qsize() >= self.maxsize:
-                self._get()
-            self._put(item)
-            self.unfinished_tasks += 1
-            self.not_empty.notify()
+            if item is _SENTINEL:
+                while self.maxsize > 0 and self._qsize() >= self.maxsize:
+                    self._get()
+                self._admit(item)
+                return
+            room = self.maxsize - self._qsize() if self.maxsize > 0 else 2
+            if room <= 0 or (self.dropped and room < 2):
+                self.dropped += 1
+                self.dropped_total += 1
+                return
+            if self.dropped:
+                self._admit(_gap(self.dropped))
+                self.dropped = 0
+            self._admit(item)
+
+    #: Records dropped since the last gap line, and over the queue's life.
+    dropped = 0
+    dropped_total = 0
+
+    def _admit(self, item: Any) -> None:
+        self._put(item)
+        self.unfinished_tasks += 1
+        self.not_empty.notify()
+
+
+#: `QueueListener`'s sentinel, which `_Bounded` must never drop.
+_SENTINEL = handlers.QueueListener._sentinel
+
+
+def _gap(count: int) -> logging.LogRecord:
+    """The line that stands where `count` dropped records would have been."""
+    return logging.makeLogRecord({
+        "name": "collab.log", "levelno": logging.WARNING, "levelname": "WARNING",
+        "msg": "%d log lines dropped here: the writer fell behind",
+        "args": (count,)})
 
 
 class _Listener(handlers.QueueListener):
@@ -227,7 +265,7 @@ def _write_logs_on_a_thread() -> None:
     atexit.register(_listener.stop)
 
 
-def open_log(path: Path, cap: int = LOG_CAP):
+def open_log(path: Path, cap: int = LOG_CAP, *, trim: bool = True):
     """Open a detached process's log for appending, rolling it aside if it is large.
 
     ALWAYS `"a"`, which is `O_APPEND`, and the running cap depends on it: the
@@ -244,9 +282,14 @@ def open_log(path: Path, cap: int = LOG_CAP):
     file is what somebody wants when a daemon has just been restarted by the
     thing they are investigating, and the end of it is the part that explains
     the restart.
+
+    `trim=False` is for a caller that must not wait on a copy — the daemon
+    restarting a hub from inside its event loop — and whose file a
+    `collab.logcap.Watcher` thread already keeps under its cap.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    logcap.trim(path, cap)      # never raises: a log that cannot be rolled is
+    if trim:
+        logcap.trim(path, cap)  # never raises: a log that cannot be rolled is
     return path.open("a")       # still appended to
 
 
