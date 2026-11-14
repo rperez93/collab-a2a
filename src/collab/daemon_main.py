@@ -23,7 +23,14 @@ def main() -> int:
     # CAPPED WHILE IT RUNS, not only when the next daemon is spawned: a daemon
     # stays up for the life of a session, and its log used to grow for as long.
     # `worker.log` is capped by its own writer, a line at a time.
-    logcap.watch(DaemonPaths(profile.dir).log)
+    #
+    # On a host it watches `hub.log` and `ngrok.log` as well, beside the hub's
+    # own watcher (the trim lock keeps the two from racing). ngrok is started
+    # in a session of its own and outlives a hub that was SIGKILLed; with only
+    # the hub watching, its log grew uncapped until the next hub came up. For a
+    # guest the two paths do not exist and cost a failed `stat` a pass.
+    paths = DaemonPaths(profile.dir)
+    logcap.watch(paths.log, paths.root / "hub.log", paths.root / "ngrok.log")
     try:
         asyncio.run(run_daemon(profile))
     except KeyboardInterrupt:

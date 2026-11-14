@@ -2343,9 +2343,11 @@ or `skipped-local` for a counted turn that called no model), what triggered it
 as counts by kind, the model, tokens and cost, reply and escalation counts, the
 class of any failure and how long it took — never what anybody said, who said
 it, or a provider's own error text. Every one of them is capped at 10 MB with its
-rotated generation, while the process writing it runs: past 4 MiB the tail is
+rotated generation, while the process writing it runs: past 3 MiB the tail is
 copied to `<name>.1` and the file is truncated in place, so a process holding it
-open goes on writing into the live one. `collab logs` prints all three of
+open goes on writing into the live one. The watcher looks once a second and
+faster as a log's growth rate climbs, which holds the budget against a runaway
+writer of up to about 3.7 MB/s from a standing start. `collab logs` prints all three of
 collab's own.
 
 ## Settings

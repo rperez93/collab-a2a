@@ -107,6 +107,16 @@ _INVALID = ("Worker returned", "Worker did not return valid JSON",
             "Worker referred to a message outside this turn", "OpenCode returned")
 
 
+#: `WorkerRuntimeError`s raised BEFORE a provider process exists — a model,
+#: provider or command the runtime refused, or an executable that would not
+#: start. The budget slot was spent, so the attempt is logged; but no model was
+#: reached, and `phase` says so rather than `launched`.
+_PREFLIGHT = ("Background workers require", "Worker requires an explicit",
+              "Worker timeout must", "Worker payload must", "Worker command must",
+              "Worker input", "Unsupported worker provider", "OpenCode requires",
+              "Cursor worker requires", "Worker executable could not start")
+
+
 def classify(exc: BaseException) -> tuple[str, str]:
     """(outcome, error class) for a turn that raised. Never the text.
 
@@ -510,6 +520,9 @@ class Conversation:
             # status needs a class of failure, not private subprocess logs.
             detail = str(exc) if isinstance(exc, worker_runtime.WorkerRuntimeError) else type(exc).__name__
             outcome, kind = classify(exc)
+            if (logged and isinstance(exc, worker_runtime.WorkerRuntimeError)
+                    and str(exc).startswith(_PREFLIGHT)):
+                logged["phase"] = "reserved"
             self._log_turn(logged, outcome, error=kind)
             self.next_at = time.time() + setting("worker_retry_delay")
             store.health(error=detail[:300], retry_at=self.next_at, running=False, expected_generation=snapshot["generation"])
