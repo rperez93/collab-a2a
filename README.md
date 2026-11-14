@@ -2344,11 +2344,19 @@ or `skipped-local` for a counted turn that called no model), what triggered it
 as counts by kind, the model, tokens and cost, reply and escalation counts, the
 class of any failure and how long it took — never what anybody said, who said
 it, or a provider's own error text. Every one of them is capped at 10 MB with its
-rotated generation, while the process writing it runs: past 3 MiB the tail is
-copied to `<name>.1` and the file is truncated in place, so a process holding it
-open goes on writing into the live one. The watcher looks once a second and
-faster as a log's growth rate climbs, which holds the budget against a runaway
-writer of up to about 3.7 MB/s from a standing start. `collab logs` prints all three of
+rotated generation — the live file, `<name>.1` and a rotation's `<name>.1.tmp`
+together — and the cap is applied AT WRITE TIME: whatever collab writes rotates
+first if it would carry the live file past 3 MiB, so no burst can take the file
+over its budget. ngrok never writes `ngrok.log` itself; its output goes through a
+small collector process that writes the file the same way and drops a flood
+past 256 KB a second, saying how many lines it dropped. A watcher thread
+remains as a safety net for the one thing that writes around the cap — an
+interpreter's own traceback on a crash, a few kilobytes once.
+
+Upgrading from 2.1.2: an older `collab host` started beside a newer hub renames
+`hub.log` aside to `hub.log.1` when it opens it, as 2.1.2 always did. The newer
+hub notices the rename and starts a fresh `hub.log`; nothing is lost, but the
+lines from before are in `hub.log.1`. `collab logs` prints all three of
 collab's own.
 
 ## Settings
