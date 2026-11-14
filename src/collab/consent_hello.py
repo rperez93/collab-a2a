@@ -173,7 +173,11 @@ try {
     $f.CancelButton = $no
     $f.AcceptButton = $no
     $f.Add_Shown({ $f.Activate(); $no.Focus() })
-    if ($req.dry) { $f.Dispose(); Say @{status = 'Success'; choice = 'built'}; exit 0 }
+    if ($req.dry) {
+      $keys = @{status = 'Success'; choice = 'built';
+                accept = [bool]($f.AcceptButton -eq $no); cancel = [bool]($f.CancelButton -eq $no)}
+      $f.Dispose(); Say $keys; exit 0
+    }
     [void]$f.ShowDialog()
     Say @{status = 'Success'; choice = $script:choice}
     exit 0
@@ -311,7 +315,16 @@ def _run(request: dict, deadline: float) -> dict:
             _end_group(proc)
         return _answer(bytes(got))
     finally:
-        for pipe in (proc.stdout, proc.stdin):
+        # NOT WHILE THE READER IS IN IT. Closing a buffered pipe another thread
+        # is blocked reading waits for that read to return — and a grandchild
+        # still holding the pipe (when only `proc.kill()` could be used, not a
+        # group kill) kept it open for its whole life: a 1.5 s deadline took
+        # 60 s. A reader still running is a daemon thread on a pipe that will
+        # reach end of file when its last holder exits. The same for the
+        # writer, blocked on a stdin nobody reads.
+        pipes = (([] if writer.is_alive() else [proc.stdin])
+                 + ([] if reader.is_alive() else [proc.stdout]))
+        for pipe in pipes:
             try:
                 if pipe is not None:
                     pipe.close()
@@ -554,9 +567,11 @@ def open_window(request: dict) -> dict:
             return {"choice": "expired"}
         return {"choice": "unavailable", "reason": exc.status}
     # CHECKED HERE TOO, against the key's own public half — read without a
-    # prompt. The hub's verification is the one that counts; this one stops a
-    # signature this machine's Hello did not make (a swapped powershell.exe, a
-    # broken answer) being forwarded as if it were an approval.
+    # prompt. This catches a broken or corrupted answer before it is forwarded
+    # as an approval. It does NOT catch a swapped powershell.exe: the public key
+    # comes back through the same executable, so a forger controls both. The
+    # hub's verification, against the key enrolled for this participant, is
+    # the control that counts.
     try:
         if not verify(public_key(cred), challenge, signature):
             return {"choice": "unavailable", "reason": "SignatureMismatch"}
