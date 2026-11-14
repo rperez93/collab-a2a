@@ -587,7 +587,7 @@ def test_reply_verbatim_and_instruct_choose_who_words_the_answer(tmp_path, monke
     assert [(r['to'], r['text']) for r in store.outbox()] == [('bob', 'Yes, exactly this.')]
     # The durable item exists, but no transport has run in this process.
     out = capsys.readouterr().out
-    assert 'answer queued for the asking peer as written' in out
+    assert 'queued for @bob verbatim' in out
     assert 'answer sent' not in out
 
     assert reply(second, 'Tell bob yes, politely.') == 0

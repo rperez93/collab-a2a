@@ -6538,12 +6538,23 @@ def cmd_worker(args: argparse.Namespace) -> int:
         elif args.worker_action == "reply":
             mode = True if getattr(args, "verbatim", False) else False if getattr(args, "instruct", False) else None
             record = next((r for r in store.pending() if r["id"] == args.decision_id), {})
-            verbatim = mode if mode is not None else bool(record.get("awaiting_human"))
+            if mode is None and record.get("awaiting_human"):
+                # The human's words may not be meant for the peer as written
+                # ("tell him no -- between us…"): the agent must choose.
+                fail("this decision waits on your human: reply with --verbatim to send TEXT to the "
+                     "asking peer exactly as written, or --instruct to let the worker word it")
+                return 2
+            verbatim = bool(mode)
             to, room = _decision_source(profile, store, args.decision_id) if verbatim else ("", "")
+            to = to or record.get("notify_to") or ""
+            room = room or record.get("notify_room") or ""
+            if verbatim and not (to or room):
+                fail("no asking peer is known for this decision, so it cannot be sent verbatim; "
+                     "use --instruct, or `collab worker send --to NAME`")
+                return 2
             store.answer(args.decision_id, args.text, verbatim=verbatim, notify_to=to, notify_room=room)
-            if verbatim and not (to or room or record.get("notify_to") or record.get("notify_room")):
-                warn("no asking peer is known for this decision; the worker relays it instead")
-            ok("answer queued for the asking peer as written" if verbatim
+            # Queued: the durable outbox delivers it; nothing was sent yet.
+            ok(f"queued for {('@' + said(to)) if to else ('#' + said(room))} verbatim" if verbatim
                else "decision queued for the collaboration worker")
         elif args.worker_action == "context":
             store.context(args.text)
@@ -8765,7 +8776,8 @@ def _decisions_banner(args: argparse.Namespace) -> None:
         return
     try:
         from .worker import pending_count_readonly
-        profile = SessionProfile.current()
+        session = getattr(args, "session", None)
+        profile = SessionProfile.load(session) if session else SessionProfile.current()
         if profile is None:
             return
         waiting = pending_count_readonly(profile.dir)

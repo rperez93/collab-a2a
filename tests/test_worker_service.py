@@ -635,10 +635,13 @@ async def test_a_worker_reply_repeating_an_open_question_to_someone_else_is_drop
     store.commit_turn(expected_cursor=snap["cursor"], cursor=1, summary="", replies=[],
                       escalations=[{"reason": "decision", "seq": 1,
                                     "question": "Bob asks: may we drop the legacy API in 3.0?"}])
-    incoming(conversation, 2, "anything new?")
+    # a message in another room, so "ops" is a room this turn may answer in
+    conversation.daemon.inbox.record(Envelope(seq=2, kind="chat", sender="bob", sender_id="p_b",
+                                              room="ops", text="anything new?"))
     async def run(*args, **kwargs):
         return {"summary": "", "escalations": [], "replies": [
-            {"text": "FYI all: Bob asks: may we drop the legacy API in 3.0? waiting", "to": "", "room": "general"},
+            {"text": "FYI ops: Bob asks: may we drop the legacy API in 3.0? waiting", "to": "", "room": "ops"},
+            {"text": "In general: Bob asks: may we drop the legacy API in 3.0? Still open.", "to": "", "room": "general"},
             {"text": "Still with the main agent.", "to": "bob", "room": ""}]}
     monkeypatch.setattr("collab.worker_runtime.run_turn", run)
     sent = []
@@ -648,7 +651,9 @@ async def test_a_worker_reply_repeating_an_open_question_to_someone_else_is_drop
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
         conversation.daemon._http = client
         await conversation.turn()
-    assert sent == ["Still with the main agent."]
+    assert sent == ["In general: Bob asks: may we drop the legacy API in 3.0? Still open.",
+                    "Still with the main agent."], "dropped in another room, kept in the asker's own"
+    assert store.status()["dropped_replies"] == 1
 
 
 @pytest.mark.asyncio
