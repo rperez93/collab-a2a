@@ -29,7 +29,9 @@ from .worker_notices import _db as _notice_db, _load, _save
 #: then came back empty and nobody was woken. Measured under CPU stress (the
 #: test niced to 19 under 28 busy loops): 12 lost doorbells in 6,000 races
 #: with no wait, 0 in 3,000 with this one. A reader holds
-#: its lock for microseconds; one that never lets go costs this much, once.
+#: its lock for microseconds; one that never lets go costs this much on EVERY
+#: check that finds an opportunity — each heartbeat while there is work to
+#: offer — never more per check, and never SQLite's ten-second default.
 COMMIT_WAIT = 0.05
 
 

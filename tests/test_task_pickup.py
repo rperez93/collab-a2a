@@ -412,3 +412,22 @@ def test_a_ledger_held_forever_costs_one_bounded_wait_not_ten_seconds(tmp_path):
     finally:
         holder.release()
         holder.join()
+
+
+def test_a_competing_writer_is_refused_at_once_not_after_the_commit_wait(tmp_path, monkeypatch):
+    """The commit's wait must be set AFTER the write lock is taken: a claimant
+    that finds another holding it is refused at once — that one is ringing,
+    and this runs on the daemon's event loop — and only a commit waits."""
+    import sqlite3
+    monkeypatch.setattr(pickup, 'COMMIT_WAIT', 2.0)
+    seed(tmp_path)
+    first = pickup.claim(tmp_path, now=1000)
+    db = sqlite3.connect(tmp_path/'task-pickup-notices.db')
+    try:
+        db.execute('BEGIN IMMEDIATE')
+        began = time.monotonic()
+        assert pickup.claim(tmp_path, now=1001) is None
+        assert pickup.commit(tmp_path, first['token'], now=1001) is False
+        assert time.monotonic() - began < 0.5
+    finally:
+        db.rollback(); db.close()
