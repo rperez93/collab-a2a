@@ -6,6 +6,7 @@ import contextlib
 import hashlib
 import json
 import os
+from contextlib import contextmanager
 import re
 import shutil
 import subprocess
@@ -521,6 +522,30 @@ _AGENT_PATH: dict[tuple, tuple[Path | None, float]] = {}
 #: Set by `collab config KEY --machine`: write THAT agent-scoped key to the
 #: shared file (only that one; this agent's other overrides never move there).
 WRITE_MACHINE: dict[str, Any] = {"on": False, "key": None}
+#: Set by `collab config KEY --kind [KIND]`: write THAT agent-scoped key for
+#: every conversation of one agent kind (claude-code, codex, …), so a name or a
+#: probe outlives one conversation without reaching agents of another kind.
+WRITE_KIND: dict[str, Any] = {"on": False, "key": None, "kind": None}
+_KIND_CACHE: dict[str, Any] = {}
+
+
+def current_kind() -> str:
+    """The coding agent kind running collab: COLLAB_AGENT_KIND, else detected."""
+    from .hosttool import detect
+    kind = (os.environ.get("COLLAB_AGENT_KIND") or detect() or "").strip()
+    return kind if re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", kind) else ""
+
+
+def kind_config_path(kind: str | None = None) -> Path | None:
+    kind = current_kind() if kind is None else kind
+    if not kind or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", kind):
+        return None
+    return global_config_path().parent / "kinds" / f"{kind}.json"
+
+
+def load_kind_config() -> dict[str, Any]:
+    path = kind_config_path()
+    return _load_file(path, _KIND_CACHE) if path is not None else {}
 
 
 def agent_config_path() -> Path | None:
@@ -562,12 +587,14 @@ def load_agent_config() -> dict[str, Any]:
 
 
 def setting_source(key: str) -> str:
-    """Where a setting's value comes from: agent, machine, legacy or default.
+    """Where a setting's value comes from: agent, kind, machine, legacy or default.
 
     "legacy" is an identity key found only in the machine file: shown, not used.
     """
     if agent_scoped(key) and key in load_agent_config():
         return "agent"
+    if agent_scoped(key) and key in load_kind_config():
+        return "kind"
     if key in load_machine_config():
         return "legacy" if key in IDENTITY_KEYS else "machine"
     return "default"
@@ -593,8 +620,10 @@ def load_config() -> dict[str, Any]:
     """
     import copy
     machine = load_machine_config()
+    kind = load_kind_config()
     agent = load_agent_config()
     merged = {k: v for k, v in machine.items() if k not in IDENTITY_KEYS}
+    merged.update({k: v for k, v in kind.items() if agent_scoped(k)})  # machine → kind → agent
     merged.update({k: v for k, v in agent.items() if agent_scoped(k)})
     view = ConfigView(copy.deepcopy(merged))
     view.baseline = copy.deepcopy(merged)
@@ -631,7 +660,6 @@ def save_config(cfg: dict[str, Any]) -> None:
     Removing an agent-scoped key removes THIS agent's value only: the shared
     default other agents use is changed only with --machine.
     """
-    import fcntl
     if WRITE_MACHINE["on"] and WRITE_MACHINE.get("key") in IDENTITY_KEYS:
         raise ValueError(f"{WRITE_MACHINE['key']} is each agent's own and has no shared default")
     # The caller edited the view it READ, possibly under an earlier selection:
@@ -641,33 +669,76 @@ def save_config(cfg: dict[str, Any]) -> None:
     seen = cfg.baseline if isinstance(cfg, ConfigView) else load_config()
     changed = {k for k in set(cfg) | set(seen)
                if (k in cfg) != (k in seen) or (k in cfg and cfg[k] != seen[k])}
-    if WRITE_MACHINE["on"] and WRITE_MACHINE.get("key"):
-        changed.add(WRITE_MACHINE["key"])
+    for flag in (WRITE_MACHINE, WRITE_KIND):
+        if flag["on"] and flag.get("key"):
+            changed.add(flag["key"])
     _AGENT_PATH.clear()  # a write resolves the selected identity fresh, never from a cache
     machine_path, agent_path = global_config_path(), agent_config_path()
+    kind_path = kind_config_path(WRITE_KIND.get("kind") or None) if WRITE_KIND["on"] else None
+    if WRITE_KIND["on"] and kind_path is None:
+        raise ValueError("no agent kind to write for; pass --kind claude-code|codex|…")
     machine_path.parent.mkdir(parents=True, exist_ok=True)
-    # Two agents read-modify-writing the shared file must not lose each other's change.
-    lock = open(machine_path.with_name(machine_path.name + ".lock"), "a")
-    fcntl.flock(lock, fcntl.LOCK_EX)
-    try:
-        _save_locked(cfg, machine_path, agent_path, changed)
-    finally:
-        fcntl.flock(lock, fcntl.LOCK_UN)
-        lock.close()
+    with settings_lock(machine_path):
+        _save_locked(cfg, machine_path, agent_path, changed, kind_path)
     _CACHE.clear()
     _AGENT_CACHE.clear()
+    _KIND_CACHE.clear()
+
+
+@contextmanager
+def settings_lock(machine_path: Path, timeout: float = 5.0):
+    """Serialise read-modify-write of the settings files across agents.
+
+    A bounded wait: a stuck holder makes the write fail loudly instead of
+    hanging the command. No locking where fcntl does not exist (Windows).
+    """
+    try:
+        import fcntl
+    except ImportError:
+        yield
+        return
+    handle = open(machine_path.with_name(machine_path.name + ".lock"), "a")
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    raise ValueError("another collab process is writing settings; try again")
+                time.sleep(0.02)
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            fcntl.flock(handle, fcntl.LOCK_UN)
+        handle.close()
 
 
 def _save_locked(cfg: dict[str, Any], machine_path: Path, agent_path: Path | None,
-                 changed: set[str]) -> None:
+                 changed: set[str], kind_path: Path | None = None) -> None:
     machine, agent = _read_raw(machine_path), _read_raw(agent_path)
+    kind = _read_raw(kind_path)
     current = {k: v for k, v in machine.items() if k not in IDENTITY_KEYS}
+    current.update({k: v for k, v in _read_raw(kind_config_path()).items() if agent_scoped(k)})
     current.update({k: v for k, v in agent.items() if agent_scoped(k)})
-    changed_machine = changed_agent = False
+    changed_machine = changed_agent = changed_kind = False
     machine_key = WRITE_MACHINE.get("key") if WRITE_MACHINE["on"] else None
+    kind_key = WRITE_KIND.get("key") if WRITE_KIND["on"] else None
     for key in changed:
         if WRITE_MACHINE["on"] and agent_scoped(key) and key != machine_key:
             continue  # --machine names one key; the rest of this agent's stay put
+        if WRITE_KIND["on"]:
+            if key != kind_key or not agent_scoped(key):
+                continue  # --kind names one agent-scoped key
+            if key in cfg and kind.get(key) == cfg[key]:
+                continue
+            if key in cfg:
+                kind[key] = cfg[key]
+            else:
+                kind.pop(key, None)
+            changed_kind = True
+            continue
         to_agent = agent_scoped(key) and not WRITE_MACHINE["on"]
         # Compared with the layer being written: --machine must set the shared
         # value even when it equals this agent's own override.
@@ -693,18 +764,21 @@ def _save_locked(cfg: dict[str, Any], machine_path: Path, agent_path: Path | Non
         _write_json(machine_path, machine)
     if changed_agent and agent_path is not None:
         _write_json(agent_path, agent)
+    if changed_kind and kind_path is not None:
+        _write_json(kind_path, kind)
 
 
 def pin_agent_value(key: str, value: Any) -> None:
     """Give this agent its own value even when it equals the inherited one."""
     path = agent_config_path()
-    if path is None or not agent_scoped(key) or WRITE_MACHINE["on"]:
+    if path is None or not agent_scoped(key) or WRITE_MACHINE["on"] or WRITE_KIND["on"]:
         return
-    agent = _read_raw(path)
-    if agent.get(key) != value or key not in agent:
-        agent[key] = value
-        _write_json(path, agent)
-        _AGENT_CACHE.clear()
+    with settings_lock(global_config_path()):
+        agent = _read_raw(path)
+        if agent.get(key) != value or key not in agent:
+            agent[key] = value
+            _write_json(path, agent)
+    _AGENT_CACHE.clear()
 
 
 def _git_user_name() -> str | None:
@@ -2413,12 +2487,12 @@ def settings() -> tuple[Setting, ...]:
         # set and `collab name` can — so reporting the effective name here
         # would have shown a value that setting this key did not change.
         Setting("display_name", "the name others see this agent as "
-                                "(`--machine` sets everyone's default)",
+                                "(`--kind` keeps it for every conversation of this agent kind)",
                 _name_fallback(), str,
                 lambda: load_config().get("display_name") or _name_fallback(),
                 lambda v: set_default_name(v)),
         Setting("color", "the colour others see this agent in "
-                         "(`--machine` sets everyone's default)",
+                         "(`--kind` keeps it for every conversation of this agent kind)",
                 None, str,
                 lambda: load_config().get("color"),
                 _write_color),
