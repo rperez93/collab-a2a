@@ -368,7 +368,7 @@ class Store:
                 entry["status"] = status
 
     def send(self, text: str, *, to: str, to_id: str = "", room: str = "", thread: str = "",
-             body: dict[str, Any] | None = None) -> str:
+             body: dict[str, Any] | None = None, recipient_id: str = "") -> str:
         """Queue the main agent's exact message without asking a model to repeat it.
 
         Context supplies facts and can legitimately produce no reply. Treating
@@ -380,7 +380,9 @@ class Store:
         # An empty recipient is a room message: the main agent's own `send`
         # is routed here while its worker is enabled.
         to = _text(to, "recipient", empty=True)
-        to_id = _bound_recipient(to, to_id)
+        if recipient_id and to_id and recipient_id != to_id:
+            raise ValueError("conflicting recipient identities")
+        to_id = _bound_recipient(to, to_id or recipient_id)
         room = _text(room, "room", empty=True)
         thread = _text(thread, "thread", empty=True)
         if len(text) > 8000:
@@ -390,10 +392,15 @@ class Store:
         if (len(to) > 200 or len(room) > 200 or len(thread) > 200
                 or any("\0" in value for value in (text, to, room, thread))):
             raise ValueError("invalid message routing or NUL in message")
+        if recipient_id:
+            from .remote_requests import _identifier
+            _identifier(recipient_id, "expected recipient")
         with self._db() as db:
             if not (self._state(db)["config"] or {}).get("enabled"):
                 raise ValueError("start the worker before queueing a message")
             data = {"text": text, "to": to, "to_id": to_id, "room": room, "routing_version": 1}
+            if recipient_id:
+                data["recipient_id"] = recipient_id
             if thread:
                 data["thread"] = thread
             if body:
@@ -402,7 +409,8 @@ class Store:
                 data["body"] = body
             record_id = self._add(db, "outbox", data)
             state = self._state(db)
-            self._note_sent(state, record_id, to=to, to_id=to_id, room=room, text=text, status="queued")
+            if not recipient_id:
+                self._note_sent(state, record_id, to=to, to_id=to_id, room=room, text=text, status="queued")
             self._save(db, state)
             return record_id
 
