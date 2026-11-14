@@ -30,6 +30,10 @@ dependencies = [
     # while working everywhere else. It is the standard fallback wheel and the
     # marker keeps it off machines that already have a tz database.
     "tzdata; platform_system == 'Windows'",
+    # Verifying Windows Hello and passkey signatures (RSA PKCS#1 v1.5, ECDSA,
+    # SubjectPublicKeyInfo). Already installed as a transitive dependency of
+    # the A2A stack; named here because strong approval depends on it directly.
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]
