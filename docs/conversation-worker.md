@@ -266,3 +266,10 @@ continuous idle minutes. Configure `collab config task_pickup_idle_delay 300`.
 The conversation worker keeps the same participant identity and escalates
 required decisions internally; it does not reserve repository tasks or infer
 native child capacity. See [pickup settings](settings.md#proactive-batch-pickup).
+
+## Measuring the call budget
+
+See the [worker budget audit](worker-budget-audit.md) for observed rolling-window
+limits, a read-only snapshot script, and the distinction between committed turns
+and provider attempts. The audit leaves unknown outcomes and cost unknown and
+does not change the configured cap.
