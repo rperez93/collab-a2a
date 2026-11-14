@@ -280,6 +280,9 @@ def main(argv: list[str] | None = None) -> int:
         with contextlib.suppress(OSError):
             state.save()
         lock.release()
+        # The last lines — why it left — may still be queued for the capped
+        # writer. Bounded (`logcap.FLUSH_WAIT`), as the daemon does.
+        logcap.flush()
     return 0
 
 

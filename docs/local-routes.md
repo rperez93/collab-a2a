@@ -60,8 +60,9 @@ overwrite current routes or snapshots.
 A surviving route can advertise a new tunnel URL; private local discovery can
 find a moved local port. If every known address changes while a guest is
 disconnected, recovery needs a stable public URL or rendezvous. Unknown
-addresses cannot be inferred. Reserved domains provide that stable route;
-central proxy routing is a separate change.
+addresses cannot be inferred. Reserved domains provide that stable route; so
+does the shared machine proxy, opt-in this release ([proxy
+hosting](proxy-hosting.md)).
 
 The TLS entrance admits at most 256 connections before handshaking, with a
 three-second handshake and one-second upstream connection deadline. It reads

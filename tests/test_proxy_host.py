@@ -340,3 +340,16 @@ sys.exit(proxy_main.main(sys.argv[1:]))
         child.wait(timeout=10)
     assert peak > 1_000_000, 'the flood never reached the log'
     assert peak <= logcap.BUDGET, f'proxy.log reached {peak:,} bytes'
+
+
+def test_an_agent_kind_cannot_choose_the_machines_proxy(capsys):
+    """One proxy and one tunnel serve every session on the machine, so the
+    choice is the machine's: a kind's layer asking for it is refused, and the
+    plain command sets what every hub here reads."""
+    from collab.cli import main
+
+    assert main(['config', 'proxy', 'on', '--kind', 'claude']) != 0
+    assert 'belongs to the machine' in capsys.readouterr().err
+    assert config.proxy_mode() == 'off'
+    assert main(['config', 'proxy', 'on']) == 0
+    assert config.proxy_mode() == 'on'

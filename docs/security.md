@@ -320,9 +320,10 @@ Be clear-eyed about the limits.
   do not need a public address. The choice is kept with the session, so a hub
   the daemon revives after a crash, or a `collab resume` after a reboot, stays
   local too; `collab host --resume` without the flag publishes it again. A
-  shared machine proxy started by hand (`collab.proxy_main`) routes every hosted
-  session on the machine, local-only ones included, so do not run one beside a
-  session you keep local.
+  shared machine proxy — started by `collab host` when the `proxy` setting or
+  `--tunnel proxy` asks for it, or by hand (`collab.proxy_main`) — routes every
+  hosted session on the machine, local-only ones included, so do not run one
+  beside a session you keep local.
 
 ## Version 2 boundaries
 
