@@ -341,6 +341,11 @@ merges, nothing in collab calls the adapter. When it does:
   a passkey instead**; Enter and Esc decline. Approve is followed by the Hello
   prompt; a cancelled prompt is a decline, and a window nobody answers within
   ten minutes lets the request expire.
+- **Enrolling asks for two gestures.** The first creates the key; the second
+  signs the hub's enrolment challenge with it, so the hub registers a key whose
+  holder has proved possession, not merely a public key somebody sent. A
+  cancelled second gesture enrols nothing; the next attempt proves the key
+  already created rather than making another.
 - **The window is the front door; the gesture is the lock.** A same-user
   process can redraw a window or drive it, so what proves the approval is the
   signature, checked by the hub against the key enrolled for you.
