@@ -20,7 +20,8 @@ def request_headers(token: str | None = None, extra: dict[str, str] | None = Non
     would let its old daemons reconnect indefinitely without upgrading.
     """
     from . import __version__
-    headers = {**(extra or {}), PROTOCOL_HEADER: str(PROTOCOL_MAJOR), VERSION_HEADER: __version__}
+    headers = {**(extra or {}), PROTOCOL_HEADER: str(PROTOCOL_MAJOR), VERSION_HEADER: __version__,
+               'Collab-Remote-Consent': '1'}
     if token:
         headers['Authorization'] = f'Bearer {token}'
     return headers

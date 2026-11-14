@@ -863,6 +863,18 @@ class Store:
                              (json.dumps(meta), participant_id))
             self._db.commit()
 
+    def remote_goal(self, *, set_value=None):
+        """One durable host-configured offer template; never a consent grant."""
+        with self._lock:
+            self._db.execute('CREATE TABLE IF NOT EXISTS remote_goal '
+                             '(singleton INTEGER PRIMARY KEY CHECK(singleton=1), payload TEXT NOT NULL)')
+            if set_value is not None:
+                self._db.execute('INSERT OR REPLACE INTO remote_goal VALUES (1,?)',
+                                 (json.dumps(set_value),))
+            self._db.commit()
+            row = self._db.execute('SELECT payload FROM remote_goal WHERE singleton=1').fetchone()
+            return json.loads(row['payload']) if row else {}
+
     def update_meta(self, participant_id: str, meta: dict[str, Any]) -> None:
         with self._lock:
             self._db.execute(

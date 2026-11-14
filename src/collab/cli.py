@@ -1335,6 +1335,12 @@ def cmd_join(args: argparse.Namespace) -> int:
     ok(f"joined {c(profile.session_id, '36')} as {c(profile.name, '1')}"
        f" (host: {profile.host_name})")
     ok(f"using route {profile.url}")
+
+    if status.get("remote_goal_pending"):
+        print("A remote goal is pending human review. Run `collab remote pending`; "
+              "accept or decline it locally. Joining does not authorize execution.")
+    if status.get('remote_goal_refusal'):
+        warn(status['remote_goal_refusal'])
     if _is_listening(profile, status):
         ok("listening")
     elif not args.no_daemon:
@@ -4445,6 +4451,17 @@ def _wake_deliver(args: argparse.Namespace, wk) -> int:
         return 1
     (ok if code == 0 else fail)(detail)
     return code
+
+
+def cmd_remote(args: argparse.Namespace) -> int:
+    from .remote_cli import run
+    profile = (_require_profile(args) if args.action in ("pending", "show")
+               else _require_own_profile(args))
+    try:
+        return run(args, profile)
+    except (ValueError, OSError) as exc:
+        fail(str(exc))
+        return 1
 
 
 def cmd_wake(args: argparse.Namespace) -> int:
@@ -7812,6 +7829,17 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--json", action="store_true")
     add_session_flag(b)
     b.set_defaults(func=cmd_batch)
+
+    remote = sub.add_parser("remote", help="review and accept remote prompt or goal offers locally")
+    remote.add_argument("action", choices=["pending", "show", "bind", "accept", "decline", "offer", "goal"])
+    remote.add_argument("request_id", nargs="?")
+    remote.add_argument("--to", help="with offer: recipient name or participant id")
+    remote.add_argument("--clear", action="store_true", help="with goal: stop offering a connection goal")
+    remote.add_argument("--text", help="with offer: prompt or goal for the human to review")
+    remote.add_argument("--kind", choices=["prompt", "goal"], default="prompt")
+    remote.add_argument("--target", help="with bind: the receiver's local coding session id")
+    add_session_flag(remote)
+    remote.set_defaults(func=cmd_remote)
 
     wa = sub.add_parser("wake",
                         help="let the daemon start a turn for an agent that"

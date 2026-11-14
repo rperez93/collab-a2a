@@ -282,6 +282,14 @@ class MessageRefused(ValueError):
     """A message the hub will not carry, and why — in the sender's terms."""
 
 
+class RecipientChanged(MessageRefused):
+    """An explicit stable recipient assertion no longer matches routing."""
+
+
+class RemoteRateLimited(MessageRefused):
+    """Remote-offer traffic exceeded its authenticated sender/receiver budget."""
+
+
 def message_refusal(text: str) -> str:
     """The reason this text may not be sent, or "" when it may."""
     length = len(text)

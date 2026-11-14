@@ -47,7 +47,7 @@ from ..protocol import (
     MAX_NAME,
     MAX_ROOM,
     MAX_TITLE,
-    MessageRefused,
+    MessageRefused, RecipientChanged,
     REST_PREFIX,
     ROOM_FILE_TTL_SECONDS,
     RPC_PATH,
@@ -59,6 +59,8 @@ from ..protocol import (
 )
 from .auth import BearerBackend, RateLimiter, new_secret
 from .card import build_agent_card
+from ..remote_requests import event_visible_to_receiver
+from ..protocol import RemoteRateLimited
 from .events import event_stream
 from .executor import CollabAgentExecutor
 from .hub import Hub
@@ -235,8 +237,8 @@ def create_app(
     if len(stable_local_url) > 2048 or len(public_url) > 2048:
         raise ValueError("session route exceeds 2048 characters")
 
-    def session_snapshot(viewer: str, *, history: int = 20) -> dict[str, Any]:
-        return {**hub.snapshot(viewer=viewer, history=history), "routes": routes()}
+    def session_snapshot(viewer: str, *, history: int = 20, remote_consent: bool = False) -> dict[str, Any]:
+        return {**hub.snapshot(viewer=viewer, history=history, remote_consent=remote_consent), "routes": routes()}
 
     card = build_agent_card(live_url(), session_id=session_id, host_name=host_name)
 
@@ -319,6 +321,27 @@ def create_app(
         from ..compatibility import advertisement
         return advertisement()
 
+    @app.put(f"{EXT_PREFIX}/remote-goal", tags=["collab"])
+    async def remote_goal(request: Request):
+        user = _require(request)
+        if not user.is_host:
+            raise HTTPException(status_code=403, detail="only the host can offer a connection goal")
+        body = await request.json()
+        from ..remote_requests import make_offer, wire_text, RECEIVER_TARGET
+        if body.get("clear") is True:
+            value = {}
+        else:
+            try:
+                template = make_offer(session_id=session_id, sender_id=user.id,
+                                      recipient_id=user.id, target=RECEIVER_TARGET,
+                                      kind="goal", text=body.get("text"))
+                wire_text(template)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            value = {"sender_id": user.id, "text": template["text"]}
+        await asyncio.to_thread(store.remote_goal, set_value=value)
+        return {"configured": bool(value), "requires_receiver_consent": True}
+
     # --- extension: join ------------------------------------------------------
 
     @app.post(f"{EXT_PREFIX}/join", tags=["collab"])
@@ -350,6 +373,9 @@ def create_app(
         # unsanitised. See collab.protocol.bounded_meta.
         requested = clip(str(body.get("name") or "agent"), MAX_NAME) or "agent"
         hello = bounded_meta(body.get("hello"))
+        from ..remote_requests import supports_remote_consent
+        # A rejoining older client must clear any capability retained in meta.
+        hello['remote_consent_version'] = 1 if supports_remote_consent(hello) else 0
 
         # A NAME CLASHES ONLY WITH SOMEBODY WHO IS HERE. Two people answering
         # to one name makes every direct message a guess, which is why this is
@@ -394,14 +420,37 @@ def create_app(
             kind=KIND_HELLO, sender=person.name, sender_id=person.id,
             room=DEFAULT_ROOM, text=hello.get("focus", ""), body=hello,
         ))
+        offered_goal = None
+        goal_issuer_id = None
+        goal_refusal = None
+        template = await asyncio.to_thread(store.remote_goal)
+        if template and supports_remote_consent(hello):
+            from ..remote_requests import make_offer, wire_text, RECEIVER_TARGET
+            issuer = store.participant_by_id(template['sender_id'])
+            if issuer is not None and issuer.is_host:
+                goal_issuer_id = issuer.id
+                offered_goal = make_offer(session_id=session_id, sender_id=issuer.id,
+                                          recipient_id=person.id, target=RECEIVER_TARGET,
+                                          kind="goal", text=template['text'], ttl=3600)
+                try:
+                    await hub.publish(Envelope(kind=KIND_CHAT, sender=issuer.name, sender_id=issuer.id,
+                                               to=person.name, to_id=person.id,
+                                               text=wire_text(offered_goal)), connection_goal=True)
+                except RemoteRateLimited:
+                    offered_goal, goal_issuer_id = None, None
+                    goal_refusal = 'connection goal withheld: remote offer rate exceeded'
         return {
+            "remote_goal": offered_goal,
+            # Server-validated host identity, separate from untrusted offer content.
+            "remote_goal_sender_id": goal_issuer_id,
+            "remote_goal_refusal": goal_refusal,
             "token": token,
             "name": person.name,
             "id": person.id,
             "session_id": session_id,
             "host": hub.host_name,
             "routes": routes(),
-            "snapshot": session_snapshot(person.id),
+            "snapshot": session_snapshot(person.id, remote_consent=supports_remote_consent(hello)),
         }
 
     # --- extension: the live feed ---------------------------------------------
@@ -414,6 +463,7 @@ def create_app(
 
     # --- extension: messaging --------------------------------------------------
 
+    @app.post(f"{EXT_PREFIX}/remote-messages", tags=["collab"])
     @app.post(f"{EXT_PREFIX}/messages", tags=["collab"])
     async def post_message(request: Request) -> dict[str, Any]:
         """Convenience path — the same fan-out A2A SendMessage performs."""
@@ -441,6 +491,10 @@ def create_app(
         )
         try:
             env = await hub.publish(env)
+        except RecipientChanged as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except RemoteRateLimited as exc:
+            raise HTTPException(status_code=429, detail=str(exc), headers={'Retry-After': '60'}) from exc
         except MessageRefused as exc:
             # 413, and the reason as the body: the sender reads it, and it
             # names the alternative. See protocol.MAX_MESSAGE.
@@ -453,7 +507,7 @@ def create_app(
         items = await asyncio.to_thread(
             store.history, room=room, viewer=user.id, limit=min(limit, 500)
         )
-        return {"events": [e.to_dict() for e in items]}
+        return {"events": [e.to_dict() for e in items if event_visible_to_receiver(e, request.headers.get('Collab-Remote-Consent') == '1')]}
 
     @app.get(f"{EXT_PREFIX}/replay", tags=["collab"])
     async def replay(request: Request, after: int = 0, through: int | None = None,
@@ -468,7 +522,7 @@ def create_app(
             store.since_page, after, viewer=user.id, limit=max(1, min(limit, 500)),
             through=top,
         )
-        return {"events": [e.to_dict() for e in items], "cursor": cursor,
+        return {"events": [e.to_dict() for e in items if event_visible_to_receiver(e, request.headers.get('Collab-Remote-Consent') == '1')], "cursor": cursor,
                 "through": top}
 
     # --- extension: rooms, roster, snapshot -------------------------------------
@@ -501,7 +555,8 @@ def create_app(
     @app.get(f"{EXT_PREFIX}/snapshot", tags=["collab"])
     async def snapshot(request: Request) -> Response:
         user = _require(request)
-        return roster_response(session_snapshot(user.id), request)
+        return roster_response(session_snapshot(
+            user.id, remote_consent=request.headers.get('Collab-Remote-Consent') == '1'), request)
 
     @app.post(f"{EXT_PREFIX}/stats", tags=["collab"])
     async def report_stats(request: Request) -> dict[str, Any]:

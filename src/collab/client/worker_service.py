@@ -217,19 +217,27 @@ class Conversation:
                         "subject": message["subject"], "id": message["subject_id"],
                         "text": message["text"], "collab_worker_delivery": message["id"]}
                 else:
-                    route, payload = "messages", {
-                        "kind": "chat", "text": message["text"],
-                        "to": message.get("to") or None,
-                        "room": message.get("room") or None,
-                        "thread": message.get("thread") or None,
-                        "body": {**(message.get("body") or {}),
-                                 "collab_worker_delivery": message["id"]}}
+                    expected_id = message.get("recipient_id")
+                    route = "remote-messages" if expected_id else "messages"
+                    body = {**(message.get("body") or {}), "collab_worker_delivery": message["id"]}
+                    if expected_id:
+                        body["collab_expected_recipient_id"] = expected_id
+                    payload = {"kind": "chat", "text": message["text"],
+                               "to": message.get("to") or None,
+                               "room": message.get("room") or None,
+                               "thread": message.get("thread") or None, "body": body}
                 async def acknowledge():
                     async with self.daemon._http.stream(
                         "POST", f"{self.daemon.profile.url}{EXT_PREFIX}/{route}",
                         headers=request_headers(self.daemon.profile.token),
                         json=payload, timeout=timeout) as response:
-                        if 400 <= response.status_code < 500 and response.status_code not in (401, 408, 425, 429):
+                        # A hub without the guarded endpoint cannot receive an
+                        # offer safely. Retain it under ordinary bounded backoff,
+                        # never retry it through the unguarded messages route.
+                        unsupported_guard = route == "remote-messages" and response.status_code == 404
+                        if (400 <= response.status_code < 500
+                                and response.status_code not in (401, 408, 425, 429)
+                                and not unsupported_guard):
                             store.reject(message["id"], reason=f"hub answered {response.status_code}")
                             return
                         response.raise_for_status()
@@ -241,8 +249,11 @@ class Conversation:
             except Exception as exc:
                 # A departed peer must not hold every other conversation behind
                 # its outbox entry. Keep the entry, retry later, and report it.
-                store.defer(message["id"], retry_at=time.time() + setting("worker_retry_delay"),
-                            error=type(exc).__name__)
+                response = getattr(exc, 'response', None)
+                throttled = getattr(response, 'status_code', None) == 429
+                store.defer(message["id"], retry_at=time.time() +
+                            (max(60, setting("worker_retry_delay")) if throttled else setting("worker_retry_delay")),
+                            error='delivery rate exceeded (HTTP 429)' if throttled else type(exc).__name__)
             if attempts >= setting("worker_delivery_batch"):
                 break
 
@@ -303,7 +314,10 @@ class Conversation:
             events = self.daemon.inbox.after(snapshot["cursor"], limit=setting("worker_page_size"))
             selected = []
             size = 0
+            from ..remote_requests import OFFER_PREFIX
             for event in events:
+                if event.text.startswith(OFFER_PREFIX):
+                    continue  # separate human consent, never model conversation input
                 own = (event.sender_id == self.daemon.profile.participant_id
                        if event.sender_id and self.daemon.profile.participant_id
                        else event.sender == self.daemon.profile.name)

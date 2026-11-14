@@ -125,6 +125,21 @@ def ensure_daemon(profile: SessionProfile, *, wait: bool = True,
     return wait_until_live(profile) if wait else read_status(profile)
 
 
+def receive_connection_goal(profile, result):
+    """Check the goal against the authenticated join response's host identity."""
+    offer = result.get('remote_goal')
+    if not offer:
+        return None
+    from ..remote_requests import Inbox, validate
+    offer = validate(offer)
+    issuer = result.get('remote_goal_sender_id')
+    if not isinstance(issuer, str) or not issuer or offer['kind'] != 'goal':
+        raise ValueError('connection goal has no authenticated host issuer')
+    Inbox(profile.dir).receive(offer, session_id=profile.session_id,
+                               sender_id=issuer, recipient_id=profile.participant_id)
+    return offer['id']
+
+
 def join_session(
     url: str,
     *,
@@ -174,10 +189,22 @@ def join_session(
     if selected and selected != profile.url:
         profile.url = selected
         profile.save(make_current=False)
+
+    from ..remote_requests import RemoteQueueFull
+    goal_refusal = None
+    try:
+        pending_goal = receive_connection_goal(profile, result)
+    except RemoteQueueFull:
+        pending_goal = None
+        goal_refusal = 'connection goal refused: local receiver queue or sender limit reached'
     from ..worker import Store
     Store(profile.dir).ensure_default()
     from ..telemetry_setup import ensure
     ensure(profile)
 
     status = ensure_daemon(profile, follow=follow) if start_daemon else {}
+    if pending_goal:
+        status["remote_goal_pending"] = pending_goal
+    if goal_refusal or result.get('remote_goal_refusal'):
+        status['remote_goal_refusal'] = goal_refusal or 'connection goal withheld: remote offer rate exceeded'
     return profile, result.get("snapshot", {}), status

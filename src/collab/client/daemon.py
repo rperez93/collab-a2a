@@ -15,6 +15,7 @@ import logging
 import os
 import random
 import signal
+import sqlite3
 import subprocess
 import sys
 import time
@@ -1685,6 +1686,19 @@ class Daemon:
             logger.warning("could not %s at %.0f%%: %s",
                            act_name, share, detail)
 
+    async def _receive_remote_offer(self, env: Envelope) -> None:
+        from ..remote_requests import OFFER_PREFIX, RemoteQueueFull, receive_envelope
+        if env.kind != 'chat' or not env.text.startswith(OFFER_PREFIX):
+            return
+        try:
+            await asyncio.to_thread(receive_envelope, self.profile, env)
+        except RemoteQueueFull:
+            logger.warning('remote offer intake refused: receiver queue or sender limit reached')
+        except (ValueError, OSError, sqlite3.Error) as exc:
+            # No peer content or local paths in diagnostics. Receipt never
+            # authorizes or starts delivery; the human accepts locally.
+            logger.warning('remote offer intake refused (%s)', type(exc).__name__)
+
     async def _tick_conversation(self) -> None:
         # Lazy creation keeps older daemon fixtures and sessions without a
         # configured worker on their existing path.
@@ -1762,6 +1776,16 @@ class Daemon:
             return                       # a turn is already in flight
         self._drain_wake_result(self._waking)
         self._waking = None
+        from .. import remote_delivery
+        try:
+            prepared = await asyncio.to_thread(remote_delivery.prepare, self.profile)
+        except (ValueError, OSError, sqlite3.Error) as exc:
+            logger.warning('remote delivery preparation failed (%s)', type(exc).__name__)
+            prepared = None
+        if prepared is not None:
+            self._waking_batch = None
+            self._waking = asyncio.create_task(remote_delivery.deliver(self.profile, prepared))
+            return
         from .. import worker_notices
 
         if worker_notices.enabled(self.profile.dir):
@@ -3111,6 +3135,7 @@ class Daemon:
                     logger.warning("skipping unparseable event")
                     continue
                 if self.inbox.record(env):
+                    await self._receive_remote_offer(env)
                     # A recorded peer message is enough to schedule intake now;
                     # waiting for the three-second heartbeat adds visible lag.
                     # The named scheduler coalesces bursts; Conversation retains

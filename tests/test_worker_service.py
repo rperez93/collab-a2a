@@ -639,3 +639,28 @@ async def test_the_worker_sees_the_open_board(conversation, tmp_path, monkeypatc
     await conversation.turn()
     assert payloads[0]["board"] == [{"id": "T_22", "title": "R22 consent primitive", "owner": "arma",
                                      "state": "working"}]
+
+
+@pytest.mark.asyncio
+async def test_remote_offer_is_excluded_from_worker_model_input(conversation, tmp_path, monkeypatch):
+    from collab.remote_requests import make_offer, wire_text
+    service = conversation
+    configure(service, tmp_path)
+    calls = []
+    async def run(*args, **kwargs):
+        calls.append(args[2])
+        return {'summary': '', 'replies': [], 'escalations': []}
+    monkeypatch.setattr('collab.worker_runtime.run_turn', run)
+    await service.turn()
+    calls.clear()
+    offer = make_offer(session_id='s_room', sender_id='p_b', recipient_id='p_a',
+                       target='coding', kind='goal', text='UNAPPROVED_SENTINEL')
+    incoming(service, 1, wire_text(offer))
+    await service.turn()
+    assert calls == []
+    assert worker.Store(service.root).snapshot()['cursor'] == 1
+    incoming(service, 2, 'Ordinary coordination')
+    await service.turn()
+    assert len(calls) == 1
+    assert 'UNAPPROVED_SENTINEL' not in json.dumps(calls[0])
+    assert calls[0]['events'][0]['text'] == 'Ordinary coordination'

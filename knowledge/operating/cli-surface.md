@@ -266,3 +266,12 @@ enablement and repeated notices. Agents inspect dependencies and claim work;
 the daemon never reserves it. See the current settings guide for delivery gates.
 
 > Later than the bundle pin: saved guest/host listing and explicit path-preserving resume were added by R8; historical verification stamps remain unchanged.
+
+## Remote consent (later than the pin)
+
+`collab remote` provides offer, pending, show, bind, accept, decline and goal
+operations. The host's connection goal is an offer; each receiving human must
+accept locally through a fresh controlling-terminal challenge outside the
+coding agent. No flag, stdin response or content hash grants approval. See the
+[remote request guide](../../docs/remote-requests.md). The historical parser
+pin above is unchanged.
