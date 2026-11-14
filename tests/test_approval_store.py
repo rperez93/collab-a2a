@@ -382,3 +382,56 @@ def test_writer_wait_cannot_extend_receipt_expiry(hub, signer):
         blocker._db.rollback()
         blocker.close()
 
+
+
+def test_the_hub_machine_can_reset_a_host_key_an_agent_enrolled_first(hub, signer):
+    """Review of #161, must-fix 3: an agent that enrols a key for the HOST first
+    could never be undone — recovery needs a different unique active host. The
+    hub machine's own reset (no bearer, no HTTP route) retires every host key,
+    declines its pending approvals, re-opens first enrolment under the same
+    cooling-off, and raises a loud session alarm."""
+    with hub.store._lock, hub.store._db:
+        hub.store._db.execute("UPDATE participants SET is_host=1 WHERE id=?", (hub.people["bob"].id,))
+    cred, _ = enrol(hub, signer)
+    req = request(hub)
+    with pytest.raises(approvals.Rejected):
+        hub.api.begin_enrol("test-bob", method="hello")      # frozen after the first key
+
+    result = hub.api.reset_host_credentials()
+    assert result == {"api_version": 1, "owner_id": hub.people["bob"].id, "retired": 1, "state": "reset"}
+    with hub.store._lock:
+        states = [r[0] for r in hub.store._db.execute(
+            "SELECT state FROM approval_keys WHERE owner_id=?", (hub.people["bob"].id,))]
+    assert states == ["retired"]
+    with hub.store._lock:
+        declined = hub.store._db.execute("SELECT state FROM approval_requests WHERE id=?",
+                                         (req["request_id"],)).fetchone()[0]
+    assert declined == "declined"
+    with pytest.raises(approvals.Rejected):                 # the old key approves nothing
+        hub.api.challenge("test-bob", req["request_id"], credential_id=cred)
+
+    other = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    c = hub.api.begin_enrol("test-bob", method="hello")      # first enrolment is open again
+    finish(hub, other, c, cred="collab.test.key2")
+    req2 = request(hub)
+    with pytest.raises(approvals.Rejected):                 # ...under the same cooling-off
+        hub.api.challenge("test-bob", req2["request_id"], credential_id="collab.test.key2")
+
+    with hub.store._lock:
+        kinds = [r[0] for r in hub.store._db.execute("SELECT kind FROM approval_audit ORDER BY seq")]
+    assert "host_credentials_reset" in kinds
+    with hub.store._lock:
+        payloads = [json.loads(r[0]) for r in hub.store._db.execute(
+            "SELECT payload FROM approval_alarm_outbox ORDER BY rowid")]
+    assert any(p.get("body", {}).get("action") == "reset"
+               and "hub machine reset" in p.get("text", "") for p in payloads)
+    import inspect
+    from collab.server import approval_routes
+    assert "reset_host_credentials" not in inspect.getsource(approval_routes)
+
+
+def test_only_the_host_can_be_reset_this_way(hub):
+    """With no host, or more than one, the hub-machine reset refuses: it never
+    picks whose keys to retire."""
+    with pytest.raises(approvals.Rejected, match="host_unavailable"):
+        hub.api.reset_host_credentials()

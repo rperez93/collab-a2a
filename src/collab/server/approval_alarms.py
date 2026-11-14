@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS approval_alarm_outbox (
 def enqueue(db, session_id, owner, kind, now, metadata):
     """Called inside the authority transaction; never publish caller prose."""
     actions = {"tofu_enrolled": "enrolled", "key_reported_missing": "missing",
-               "key_reported_changed": "changed", "key_change_applied": "key-change"}
+               "key_reported_changed": "changed", "key_change_applied": "key-change",
+               "host_credentials_reset": "reset"}
     if kind not in actions:
         return
     fingerprint = metadata["fingerprint"]
@@ -41,6 +42,11 @@ def enqueue(db, session_id, owner, kind, now, metadata):
             "fingerprint": fingerprint}
     if action == "enrolled":
         text = f"SECURITY: participant {owner} enrolled a first approval credential (TOFU, not attested)."
+    elif action == "reset":
+        body["verified_human"] = False
+        text = (f"SECURITY: the hub machine reset the approval credentials of host {owner}; every host key "
+                "is retired and a first key may be enrolled again (TOFU, with the cooling-off). "
+                "If nobody at the hub machine did this, treat that machine as compromised.")
     elif action in ("missing", "changed"):
         body["verified_human"] = False
         text = (f"SECURITY: participant {owner} reported {action} approval key material; "

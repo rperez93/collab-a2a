@@ -2,6 +2,7 @@
 import asyncio
 import concurrent.futures
 from datetime import datetime, timezone
+import hashlib
 import json
 import threading
 import tracemalloc
@@ -70,6 +71,13 @@ def test_exact_server_owned_review_and_private_durable_acceptance(hub, signer):
         assert event.kind == KIND_SYSTEM and event.to_id == hub.people["alice"].id
         assert event.sender_id == hub.people["bob"].id
         assert event.body["strong_skill_response"]["digest"] == req["digest"]
+        # The requester can verify WHAT was approved: the reviewed bytes travel
+        # with the acceptance and hash to its digest (review of #161, must-fix 2).
+        carried = event.body["strong_skill_response"]["canonical_review"]
+        import base64
+        raw = base64.urlsafe_b64decode(carried + "=" * (-len(carried) % 4))
+        assert hashlib.sha256(raw).hexdigest() == req["digest"]
+        assert json.loads(raw)["payload"]["args"] == original.body["skill_request"]["args"]
         assert result["receipt"] not in json.dumps(event.to_dict())
     assert not any(e.body.get("event") == "skill-approval" for e in seen["carol"])
     assert not any(e.body.get("event") == "skill-approval" for e in hub.store.since(0, viewer=hub.people["carol"].id))

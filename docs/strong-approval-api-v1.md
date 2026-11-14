@@ -28,6 +28,16 @@ host with a mature key. Losing the only host key fails closed. Bearer access
 cannot install or unfreeze a replacement. Recovery retires previous keys;
 rotation retires the selected key. New keys retain the 600-second cooldown.
 
+The HOST has no other host to recover through, so a key an agent enrolled for
+the host first could otherwise never be undone. `reset_host_credentials()` is
+the hub machine's own reset: it takes no bearer token and is on no HTTP route;
+only code holding the session database on the hub machine can call it. It
+retires every host key, declines the host's pending approvals, drops its
+challenges and re-opens first enrolment — under the same cooldown — and raises
+an `approval-security` alarm (`action: reset`) to the session. A same-UID agent
+on the hub machine could run it too; the alarm is what surfaces that, as with
+any TOFU enrolment.
+
 Key changes bind the owner generation, new fingerprint, credential identifier,
 algorithm, replacement identifier and authorizer to the canonical review.
 Their receipts cannot enter generic operation dispatch. Applying a change
@@ -234,7 +244,11 @@ receipt needs a fresh review/approval, and its old request cannot be reused.
 The event is a hub-owned `system` event addressed by immutable IDs to the two
 participants. It uses a distinct `strong_skill_response` field, **not** the
 legacy `skill_response` field. A frontend must check the server-owned event
-kind, both identities, source sequence and reviewed digest; it must never trust
+kind, both identities, source sequence and reviewed digest. The event carries
+`canonical_review` (unpadded base64url of the reviewed bytes, which hold only the
+requester's own request data), so the requester recomputes SHA-256 and checks
+that the approved review names exactly the skill, arguments and source sequence
+it sent; a mismatch is never acceptance. It must never trust
 a peer chat that merely copies a `strength` label. The old first-wins request
 parser cannot inherit acceptance for another message reusing the same short
 request ID. Reusing a request ID under an existing source binding is refused.
