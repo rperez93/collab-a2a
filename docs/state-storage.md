@@ -63,7 +63,8 @@ file, `.1` and a rotation's `.1.tmp` together stay under 9.8 MB. ngrok's output
 reaches `ngrok.log` through a collector process (`python -m collab.logpipe`)
 that writes under the same cap, holds at most 16 KiB of a line, writes at most
 256 KB a second, and ends when ngrok does. The one writer left outside the cap is
-a process's own stderr — an interpreter traceback on a crash — and a watcher
+a process's own stderr — an interpreter traceback on a crash; warnings and
+uncaught thread exceptions are routed through the capped logging — and a watcher
 thread in the daemon and the hub, looking once a second, trims it if it ever
 matters; for that path alone the overshoot is what arrives within one second.
 

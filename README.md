@@ -2355,8 +2355,10 @@ interpreter's own traceback on a crash, a few kilobytes once.
 
 Upgrading from 2.1.2: an older `collab host` started beside a newer hub renames
 `hub.log` aside to `hub.log.1` when it opens it, as 2.1.2 always did. The newer
-hub notices the rename and starts a fresh `hub.log`; nothing is lost, but the
-lines from before are in `hub.log.1`. `collab logs` prints all three of
+hub's logging notices the rename and starts a fresh `hub.log`, and the lines
+from before are in `hub.log.1`. Its raw stderr — a crash traceback — still
+points at the renamed file, which a later rotation replaces, so such a
+traceback can be lost; restarting the hub ends that. `collab logs` prints all three of
 collab's own.
 
 ## Settings

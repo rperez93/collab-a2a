@@ -176,10 +176,21 @@ def _url_from_log(path: str | None, offset: int) -> str | None:
     return matches[-1] if matches else None
 
 
-def _settle(path: str | None, *, limit: float = 1.0, step: float = 0.05) -> None:
-    """Wait until `path` stops growing, briefly. ngrok's output reaches its log
-    through a collector process (collab.logcap.spawn_collected), so the last
-    line ngrok wrote before exiting may land a few milliseconds after it did."""
+def _settle(path: str | None, collector=None, *, limit: float = 1.0,
+            step: float = 0.05) -> None:
+    """Wait for ngrok's last lines to reach its log, briefly.
+
+    ngrok's output reaches the log through a collector process
+    (collab.logcap.spawn_collected), which writes a moment after ngrok said it
+    and exits at end of file — so waiting for THAT is exact. Without its
+    handle, wait until the file stops growing.
+    """
+    if collector is not None:
+        try:
+            collector.wait(timeout=limit)
+            return
+        except Exception:                                    # noqa: BLE001
+            return
     if not path:
         return
     end = time.monotonic() + limit
@@ -299,7 +310,7 @@ def start_tunnel(port: int, *, log_path: str | None = None,
             # The collector writes the log a moment after ngrok said it, so
             # wait for the file to stop growing first (at most a second).
             if errors is not None:
-                _settle(log_path)
+                _settle(log_path, getattr(proc, "collector", None))
                 errors.append(failure_from_log(log_path, offset)
                               or f"ngrok exited with status {proc.returncode}")
             return None
