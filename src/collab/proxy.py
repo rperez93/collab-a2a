@@ -148,6 +148,14 @@ class ProxyState:
         tmp.replace(path)
 
 
+class BodyStalled(Exception):
+    """The client stopped sending its request body, or sent it too slowly.
+
+    ITS OWN CLASS, not asyncio's TimeoutError: a flood probe saw 408s two
+    seconds into uploads, well inside both limits, and a bare TimeoutError
+    could not say whether this code or something below it had raised."""
+
+
 def session_base(public_url: str, session_id: str) -> str:
     """The URL a session behind the proxy is shared under."""
     return f"{public_url.rstrip('/')}{SESSION_PREFIX}{session_id}"
@@ -261,10 +269,13 @@ def build_app(routes: Routes | None = None, *, primary: Any = None) -> Any:
                 chunk = await asyncio.wait_for(chunks.__anext__(), BODY_IDLE)
             except StopAsyncIteration:
                 return
+            except asyncio.TimeoutError:
+                raise BodyStalled(f"no request body for {BODY_IDLE:.0f} s") from None
             seen += len(chunk)
             elapsed = time.monotonic() - started
             if elapsed > BODY_GRACE and seen / elapsed < BODY_MIN_RATE:
-                raise asyncio.TimeoutError("request body below the minimum rate")
+                raise BodyStalled(f"request body under {BODY_MIN_RATE:.0f} B/s "
+                                  f"after {BODY_GRACE:.0f} s")
             yield chunk
 
     async def handle(request: Request) -> Any:
@@ -297,9 +308,8 @@ def build_app(routes: Routes | None = None, *, primary: Any = None) -> Any:
         )
         try:
             response = await client.send(upstream, stream=True)
-        except asyncio.TimeoutError:
-            return PlainTextResponse(f"request body stalled for {BODY_IDLE:.0f} s\n",
-                                     status_code=408)
+        except BodyStalled as exc:
+            return PlainTextResponse(f"{exc}\n", status_code=408)
         except httpx.HTTPError as exc:
             return PlainTextResponse(f"the hub for {session_id} did not answer: "
                                      f"{type(exc).__name__}\n", status_code=502)
