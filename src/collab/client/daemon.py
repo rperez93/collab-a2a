@@ -945,6 +945,17 @@ class Daemon:
         worker_usage = metrics(self.profile.dir)
         if worker_usage is not None:
             figures = {**figures, "worker": worker_usage}
+        from ..resources import Sampler, collect
+        sampler = getattr(self, '_resource_sampler', None)
+        if sampler is None:
+            sampler = self._resource_sampler = Sampler()
+        try:
+            figures['resources'] = await asyncio.to_thread(collect, self.profile, sampler)
+        except (OSError, ValueError):
+            # Observability must not suppress token/quota reports.
+            figures['resources'] = None
+        if not share_stats_enabled():
+            return
         payload = {**peers.identity(), "stats": figures}
         changed = payload != self._last_stats
         # An unchanged figure in a file rewritten since we last sent it is

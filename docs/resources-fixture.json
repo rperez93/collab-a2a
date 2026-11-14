@@ -1,0 +1,70 @@
+{
+  "observed_at": 0,
+  "source": "linux-procfs",
+  "roles": {
+    "hub": {
+      "rss_bytes": 50331648,
+      "cpu_pct": 1.2,
+      "read_bps": 0,
+      "write_bps": 2048,
+      "processes": 1,
+      "complete": true
+    },
+    "daemon": {
+      "rss_bytes": 33554432,
+      "cpu_pct": 0.4,
+      "read_bps": 0,
+      "write_bps": 0,
+      "processes": 1,
+      "complete": true
+    },
+    "worker": {
+      "rss_bytes": 100663296,
+      "cpu_pct": 12.5,
+      "read_bps": 4096,
+      "write_bps": 1024,
+      "processes": 1,
+      "complete": true
+    },
+    "proxy": {
+      "rss_bytes": 25165824,
+      "cpu_pct": 0.8,
+      "read_bps": 0,
+      "write_bps": 0,
+      "processes": 1,
+      "complete": true
+    },
+    "agent": {
+      "rss_bytes": 167772160,
+      "cpu_pct": 4.0,
+      "read_bps": 8192,
+      "write_bps": 4096,
+      "processes": 1,
+      "complete": true
+    },
+    "work": {
+      "rss_bytes": 268435456,
+      "cpu_pct": 85.0,
+      "read_bps": 65536,
+      "write_bps": 32768,
+      "processes": 1,
+      "complete": true
+    },
+    "watch": {
+      "rss_bytes": null,
+      "cpu_pct": null,
+      "read_bps": null,
+      "write_bps": null,
+      "processes": null,
+      "complete": false
+    }
+  },
+  "machine": {
+    "memory_total_bytes": 17179869184,
+    "memory_available_bytes": 6442450944,
+    "load1": 3.2,
+    "cpu_count": 8,
+    "load_per_cpu": 0.4,
+    "warnings": []
+  }
+}

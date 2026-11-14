@@ -307,6 +307,8 @@ async def _exchange(args: list[str], data: bytes, scratch: Path, env: dict[str, 
     except OSError as exc:
         raise WorkerRuntimeError("Worker executable could not start; check its installation") from exc
 
+    from .resources import register_worker, unregister_worker
+    resource_stamp = register_worker(proc.pid)
     consumed = 0
 
     async def read(stream: asyncio.StreamReader, keep: bool) -> bytes:
@@ -361,7 +363,10 @@ async def _exchange(args: list[str], data: bytes, scratch: Path, env: dict[str, 
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        await _reap(proc)
+        try:
+            await _reap(proc)
+        finally:
+            unregister_worker(resource_stamp)
 
 
 def _decode(agent: str, output: bytes, result_path: Path | None) -> dict:
