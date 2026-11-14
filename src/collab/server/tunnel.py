@@ -429,12 +429,13 @@ class TunnelSupervisor:
         Returns ``(url, changed)`` — ``changed`` is True when the public URL is
         different from before, which means previously shared links are dead.
         """
-        if self.tunnel is not None and self.tunnel.process is not None:
+        process = getattr(self.tunnel, "process", None)
+        if process is not None:
             # ngrok's log collector, restarted if it died: without a reader
             # ngrok would block on its log, and without ours it would SIGPIPE.
             from ..logcap import revive_collector
 
-            revive_collector(self.tunnel.process)
+            revive_collector(process)
         if self.tunnel is not None and self.tunnel.alive():
             return self.public_url, False
 
