@@ -17,7 +17,8 @@
       <h2 id="summary-title">Request and authority</h2>
       <dl>
         <dt>Subject</dt><dd id="subject">Unknown</dd>
-        <dt>Requester</dt><dd id="requester">Unknown</dd>
+        <dt>Requester name</dt><dd id="requester">Unknown</dd>
+        <dt>Requester participant ID</dt><dd id="requester-id">Unknown</dd>
         <dt>Destination</dt><dd id="destination">Unknown</dd>
         <dt>Authority granted</dt><dd id="authority">Unknown</dd>
         <dt>Review digest</dt><dd id="digest">Unknown</dd>
@@ -41,13 +42,9 @@
         <button id="cancel" type="button" class="secondary" disabled>Cancel local operation</button>
         <button id="refresh" type="button" class="secondary">Refresh review</button>
       </div>
-      <details>
-        <summary>Register a first passkey</summary>
-        <p class="notice">First enrolment uses trust on first use. A software or virtual authenticator may claim user
-          verification; that alone is not proof of hardware or a human gesture. The hub must announce enrolment
-          and label only verified attestation. An existing key must not be silently replaced.</p>
-        <button id="enrol" type="button" class="secondary" disabled>Enrol a passkey</button>
-      </details>
+      <p>Register keys only through the separate human-started consent enrolment flow.
+        Request windows cannot enrol or replace a key. Initial trust is TOFU;
+        software or virtual user verification does not establish hardware attestation.</p>
     </section>
     <footer>Review and decisions use this request's local capability. No participant bearer token is placed in this page.</footer>
   </main>
