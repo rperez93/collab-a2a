@@ -44,8 +44,8 @@ WINDOW_SECONDS = 600.0
 CEREMONY_SECONDS = 120.0
 IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 BINARY = re.compile(r"[A-Za-z0-9_-]+\Z")
-FIELDS = {"clientDataJSON": 16384, "authenticatorData": 8192,
-          "signature": 8192, "attestationObject": 65536, "publicKey": 8192}
+FIELDS = {"clientDataJSON": 8192, "authenticatorData": 8192,
+          "signature": 4096, "attestationObject": 65536, "publicKey": 4096}
 SECURITY_HEADERS = {
     "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff", "Cross-Origin-Resource-Policy": "same-origin",
@@ -236,6 +236,7 @@ class PasskeyPage:
         self.origin = ""
         self.port = None
         self._windows: dict[str, _Window] = {}
+        self._enrol_service = None
         self._server = self._task = self._socket = None
         self._active = 0
         self._startup_lock = asyncio.Lock()
@@ -276,6 +277,8 @@ class PasskeyPage:
             raise
 
     async def stop(self):
+        if self._enrol_service is not None:
+            self._enrol_service.invalidate()
         self._windows.clear()
         if self._server is not None: self._server.should_exit = True
         if self._task is not None:
