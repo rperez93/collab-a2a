@@ -80,3 +80,25 @@ def test_a_posted_summary_is_overwritten_by_the_derived_one(room):
 def test_a_body_that_says_nothing_grows_no_model_fields(room):
     """`collab color` posts `stats: {}`; four nulls would read as figures."""
     assert "main_model" not in (room({}) or {})
+
+
+def test_a_model_name_cannot_carry_terminal_commands_or_bidi(room):
+    """Drawn on everyone's terminal: an ESC is a command, a bidi override a disguise."""
+    stats = room({"model": "\x1b[31mRED\x1b]0;title\x07‮gpt​",
+                  "worker": {"enabled": True, "last_model": "small\x9b2J⁦"}})
+    for value in (stats["model"], stats["main_model"], stats["worker_model"]):
+        assert not any(ord(ch) < 32 or 0x7f <= ord(ch) < 0xa0 for ch in value), repr(value)
+        assert not set(value) & {"‮", "​", "⁦"}, repr(value)
+    assert stats["main_model"].endswith("gpt")
+    assert stats["worker_model"] == "small2J"
+
+
+def test_a_worker_call_on_several_models_is_not_a_change_of_model(room):
+    """«multiple models» describes one call; publishing it flipped the field every time."""
+    room({"model": "m", "worker": {"enabled": True, "last_model": "small-1"}})
+    settled = room({"cost_usd": 1})
+    stats = room({"worker": {"enabled": True, "last_model": "multiple models"}})
+    assert stats["worker_model"] == "small-1"
+    assert stats["model_changed_at"] == settled["model_changed_at"]
+    stats = room({"worker": {"enabled": True, "last_model": "small-1"}})
+    assert stats["model_changed_at"] == settled["model_changed_at"]
