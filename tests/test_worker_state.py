@@ -522,7 +522,7 @@ def test_any_collab_command_mentions_decisions_waiting(tmp_path, monkeypatch, ca
     assert capsys.readouterr().err == ''
 
 
-def test_reply_verbatim_and_instruct_choose_who_words_the_answer(tmp_path, monkeypatch):
+def test_reply_verbatim_and_instruct_choose_who_words_the_answer(tmp_path, monkeypatch, capsys):
     import argparse
     from collab.config import SessionProfile
     from collab.client import onboard
@@ -548,6 +548,11 @@ def test_reply_verbatim_and_instruct_choose_who_words_the_answer(tmp_path, monke
         return cli.cmd_worker(args)
     assert reply(first, 'Yes, exactly this.', verbatim=True) == 0
     assert [(r['to'], r['text']) for r in store.outbox()] == [('bob', 'Yes, exactly this.')]
+    # The durable item exists, but no transport has run in this process.
+    out = capsys.readouterr().out
+    assert 'answer queued for the asking peer as written' in out
+    assert 'answer sent' not in out
+
     assert reply(second, 'Tell bob yes, politely.') == 0
     assert len(store.outbox()) == 1 and store.snapshot()['answers'][0]['text'] == 'Tell bob yes, politely.'
 

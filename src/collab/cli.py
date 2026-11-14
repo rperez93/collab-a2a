@@ -6003,7 +6003,7 @@ def cmd_worker(args: argparse.Namespace) -> int:
             store.answer(args.decision_id, args.text, verbatim=verbatim, notify_to=to, notify_room=room)
             if verbatim and not (to or room or record.get("notify_to") or record.get("notify_room")):
                 warn("no asking peer is known for this decision; the worker relays it instead")
-            ok("answer sent to the asking peer as written" if verbatim
+            ok("answer queued for the asking peer as written" if verbatim
                else "decision queued for the collaboration worker")
         elif args.worker_action == "context":
             store.context(args.text)
