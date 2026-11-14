@@ -474,11 +474,17 @@ class Conversation:
         """
         seqs = {c["seq"] for c in selected}
         answering = {getattr(e, "sender_id", "") or "" for e in events if e.seq in seqs}
+        names = {p.get("id"): p.get("name") for p in self.daemon.snapshot.get("participants", [])
+                 if p.get("id") and p.get("name")}
         shown = []
         for entry in ledger:
             recipient = entry.get("to_id") or ""
             if entry.get("private") and not (recipient and answering == {recipient}):
-                entry = {**entry, "text": f"sent a private reply to {entry.get('to', '')}", "redacted": True}
+                # Named by whoever holds that id now, or not at all: the stored
+                # name may belong to someone else after a rename swap.
+                current = names.get(recipient)
+                label = f"sent a private reply to {current}" if current else "sent a private reply to another participant"
+                entry = {**entry, "text": label, "to": current or "", "redacted": True}
             shown.append(entry)
         return shown
 
@@ -831,6 +837,8 @@ class Conversation:
             # The main agent's private sends get the same guard: their text may
             # reach only the participant it was sent to, by DM.
             # Compared by the frozen to_id: a rename cannot redirect it (#146).
+            private_shown = {entry.get("to_id") for entry in payload["main_sent"]
+                             if entry.get("private") and not entry.get("redacted") and entry.get("to_id")}
             open_questions += [(entry["text"][:60], entry.get("to_id") or "unresolved", "")
                                for entry in snapshot.get("main_sent", [])
                                if entry.get("private") and len(entry.get("text", "")) >= 20]
@@ -843,6 +851,12 @@ class Conversation:
                              if q in reply["text"] and (
                                  who(reply["to"]) != asker
                                  or (reply.get("room") and reply.get("room") != room))), None)
+                # A private send this turn saw in full may be paraphrased, so a
+                # substring guard is not enough: while one is unredacted, only a
+                # DM to its own recipient may leave; anything else is withheld.
+                if leak is None and private_shown and (
+                        reply.get("room") or who(reply["to"]) not in private_shown):
+                    leak = "private send in this turn"
                 if leak is None:
                     kept.append(reply)
             if dropped := len(result["replies"]) - len(kept):
