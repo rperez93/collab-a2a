@@ -84,9 +84,9 @@ def provider_backoff(kind: str, said: float, base: float) -> float:
         return max(said, 900.0)   # wait for the window, not every 30 s
     if kind in ("auth", "model"):
         return 3600.0             # escalated; retry rarely in case it was fixed
-    if kind == "network":
-        return max(said, base)
-    return max(said, base)
+    # A stated wait outside a rate limit is untrusted text (stderr may echo
+    # the prompt, i.e. peer words): it never stretches the back-off.
+    return base
 
 
 class Conversation:
@@ -432,13 +432,12 @@ class Conversation:
             known.update(a["source"]["sender"] for a in answers if "source" in a)
             valid_seqs = {0, *(e["seq"] for e in selected),
                           *(a["source"]["seq"] for a in answers if "source" in a)}
-            # A wrong seq used to throw the whole paid turn away and back off;
-            # the question is still worth routing, so keep it (anchored to the
-            # only message in the turn, or unanchored).
-            only = {e["seq"] for e in selected}
+            # A wrong seq used to throw the whole paid turn away and back off.
+            # Keep the question, but unanchored: guessing an anchor could show
+            # the human one peer's text and route the answer to another.
             for escalation in result["escalations"]:
                 if escalation["seq"] not in valid_seqs:
-                    escalation["seq"] = next(iter(only)) if len(only) == 1 else 0
+                    escalation["seq"] = 0
             for reply in result["replies"]:
                 if reply["to"] and reply["to"] not in known:
                     raise ValueError("worker proposed an unknown recipient")
@@ -473,6 +472,8 @@ class Conversation:
             # status needs a class of failure, not private subprocess logs.
             detail = str(exc) if isinstance(exc, worker_runtime.WorkerRuntimeError) else type(exc).__name__
             kind = getattr(exc, "kind", "")
+            if kind and kind != "other":
+                detail = f"{detail} ({kind.replace('_', ' ')})"
             self.next_at = time.time() + provider_backoff(kind, getattr(exc, "retry_after", 0.0),
                                                           setting("worker_retry_delay"))
             if kind in ("auth", "model"):
