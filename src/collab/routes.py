@@ -180,7 +180,7 @@ def generation(profile):
     return (profile.url, profile.token, state.get("secure_local_url"), state.get("local_certificate"))
 
 
-def private_records(session_id=""):
+def private_records(session_id="", *, require_complete=False):
     """A shared registry can describe peers but cannot authorize plaintext auth.
 
     Machine/user labels are public and forgeable. The authorization is the
@@ -205,7 +205,9 @@ def private_records(session_id=""):
         # lookahead entry. The checked directory fd also keeps subsequent
         # record opens anchored if the path is substituted during discovery.
         with os.scandir(directory_fd) as entries:
+            scanned = 0
             for entry in islice(entries, MAX_REGISTRY_ENTRIES):
+                scanned += 1
                 if not entry.name.endswith(".json"):
                     continue
                 try:
@@ -226,6 +228,11 @@ def private_records(session_id=""):
                         found.append(peer)
                 except (OSError, ValueError, TypeError, RecursionError, OverflowError):
                     continue
+            # A partial scan cannot prove that another record for the same
+            # session does not name a different upstream. Do not read one more
+            # entry beyond the budget just to distinguish an exact fit.
+            if require_complete and scanned >= MAX_REGISTRY_ENTRIES:
+                return []
         return found
     except OSError:
         return []
