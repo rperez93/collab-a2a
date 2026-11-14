@@ -2397,9 +2397,17 @@ def _bare_host(value: Any) -> str:
     return host
 
 
+#: OFF THIS RELEASE. With `auto` every `collab host` after an upgrade would
+#: attach to the shared machine proxy and publish `/s/<id>` instead of its own
+#: tunnel — a change of address for every host, made by an upgrade. The proxy
+#: is opt-in (`collab config proxy on`, or `collab host --tunnel proxy`) until
+#: the live session has proven it (M1).
+PROXY_DEFAULT = "off"
+
+
 def proxy_mode() -> str:
-    value = load_config().get('proxy', 'auto')
-    return value if value in ('auto', 'on', 'off') else 'auto'
+    value = load_config().get('proxy', PROXY_DEFAULT)
+    return value if value in ('auto', 'on', 'off') else PROXY_DEFAULT
 
 
 def set_proxy_mode(value: str) -> str:
@@ -2644,13 +2652,17 @@ def settings() -> tuple[Setting, ...]:
                 lambda v: set_rules(v)),
         # BESIDE `rules`, the other setting read at `collab host`. Per platform
         # by name: see `ngrok_domain`.
-        Setting("proxy", "share one machine tunnel (auto/on), or use one per hub (off)",
-                "auto", str, proxy_mode, set_proxy_mode),
         Setting("ngrok_domain", "reserved ngrok domain `collab host` uses when "
                                 "`--domain` is not given; empty lets ngrok choose",
                 "", str,
                 ngrok_domain,
                 lambda v: set_ngrok_domain(v)),
+        # A MACHINE setting (not in AGENT_KEYS): one proxy and one tunnel serve
+        # every session on the machine, so whether to use them is the machine's
+        # choice, not one agent's. After `ngrok_domain`, which it reads.
+        Setting("proxy", "share one machine tunnel (on/auto), or use one per hub (off, "
+                         "the default this release)",
+                PROXY_DEFAULT, str, proxy_mode, set_proxy_mode),
         Setting("stats_command", "a command printing your usage as JSON, for "
                                  "an agent whose host tool cannot report it",
                 "", str,

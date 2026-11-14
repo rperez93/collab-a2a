@@ -209,7 +209,8 @@ def main() -> int:
         from .config import proxy_mode
         from .proxy_host import SharedProxy, use_proxy
         if use_proxy(cfg.tunnel_mode, proxy_mode()):
-            supervisor = SharedProxy(cfg.session_id, domain=cfg.domain)
+            supervisor = SharedProxy(cfg.session_id, domain=cfg.domain,
+                                     primary=cfg.proxy_primary)
         else:
             supervisor = TunnelSupervisor(
                 cfg.port,

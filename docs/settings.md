@@ -180,9 +180,11 @@ proceed within the accepted goal and its native delegation permissions.
 
 ## Shared tunnel policy
 
-`collab config proxy auto` (default) and `on` use one machine proxy for ngrok.
-`collab config proxy off` keeps per-hub tunnels. A host can override the policy
-with `collab host --tunnel own` or `--tunnel proxy`; `--tunnel auto` returns to
+`collab config proxy on` and `auto` use one machine proxy for ngrok.
+`collab config proxy off`, the default this release, keeps per-hub tunnels, so
+an upgrade moves nobody's address. It is a machine setting: one proxy serves
+the whole machine, so no agent's own layer can set it. A host can override the
+policy with `collab host --tunnel own` or `--tunnel proxy`; `--tunnel auto` returns to
 the setting. `--no-tunnel` wins over all modes. The selected explicit mode is
 saved with the session. Changes apply when the hub starts, not to running hubs.
 See [shared proxy hosting](proxy-hosting.md) for legacy links and recovery.

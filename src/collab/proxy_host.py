@@ -1,6 +1,7 @@
 """A hub's attachment to the machine proxy; hubs never own its process."""
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -11,6 +12,8 @@ from urllib.parse import urlsplit
 from . import proxy
 from .client import exclusive
 from .client.daemon_files import open_log
+
+logger = logging.getLogger("collab.proxy_host")
 
 
 def use_proxy(mode: str, setting: str) -> bool:
@@ -30,9 +33,17 @@ class SharedProxy:
 
     shared = True
 
-    def __init__(self, session_id: str, *, domain: str = '', timeout: float = 35):
+    def __init__(self, session_id: str, *, domain: str = '', primary: bool = False,
+                 timeout: float = 35):
         self.session_id = session_id
         self.domain = domain
+        #: Whether this session's host asked, explicitly, to be the session a
+        #: bare-domain link reaches (`collab host --primary`, kept in hub.json
+        #: so a revived hub asks again). Never implied by starting the proxy:
+        #: that made the primary whichever hub noticed a dead proxy first.
+        self.primary = primary
+        #: The session holding the primary when ours was refused, else ''.
+        self.primary_holder = ''
         self.timeout = timeout
         self.public_url = ''
         self.last_error = ''
@@ -62,17 +73,31 @@ class SharedProxy:
         stamp = exclusive.decode(state.stamp)
         return bool(stamp and stamp.pid == state.pid and stamp.alive())
 
+    def _claim(self) -> None:
+        """Claimed on disk rather than passed to the proxy we may spawn: the
+        proxy is usually running already, and an argument to a process that
+        is never started reaches nobody. The running proxy reads the primary
+        from the state file on each request (briefly cached)."""
+        if not self.primary:
+            return
+        holder = proxy.claim_primary(self.session_id)
+        self.primary_holder = '' if holder == self.session_id else holder
+        if self.primary_holder:
+            logger.warning("the shared proxy's primary is %s; bare-domain links "
+                           "reach that session, not this one", holder)
+
     def start(self) -> str:
+        self._claim()
         state = proxy.ProxyState.load()
         if self._alive(state):
             self.public_url = self._url(state)
             return self.public_url
-        command = [sys.executable, '-m', 'collab.proxy_main', '--primary', self.session_id]
+        command = [sys.executable, '-m', 'collab.proxy_main']
         if self.domain:
             command.extend(['--domain', self.domain])
         child = self._child
         if child is None or child.poll() is not None:
-            with open_log(proxy.state_path().parent / 'proxy.log') as log:
+            with open_log(proxy.log_path()) as log:
                 child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log,
                                          stderr=log, start_new_session=True, env=dict(os.environ))
             self._child = child

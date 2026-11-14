@@ -69,6 +69,11 @@ class HubConfig:
     #: An older collab ignores the key, as `HubConfig.load` filters unknown ones
     #: (and a whole-object save by an older collab drops it: version skew only).
     no_tunnel: bool = False
+    #: `collab host --primary`: this session asked to be the one a bare-domain
+    #: link reaches through the shared proxy. Kept here so a hub the daemon
+    #: revives asks again (idempotent: see `proxy.claim_primary`), and so the
+    #: choice is the host's, never a side effect of starting the proxy.
+    proxy_primary: bool = False
     pid: int = 0
     home: str = ""
     #: The hub and the tunnel again, STAMPED — the pid with the start time and
