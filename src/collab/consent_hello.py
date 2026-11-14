@@ -58,7 +58,7 @@ _WINDOWS_POWERSHELL = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell
 
 #: A Hello key name: what `KeyCredentialManager` files the key under. Checked
 #: here although it never reaches PowerShell as code, because it is also the
-#: `cred_id` the hub records.
+#: `credential_id` the hub records.
 _NAME = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 
 #: The most a call may print. A public key is ~400 bytes of base64 and a
@@ -388,13 +388,49 @@ def _name(name: str) -> str:
     return name
 
 
-def _b64(value: Any, what: str) -> bytes:
+def _ps_b64(value: Any, what: str) -> bytes:
+    """A binary field from OUR OWN PowerShell child — standard, padded base64,
+    since that is what .NET's `Convert.ToBase64String` writes. It never
+    reaches the hub: everything crossing the adapter's boundary is converted
+    to base64url by `b64url` first."""
     if not isinstance(value, str):
         raise HelloError(f"BadAnswer:{what}")
     try:
         return base64.b64decode(value, validate=True)
     except ValueError:
         raise HelloError(f"BadAnswer:{what}") from None
+
+
+#: Canonical UNPADDED base64url, the hub's encoding for every binary field
+#: (strong-approval API v1, #161): A–Z a–z 0–9 `-` `_`, nothing else.
+_B64URL = re.compile(r"[A-Za-z0-9_-]+", re.ASCII)
+
+
+def b64url(raw: bytes) -> str:
+    """Bytes as the hub's wire wants them: base64url, no `=` padding."""
+    return base64.urlsafe_b64encode(bytes(raw)).rstrip(b"=").decode("ascii")
+
+
+def unb64url(value: Any, *, limit: int) -> bytes:
+    """A binary field from the hub's side, decoded only if it is CANONICAL
+    unpadded base64url of 1–`limit` bytes; ValueError otherwise.
+
+    STRICT BOTH WAYS, as the hub is. This boundary used `b64decode`, which
+    takes the standard alphabet and padding: a dispatcher that handed over
+    `+`/`/` or `=` got a signature here that the hub — reading the same field
+    canonically — would refuse, or a challenge that was never the hub's. So
+    `=`, `+`, `/`, whitespace and non-zero pad bits (two spellings of one
+    value) are all refused, and the length is bounded before decoding."""
+    if (not isinstance(value, str) or len(value) > (limit * 4 + 2) // 3
+            or _B64URL.fullmatch(value) is None):
+        raise ValueError("not canonical unpadded base64url")
+    try:
+        raw = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    except ValueError:
+        raise ValueError("not canonical unpadded base64url") from None
+    if not raw or len(raw) > limit or b64url(raw) != value:
+        raise ValueError("not canonical unpadded base64url")
+    return raw
 
 
 # --- the four operations ------------------------------------------------------------
@@ -412,16 +448,17 @@ def enrol(name: str) -> dict:
     return what the hub registers. Raises `AlreadyEnrolled` rather than
     replacing a key, `Refused` on a cancel."""
     answer = _checked(_run({"op": "create", "name": _name(name)}, HUMAN))
-    spki = _b64(answer.get("spki"), "spki")
-    return {"cred_id": name, "method": "hello", "alg": "RS256",
-            "spki_der_b64": base64.b64encode(spki).decode("ascii"),
-            "created": time.time()}
+    spki = _ps_b64(answer.get("spki"), "spki")
+    # The hub's names (`POST /enrol/finish`, #161), and nothing else: it
+    # rejects unknown fields. `algorithm` is COSE -257, RS256, as Hello signs.
+    return {"credential_id": name, "method": "hello", "algorithm": -257,
+            "public_key_spki": b64url(spki)}
 
 
 def public_key(name: str) -> bytes:
     """The enrolled key's SubjectPublicKeyInfo, DER. Does not prompt."""
     answer = _checked(_run({"op": "pubkey", "name": _name(name)}, QUICK))
-    return _b64(answer.get("spki"), "spki")
+    return _ps_b64(answer.get("spki"), "spki")
 
 
 def sign(name: str, challenge: bytes) -> bytes:
@@ -432,7 +469,7 @@ def sign(name: str, challenge: bytes) -> bytes:
     answer = _checked(_run({"op": "sign", "name": _name(name),
                             "challenge": base64.b64encode(bytes(challenge)).decode("ascii")},
                            HUMAN))
-    return _b64(answer.get("signature"), "signature")
+    return _ps_b64(answer.get("signature"), "signature")
 
 
 def verify(spki_der: bytes, message: bytes, signature: bytes) -> bool:
@@ -502,7 +539,7 @@ def fields(request: dict) -> dict:
         "summary": (f"{_line(request.get('subject'), 60)} → "
                     f"{_line(request.get('destination'), 60)}"
                     f" · grants {_line(request.get('authority'), 60)}"
-                    f" · digest {_line(request.get('digest_hex'), 16)}"),
+                    f" · digest {_line(request.get('digest'), 16)}"),
     }
 
 
@@ -510,10 +547,12 @@ def open_window(request: dict) -> dict:
     """Show collab's approval window for `request`, and act on the choice.
 
     `request` is the dispatcher's (`consent.window.open`): request_id,
-    requester_id, requester_name, subject, destination, authority, digest_hex,
-    review_text, challenge_b64, cred_id. Returns one of:
+    requester_id, requester_name, subject, destination, authority, digest,
+    review_text, and the hub's `challenge` (unpadded base64url) and
+    `credential_id`. Returns one of:
 
-        {"choice": "approve", "method": "hello", "cred_id", "signature_b64"}
+        {"choice": "approve", "method": "hello", "credential_id",
+         "proof": {"type": "hello", "signature"}}   — as `/approve` takes it
         {"choice": "decline"}
         {"choice": "passkey"}           — the dispatcher opens the passkey page
         {"choice": "expired"}           — nobody chose within WINDOW_DEADLINE
@@ -527,12 +566,10 @@ def open_window(request: dict) -> dict:
     """
     # VALIDATED BEFORE THE WINDOW: a request that could not be signed must not
     # ask a human to read and approve it first.
-    cred = request.get("cred_id")
+    cred = request.get("credential_id")
     try:
         _name(cred)
-        challenge = base64.b64decode(str(request.get("challenge_b64") or ""), validate=True)
-        if not 1 <= len(challenge) <= 4096:
-            raise ValueError("challenge size")
+        challenge = unb64url(request.get("challenge"), limit=4096)
     except (ValueError, TypeError):
         return {"choice": "unavailable", "reason": "BadRequest"}
     review = _visible(request.get("review_text"), lines=True)
@@ -577,8 +614,8 @@ def open_window(request: dict) -> dict:
             return {"choice": "unavailable", "reason": "SignatureMismatch"}
     except HelloError as exc:
         return {"choice": "unavailable", "reason": exc.status}
-    return {"choice": "approve", "method": "hello", "cred_id": cred,
-            "signature_b64": base64.b64encode(signature).decode("ascii")}
+    return {"choice": "approve", "method": "hello", "credential_id": cred,
+            "proof": {"type": "hello", "signature": b64url(signature)}}
 
 
 def build_window_only(request: dict) -> dict:
@@ -590,14 +627,14 @@ def build_window_only(request: dict) -> dict:
 
 
 __all__ = ["AlreadyEnrolled", "HelloError", "NotEnrolled", "Refused", "Unavailable",
-           "available", "build_window_only", "enrol", "fields", "open_window",
-           "public_key", "sign", "verify"]
+           "available", "b64url", "build_window_only", "enrol", "fields",
+           "open_window", "public_key", "sign", "unb64url", "verify"]
 
 
 def _self_check(name: str = "collab-selftest") -> None:      # pragma: no cover
     """By hand only: enrol (prompts), sign (prompts), verify."""
     record = enrol(name)
-    spki = base64.b64decode(record["spki_der_b64"])
+    spki = unb64url(record["public_key_spki"], limit=4096)
     message = b"collab hello self-check"
     print(verify(spki, message, sign(name, message)))
 
