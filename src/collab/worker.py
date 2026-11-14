@@ -371,10 +371,43 @@ class Store:
             if row is None:
                 raise ValueError(f"no pending worker decision {escalation_id}")
             prompt = json.loads(row[0])
+            if prompt.get("awaiting_human") and (prompt.get("notify_to") or prompt.get("notify_room")):
+                # The human's final answer goes to the waiting peer VERBATIM and
+                # at once: through a model turn it was paraphrased, and after the
+                # hourly cap it waited up to an hour. The worker learns it as context.
+                db.execute("DELETE FROM records WHERE id=?", (escalation_id,))
+                self._add(db, "outbox", {"text": text, "to": prompt.get("notify_to", ""),
+                                         "room": prompt.get("notify_room", "")})
+                self._add(db, "context", {"text": _text(
+                    f"Answered for the main agent to {prompt.get('notify_to') or prompt.get('notify_room')}"
+                    f" (already sent, do not repeat): {text[:2000]}", "context")})
+                return
+            prompt = prompt
             # Reuse the decision id; consuming the answer in a committed turn
             # is the only operation that removes the coding agent's response.
             db.execute("UPDATE records SET kind='answer',data=? WHERE id=?",
                        (json.dumps({"text": text, "prompt": prompt}), escalation_id))
+
+    def await_human(self, escalation_id: str, note: str, *, to: str = "", room: str = "") -> str:
+        """The main agent took the question to its human (R18).
+
+        The decision stays open, so nothing re-escalates it and the deferral
+        repair sees it as routed; the peer is told once, verbatim, that a
+        human is deciding. The final `answer` later closes it as usual.
+        """
+        note = _text(note, "note")
+        with self._db() as db:
+            row = db.execute("SELECT data FROM records WHERE id=? AND kind='escalation'", (escalation_id,)).fetchone()
+            if row is None:
+                raise ValueError(f"no pending worker decision {escalation_id}")
+            data = json.loads(row[0])
+            if data.get("awaiting_human"):
+                return ""  # already with the human; the peer was told the first time
+            data.update(awaiting_human=True, awaiting_since=time.time(), notify_to=to, notify_room=room)
+            db.execute("UPDATE records SET data=? WHERE id=?", (json.dumps(data), escalation_id))
+            if not (to or room) or not (self._state(db)["config"] or {}).get("enabled"):
+                return ""
+            return self._add(db, "outbox", {"text": note, "to": to, "room": room})
 
     def commit_turn(self, *, expected_cursor: int, cursor: int, summary: str,
                     replies: list[dict[str, Any]], escalations: list[dict[str, Any]],
@@ -649,6 +682,9 @@ def metrics(root):
     return {**state.get("usage", {}), **state.get("reported_stats", {}), "enabled": state["enabled"], "running": state["running"],
         "agent": cfg.get("agent", ""), "model": model or state.get("reported_stats", {}).get("model", ""), "turns": state["turn"],
         "attempts": state.get("attempts_total", 0), "pending": len(state["pending"]),
+        "awaiting_human": sum(1 for p in state["pending"] if p.get("awaiting_human")),
+        "awaiting_since": min((p["awaiting_since"] for p in state["pending"]
+                               if p.get("awaiting_human") and p.get("awaiting_since")), default=None),
         **_budget_figures(store),
         "errors": int(bool(state["error"])), "source": state.get("reported_stats", {}).get("source") or "collab-worker",
         "observed_at": max(state.get("last_progress", 0), state.get("usage", {}).get("observed_at", 0),

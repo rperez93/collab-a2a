@@ -147,7 +147,9 @@ async def test_cancellation_and_deadlines_kill_the_exact_worker_group(tmp_path, 
     marker = tmp_path / "pids.json"
     script = ("import json,os,subprocess,sys,time; "
               "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(100)']); "
-              f"open({str(marker)!r},'w').write(json.dumps([os.getpid(),child.pid])); "
+              # Atomic: under load the reader saw a half-written file.
+              f"open({str(marker) + '.tmp'!r},'w').write(json.dumps([os.getpid(),child.pid])); "
+              f"os.replace({str(marker) + '.tmp'!r},{str(marker)!r}); "
               "time.sleep(100)")
     task = asyncio.create_task(runtime.run_turn("command", "cheap", {}, tmp_path,
         command=python(script), timeout=0.4 if not cancel else 10))
@@ -365,3 +367,24 @@ def test_an_escalation_about_a_peer_in_the_same_turn_routes_its_deferral():
     assert unrouted_deferrals(result, selected, pending=[]) == []
     alone = {**result, "escalations": []}
     assert [e["seq"] for e in unrouted_deferrals(alone, selected, pending=[])] == [4]
+
+
+def test_an_unanchored_escalation_or_a_waiting_peer_counts_as_routed():
+    from collab.worker_runtime import unrouted_deferrals
+    selected = [{"seq": 5, "sender": "bob", "to": "alice", "room": "", "text": "any update?"}]
+    defer = {"text": "Hold tight, I'll get back to you.", "to": "bob", "room": ""}
+    assert unrouted_deferrals({"replies": [defer], "escalations": [{"seq": 0, "reason": "decision", "question": "q"}]},
+                              selected, pending=[]) == []
+    assert unrouted_deferrals({"replies": [defer], "escalations": []}, selected,
+                              pending=[{"seq": 2, "sender": "bob", "awaiting_human": True}]) == []
+
+
+def test_an_old_decision_about_a_peer_does_not_hide_a_new_promise_to_them():
+    from collab.worker_runtime import unrouted_deferrals
+    selected = [{"seq": 9, "sender": "bob", "to": "", "room": "general", "text": "And the port?"},
+                {"seq": 10, "sender": "carol", "to": "", "room": "general", "text": "hi"}]
+    result = {"replies": [{"text": "I'll check and confirm.", "to": "bob", "room": ""}],
+              "escalations": [{"reason": "decision", "seq": 0, "question": "carol's thing"}]}
+    old = [{"seq": 2, "sender": "bob", "question": "old"}]
+    assert [e["seq"] for e in unrouted_deferrals(result, selected, pending=old)] == [9], \
+        "an unrelated pending decision and another peer's unanchored escalation route nothing for bob"

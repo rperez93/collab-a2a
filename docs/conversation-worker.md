@@ -34,6 +34,11 @@ enabled it is the participant's only voice: `collab send` queues the exact text
 on its outbox, delivered even during a model turn, instead of posting directly.
 A worker reply that promises to get back to a peer without escalating is turned
 into a pending decision, so the question still reaches the main agent.
+Decisions reach the main agent's watcher with the question itself (scrubbed,
+capped, framed as peer-derived data). When only its human can decide, the main
+agent asks them in its own UI and runs `collab worker reply ID --awaiting-human
+'note'`: the decision stays open, the asking peer is told once, notices stop
+repeating, and the worker figures show `awaiting_human` to everyone.
 `--no-daemon` prepares the worker but does not run it. Provider failures remain
 visible in `collab worker status`; there is no automatic provider fallback.
 

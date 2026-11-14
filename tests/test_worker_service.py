@@ -94,7 +94,7 @@ async def test_peer_conversation_and_decision_return_flow_without_main_reading(c
         assert state.snapshot()["cursor"] == 2
         assert service.daemon.inbox.unread_count() == 2
         notice = worker_notices.claim(service.root)
-        assert notice and "May Bob" not in notice["text"]
+        assert notice and "May Bob" in notice["text"]
         worker_notices.commit(service.root, notice["token"])
         incoming(service, 3, "Question")
         await service.turn()  # a pending decision must not stop other work
@@ -264,7 +264,7 @@ async def test_daemon_wakes_for_worker_decisions_even_with_old_inbox_notice(conv
     await daemon._waking
     assert calls[0][0] is None
     assert "collab worker pending" in calls[0][1]
-    assert "Private question" not in calls[0][1]
+    assert "Private question" in calls[0][1]
     assert worker_notices.claim(service.root) is None
 
 
@@ -583,3 +583,59 @@ async def test_under_collab_no_worker_queued_messages_are_still_delivered(conver
         await conversation.tick()
         await asyncio.wait_for(conversation.delivery, 2)
     assert sent == ["ship it"] and calls == [], "delivered, but no model call"
+
+
+@pytest.mark.asyncio
+async def test_an_escalation_with_a_wrong_seq_is_kept_not_thrown_away(conversation, tmp_path, monkeypatch):
+    """The whole paid turn used to be discarded and backed off for one bad reference."""
+    configure(conversation, tmp_path)
+    async def run(*args, **kwargs):
+        return {"summary": "", "replies": [], "escalations": [
+            {"reason": "decision", "seq": 999, "question": "Which branch?"}]}
+    monkeypatch.setattr("collab.worker_runtime.run_turn", run)
+    incoming(conversation, 1, "Question")
+    await conversation.turn()
+    store = worker.Store(conversation.root)
+    assert [(p["seq"], p["question"]) for p in store.pending()] == [(1, "Which branch?")], "the only message in the turn"
+    assert not store.status()["error"]
+
+
+@pytest.mark.asyncio
+async def test_a_worker_reply_repeating_an_open_question_to_someone_else_is_dropped(conversation, tmp_path, monkeypatch):
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    incoming(conversation, 1, "May we drop the legacy API in 3.0?")
+    snap = store.snapshot()
+    store.commit_turn(expected_cursor=snap["cursor"], cursor=1, summary="", replies=[],
+                      escalations=[{"reason": "decision", "seq": 1,
+                                    "question": "Bob asks: may we drop the legacy API in 3.0?"}])
+    incoming(conversation, 2, "anything new?")
+    async def run(*args, **kwargs):
+        return {"summary": "", "escalations": [], "replies": [
+            {"text": "FYI all: Bob asks: may we drop the legacy API in 3.0? waiting", "to": "", "room": "general"},
+            {"text": "Still with the main agent.", "to": "bob", "room": ""}]}
+    monkeypatch.setattr("collab.worker_runtime.run_turn", run)
+    sent = []
+    async def transport(request):
+        sent.append(json.loads(request.content)["text"])
+        return httpx.Response(200, json={"seq": 3})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        conversation.daemon._http = client
+        await conversation.turn()
+    assert sent == ["Still with the main agent."]
+
+
+@pytest.mark.asyncio
+async def test_the_worker_sees_the_open_board(conversation, tmp_path, monkeypatch):
+    configure(conversation, tmp_path)
+    conversation.daemon.snapshot["tasks"] = [{"id": "T_22", "title": "R22 consent primitive", "owner": "arma",
+                                              "state": "working"}]
+    payloads = []
+    async def run(*args, **kwargs):
+        payloads.append(args[2])
+        return {"summary": "", "replies": [], "escalations": []}
+    monkeypatch.setattr("collab.worker_runtime.run_turn", run)
+    incoming(conversation, 1, "does R22 exist?")
+    await conversation.turn()
+    assert payloads[0]["board"] == [{"id": "T_22", "title": "R22 consent primitive", "owner": "arma",
+                                     "state": "working"}]
