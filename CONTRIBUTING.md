@@ -401,9 +401,19 @@ the next patch version instead.
 
 ## Tests
 
+Run full suites through the machine-wide coordinator so concurrent participants
+do not overload the machine:
+
 ```bash
-.venv/bin/python -m pytest -q
+.venv/bin/python scripts/run-test-suite.py
 ```
+
+It requires runtime `COLLAB_NO_WORKER` support (PR #100), verified by a
+configuration-only probe; unsupported builds refuse to start. It waits at most 900 seconds for the shared lock (`--lock-timeout` overrides),
+lowers CPU/IO priority, and uses a temporary config with automatic workers off.
+A test that replaces `COLLAB_CONFIG` must preserve `worker_auto_start=false`
+unless it explicitly tests worker startup. Focused tests can still use pytest
+directly. See [resource awareness](docs/resources.md) for limits and diagnostics.
 
 Streaming tests run against a real uvicorn server rather than Starlette's
 `TestClient`, which does not behave with SSE. If you are adding behaviour to the

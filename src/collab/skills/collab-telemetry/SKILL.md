@@ -96,3 +96,15 @@ Roster/activity refresh and chat delivery do not wait for slow usage commands.
 The roster refreshes every three seconds and becomes unknown after 30 seconds
 without a successful fetch. See [telemetry documentation](https://github.com/rperez93/collab-a2a/blob/main/docs/telemetry.md)
 for controls, source limits and diagnosis.
+
+### Process resources
+
+`stats.resources` is separate from tokens and quota. Linux listeners sample
+explicitly stamped process trees every 15 seconds; stale samples (over 45
+seconds), incomplete trees and unsupported platforms are unknown. RSS includes
+shared pages, CPU100% means one core, and IO rates describe storage counters.
+Agent/work/proxy rows are shared estimates: never sum them across participants
+as exclusive usage. A pressure warning is advisory, not a quota or permission
+to kill a process. Never inspect another participant's private state to fill a
+missing metric. Coordinate full suites with `scripts/run-test-suite.py`; it
+limits lock waiting and sets a scratch config that disables automatic workers.
