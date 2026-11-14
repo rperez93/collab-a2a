@@ -113,7 +113,7 @@ def issue(*, purpose: str, session_id: str, target_id: str, requester_id: str,
     This helper deliberately takes no display names or caller-chosen nonce.
     Replay/expiry/key-generation checks belong to the consuming transaction.
     """
-    if purpose not in ("enrol", "approve"):
+    if purpose not in ("enrol", "approve", "key-possession"):
         raise InvalidProof("invalid challenge purpose")
     for field in (session_id, target_id, requester_id, subject):
         _label(field)

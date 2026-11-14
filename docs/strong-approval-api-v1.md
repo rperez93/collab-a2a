@@ -18,8 +18,27 @@ cooldown. It persists immutable operation reviews, single-use challenges,
 approvals and opaque hashed receipts. Receipt consumption claims dispatch once;
 it does not execute an operation or promise exactly-once external effects.
 
-API routes, signed key addition/rotation and host-strong recovery, event
-publication, operation-specific authorization/adoption, adapter wiring and real
+`server/approval_keys.py` adds internal signed key addition, rotation and
+host-authorized recovery. New keys prove possession over a dedicated
+`key-possession` challenge, then a separate immutable request needs approval
+from a mature existing key. Addition and rotation use the owner's key;
+recovery requires every owner key to be inactive and a different, unique active
+host with a mature key. Losing the only host key fails closed. Bearer access
+cannot install or unfreeze a replacement. Recovery retires previous keys;
+rotation retires the selected key. New keys retain the 600-second cooldown.
+
+Key changes bind the owner generation, new fingerprint, credential identifier,
+algorithm, replacement identifier and authorizer to the canonical review.
+Their receipts cannot enter generic operation dispatch. Applying a change
+revalidates current host authority where needed, consumes the receipt and
+advances the owner generation atomically, invalidating older challenges and
+receipts. Two SQLite connections cannot apply the same change twice. Registry
+bounds are four active keys and 64 retained keys per owner (retired keys count);
+pending change storage is capped at 128 globally and eight per owner, with
+600-second expiry. Capacity exhaustion fails closed rather than dropping old
+fingerprints and permitting silent reuse.
+
+API routes, event publication, operation-specific authorization/adoption, adapter wiring and real
 human ceremonies remain outstanding. The capability endpoint must not advertise
 availability based on these internal components alone.
 
@@ -47,8 +66,8 @@ browser origin, UP and UV, and preserves the original signed client bytes.
 The origin has an explicit non-default port; browser default-port aliases are
 not accepted. Counterless credentials (0 to 0) are supported; otherwise counters
 must increase. Stored backup eligibility must not change. Counter comparison
-and persistence must occur atomically with challenge consumption in the later
-state-machine implementation. A failed counter check is not proof of cloning.
+and persistence occur atomically with challenge consumption in the internal
+state machine. A failed counter check is not proof of cloning.
 
 Review JSON is limited to 64 KiB of canonical bytes, depth 16 and 2048 nodes.
 Strings cannot contain unpaired surrogates; integers must fit the exact JSON
@@ -148,7 +167,7 @@ The adapter forwards original byte arrays encoded once; it must not parse and
 reserialize client data before forwarding or assign receipt strength itself.
 
 The hub constructs the challenge as SHA-256 of canonical JSON containing
-`api_version`, `purpose` (`enrol` or `approve`), authenticated `session_id`,
+`api_version`, `purpose` (`enrol`, `key-possession` or `approve`), authenticated `session_id`,
 `target_id`, `request_id` (null for enrol), `subject`, `requester_id`, `digest`,
 `credential_id` (null for first enrol), fresh 32-byte `nonce`, `origin` and
 `expires_at`. Null fields are explicit. Canonical JSON uses sorted keys,
