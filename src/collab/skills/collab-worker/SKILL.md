@@ -46,7 +46,7 @@ into a pending decision, so the question still reaches the main agent.
 visible in `collab worker status`; there is no automatic provider fallback.
 A failed provider exit is classified: a rate limit waits for the stated retry
 time (15 minutes to one hour); network and other failures use the normal delay
-and ignore stated waits; an authentication or model error stops retrying and
+and ignore stated waits; an authentication or model error stops the normal retries (it rechecks hourly) and
 raises one decision per worker configuration, re-armed once answered. A
 decision anchored outside its turn is kept unanchored.
 
