@@ -66,7 +66,7 @@ def test_opening_a_pane_outside_tmux_is_refused(monkeypatch):
     """Better a clear message than a split that silently never appears."""
     monkeypatch.setattr(watch, "tmux_available", lambda: True)
     monkeypatch.setattr(watch, "in_tmux", lambda: False)
-    with pytest.raises(RuntimeError, match="not inside a tmux session"):
+    with pytest.raises(RuntimeError, match="could not identify this terminal's tmux pane"):
         watch.open_tmux_pane(["collab", "watch"])
 
 
@@ -84,7 +84,7 @@ def test_the_pane_command_carries_the_environment(monkeypatch):
 
     monkeypatch.setattr(watch, "tmux_available", lambda: True)
     monkeypatch.setattr(watch, "in_tmux", lambda: True)
-    monkeypatch.setattr(watch.subprocess, "run", fake_run)
+    monkeypatch.setattr(watch, "_tmux_command", fake_run)
 
     watch.open_tmux_pane(["collab", "watch"], env={"COLLAB_HOME": "/repo/.collab"},
                          percent=40, position="left")

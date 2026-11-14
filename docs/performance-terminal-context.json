@@ -1,0 +1,55 @@
+{
+  "method": "Fresh processes; cached roster calls versus changing one reported pending count. No polling or input readers added. Absolute postexec VmHWM. Synthetic40participant fixture at51content columns (54columnpane).",
+  "results": [
+    {
+      "variant": "before",
+      "mode": "idle_cached",
+      "calls": 2000,
+      "participants": 40,
+      "rows": 40,
+      "cpu_seconds": 0.33521201300000003,
+      "peak_rss_kib": 27300
+    },
+    {
+      "variant": "before",
+      "mode": "busy_changed",
+      "calls": 500,
+      "participants": 40,
+      "rows": 40,
+      "cpu_seconds": 2.616440743,
+      "peak_rss_kib": 27348
+    },
+    {
+      "variant": "after",
+      "mode": "idle_cached",
+      "calls": 2000,
+      "participants": 40,
+      "rows": 41,
+      "cpu_seconds": 0.309982972,
+      "peak_rss_kib": 27332
+    },
+    {
+      "variant": "after",
+      "mode": "busy_changed",
+      "calls": 500,
+      "participants": 40,
+      "rows": 41,
+      "cpu_seconds": 2.4700876099999998,
+      "peak_rss_kib": 27368
+    }
+  ],
+  "tmux_faults": [
+    {
+      "peer": "silent",
+      "wall_seconds": 0.251642,
+      "controller_cpu_seconds": 0.0007188,
+      "peak_rss_kib": 22044
+    },
+    {
+      "peer": "flood",
+      "wall_seconds": 0.020799,
+      "controller_cpu_seconds": 0.000891,
+      "peak_rss_kib": 22140
+    }
+  ]
+}
