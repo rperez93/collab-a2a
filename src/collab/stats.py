@@ -1305,7 +1305,7 @@ def _short_reset(value: str) -> str:
     if value.isascii() and value.isdigit() and len(value) <= 11:
         # Epoch seconds: what Claude Code's status line reports for resets.
         # A peer controls this string: '²', 30 nines or a year-10000 epoch
-        # crashed every roster view that rendered it.
+        # must not crash a roster view that renders it.
         try:
             candidates.append(datetime.fromtimestamp(int(value), timezone.utc))
         except (ValueError, OverflowError, OSError):
