@@ -753,8 +753,10 @@ def cmd_host(args: argparse.Namespace) -> int:
     # Recorded with the session, not only in this one child's environment: the
     # daemon revives a dead hub with its own environment, and that hub must
     # keep the host's choice (see `HubConfig.no_tunnel`). Each `collab host`
-    # decides afresh, so resuming without the flag publishes the session again.
-    cfg.no_tunnel = bool(args.no_tunnel)
+    # decides afresh, so resuming without the flag publishes the session again;
+    # `collab resume` restores the recorded choice instead. COLLAB_NO_TUNNEL=1
+    # counts as the flag, as the README promises.
+    cfg.no_tunnel = bool(args.no_tunnel) or os.environ.get("COLLAB_NO_TUNNEL") == "1"
     cfg.save()
 
     # NAMED HERE OR NOT AT ALL. The hub is detached and reparented just as the
@@ -3390,7 +3392,10 @@ def cmd_resume(args: argparse.Namespace) -> int:
                 "host", "--resume", args.session_id, "--home", str(home),
                 "--no-update-check",
                 *(["--keep"] if args.keep else []),
-                *(["--no-tunnel"] if args.no_tunnel else []),
+                # RESTORES the session, so a host who kept it local gets it
+                # back local after a reboot as after a crash; `collab host
+                # --resume` is the way to publish it again.
+                *(["--no-tunnel"] if args.no_tunnel or cfg.no_tunnel else []),
                 *(["--no-daemon"] if args.no_daemon else []),
             ])
             return cmd_host(host_args)

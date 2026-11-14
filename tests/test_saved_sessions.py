@@ -460,6 +460,19 @@ def test_resume_keep_is_forwarded_to_stopped_host(saved, monkeypatch):
     monkeypatch.setattr(cli, 'cmd_host', lambda args: calls.append(args) or 0)
     assert cli.main(['resume', cfg.session_id, '--keep', '--no-tunnel', '--no-daemon']) == 0
     assert calls[0].keep is True
+    assert calls[0].no_tunnel is True
+
+
+def test_resume_restores_a_recorded_local_only_choice(saved, monkeypatch):
+    """`collab resume` restores a session; one its host kept local must come
+    back local after a reboot exactly as after a crash, without the flag."""
+    cfg = create_session('host', 9000)
+    cfg.no_tunnel = True
+    cfg.save()
+    calls = []
+    monkeypatch.setattr(cli, 'cmd_host', lambda args: calls.append(args) or 0)
+    assert cli.main(['resume', cfg.session_id, '--no-daemon']) == 0
+    assert calls[0].no_tunnel is True
 
 
 def test_host_address_prefers_loopback_over_dead_public_tunnel(saved):

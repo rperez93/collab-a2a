@@ -65,7 +65,8 @@ class HubConfig:
     #: the revived hub started ngrok: a session the host chose to keep local
     #: tried to publish itself, and was stopped only because the account's
     #: endpoint was already online (ERR_NGROK_334, seen in an R17 load run).
-    #: An older collab ignores the key, as `HubConfig.load` filters unknown ones.
+    #: An older collab ignores the key, as `HubConfig.load` filters unknown ones
+    #: (and a whole-object save by an older collab drops it: version skew only).
     no_tunnel: bool = False
     pid: int = 0
     home: str = ""

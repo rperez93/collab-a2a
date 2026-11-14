@@ -458,12 +458,23 @@ def test_a_hub_left_running_by_a_test_is_stopped_by_the_fixture(tmp_path, monkey
 def _revive_like_the_daemon(root):
     """Start the session's hub again the way the host daemon revives a dead
     one: from the saved session only, with the daemon's own environment, which
-    never carried `collab host`'s COLLAB_NO_TUNNEL."""
+    never carried `collab host`'s COLLAB_NO_TUNNEL.
+
+    Waits first for the OLD hub to be gone — `stop_session` signals and
+    returns, and a dying hub still answers /health, which once made this
+    report «up» after 0.0 s about the wrong process (adversarial review of
+    #159). «Up» then means hub.json names the revived pid: the hub records
+    itself only after its tunnel decision, so ngrok's launch, if any, has
+    already happened by then."""
     import subprocess
     import sys
 
-    from collab.client.hub_client import HubClient, HubError
     from collab.server.session import HubConfig, hosted_sessions
+
+    deadline = time.monotonic() + 15
+    while _hubs_of(root / ".collab") and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not _hubs_of(root / ".collab"), "the previous hub never went away"
 
     cfg = hosted_sessions(root / ".collab")[0]
     env = {k: v for k, v in os.environ.items() if k != "COLLAB_NO_TUNNEL"}
@@ -474,26 +485,11 @@ def _revive_like_the_daemon(root):
     deadline = time.monotonic() + 30
     up = False
     while time.monotonic() < deadline and not up:
-        latest = HubConfig.load(cfg.session_id, cfg.home) or cfg
-        try:
-            with HubClient(latest.local_url, timeout=1.0) as probe:
-                probe.health()
-            up = True
-        except HubError:
-            time.sleep(0.2)
+        latest = HubConfig.load(cfg.session_id, cfg.home)
+        up = bool(latest and latest.pid == proc.pid)
+        if not up:
+            time.sleep(0.1)
     return proc, up
-
-
-def _ngrok_launched(root, within: float) -> bool:
-    """Whether the fake ngrok was run, waiting up to `within` seconds — the
-    tunnel starts after the hub answers, so one look straight away proves
-    nothing either way."""
-    deadline = time.monotonic() + within
-    while time.monotonic() < deadline:
-        if (root / "argv.txt").exists():
-            return True
-        time.sleep(0.2)
-    return (root / "argv.txt").exists()
 
 
 def test_a_local_only_session_stays_local_when_its_daemon_revives_the_hub(
@@ -505,7 +501,7 @@ def test_a_local_only_session_stays_local_when_its_daemon_revives_the_hub(
     with the session."""
     from collab.server.session import HubConfig, hosted_sessions, stop_session
 
-    _fake_ngrok_on_path(hosting, monkeypatch, "sleep 30\n")
+    _fake_ngrok_on_path(hosting, monkeypatch, "exit 1\n")
     _host(hosting, "--no-tunnel")
     cfg = hosted_sessions(hosting / ".collab")[0]
     assert cfg.no_tunnel is True
@@ -514,7 +510,7 @@ def test_a_local_only_session_stays_local_when_its_daemon_revives_the_hub(
     proc, up = _revive_like_the_daemon(hosting)
     try:
         assert up, "the revived hub did not come up"
-        assert not _ngrok_launched(hosting, 15), "the revived hub started ngrok"
+        assert not (hosting / "argv.txt").exists(), "the revived hub started ngrok"
     finally:
         stop_session(HubConfig.load(cfg.session_id, cfg.home) or cfg)
         with contextlib.suppress(Exception):
@@ -528,7 +524,7 @@ def test_a_published_session_is_published_again_when_its_hub_is_revived(
     and a later plain `collab host` clears an earlier --no-tunnel."""
     from collab.server.session import HubConfig, hosted_sessions, stop_session
 
-    _fake_ngrok_on_path(hosting, monkeypatch, "sleep 30\n")
+    _fake_ngrok_on_path(hosting, monkeypatch, "exit 1\n")
     _host(hosting, "--no-tunnel")
     _host(hosting, "--resume", hosted_sessions(hosting / ".collab")[0].session_id)
     cfg = hosted_sessions(hosting / ".collab")[0]
@@ -538,8 +534,20 @@ def test_a_published_session_is_published_again_when_its_hub_is_revived(
     proc, up = _revive_like_the_daemon(hosting)
     try:
         assert up
-        assert _ngrok_launched(hosting, 15), "a published session lost its tunnel"
+        assert (hosting / "argv.txt").exists(), "a published session lost its tunnel"
     finally:
         stop_session(HubConfig.load(cfg.session_id, cfg.home) or cfg)
         with contextlib.suppress(Exception):
             proc.wait(timeout=10)
+
+
+def test_the_no_tunnel_variable_alone_is_recorded_like_the_flag(hosting, monkeypatch):
+    """README: COLLAB_NO_TUNNEL=1 is «same as `collab host --no-tunnel`». It
+    was not recorded, so a daemon restarted from another shell revived that
+    hub with a tunnel (adversarial review of #159, mutant M4)."""
+    from collab.server.session import hosted_sessions
+
+    _fake_ngrok_on_path(hosting, monkeypatch, "exit 1\n")
+    monkeypatch.setenv("COLLAB_NO_TUNNEL", "1")
+    _host(hosting)
+    assert hosted_sessions(hosting / ".collab")[0].no_tunnel is True
