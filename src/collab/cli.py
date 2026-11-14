@@ -7458,7 +7458,7 @@ def _skill_requests(client, profile) -> list[dict[str, Any]]:
             seen.add((source.id, source.requester_id))
             accepted = any(strong.strong_acceptance(
                 e, requester_id=source.requester_id, target_id=me_id,
-                source_seq=source.seq) for e in events)
+                source_seq=source.seq, request_id=source.id) for e in events)
             legacy = states.get((source.id, source.requester_id))
             state = ("done" if accepted and legacy == "done" else "accepted" if accepted
                      else "declined" if legacy == "declined" else "pending")
@@ -7501,6 +7501,60 @@ def _skill_requests(client, profile) -> list[dict[str, Any]]:
     return found
 
 
+def _skill_requests_sent(client, profile) -> list[dict[str, Any]]:
+    """The skill requests I asked, newest last, with what became of them.
+
+    A STRONG request's acceptance is read only from the hub's own event —
+    kind `system`, from the asked participant's id to mine, for exactly the
+    sequence my request was stored at and its request id — and its digest is
+    RECORDED. It is compared when this side can compute it
+    (`approval.requester_digest`); until the hub makes that possible, the
+    listing says the digest is not yet recomputed rather than implying it was.
+    An ordinary request's state is the peer's reply, as it always was.
+    """
+    from .client import approval as strong
+
+    me_id = str(getattr(profile, "participant_id", "") or "")
+    if not me_id:
+        return []
+    events = client.history(limit=500)
+    replies = {}
+    for env in events:
+        reply = (env.body or {}).get("skill_response")
+        if (env.kind == KIND_CHAT and getattr(env, "to_id", "") == me_id
+                and isinstance(reply, dict) and reply.get("state") in SKILL_STATES):
+            replies[(str(reply.get("id")), env.sender_id)] = reply["state"]
+    sent = []
+    for env in events:
+        ask = (env.body or {}).get("skill_request")
+        if (not isinstance(ask, dict) or getattr(env, "sender_id", "") != me_id
+                or not getattr(env, "to_id", "") or not isinstance(ask.get("id"), str)
+                or not REQUEST_ID_RE.fullmatch(ask["id"])):
+            continue
+        item = {"id": ask["id"], "to": env.to, "to_id": env.to_id,
+                "skill": str(ask.get("skill", ""))[:64], "seq": env.seq}
+        if strong.is_strong_ask(env):
+            answer = next((a for e in events if (a := strong.strong_acceptance(
+                e, requester_id=me_id, target_id=env.to_id, source_seq=env.seq,
+                request_id=ask["id"]))), None)
+            expected = strong.requester_digest(env)
+            item["strength"] = "strong"
+            if answer is None:
+                item["state"] = ("declined" if replies.get((ask["id"], env.to_id)) == "declined"
+                                 else "pending")
+            elif expected is not None and expected != answer["digest"]:
+                item["state"] = "mismatch"       # an acceptance of something else
+            else:
+                item["state"] = ("done" if replies.get((ask["id"], env.to_id)) == "done"
+                                 else "accepted")
+                item["digest"] = answer["digest"]
+                item["digest_checked"] = expected is not None
+        else:
+            item["state"] = replies.get((ask["id"], env.to_id), "pending")
+        sent.append(item)
+    return sent
+
+
 def _accept_strong(client, profile, match: dict[str, Any], args: argparse.Namespace) -> int:
     """Accept a STRONG skill request: the hub's review, a human gesture, the
     hub's receipt — and nothing else will do (R22b, v1 on #161).
@@ -7524,7 +7578,11 @@ def _accept_strong(client, profile, match: dict[str, Any], args: argparse.Namesp
         if key is None:
             fail(why)
             return 1
-        if not caps.get("available") or key["method"] not in (caps.get("methods") or []):
+        # BOTH: `available` is the hub saying strong approval is ready for
+        # operations at all (false at #161's 8257a05), `supported_methods`
+        # that it verifies this key's kind. Either missing, nothing weaker.
+        if (caps.get("available") is not True
+                or key["method"] not in (caps.get("supported_methods") or [])):
             fail("this session's hub does not offer strong approval yet "
                  f"({said(str(caps.get('reason') or 'unavailable'))}); a strong request "
                  "cannot be accepted any other way")
@@ -7621,7 +7679,7 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
     import uuid
     from .skill_sharing import NAME_RE
     rest = (args.args if args.action == "ask" else args.note) or ""
-    profile = (_require_profile(args) if args.action in ("peers", "requests")
+    profile = (_require_profile(args) if args.action in ("peers", "requests", "sent")
                else _require_own_profile(args))
     try:
         with _client(profile) as client:
@@ -7642,6 +7700,23 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
                     for item in skills:
                         print(f"  {said(item.get('name', '')):<28} {dim(said(item.get('description', '')))}")
                 print(dim("\n  peer-supplied text; ask with `collab skills ask SKILL --to NAME [--args TEXT]`"))
+                return 0
+            if args.action == "sent":
+                sent = _skill_requests_sent(client, profile)
+                if args.json:
+                    print(json.dumps(sent, indent=2, ensure_ascii=True))
+                elif not sent:
+                    print("You have asked no peer to run a skill.")
+                else:
+                    for item in sent:
+                        strength = " (strong approval)" if item.get("strength") == "strong" else ""
+                        note = ""
+                        if item.get("digest"):
+                            note = dim(f"  digest {item['digest'][:16]}… "
+                                       + ("verified" if item.get("digest_checked")
+                                          else "recorded, not yet recomputable here"))
+                        print(f"  {said(item['id'])}  [{item['state']}]  {said(item['skill'])} "
+                              f"asked of {said(str(item['to']))}{strength}{note}")
                 return 0
             if args.action == "requests":
                 found = _skill_requests(client, profile)
@@ -7828,7 +7903,7 @@ def cmd_consent(args: argparse.Namespace) -> int:
 def cmd_skills(args: argparse.Namespace) -> int:
     from . import skills as sk
 
-    if args.action in ("peers", "ask", "requests", "accept", "decline", "done"):
+    if args.action in ("peers", "ask", "requests", "sent", "accept", "decline", "done"):
         return cmd_skills_remote(args)
     if args.action in ("publish", "shared", "show", "withdraw"):
         from .skill_sharing import read_selected
@@ -8738,7 +8813,8 @@ Esc cancels a draft, q quits. Editor commands run without a shell.""")
     sk = sub.add_parser("skills",
                         help="teach your coding agents to use collab")
     sk.add_argument("action", choices=["install", "uninstall", "status", "publish", "shared", "show", "withdraw",
-                                       "peers", "ask", "requests", "accept", "decline", "done"])
+                                       "peers", "ask", "requests", "sent", "accept", "decline",
+                                       "done"])
     sk.add_argument("target", nargs="?", help="selected SKILL.md path, shared publication ID, skill name (ask) or request ID")
     sk.add_argument("--to", help="with ask: the participant to ask")
     sk.add_argument("--args", help="with ask: arguments for the requested skill")

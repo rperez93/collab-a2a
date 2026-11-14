@@ -1053,11 +1053,11 @@ usage: collab skills [-h] [--to TO] [--args ARGS] [--note NOTE]
                      [--description DESCRIPTION] [--after AFTER]
                      [--limit LIMIT] [--session SESSION] [--agent NAME]
                      [--copy] [--force] [--all] [--json]
-                     {install,uninstall,status,publish,shared,show,withdraw,peers,ask,requests,accept,decline,done}
+                     {install,uninstall,status,publish,shared,show,withdraw,peers,ask,requests,sent,accept,decline,done}
                      [target]
 
 positional arguments:
-  {install,uninstall,status,publish,shared,show,withdraw,peers,ask,requests,accept,decline,done}
+  {install,uninstall,status,publish,shared,show,withdraw,peers,ask,requests,sent,accept,decline,done}
   target                selected SKILL.md path, shared publication ID, skill
                         name (ask) or request ID
 
