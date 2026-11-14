@@ -476,17 +476,16 @@ def join_line(cfg: HubConfig) -> str:
         # Preserve the exact legacy local-only line, including its fragment.
         return f"collab join {base}#{cfg.invite}"
     if base != cfg.local_url:
-        import base64
-        from .local_tls import read_certificate
         from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
         parsed = urlsplit(base)
         query = [(key, value) for key, value in parse_qsl(parsed.query)
                  if key not in {"collab_session", "collab_local", "collab_cert"}]
-        query.append(("collab_session", cfg.session_id))
-        certificate = read_certificate(cfg.dir) if cfg.secure_port else ""
-        if certificate:
-            query.extend([("collab_local", cfg.secure_local_url),
-                ("collab_cert", base64.urlsafe_b64encode(certificate.encode("ascii")).decode("ascii"))])
+        # Ordinary links keep their short legacy spelling. Routed public
+        # paths carry only the expected session id for pre-credential health
+        # checking; local destinations/certificates arrive after the join.
+        if parsed.path.rstrip("/").endswith("/s/" + cfg.session_id):
+            query.append(("collab_session", cfg.session_id))
         base = urlunsplit((parsed.scheme, parsed.netloc, parsed.path,
                           urlencode(query), ""))
-    return "collab join " + shlex.quote(f"{base}#{cfg.invite}")
+    link = f"{base}#{cfg.invite}"
+    return "collab join " + (shlex.quote(link) if "?" in base else link)

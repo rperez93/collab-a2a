@@ -24,10 +24,24 @@ async def secure(live_server, tmp_path):
         pytest.skip("openssl certificate generation unavailable")
     forwarder = LocalTLS(live_server["base"], "127.0.0.1", context)
     await forwarder.start()
+    pem = read_certificate(tmp_path / "cert")
+    entrance = f"https://127.0.0.1:{forwarder.port}"
+    # Only the authenticated original join response advertises the TLS
+    # entrance. This fixture uses the real app/join handler and real TLS
+    # channel; query data never supplies metadata to that response.
+    route = next(route for route in live_server["app"].routes
+                 if getattr(route, "path", "") == "/ext/collab/v1/join")
+    original_join = route.dependant.call
+    async def joined(request):
+        result = await original_join(request)
+        result["routes"] = {"session_id": "s_test", "public_url": live_server["base"],
+                            "secure_local_url": entrance, "local_certificate": pem}
+        return result
+    route.dependant.call = joined
     try:
-        yield {**live_server, "url": f"https://127.0.0.1:{forwarder.port}",
-               "pem": read_certificate(tmp_path / "cert"), "forwarder": forwarder}
+        yield {**live_server, "url": entrance, "pem": pem, "forwarder": forwarder}
     finally:
+        route.dependant.call = original_join
         await forwarder.close()
 
 
@@ -36,11 +50,11 @@ def link(base, secure, sid="s_test", invite="invite"):
         "collab_cert": base64.urlsafe_b64encode(secure["pem"].encode()).decode()}) + "#" + invite
 
 
-async def test_a_pinned_local_route_joins_the_same_hub_without_using_the_tunnel(secure, tmp_path, monkeypatch):
-    """TLS authenticates every secret-bearing request, including CLI calls after join."""
+async def test_original_join_authorizes_pinned_local_traffic_afterward(secure, tmp_path, monkeypatch):
+    """The invite goes to the visible original; its response authorizes later local TLS."""
     from collab.cli import _client
     monkeypatch.setenv("COLLAB_HOME", str(tmp_path / "guest"))
-    original = "https://unused.invalid"
+    original = secure["base"]
     raw = link(original, secure, invite=secure["invite"])
     profile, snapshot, _ = await asyncio.to_thread(onboard.join_session, raw, name="bob", start_daemon=False)
     assert profile.url == secure["url"]
@@ -53,23 +67,25 @@ async def test_a_pinned_local_route_joins_the_same_hub_without_using_the_tunnel(
     assert (await asyncio.to_thread(read))["you"] == "bob"
 
 
-async def test_a_wrong_certificate_falls_back_before_join_sends_any_secret(secure, tmp_path, monkeypatch):
-    """A service relaying the old nonce proof cannot impersonate the TLS certificate."""
+async def test_a_wrong_query_certificate_cannot_override_the_authenticated_join_metadata(secure, tmp_path, monkeypatch):
+    """Query hints have no pin authority, even when they name a real TLS entrance."""
     await asyncio.to_thread(server_context, tmp_path / "other", "127.0.0.1")
     wrong = {**secure, "pem": read_certificate(tmp_path / "other")}
     monkeypatch.setenv("COLLAB_HOME", str(tmp_path / "guest"))
     raw = link(secure["base"], wrong, invite=secure["invite"])
     profile, _, _ = await asyncio.to_thread(onboard.join_session, raw, name="bob", start_daemon=False)
-    assert profile.url == secure["base"]
+    assert profile.url == secure["url"]
+    assert routes.load(profile)["local_certificate"] == secure["pem"]
     assert len(secure["store"].participants()) == 2
 
 
-def test_hint_queries_preserve_legacy_fragment_and_certificate_roots(secure):
-    """Old clients ignore query hints and still spend the same original invite."""
+def test_hint_queries_preserve_only_expected_session_and_legacy_fragment(secure):
+    """A query-supplied certificate must not authorize its query-supplied destination."""
     raw = link("https://public.invalid", secure)
     assert onboard.split_join_url(raw) == ("https://public.invalid", "invite")
     parsed = routes.hints(raw)
-    context = routes.tls_context(parsed["local_certificate"])
+    assert parsed == {"session_id": "s_test"}
+    context = routes.tls_context(secure["pem"])
     assert context.check_hostname is False
     assert context.verify_mode == ssl.CERT_REQUIRED
     assert len(context.get_ca_certs(binary_form=True)) <= 1

@@ -2852,8 +2852,9 @@ class Daemon:
         local user can compute ours. What actually holds is that the registry is
         the user's own private directory (`announce` keeps it 0700) and that
         nothing but a loopback address is ever adopted from it. On a shared
-        COLLAB_PEERS_DIR the first of those is gone, and the second is all that
-        stands between a planted record and this agent's token.
+        COLLAB_PEERS_DIR that ownership premise is gone. Such a registry may
+        describe peers, but private_records refuses automatic credential
+        routing through it; loopback syntax alone is not enough.
 
         AND IT ONLY RUNS AFTER A RECONNECT HAS FAILED. A feed that is up is
         never interrupted to go reading files, so a remote guest talking happily
@@ -2866,7 +2867,10 @@ class Daemon:
             # A hub.json with no port yet — written but not started — composes
             # to `http://:0`, which is truthy and would be saved over a working
             # address. An address with no host in it is not an address.
-            mine = cfg.public_url or cfg.local_url
+            # A host's tunnel can flap while its own listener remains live.
+            # Returning the public URL here undid local selection on every
+            # reconnect, flipping the saved profile between local/public.
+            mine = cfg.local_url
             return mine if _has_host(mine) else ""
 
         here, user = peers.machine_id(), peers.current_user()
@@ -2881,10 +2885,9 @@ class Daemon:
             if (peer.role != "host"
                     or peer.machine_id != here or peer.user != user):
                 continue
-            # Liveness is not checked here: `discover` already drops records
-            # whose process is gone, and for a HOST record that process is the
-            # hub itself — a host announces its hub's pid, not its own. A second
-            # check here would read as the guard and never fire.
+            # private_records already checked process liveness without pruning
+            # another participant's record. A host announces the hub pid, so
+            # that check names the serving process rather than the agent.
             found.append(peer)
 
         # AMBIGUITY IS NOT AN ANSWER. A session directory copied into another
@@ -3209,10 +3212,30 @@ class Daemon:
                     self._note_task_boundary(env)
                     self._note_fresh_session(env)
                     self.waker.note(env, own_name=self.profile.name)
-                    await self.bridge.broadcast(env)
-                    if env.kind in REFRESHES_THE_SNAPSHOT:
-                        self._request_snapshot(client)
-                    self.write_status()
+                    delivery = asyncio.create_task(self.bridge.broadcast(env))
+                    try:
+                        # record() already advanced the replay cursor. Finish
+                        # this bounded local delivery before a route change
+                        # closes the old feed, or reconnect skips the event
+                        # that the bridge never received. Shutdown can cancel
+                        # the stream AGAIN while its reconnect gather waits;
+                        # a single second shield would abandon delivery then.
+                        interrupted = False
+                        while not delivery.done():
+                            try:
+                                await asyncio.shield(delivery)
+                            except asyncio.CancelledError:
+                                interrupted = True
+                        # A cancelled/failed delivery is terminal too. Read its
+                        # result before propagating caller cancellation so the
+                        # retry loop cannot spin on a cancelled child task.
+                        delivery.result()
+                        if interrupted:
+                            raise asyncio.CancelledError
+                    finally:
+                        if env.kind in REFRESHES_THE_SNAPSHOT:
+                            self._request_snapshot(client)
+                        self.write_status()
 
 
 async def run_daemon(profile: SessionProfile, *, bridge_port: int = 0) -> None:

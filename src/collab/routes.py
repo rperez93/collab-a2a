@@ -8,7 +8,8 @@ certificate; local HTTP is selected only from this user's private registry.
 from __future__ import annotations
 
 import asyncio
-import base64
+import ipaddress
+from itertools import islice
 import json
 import os
 import re
@@ -24,6 +25,28 @@ from .protocol import EXT_PREFIX
 MAX_ROUTE_BYTES = 16 * 1024
 LOCAL_DEADLINE = 0.75
 PUBLIC_DEADLINE = 5.0
+MAX_REGISTRY_ENTRIES = 1024
+
+
+def secure_local(value):
+    """Authenticated metadata may name numeric loopback, private LAN or ULA TLS.
+
+    DNS and arbitrary public addresses are not automatic local candidates.
+    Keeping this numeric also avoids DNS rebinding changing the meaning of a
+    local hint between its health probe and the credential-bearing connection.
+    """
+    candidate = url(value)
+    if not candidate.startswith("https://"):
+        return ""
+    try:
+        address = ipaddress.ip_address(urlsplit(candidate).hostname)
+        address = getattr(address, "ipv4_mapped", None) or address
+        networks = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")
+        if address.is_loopback or any(address in ipaddress.ip_network(network) for network in networks):
+            return candidate
+    except ValueError:
+        pass
+    return ""
 
 
 def url(value):
@@ -63,28 +86,25 @@ def tls_context(pem):
 
 
 def hints(raw):
-    """Read public hints without changing the legacy invite fragment."""
+    """Read an expected session id, never destination/certificate authority.
+
+    Query parameters are outside the visible URL authority. Pairing an
+    attacker-chosen destination with its own certificate only authenticates
+    the attacker. The first join must use the original visible URL or the
+    private same-machine registry; only its authenticated response supplies
+    local TLS metadata for subsequent traffic.
+    """
     if len(raw) > MAX_ROUTE_BYTES:
         raise ValueError("join link is too long")
-    result = {}
     try:
         parsed = urlsplit(raw if "://" in raw else "https://" + raw)
         query = parse_qs(parsed.query, max_num_fields=16)
         sid = query.get("collab_session", [""])[0]
-        candidate = url(query.get("collab_local", [""])[0])
-        encoded = query.get("collab_cert", [""])[0]
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", sid):
             return {}
-        result = {"session_id": sid}
-        if not candidate.startswith("https://"):
-            return result
-        if len(encoded) > 12000:
-            return result
-        pem = base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True).decode("ascii")
-        tls_context(pem)
-        return {"session_id": sid, "secure_local_url": candidate, "local_certificate": pem}
-    except (ValueError, UnicodeError, ssl.SSLError):
-        return result
+        return {"session_id": sid}
+    except ValueError:
+        return {}
 
 
 def load(profile):
@@ -100,6 +120,7 @@ def load(profile):
         normalized = {"session_id": profile.session_id}
         for name in ("original_user_url", "public_url", "local_url", "secure_local_url"):
             normalized[name] = url(data.get(name))
+        normalized["secure_local_url"] = secure_local(data.get("secure_local_url"))
         pem = data.get("local_certificate")
         normalized["local_certificate"] = pem if isinstance(pem, str) and len(pem) <= 8192 else ""
         return normalized if normalized["original_user_url"] else {}
@@ -123,7 +144,8 @@ def remember(profile, metadata, *, original_url=None, expected=None):
     pem = metadata.get("local_certificate", "")
     try:
         tls_context(pem)
-        if not saved["secure_local_url"].startswith("https://"):
+        saved["secure_local_url"] = secure_local(saved["secure_local_url"])
+        if not saved["secure_local_url"]:
             raise ValueError("not a TLS route")
         saved["local_certificate"] = pem
     except (ValueError, ssl.SSLError):
@@ -169,34 +191,47 @@ def private_records(session_id=""):
     if not hasattr(os, "getuid"):
         return []
     directory = peers.peers_dir()
+    directory_fd = None
     try:
-        info = directory.lstat()
+        directory_fd = os.open(directory, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+        info = os.fstat(directory_fd)
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
             return []
+        found = []
+        # Glob may collect directory entries before filtering, and a cap on
+        # matching .json names does nothing against millions of other names.
+        # Bound the streaming iterator BEFORE suffix filtering, with no
+        # lookahead entry. The checked directory fd also keeps subsequent
+        # record opens anchored if the path is substituted during discovery.
+        with os.scandir(directory_fd) as entries:
+            for entry in islice(entries, MAX_REGISTRY_ENTRIES):
+                if not entry.name.endswith(".json"):
+                    continue
+                try:
+                    fd = os.open(entry.name, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0),
+                                 dir_fd=directory_fd)
+                    with os.fdopen(fd, "rb") as stream:
+                        info = os.fstat(stream.fileno())
+                        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+                            continue
+                        raw = stream.read(MAX_ROUTE_BYTES + 1)
+                    if len(raw) > MAX_ROUTE_BYTES:
+                        continue
+                    data = json.loads(raw)
+                    if not isinstance(data, dict) or session_id and data.get("session_id") != session_id:
+                        continue
+                    peer = peers.Peer(**{k: v for k, v in data.items() if k in peers.Peer.__dataclass_fields__})
+                    if peer.alive:
+                        found.append(peer)
+                except (OSError, ValueError, TypeError, RecursionError, OverflowError):
+                    continue
+        return found
     except OSError:
         return []
-    found = []
-    for index, path in enumerate(directory.glob("*.json")):
-        if index >= 1024:
-            break
-        try:
-            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
-            with os.fdopen(fd, "rb") as stream:
-                info = os.fstat(stream.fileno())
-                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
-                    continue
-                raw = stream.read(MAX_ROUTE_BYTES + 1)
-            if len(raw) > MAX_ROUTE_BYTES:
-                continue
-            data = json.loads(raw)
-            if not isinstance(data, dict) or session_id and data.get("session_id") != session_id:
-                continue
-            peer = peers.Peer(**{k: v for k, v in data.items() if k in peers.Peer.__dataclass_fields__})
-            if peer.alive:
-                found.append(peer)
-        except (OSError, ValueError, TypeError, RecursionError, OverflowError):
-            continue
-    return found
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
 
 
 def trusted_local(session_id, *, invite=None):
@@ -222,28 +257,33 @@ def join_route(raw, original, invite):
                and (sid or url(p.url) == url(original))]
     choices = {(p.session_id, url(p.local_url)) for p in records}
     local = next(iter(choices)) if len(choices) == 1 else None
-    if local and local[1] == url(original):
-        return original, advertised
     if not local and not advertised:
         return original, advertised
     async def choose():
         if local and await healthy(local[1], local[0]):
             return local[1]
-        if advertised.get("secure_local_url") and await healthy(advertised["secure_local_url"], sid,
-                verify=tls_context(advertised["local_certificate"])):
-            return advertised["secure_local_url"]
-        if sid and not await healthy(original, sid, timeout=PUBLIC_DEADLINE):
+        expected = sid or (local[0] if local else "")
+        if expected and not await healthy(original, expected, timeout=PUBLIC_DEADLINE):
             raise ValueError("no reachable route serves the invited session; no invite was submitted")
         return original
     # The CLI is synchronous. If an embedding caller already has an event
     # loop, run the bounded probe in a separate loop rather than nesting it.
+    return _synchronous(choose), advertised
+
+
+def _synchronous(operation):
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(choose()), advertised
+        return asyncio.run(operation())
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=1) as executor:
-        return executor.submit(lambda: asyncio.run(choose())).result(), advertised
+        return executor.submit(lambda: asyncio.run(operation())).result()
+
+
+def after_join(profile):
+    """The successful original join response can now authorize a local route."""
+    return _synchronous(lambda: _preferred_local(profile, load(profile)))
 
 
 async def healthy(candidate, session_id, *, verify=True, timeout=LOCAL_DEADLINE):
@@ -271,32 +311,61 @@ async def healthy(candidate, session_id, *, verify=True, timeout=LOCAL_DEADLINE)
         return False
 
 
-async def select(profile):
-    """Prefer a proven local channel, then known public routes, without rejoin."""
-    state = load(profile)
-    if not state:
-        return profile.url
+async def _preferred_local(profile, state):
+    # One 750ms budget for ALL local candidates, not 750ms per address.
+    deadline = asyncio.get_running_loop().time() + LOCAL_DEADLINE
     local = trusted_local(profile.session_id)
-    if local and await healthy(local, profile.session_id):
+    remaining = deadline - asyncio.get_running_loop().time()
+    if local and remaining > 0 and await healthy(local, profile.session_id, timeout=remaining):
         return local
     secure = state.get("secure_local_url")
-    if secure:
+    remaining = deadline - asyncio.get_running_loop().time()
+    if secure and remaining > 0:
         try:
-            if await healthy(secure, profile.session_id, verify=tls_context(state.get("local_certificate"))):
+            context = tls_context(state.get("local_certificate"))
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining > 0 and await healthy(secure, profile.session_id, verify=context,
+                             timeout=remaining):
                 return secure
         except (ValueError, ssl.SSLError):
             pass
+    return ""
+
+
+async def select(profile):
+    """Spend at most 750 ms on local probes, then 5 s on all public fallbacks."""
+    state = load(profile)
+    if not state:
+        # A legacy profile still knows its session id. A reused port must not
+        # receive its bearer merely because there is no newer route sidecar.
+        candidate = url(profile.url)
+        if candidate and await healthy(candidate, profile.session_id, timeout=PUBLIC_DEADLINE):
+            return profile.url
+        return ""
+    local = await _preferred_local(profile, state)
+    if local:
+        return local
     # A discovered plaintext URL never inherits the original user's trust.
     # The public fallback can be changed by the authenticated hub only when it
     # remains HTTPS; the original explicit URL retains legacy HTTP behavior.
     candidates = [state.get("public_url"), state.get("original_user_url")]
     seen = set()
+    viable = []
     for candidate in candidates:
         if not candidate or candidate in seen:
             continue
         seen.add(candidate)
         if candidate != state.get("original_user_url") and not candidate.startswith("https://"):
             continue
-        if await healthy(candidate, profile.session_id, timeout=PUBLIC_DEADLINE):
+        viable.append(candidate)
+    deadline = asyncio.get_running_loop().time() + PUBLIC_DEADLINE
+    for index, candidate in enumerate(viable):
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            break
+        # Share the finite public budget so a silent new address cannot use
+        # it all before the original explicit URL gets a chance to recover.
+        timeout = remaining / (len(viable) - index)
+        if await healthy(candidate, profile.session_id, timeout=timeout):
             return candidate
     return ""
