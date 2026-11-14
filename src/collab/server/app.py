@@ -388,6 +388,31 @@ def create_app(
             raise HTTPException(status_code=413, detail=str(exc)) from exc
         return {"seq": env.seq, "ts": env.ts}
 
+    @app.post(f"{EXT_PREFIX}/messages/to-id", tags=["collab"])
+    async def post_message_to_id(request: Request) -> dict[str, Any]:
+        """A direct message to exactly one participant id, decided at delivery.
+
+        Its own route on purpose: a hub too old to know it answers 404 BEFORE
+        writing anything, where an unknown field on /messages was ignored and
+        the message went to whoever held the name by then.
+        """
+        user = _require(request)
+        body = await request.json()
+        expected = body.get("to_id")
+        if not isinstance(expected, str) or not expected:
+            raise HTTPException(status_code=400, detail="to_id is required")
+        person = store.participant_by_id(expected)
+        if person is None or getattr(person, "revoked", False):
+            raise HTTPException(status_code=404, detail="the expected recipient is not in this session")
+        env = Envelope(kind=KIND_CHAT, text=str(body.get("text") or ""), room=None,
+                       to=person.name, to_id=person.id, sender=user.name, sender_id=user.id,
+                       body=dict(body.get("body") or {}))
+        try:
+            env = await hub.publish(env)
+        except MessageRefused as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        return {"seq": env.seq, "ts": env.ts, "to_id": person.id}
+
     @app.get(f"{EXT_PREFIX}/history", tags=["collab"])
     async def history(request: Request, room: str | None = None, limit: int = 50) -> dict[str, Any]:
         user = _require(request)

@@ -6884,6 +6884,7 @@ def cmd_capacity(args: argparse.Namespace) -> int:
 SKILL_STATES = ("accepted", "declined", "done")
 REQUEST_ID_RE = re.compile(r"sr_[0-9a-f]{12}")
 SKILL_REQUEST_TTL = 24 * 3600
+MAX_OPEN_PER_PEER = 3
 SHOWN_ARGS = 500
 
 
@@ -6912,10 +6913,12 @@ def _skill_requests(client, profile) -> list[dict[str, Any]]:
     for env in events:
         reply = (env.body or {}).get("skill_response")
         if mine(env, "sender", "sender_id") and isinstance(reply, dict) and reply.get("state") in SKILL_STATES:
-            states[(str(reply.get("id")), env.to)] = reply["state"]
+            # Keyed by the requester's stable id where the hub stamped one: a
+            # display name can be renamed or reused by somebody else.
+            states[(str(reply.get("id")), getattr(env, "to_id", "") or env.to)] = reply["state"]
     from datetime import datetime, timezone
     from .skill_sharing import NAME_RE
-    found, seen = [], set()
+    found, seen, waiting = [], set(), {}
     for env in events:
         ask = (env.body or {}).get("skill_request")
         if not mine(env, "to", "to_id") or not isinstance(ask, dict):
@@ -6928,7 +6931,8 @@ def _skill_requests(client, profile) -> list[dict[str, Any]]:
                 or not isinstance(skill, str) or not NAME_RE.fullmatch(skill)
                 or not isinstance(args, str)):
             continue
-        key = (request_id, env.sender)
+        who = getattr(env, "sender_id", "") or env.sender  # stable identity, name as fallback
+        key = (request_id, who)
         if key in seen:
             continue
         seen.add(key)
@@ -6940,31 +6944,23 @@ def _skill_requests(client, profile) -> list[dict[str, Any]]:
         state = states.get(key, "pending")
         if state == "pending" and age > SKILL_REQUEST_TTL:
             state = "expired"
-        found.append({"id": request_id, "from": env.sender, "skill": skill,
-                      "args": args[:4000], "seq": env.seq, "state": state})
+        if state == "pending":
+            # A peer may keep only a few requests open at once; the rest are
+            # throttled, so one sender cannot flood the human with prompts.
+            waiting[who] = waiting.get(who, 0) + 1
+            if waiting[who] > MAX_OPEN_PER_PEER:
+                state = "throttled"
+        found.append({"id": request_id, "from": env.sender, "from_id": getattr(env, "sender_id", "") or "",
+                      "skill": skill, "args": args[:4000], "seq": env.seq, "state": state})
     return found
 
 
-def _human_consents(match: dict[str, Any], args: argparse.Namespace) -> bool:
-    """Consent is the human's: asked on a terminal, or vouched for explicitly.
-
-    An agent runs commands without a TTY, so without --human-approved a
-    non-interactive accept is refused: the agent must ask its human first and
-    say so with the flag. On a terminal the human answers here.
-    """
-    if getattr(args, "human_approved", False):
-        return True
-    if not (sys.stdin.isatty() and sys.stdout.isatty()):
-        fail("accepting runs a peer's request on this machine: ask your human, then repeat "
-             "with --human-approved (or run it yourself in a terminal)")
-        return False
-    print(f"  {said(match['from'])} asks this machine to run `{said(match['skill'])}`"
-          + _peer_args(match["args"]))
-    try:
-        answer = input("  Allow it? [y/N] ")
-    except EOFError:
-        return False
-    return answer.strip().lower() in ("y", "yes")
+def _accept_fields(match: dict[str, Any]) -> dict[str, str]:
+    """What an accept consent is bound to: this request, these bytes, this peer."""
+    import hashlib
+    digest = hashlib.sha256((match["skill"] + "\0" + match["args"]).encode()).hexdigest()
+    return dict(subject="skill-accept", request_id=match["id"][:200], digest=digest,
+                binding=hashlib.sha256((match.get("from_id") or "name:" + match["from"]).encode()).hexdigest())
 
 
 def cmd_skills_remote(args: argparse.Namespace) -> int:
@@ -7040,16 +7036,46 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
                 raise ValueError("only an accepted request can be reported done")
             if args.action in ("accept", "decline") and match["state"] != "pending":
                 raise ValueError(f"request {args.target} is already {match['state']}")
-            if args.action == "accept" and not _human_consents(match, args):
-                return 1
+            receipt = None
+            if args.action == "accept":
+                # R22: the human approves on their own terminal, outside the
+                # agent, with a one-time code; no flag or stdin can stand in.
+                from . import consent
+                fields = _accept_fields(match)
+                review = {"operation": "run a skill a peer asked this agent to run",
+                          "requester": match["from"], "skill": match["skill"],
+                          "arguments (peer-supplied, untrusted)": match["args"],
+                          "authority": "this agent will run the skill under its host's permissions"}
+                try:
+                    receipt = consent.request(profile.dir, review=review, **fields)
+                except consent.ConsentRefused as exc:
+                    consent.audit(profile.dir, event="refused", details={"reason": str(exc)[:200]}, **fields)
+                    fail(f"not accepted: {exc}")
+                    print(dim("  your human accepts it from their own terminal, outside this agent: "
+                              f"collab skills accept {said(match['id'])}"))
+                    return 1
+                # Revalidate, then consume immediately before the reply.
+                again = [r for r in _skill_requests(client, profile)
+                         if r["id"] == match["id"] and (r["from_id"] or r["from"]) == (match["from_id"] or match["from"])]
+                if not again or again[0]["state"] != "pending" or _accept_fields(again[0]) != fields:
+                    raise ValueError("the request changed while it was being reviewed; nothing was accepted")
+                consent.consume(profile.dir, receipt, **fields)
             state = {"accept": "accepted", "decline": "declined", "done": "done"}[args.action]
+            if not match.get("from_id"):
+                # Fail closed: without the requester's stable id the answer
+                # could reach whoever holds that name now.
+                raise ValueError("this request carries no stable sender id; the reply was not sent")
             words = {"accepted": f"accepted your request to run `{match['skill']}`; running it now",
                      "declined": f"declined your request to run `{match['skill']}`",
                      "done": f"ran `{match['skill']}`"}[state]
-            client.send(Envelope(kind=KIND_CHAT, text=words + (f": {rest}" if rest else "."),
-                                 sender=profile.name, to=match["from"],
-                                 body={"skill_response": {"id": match["id"], "state": state,
-                                                          "text": rest[:4000]}}))
+            # Delivered by the hub to the requester's stable id, atomically:
+            # a rename between our check and the send cannot redirect it.
+            client.send_to_id(Envelope(kind=KIND_CHAT, text=words + (f": {rest}" if rest else "."),
+                                       sender=profile.name, to=match["from"],
+                                       body={"skill_response": {"id": match["id"], "state": state,
+                                                                "text": rest[:4000]}}), match["from_id"])
+            if receipt is not None:
+                consent.audit(profile.dir, event="accepted", **_accept_fields(match))
             ok(f"{state}: {said(match['id'])}")
             if state == "accepted":
                 print(f"  now run the skill `{said(match['skill'])}`, then "
@@ -7948,8 +7974,6 @@ Esc cancels a draft, q quits. Editor commands run without a shell.""")
     sk.add_argument("--to", help="with ask: the participant to ask")
     sk.add_argument("--args", help="with ask: arguments for the requested skill")
     sk.add_argument("--note", help="with accept/decline/done: a reason or the result")
-    sk.add_argument("--human-approved", action="store_true",
-                    help="with accept, without a terminal: your human has explicitly consented")
     sk.add_argument("--name", help="published skill name override")
     sk.add_argument("--description", help="published skill description override")
     sk.add_argument("--after", default="", help="shared inventory page cursor")
