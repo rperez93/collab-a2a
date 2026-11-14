@@ -213,3 +213,34 @@ def test_awaiting_human_twice_tells_the_peer_once(tmp_path):
     assert store.await_human(escalation, "deciding", to="bob")
     assert store.await_human(escalation, "deciding", to="bob") == ""
     assert len(store.outbox()) == 1
+
+
+def test_the_humans_final_answer_reaches_the_peer_verbatim_without_a_model_turn(tmp_path):
+    store = configured(tmp_path)
+    decision(store)
+    decision_id = store.pending()[0]["id"]
+    store.await_human(decision_id, "My human is deciding.", to="bob")
+    store.answer(decision_id, "Yes — merge after CI, exactly as written.")
+    texts = [(r["to"], r["text"]) for r in store.outbox()]
+    assert texts[-1] == ("bob", "Yes — merge after CI, exactly as written.")
+    assert not store.pending() and not store.snapshot()["answers"], "no paraphrasing turn needed"
+    assert any("already sent" in c["text"] for c in store.snapshot()["context"])
+
+
+def test_a_long_wait_on_the_human_is_mentioned_again(tmp_path):
+    store = configured(tmp_path)
+    decision(store)
+    decision_id = store.pending()[0]["id"]
+    store.await_human(decision_id, "deciding", to="bob")
+    assert notices.claim(tmp_path, now=time.time() + 60) is None
+    later = notices.claim(tmp_path, now=time.time() + notices.AWAITING_REMIND + 60)
+    assert later and "still with your human" in later["text"]
+
+
+def test_the_roster_shows_a_peer_waiting_on_its_human():
+    from collab.client import participant_metrics
+    person = {"name": "bob", "stats": {"worker": {"enabled": True, "running": False, "turns": 3,
+                                                  "awaiting_human": 1, "awaiting_since": time.time() - 12 * 60}}}
+    rendered = participant_metrics.metric_lines(person, ["worker"], detailed=False)
+    text = " ".join(str(x) for x in (rendered if isinstance(rendered, (list, tuple)) else [rendered]))
+    assert "waiting on their human (1) · 12m" in text

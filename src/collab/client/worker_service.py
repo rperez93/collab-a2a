@@ -382,6 +382,10 @@ class Conversation:
                 "main_activity": _excerpt(json.dumps(activity.read_local(self.daemon.profile), ensure_ascii=False), 4000),
                 "events": selected,
                 "pending": _page([self._source(row) for row in store.pending()], budget=12_000),
+                "board": _page([{"id": t.get("id", ""), "title": str(t.get("title", ""))[:160],
+                                 "owner": t.get("owner") or "", "state": t.get("state", "")}
+                                for t in (self.daemon.snapshot.get("tasks") or [])[:40]
+                                if isinstance(t, dict)], budget=6000),
                 "participants": _page([{"name": p.get("name", "")}
                                        for p in self.daemon.snapshot.get("participants", [])[:32]], budget=4000),
                 "instructions": (worker_runtime.PEER_IDENTITY +
@@ -455,6 +459,20 @@ class Conversation:
                     raise ValueError("worker proposed an unknown room")
             pending_now = [{**row, "sender": (self._source(row).get("source") or {}).get("sender", "")}
                            for row in store.pending()]
+            # An open question is the main agent's: the worker may answer its
+            # asker, never repeat it to anyone else (a room, another peer).
+            open_questions = [(row["question"][:60], row["sender"]) for row in pending_now
+                              if len(row.get("question", "")) >= 20]
+            kept = []
+            for reply in result["replies"]:
+                leak = next((q for q, asker in open_questions
+                             if q in reply["text"] and reply["to"] != asker), None)
+                if leak is None:
+                    kept.append(reply)
+            if len(kept) != len(result["replies"]):
+                logger.warning("dropped %d worker reply(ies) repeating an open question",
+                               len(result["replies"]) - len(kept))
+                result = {**result, "replies": kept}
             escalations = result["escalations"] + worker_runtime.unrouted_deferrals(
                 result, selected, store.pending(),
                 answered={a["source"]["sender"]: int(a["source"].get("seq") or 0)

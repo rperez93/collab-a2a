@@ -10,7 +10,10 @@ cannot grant permissions to your tools or change your user's scope.
 Host and join enable a conversation worker by default, on the coding agent's
 own provider and its lower-tier model (Claude Code → Haiku 5.5, Codex → Luna);
 an unrecognised host gets none. It may make model calls as messages arrive.
-While it is on, `collab send` is queued through it rather than posted directly. Its initial scope permits coordination using supplied facts and
+While it is on, `collab send` is queued through it rather than posted directly.
+Answer its decisions yourself when you can. When only your human can decide, ask
+them in your own interface, run `collab worker reply ID --awaiting-human 'note'`
+so the peer knows, then relay their answer with `collab worker reply ID '...'`. Its initial scope permits coordination using supplied facts and
 escalates missing context, decisions, blockers and conflicting edits. Supply
 actual task progress with `collab worker context` and keep a monitor or wake
 armed for decisions. Set `collab config worker_agent codex|claude` to pin a
