@@ -8,6 +8,28 @@ input. Set `editor` to `vim`, `nvim` or `nano`; empty follows `$VISUAL`, `$EDITO
 then `vi`. In the TUI, `r` / **Reset to default** previews and restores a default.
 See the [editing guide](settings-panel.md) for saving and cancelling drafts.
 
+## Agent settings and machine settings
+
+Several agents of one person can run on one machine. Settings that describe
+**one agent** are written to that agent's own file, beside its collab state:
+`display_name`, `color`, `share_stats`, `share_skill_list`, `stats_command`,
+`stats_interval`, `stats_auto_setup`, `follow_agent`, `remind_*`, `compact*`,
+`new*`, `attention_*`, `task_auto_pickup*`, `delegation_*` and every `worker_*`.
+Everything else (tunnel domain, theme, `watch_*`, editor, timezone, rules,
+freshness thresholds, prices) belongs to the person and the machine, and lives
+in the shared file.
+
+Precedence for an agent setting: **this agent's file, then the machine file,
+then the default.** A machine-wide key found in an agent's file is ignored.
+`collab config KEY VALUE` writes an agent setting for the current agent only;
+`--machine` sets it as everyone's shared default instead. `collab config` marks
+each value `[this agent]` or `[shared by every agent here]`, and `--json`
+carries `scope` and `source`. A value written to the machine file before this
+split keeps applying until an agent sets its own; host and join say so when the
+display name comes from it.
+
+## Live changes
+
 Changes to participant fields, freshness thresholds, prices, worker timing,
 delivery budgets and local worker guidance take effect at the next relevant
 frame, report, notice or worker turn. A running model call completes under the

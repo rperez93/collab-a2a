@@ -54,11 +54,15 @@ class SettingsEditor:
         return next((item for item in self.entries if item.name == self.selected), None)
 
     def refresh(self, *, force: bool = False) -> None:
-        try:
-            stat = config.global_config_path().stat()
-            stamp = (stat.st_ino, stat.st_mtime_ns, stat.st_size)
-        except OSError:
-            stamp = None
+        # Both layers (R21): a change to this agent's own file is a change too.
+        stamp = []
+        for path in (config.global_config_path(), config.agent_config_path()):
+            try:
+                stat = path.stat() if path is not None else None
+                stamp.append((stat.st_ino, stat.st_mtime_ns, stat.st_size) if stat else None)
+            except OSError:
+                stamp.append(None)
+        stamp = tuple(stamp)
         if not force and stamp == self._stamp:
             return
         self._stamp = stamp
