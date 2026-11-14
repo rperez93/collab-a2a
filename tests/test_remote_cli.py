@@ -1,5 +1,6 @@
 from remote_consent_helpers import receipt
 import json
+import shutil
 from types import SimpleNamespace
 
 import pytest
@@ -14,7 +15,7 @@ def local(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, '_require_profile', lambda args: profile)
     monkeypatch.setattr(cli, '_require_own_profile', lambda args: profile)
     monkeypatch.setattr('sys.stdin.isatty', lambda: False)
-    wake.write_config(tmp_path, wake.WakeConfig(command=['local-adapter', '--session', 'coding']))
+    wake.write_config(tmp_path, wake.WakeConfig(command=[shutil.which('collab'), 'wake', 'deliver', '--to', 'codex', '--target', 'coding']))
     offer = make_offer(session_id='s_room', sender_id='p_peer', recipient_id='p_local',
                        target='coding', kind='prompt', text='Review this \x1b[31m text.')
     inbox = Inbox(tmp_path)
@@ -132,3 +133,16 @@ def test_sender_refuses_unsupported_receiver_before_queueing(local, monkeypatch,
     monkeypatch.setattr(cli, '_client', lambda profile: Client())
     assert cli.main(['remote', 'offer', '--to', 'peer', '--target', 'coding', '--text', 'private offer']) == 1
     assert store.outbox() == []
+
+
+def test_bind_must_match_actual_native_session(local):
+    inbox, _ = local
+    assert cli.main(['remote', 'bind', '--target', 'different-session']) == 1
+    with pytest.raises(ValueError, match='no local'):
+        inbox.bound_target(list(wake.read_config(inbox.root.parent).command))
+
+
+def test_custom_adapter_cannot_claim_an_existing_session(local):
+    inbox, _ = local
+    wake.write_config(inbox.root.parent, wake.WakeConfig(command=['custom-adapter', '--session', 'coding']))
+    assert cli.main(['remote', 'bind', '--target', 'coding']) == 1
