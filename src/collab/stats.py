@@ -71,6 +71,7 @@ that already emit something close.
 from __future__ import annotations
 
 import json
+import re
 import math
 import time
 from pathlib import Path
@@ -1272,57 +1273,90 @@ def quota_summary(stats: dict[str, Any], *, with_resets: bool = False) -> str:
     windows = (stats or {}).get("quotas") or {}
     parts: list[str] = []
     if isinstance(windows, dict):
+        # A window whose figure is not a usable percentage is unknown, not
+        # drawn: «nan%» or «999%» from a peer is noise, not a reading.
         ranked = sorted(
-            ((name, figures) for name, figures in windows.items()
-             if isinstance(figures, dict) and figures.get("used_pct") is not None),
-            key=lambda pair: pair[1]["used_pct"], reverse=True,
+            ((name, figures, used) for name, figures in windows.items()
+             if isinstance(figures, dict) and (used := usable_pct(figures.get("used_pct"))) is not None),
+            key=lambda row: row[2], reverse=True,
         )
         # Labelled as a SET rather than one at a time: whether an allowance id
         # is worth drawing depends on whether the row holds another one.
-        labels = window_labels([name for name, _figures in ranked])
-        for name, figures in ranked:
-            try:
-                used = min(max(float(figures['used_pct']), 0.0), 999.0)
-            except (TypeError, ValueError):
-                continue
+        labels = window_labels([name for name, _figures, _used in ranked])
+        for name, figures, used in ranked:
             piece = f"{labels[name]} {used:.0f}%"
             if with_resets and figures.get("resets_at"):
                 piece += f" (→{_short_reset(str(figures['resets_at']))})"
             parts.append(piece)
-    if not parts and stats.get("quota_used_pct") is not None:
-        try:
-            parts.append(f"{float(stats['quota_used_pct']):.0f}%")
-        except (TypeError, ValueError):
-            return ""
+    if not parts and (used := usable_pct((stats or {}).get("quota_used_pct"))) is not None:
+        parts.append(f"{used:.0f}%")
     return "quota " + " · ".join(parts) if parts else ""
 
 
-def _short_reset(value: str) -> str:
-    """A reset time worth reading at a glance."""
-    from datetime import datetime, timezone
+def usable_pct(value: Any) -> float | None:
+    """A used percentage worth showing: a finite number from 0 to 100, else unknown."""
+    if isinstance(value, bool):
+        return None
+    try:
+        used = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return used if math.isfinite(used) and 0.0 <= used <= 100.0 else None
 
-    candidates = []
-    if value.isascii() and value.isdigit() and len(value) <= 11:
-        # Epoch seconds: what Claude Code's status line reports for resets.
-        # A peer controls this string: '²', 30 nines or a year-10000 epoch
-        # crashed every roster view that rendered it.
+
+#: datetime's upper limit (year 9999), as Unix seconds.
+MAX_RESET_EPOCH = 253402300800
+_RESET_NUMBER = re.compile(r"[0-9]{1,15}(?:\.[0-9]{1,9})?")
+_RESET_ISO = re.compile(r"(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?)(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})")
+
+
+def parse_reset(value: Any):
+    """A reset instant as an aware UTC datetime, or None when it is not one.
+
+    Policy (#123): an untagged number is Unix seconds, decimals allowed, only
+    within 0 <= s < year 10000; milliseconds are never inferred from the digit
+    count (a source that reports them converts in its adapter), so a 13-digit
+    value is unknown. ISO text needs Z or a numeric offset, may carry a
+    fraction (kept to microseconds, extra digits truncated), and is
+    normalised to UTC. Naive, invalid or out-of-range values are unknown.
+    Peer-controlled: nothing here may raise.
+    """
+    from datetime import datetime, timezone
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        seconds = float(value)
+    elif isinstance(value, str) and _RESET_NUMBER.fullmatch(text := value.strip()):
+        seconds = float(text)
+    elif isinstance(value, str) and (m := _RESET_ISO.fullmatch(value.strip())):
+        base, fraction, zone = m.groups()
+        zone = "+00:00" if zone == "Z" else (zone if ":" in zone else zone[:3] + ":" + zone[3:])
+        stamp = base + (("." + fraction[:6].ljust(6, "0")) if fraction else "") + zone
         try:
-            candidates.append(datetime.fromtimestamp(int(value), timezone.utc))
-        except (ValueError, OverflowError, OSError):
-            pass
-    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%MZ"):
-        try:
-            candidates.append(datetime.strptime(value, fmt).replace(tzinfo=timezone.utc))
-        except ValueError:
-            continue
-    for when in candidates:
-        delta = when - datetime.now(timezone.utc)
-        minutes = int(delta.total_seconds() // 60)
-        if minutes < 0:
-            return "due"
-        if minutes < 60:
-            return f"{minutes}m"
-        if minutes < 60 * 24:
-            return f"{minutes // 60}h"
-        return f"{minutes // (60 * 24)}d"
-    return value[:16]
+            return datetime.fromisoformat(stamp.replace(" ", "T")).astimezone(timezone.utc)
+        except (ValueError, OverflowError):
+            return None
+    else:
+        return None
+    if not (seconds == seconds and 0 <= seconds < MAX_RESET_EPOCH):  # NaN fails the first test
+        return None
+    try:
+        return datetime.fromtimestamp(seconds, timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _short_reset(value: Any) -> str:
+    """A reset time worth reading at a glance; never the raw peer value."""
+    from datetime import datetime, timezone
+    when = parse_reset(value)
+    if when is None:
+        return "unknown"
+    minutes = int((when - datetime.now(timezone.utc)).total_seconds() // 60)
+    if minutes < 0:
+        return "due"
+    if minutes < 60:
+        return f"{minutes}m"
+    if minutes < 60 * 24:
+        return f"{minutes // 60}h"
+    return f"{minutes // (60 * 24)}d"
