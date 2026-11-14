@@ -85,6 +85,8 @@ SKILL_SCAN = 300.0
 SKILLS_REFRESH = 600.0
 #: Read limit for peers' skill lists (R12).
 SKILLS_MAX_BYTES = 4 * 1024 * 1024
+# Per-read timeouts alone let a timely trickle retain the refresh forever.
+SKILLS_FETCH_SECONDS = 10.0
 #: How long to leave a failed automatic compaction before probing the pane
 #: again. The heartbeat runs every three seconds and an agent sitting over its
 #: threshold sits there for a long time, so without this a pane in copy mode
@@ -2689,6 +2691,16 @@ class Daemon:
         self._schedule_refresh("skills", lambda: self._fetch_skills(client, signature))
 
     async def _fetch_skills(self, client: httpx.AsyncClient, signature=None) -> None:
+        try:
+            await asyncio.wait_for(Daemon._fetch_skills_once(self, client, signature), SKILLS_FETCH_SECONDS)
+        except asyncio.TimeoutError:
+            Daemon._skill_refresh_failed(self)
+
+    def _skill_refresh_failed(self) -> None:
+        backoff = min(max(2 * getattr(self, "_skills_backoff", 1.5), 3.0), SKILLS_REFRESH)
+        self._skills_backoff, self._skills_retry_at = backoff, time.time() + backoff
+
+    async def _fetch_skills_once(self, client: httpx.AsyncClient, signature=None) -> None:
         # Revalidate only what is on disk: an ETag kept after a failed write
         # turned every later answer into a 304 and the cache never appeared.
         etag = getattr(self, "_skills_etag", None) if self.paths.skills.exists() else None
@@ -2705,6 +2717,10 @@ class Daemon:
                 elif r.status_code == 404:
                     data = {"unsupported": True}  # a hub older than skill lists
                 elif r.status_code == 200:
+                    # A peer can ignore identity; reject before HTTPX inflates a
+                    # single chunk beyond the cap (32KiB previously cost 65MiB).
+                    if r.headers.get("content-encoding", "").strip().lower() not in ("", "identity"):
+                        raise ValueError("encoded participant skill lists are unsupported")
                     declared = r.headers.get("content-length", "")
                     if declared.isdigit() and int(declared) > SKILLS_MAX_BYTES:
                         raise ValueError("participant skill lists exceed the read limit")
@@ -2729,8 +2745,7 @@ class Daemon:
                 if "participants" in data:
                     self._skills_etag = new_etag  # only once the cache it validates exists
         except (httpx.HTTPError, ValueError, OSError):
-            backoff = min(max(2 * getattr(self, "_skills_backoff", 1.5), 3.0), SKILLS_REFRESH)
-            self._skills_backoff, self._skills_retry_at = backoff, time.time() + backoff
+            Daemon._skill_refresh_failed(self)
             return
         self._skills_backoff, self._skills_retry_at = 0.0, 0.0
         self._skills_signature, self._skills_at = signature, time.time()
