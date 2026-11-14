@@ -67,25 +67,44 @@ def _stop_orphaned_ngrok(previous: proxy.ProxyState) -> bool:
     return not stamp.alive()
 
 
-def descriptor_budget() -> int:
-    """Raise the soft descriptor limit to the hard one, and return how many
-    connections the door may admit.
+#: The most connections the door admits however many descriptors there are.
+#: With a hard limit of 1,048,576 the derived budget was 524,224 and memory
+#: became the ceiling (~40 KB a held request: about 4 GB before any 503).
+MAX_DOOR = 20000
 
-    Each proxied request costs two descriptors — the client's and the
-    upstream's — so at the common soft default of 1,024 about 500 held
-    requests exhausted the process long before limit_concurrency=2000 could
-    engage. What followed was a busy accept loop at a full core and 56 MB of
-    EMFILE log in ten seconds (review of #119). Admit at most half the real
-    limit, less a margin for logs, the lock and the tunnel.
+#: Below this many descriptors the door is too small for half-open
+#: connections, which limit_concurrency never sees: at soft = hard = 1024 they
+#: pinned a core in asyncio's accept loop (review of #119). Said at start.
+DESCRIPTOR_FLOOR = 4096
+
+
+def descriptor_budget(resource_module=None) -> tuple[int, int]:
+    """Raise the soft descriptor limit as far as the system allows, and return
+    `(connections the door admits, descriptors now available)`.
+
+    Each proxied request costs two descriptors, so at the common soft default
+    of 1,024 about 500 held requests exhausted the process long before a fixed
+    limit_concurrency could engage (review of #119). Admit half, less a margin.
+
+    DESCENDING ATTEMPTS, because macOS reports an infinite hard limit yet
+    refuses anything above kern.maxfilesperproc: one attempt at 65,536 failed
+    there and left the budget at 64 connections for every session on the Mac.
     """
-    import resource
+    import resource as default_resource
 
+    resource = resource_module or default_resource
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-    want = hard if hard != resource.RLIM_INFINITY else max(soft, 65536)
-    with contextlib.suppress(ValueError, OSError):
-        resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+    ceiling = hard if hard != resource.RLIM_INFINITY else 1 << 20
+    for want in (ceiling, 65536, 24576, 10240, 4096):
+        if want <= soft or want > ceiling:
+            continue
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+        except (ValueError, OSError):
+            continue
         soft = want
-    return max(64, soft // 2 - 64)
+        break
+    return max(64, min(MAX_DOOR, soft // 2 - 64)), soft
 
 
 class _OnceEvery(logging.Filter):
@@ -197,12 +216,18 @@ def main(argv: list[str] | None = None) -> int:
     _record_ngrok(state, supervisor)
     state.save()
 
+    door, descriptors = descriptor_budget()
+    if descriptors < DESCRIPTOR_FLOOR:
+        logger.warning(
+            "only %d file descriptors are available (hard limit); half-open "
+            "connections can exhaust them — raise `ulimit -Hn` to at least %d",
+            descriptors, DESCRIPTOR_FLOOR)
     config = uvicorn.Config(proxy.build_app(routes), host="127.0.0.1", port=port,
                             log_level="warning", lifespan="on",
                             # A ceiling at the door derived from the real
                             # descriptor limit, so a flood is refused with 503
                             # before the process runs out of descriptors.
-                            limit_concurrency=descriptor_budget())
+                            limit_concurrency=door)
     for name in ("uvicorn.error", "uvicorn", "asyncio"):
         logging.getLogger(name).addFilter(_OnceEvery())
     server = uvicorn.Server(config)

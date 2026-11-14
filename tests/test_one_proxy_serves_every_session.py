@@ -10,6 +10,7 @@ nothing else.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import resource
 import socket
@@ -390,7 +391,11 @@ def test_a_body_that_stops_arriving_is_cut_with_408(inproc):
     s = _post_head(inproc, 1000)
     s.sendall(b"x" * 10)
     s.settimeout(5)
-    assert b" 408 " in s.recv(200)
+    answer = b""
+    with contextlib.suppress(OSError):
+        while chunk := s.recv(400):
+            answer += chunk
+    assert b" 408 " in answer and b"no request body for" in answer
 
 
 def test_a_body_dripping_below_the_minimum_rate_is_cut_with_408(inproc):
@@ -405,7 +410,11 @@ def test_a_body_dripping_below_the_minimum_rate_is_cut_with_408(inproc):
             head = s.recv(200)
         except socket.timeout:
             time.sleep(0.3)
-    assert b" 408 " in head
+    s.settimeout(2)
+    with contextlib.suppress(OSError):
+        while chunk := s.recv(400):
+            head += chunk
+    assert b" 408 " in head and b"B/s" in head
 
 
 def test_a_stamped_process_that_is_not_a_group_leader_is_left_alone(registry):
@@ -473,3 +482,84 @@ def test_the_proxy_stops_an_orphan_at_start_and_clears_its_own_on_exit(registry,
         # it by its recorded stamp, the way the next proxy would.
         from collab import proxy_main
         proxy_main._stop_orphaned_ngrok(proxy.ProxyState.load())
+
+
+class _FakeResource:
+    """`resource`, with a system that refuses anything above `refuse_above`."""
+    RLIMIT_NOFILE = 7
+    RLIM_INFINITY = -1
+
+    def __init__(self, soft, hard, refuse_above):
+        self.limits = (soft, hard)
+        self.refuse_above = refuse_above
+
+    def getrlimit(self, which):
+        return self.limits
+
+    def setrlimit(self, which, value):
+        if value[0] > self.refuse_above:
+            raise ValueError("not permitted")
+        self.limits = value
+
+
+def test_the_descriptor_limit_is_raised_as_far_as_the_system_allows():
+    """macOS: infinite hard limit, refusal above kern.maxfilesperproc. One
+    attempt at 65,536 failed and left the door at 64 connections."""
+    from collab import proxy_main
+
+    fake = _FakeResource(256, -1, refuse_above=24576)
+    door, available = proxy_main.descriptor_budget(fake)
+    assert available == 24576
+    assert door == 24576 // 2 - 64
+
+
+def test_a_huge_descriptor_limit_still_caps_the_door():
+    """At 1,048,576 the derived door was 524,224: memory, not a 503, was the
+    ceiling."""
+    from collab import proxy_main
+
+    door, _ = proxy_main.descriptor_budget(_FakeResource(1024, 1 << 20, refuse_above=1 << 20))
+    assert door == proxy_main.MAX_DOOR
+
+
+def test_a_low_hard_limit_leaves_a_small_door_and_says_so():
+    from collab import proxy_main
+
+    door, available = proxy_main.descriptor_budget(_FakeResource(1024, 1024, refuse_above=1024))
+    assert available == 1024 < proxy_main.DESCRIPTOR_FLOOR
+    assert door == 1024 // 2 - 64
+
+
+def test_a_repeated_error_is_logged_once_per_window_with_a_count():
+    """Under descriptor exhaustion the accept loop logged one line 129,086
+    times in ten seconds."""
+    import logging
+
+    from collab import proxy_main
+
+    keep = proxy_main._OnceEvery(seconds=60)
+    record = lambda: logging.LogRecord("asyncio", logging.ERROR, "", 0,  # noqa: E731
+                                       "socket.accept() out of system resource", None, None)
+    passed = [keep.filter(record()) for _ in range(1000)]
+    assert passed.count(True) == 1
+    keep._last.clear()
+    again = record()
+    assert keep.filter(again) and "(and 999 more like it)" in again.msg
+
+
+def test_no_408_before_the_body_has_actually_stalled(inproc, monkeypatch):
+    """Nine slow uploads got 408 two seconds in during a flood; a body still
+    arriving within BODY_IDLE, and above the minimum rate, is never cut."""
+    monkeypatch.setattr(proxy, "BODY_MIN_RATE", 0.1)
+    s = _post_head(inproc, 4)
+    s.settimeout(0.2)
+    for _ in range(3):
+        time.sleep(0.5)                 # each gap inside BODY_IDLE = 1.0 s
+        s.sendall(b"x")
+        try:
+            assert b" 408 " not in s.recv(200)
+        except socket.timeout:
+            pass
+    s.sendall(b"x")
+    s.settimeout(5)
+    assert b" 200 " in s.recv(200)
