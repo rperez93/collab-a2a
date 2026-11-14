@@ -106,7 +106,8 @@ async def events(request):
 
 async def echo(request):
     body = await request.body()
-    return JSONResponse({"path": request.url.path, "query": request.url.query,
+    return JSONResponse({"path": request.url.path, "raw": request.scope["raw_path"].decode(),
+                         "query": request.scope["query_string"].decode(),
                          "len": len(body), "auth": request.headers.get("authorization", ""),
                          "fwd": request.headers.get("x-forwarded-for", "")})
 
@@ -168,7 +169,7 @@ def test_a_request_reaches_its_session_with_path_query_body_and_token(proxied):
     r = httpx.post(f"{base}/s/s_one/a2a?x=1", content=b"y" * 5000,
                    headers={"Authorization": "Bearer tok"})
     assert r.status_code == 200
-    assert r.json() == {"path": "/a2a", "query": "x=1", "len": 5000,
+    assert r.json() == {"path": "/a2a", "raw": "/a2a", "query": "x=1", "len": 5000,
                         "auth": "Bearer tok", "fwd": "127.0.0.1"}
 
 
@@ -238,3 +239,102 @@ def test_a_one_mebibyte_upload_costs_the_proxy_little_memory(proxied):
         assert r.json()["len"] == 1 << 20
     grown = rss_kb(proc.pid) - before
     assert grown < 6 * 1024, f"proxy RSS grew {grown} KB over 8 MiB of uploads"
+
+
+# ── review of #111 ───────────────────────────────────────────────────────────
+
+def test_the_proxy_state_survives_a_pruning_read_of_the_registry(registry):
+    """It lived beside the records as `proxy.json`, which `discover(prune=True)`
+    deletes once it is older than STALE_AFTER — 90 s after start."""
+    state = proxy.ProxyState(primary="s_abc", pid=1)
+    state.save()
+    old = time.time() - 600
+    os.utime(proxy.state_path(), (old, old))
+    peers.discover()
+    assert proxy.ProxyState.load().primary == "s_abc"
+
+
+def test_a_stale_or_foreign_host_record_is_never_a_route(registry, tmp_path):
+    """A dead hub's port may be reused by anything; a record from another
+    machine names a port on that machine, not this one."""
+    import json as jsonlib
+
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    _announce("s_dead", "http://127.0.0.1:41010", pid=dead.pid)
+    _announce("s_far", "http://127.0.0.1:41011")
+    far = next(registry.glob("s_far-*.json"))
+    data = jsonlib.loads(far.read_text())
+    data["machine_id"] = "m_somewhere_else"
+    far.write_text(jsonlib.dumps(data))
+
+    assert proxy.Routes(ttl=0).table() == {}
+
+
+@pytest.mark.parametrize("raw", ["/s/s_one/../../etc/passwd", "/s/s_one/./a2a"])
+def test_dot_segments_are_refused_not_resolved(proxied, raw):
+    """`/s/<id>/../../etc/passwd` reached the hub as `/etc/passwd`."""
+    base, _ = proxied
+    with socket.create_connection(("127.0.0.1", int(base.rsplit(":", 1)[1]))) as s:
+        s.sendall(f"GET {raw} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n".encode())
+        head = s.recv(200).decode("latin-1")
+    assert " 400 " in head.splitlines()[0]
+
+
+def test_the_hub_receives_the_path_exactly_as_it_was_sent(proxied):
+    """Decoded, `%3F` became a query and `%2F` a separator."""
+    base, _ = proxied
+    r = httpx.get(f"{base}/s/s_one/ext/x%3Fy=1%2Fz?q=2")
+    assert r.json()["raw"] == "/ext/x%3Fy=1%2Fz"
+    assert r.json()["query"] == "q=2"
+
+
+def test_many_open_feeds_do_not_starve_an_ordinary_request(proxied):
+    """httpx's shared default of 100 connections: 105 open SSE feeds across
+    all sessions made every further request wait 10 s and fail 502."""
+    base, _ = proxied
+    held = []
+    try:
+        for _ in range(110):
+            s = socket.create_connection(("127.0.0.1", int(base.rsplit(":", 1)[1])))
+            s.sendall(b"GET /s/s_one/ext/events HTTP/1.1\r\nHost: x\r\n\r\n")
+            held.append(s)
+        time.sleep(0.5)
+        started = time.monotonic()
+        r = httpx.get(f"{base}/s/s_one/a2a", timeout=8)
+        assert r.status_code == 200
+        assert time.monotonic() - started < 3
+    finally:
+        for s in held:
+            s.close()
+
+
+def test_an_orphaned_ngrok_is_stopped_by_its_stamp_and_only_then(registry):
+    """A SIGKILLed proxy leaves its ngrok holding the account's endpoint and
+    forwarding the domain to a port anything may take next."""
+    from collab import proxy_main
+    from collab.client import exclusive
+
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                             start_new_session=True)
+    try:
+        state = proxy.ProxyState(ngrok_pid=child.pid,
+                                 ngrok_stamp=exclusive.stamp_for(child.pid).encode())
+        # a stamp for another process with the same number must not be obeyed
+        forged = proxy.ProxyState(ngrok_pid=child.pid, ngrok_stamp=exclusive.Stamp(
+            pid=child.pid, started="1", boot="other-boot").encode())
+        assert proxy_main._stop_orphaned_ngrok(forged) is False
+        assert child.poll() is None
+        assert proxy_main._stop_orphaned_ngrok(state) is True
+        assert child.wait(timeout=5) is not None
+    finally:
+        if child.poll() is None:
+            child.kill()
+
+
+def test_a_clean_exit_leaves_no_pids_behind(proxied, registry):
+    _, proc = proxied
+    peers.withdraw("s_one", pid=os.getpid())
+    assert proc.wait(timeout=15) == 0
+    left = proxy.ProxyState.load()
+    assert (left.pid, left.ngrok_pid, left.stamp, left.ngrok_stamp) == (0, 0, "", "")
