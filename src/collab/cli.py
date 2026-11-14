@@ -7021,20 +7021,19 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
                     raise ValueError("the request changed while it was being reviewed; nothing was accepted")
                 consent.consume(profile.dir, receipt, **fields)
             state = {"accept": "accepted", "decline": "declined", "done": "done"}[args.action]
-            if match.get("from_id"):
-                # The reply goes by name; refuse if that name now belongs to
-                # somebody else, so an answer cannot reach an impostor.
-                people = client.participants().get("participants", []) if hasattr(client, "participants") else []
-                holder = next((p.get("id") for p in people if p.get("name") == match["from"]), None)
-                if people and holder != match["from_id"]:
-                    raise ValueError(f"{match['from']!r} is now somebody else; the reply was not sent")
+            if not match.get("from_id"):
+                # Fail closed: without the requester's stable id the answer
+                # could reach whoever holds that name now.
+                raise ValueError("this request carries no stable sender id; the reply was not sent")
             words = {"accepted": f"accepted your request to run `{match['skill']}`; running it now",
                      "declined": f"declined your request to run `{match['skill']}`",
                      "done": f"ran `{match['skill']}`"}[state]
-            client.send(Envelope(kind=KIND_CHAT, text=words + (f": {rest}" if rest else "."),
-                                 sender=profile.name, to=match["from"],
-                                 body={"skill_response": {"id": match["id"], "state": state,
-                                                          "text": rest[:4000]}}))
+            # Delivered by the hub to the requester's stable id, atomically:
+            # a rename between our check and the send cannot redirect it.
+            client.send_to_id(Envelope(kind=KIND_CHAT, text=words + (f": {rest}" if rest else "."),
+                                       sender=profile.name, to=match["from"],
+                                       body={"skill_response": {"id": match["id"], "state": state,
+                                                                "text": rest[:4000]}}), match["from_id"])
             if receipt is not None:
                 consent.audit(profile.dir, event="accepted", **_accept_fields(match))
             ok(f"{state}: {said(match['id'])}")

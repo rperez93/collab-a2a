@@ -367,7 +367,16 @@ def create_app(
         kind = str(body.get("kind") or KIND_CHAT)
         if reason := client_kind_refusal(kind):
             raise HTTPException(status_code=400, detail=reason)
-        to_name, to_id = resolve_target(body.get("to"))
+        expected = body.get("to_id_expected")
+        if isinstance(expected, str) and expected:
+            # Delivery by stable id, decided here and nowhere else: a name
+            # looked up earlier by the sender can have changed hands since.
+            person = store.participant_by_id(expected)
+            if person is None or getattr(person, "revoked", False):
+                raise HTTPException(status_code=404, detail="the expected recipient is not in this session")
+            to_name, to_id = person.name, person.id
+        else:
+            to_name, to_id = resolve_target(body.get("to"))
         env = Envelope(
             kind=kind,
             text=str(body.get("text") or ""),
@@ -386,7 +395,7 @@ def create_app(
             # 413, and the reason as the body: the sender reads it, and it
             # names the alternative. See protocol.MAX_MESSAGE.
             raise HTTPException(status_code=413, detail=str(exc)) from exc
-        return {"seq": env.seq, "ts": env.ts}
+        return {"seq": env.seq, "ts": env.ts, "to_id": to_id}
 
     @app.get(f"{EXT_PREFIX}/history", tags=["collab"])
     async def history(request: Request, room: str | None = None, limit: int = 50) -> dict[str, Any]:

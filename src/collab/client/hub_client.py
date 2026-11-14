@@ -345,6 +345,21 @@ class HubClient:
 
     # --- sending, over real A2A ------------------------------------------------
 
+    def send_to_id(self, env: Envelope, expected_id: str) -> dict[str, Any]:
+        """Deliver to exactly this participant id, resolved by the hub at delivery.
+
+        Fails closed: a hub that does not honour the expected id (older than
+        this) answers without echoing it, and that is reported as an error.
+        """
+        if not expected_id:
+            raise HubError("no stable recipient id to deliver to; not sent")
+        result = self._request("POST", f"{EXT_PREFIX}/messages", json={
+            "kind": "chat", "text": env.text, "to": env.to, "to_id_expected": expected_id,
+            "body": env.body or {}})
+        if result.get("to_id") != expected_id:
+            raise HubError("the hub could not confirm the recipient's identity (older hub?)")
+        return result
+
     def send(self, env: Envelope) -> dict[str, Any]:
         payload = {
             "jsonrpc": "2.0",
