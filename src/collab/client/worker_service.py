@@ -666,7 +666,9 @@ class Conversation:
                 "instructions": (worker_runtime.PEER_IDENTITY +
                     "Own routine collaboration within the delegated scope. Respond when a peer "
                     "needs an answer, ask concise clarifying questions, and carry main-agent "
-                    "answers back to peers. Use only supplied facts; do not invent progress or "
+                    "answers back to peers; a question that came privately (its source is not a "
+                    "broadcast) is answered by a direct reply with an empty room, never in a room. "
+                    "Use only supplied facts; do not invent progress or "
                     "commit the main agent to new work. Do not acknowledge acknowledgements or "
                     "routine updates. Escalate blockers, conflicts, decisions needing unavailable "
                     "context, and changes to scope. Continue other conversations while requests "
@@ -849,7 +851,10 @@ class Conversation:
                     if not name or not ident:
                         raise ValueError("human answer has no verified original peer identity")
                     targets.add(ident)
-                    source_rooms.setdefault(ident, set()).add(source.get("room") or "")
+                    # A private question carries its room too, but its answer is
+                    # private: only a DM (room '') binds. A broadcast also allows its room.
+                    source_rooms.setdefault(ident, set()).add(
+                        (source.get("room") or "") if source.get("broadcast") is True else "")
                 for reply in result["replies"]:
                     ident = reply.get("to_id")
                     if (ident not in targets or (reply.get("room")
