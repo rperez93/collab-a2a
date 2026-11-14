@@ -104,14 +104,17 @@ must be an exact canonical `http://localhost:<port>` or
 the local adapter binds its actual port before starting the ceremony. Origin
 validation is not authentication of a local process.
 
-**Enrolment proof question requiring frontend agreement:** `create()` plus
+**Enrolment possession choice (decision `e_867b714f9cd24a8e96c89320a804b647`):** `create()` plus
 `getPublicKey()` alone does not prove possession of that supplied SPKI without
 verifying attestation. This proposal uses a subsequent `get()` assertion by
 the new credential over the enrolment challenge, verified against the supplied
 SPKI. That can require another gesture. The create ceremony is not itself the
 hub-accepted proof. No fake or software-key fixture establishes real human
 approval; unverified TOFU remains explicitly unverified even after proof of
-possession. Jarvis and Friday must agree on this before freezing the contract.
+possession. The follow-up assertion is required as possession proof only, never attestation.
+The possible second gesture is accepted for this flow. This settles only that
+protocol choice; endpoint implementation and the rest of the contract remain
+unverified and must pass their own gates.
 
 ## Errors, receipts and remaining protocol work
 
