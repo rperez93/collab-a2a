@@ -21,7 +21,7 @@ def memory():
 class Adapter:
     async def review(self, request_id):
         raw=b'{"payload":"'+b'x'*(p.MAX_REVIEW-14)+b'"}'
-        return p.Review(raw,hashlib.sha256(raw).digest(),'Synthetic','peer','target','test only',time.time()+60,enrolled=True)
+        return p.Review(raw,hashlib.sha256(raw).digest(),'Synthetic',p.Requester('p_peer','peer'),'target','test only',time.time()+60,enrolled=True)
     async def begin(self,*args): raise AssertionError('no ceremony in resource probe')
     async def complete(self,*args): raise AssertionError('no approval in resource probe')
     async def decline(self,*args): raise AssertionError('no decision in resource probe')

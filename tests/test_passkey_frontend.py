@@ -22,7 +22,7 @@ class FakeAdapter:
     def __init__(self):
         canonical = b'{"payload":"<script>untrusted()</script>","subject":"test"}'
         self.current = module.Review(canonical, hashlib.sha256(canonical).digest(),
-            "Synthetic request", "fixture-peer", "fixture-target", "fixture operation",
+            "Synthetic request", module.Requester("p_fixture_peer", "fixture-peer"), "fixture-target", "fixture operation",
             time.time() + 300, enrolled=True)
         self.calls = []
         self.finish_wait = False
@@ -128,7 +128,7 @@ async def test_another_origin_or_ambiguous_header_cannot_reach_the_adapter(subje
     assert adapter.calls == []
 
 
-@pytest.mark.parametrize("operation", ["enrol", "approve"])
+@pytest.mark.parametrize("operation", ["approve"])
 async def test_exact_credential_bytes_are_forwarded_with_the_bound_origin_and_digest(subject, operation):
     """The page transports proof fields; it never parses or signs clientDataJSON."""
     page, adapter, client, headers, _ = subject
@@ -203,7 +203,7 @@ async def test_oversized_or_trickling_body_is_bounded_before_any_forwarding(subj
     assert not any(call[0] == "complete" for call in adapter.calls)
 
 
-@pytest.mark.parametrize("operation", ["enrol", "approve", "decline"])
+@pytest.mark.parametrize("operation", ["approve", "decline"])
 async def test_uncertain_forwarding_never_retries_or_claims_local_cancellation(subject, monkeypatch, operation):
     """A timeout can follow a hub commit; only a fresh hub read can reconcile it."""
     page, adapter, client, headers, url = subject
@@ -350,3 +350,61 @@ async def test_failed_old_opener_cannot_revoke_a_replacement(subject):
     finally:
         release.set()
         await asyncio.gather(pending, return_exceptions=True)
+
+
+@pytest.mark.parametrize("path", ["enrol/options", "enrol/result"])
+async def test_a_request_capability_never_authorizes_key_enrolment(subject, path):
+    """Even a stolen valid request URL cannot issue or finish a registration."""
+    _, adapter, client, headers, _ = subject
+    await client.get("/consent/request_1/review", headers=headers)
+    before = len(adapter.calls)
+    response = await client.post("/consent/request_1/"+path, headers=headers, json={})
+    assert response.status_code == 404
+    assert len(adapter.calls) == before
+    html = (await client.get("/consent/request_1")).text
+    assert 'id="enrol"' not in html
+
+
+async def test_a_wrong_valid_length_capability_never_reaches_the_adapter(subject):
+    """Format validation alone cannot authorize a different 43-character token."""
+    _, adapter, client, headers, _ = subject
+    supplied = headers["X-Collab-Approval-Token"]
+    wrong = ("B" if supplied[0] != "B" else "C") + supplied[1:]
+    response = await client.get("/consent/request_1/review", headers={**headers,"X-Collab-Approval-Token":wrong})
+    assert response.status_code == 403
+    assert not adapter.calls
+
+
+async def test_expiry_during_credential_validation_refuses_forwarding(subject, monkeypatch):
+    """The final guard must survive expiry after body validation already passed."""
+    page, adapter, client, headers, _ = subject
+    data = await ready(subject)
+    original = module._credential
+    def cross_deadline(value, operation):
+        result = original(value, operation)
+        page._windows["request_1"].deadline = time.monotonic()-1
+        return result
+    monkeypatch.setattr(module,"_credential",cross_deadline)
+    response = await client.post("/consent/request_1/approve/result",headers=headers,json=data)
+    assert response.status_code == 410
+    assert not any(c[0] == "complete" for c in adapter.calls)
+
+
+@pytest.mark.parametrize("algorithm", [-7, -257, -8, True, None, "-7"])
+def test_exported_registration_evidence_accepts_only_the_agreed_spki_algorithms(algorithm):
+    """The future separate enrolment helper cannot silently admit another key type."""
+    value = credential("enrol")
+    value["response"]["publicKeyAlgorithm"] = algorithm
+    if type(algorithm) is int and algorithm in (-7,-257):
+        assert module._credential(value,"enrol") == value
+    else:
+        with pytest.raises(ValueError): module._credential(value,"enrol")
+
+
+@pytest.mark.parametrize("who", ["label-only", module.Requester("", "name"), module.Requester("p_1", "x"*257)])
+async def test_a_review_without_both_requester_identity_fields_is_refused(subject, who):
+    """Names alone must not be presented as the authenticated requesting principal."""
+    _, adapter, client, headers, _ = subject
+    adapter.current = replace(adapter.current, requester=who)
+    response = await client.get("/consent/request_1/review",headers=headers)
+    assert response.status_code == 502

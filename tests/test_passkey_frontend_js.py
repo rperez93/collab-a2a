@@ -19,19 +19,19 @@ const credential = (enrol = false) => ({id: b64(bytes(0,255,2)), rawId: bytes(0,
   getPublicKeyAlgorithm:()=>-7,getAuthenticatorData:()=>bytes(8,9)} :
  {clientDataJSON:bytes(1,2,3),authenticatorData:bytes(8,9),signature:bytes(10,11)}});
 const publicKey = {challenge:b64(new Uint8Array(32).fill(1)),rpId:'localhost',rp:{id:'localhost',name:'Collab'},
- user:{id:b64(bytes(4)),name:'alice',displayName:'Alice'},
+ user:{id:b64(new TextEncoder().encode('p_requester')),name:'alice',displayName:'Alice'},
  allowCredentials:[{type:'public-key',id:b64(bytes(0,255,2))}],userVerification:'discouraged'};
 function setup({enrolled=true, credentials={}, overrides={}}={}) {
  let wall=1700000000000; let mono=0; let timerId=0;
  const timers=new Map(), elements={}, calls=[], prompts=[];
- const ids=['status','subject','requester','destination','authority','digest','expires','trust','trust-detail',
+ const ids=['status','subject','requester','requester-id','destination','authority','digest','expires','trust','trust-detail',
  'review','approve','decline','cancel','refresh','enrol'];
  for (const id of ids) {
   elements[id]={textContent:'',dataset:{},disabled:false,handlers:{},addEventListener(name,handler){this.handlers[name]=handler;}};
   Object.defineProperty(elements[id],'innerHTML',{set(){assert.fail('untrusted HTML sink used');}});
  }
  const review={request_id:'r_test',status:'pending',canonical_review:'<img src=x onerror=alert(1)>\n☃ full canonical review',
- summary:{subject:'untrusted <script>',requester:'peer',destination:'this agent',authority:'run requested work',
+ summary:{subject:'untrusted <script>',requester:{participant_id:'p_requester',display_name:'peer'},destination:'this agent',authority:'run requested work',
  digest:'a'.repeat(64),expires:wall/1000+60},trust:{label:'TOFU, not attested',detail:'Hub reported; not locally verified.'},enrolled};
  const env={isSecureContext:true,document:{getElementById:id=>elements[id]},location:{pathname:'/consent/r_test',hash:'#'+'A'.repeat(43),
  hostname:'localhost',search:''},history:{replaceState(...args){calls.push(['strip',args]);}},
@@ -77,9 +77,13 @@ assert.throws(()=>page.encodeBinary(bytes(1,2,3),2));
 
 def test_options_pin_localhost_and_require_user_verification_and_supported_algorithms(tmp_path):
     run_js(tmp_path, r'''
-const created=page.creationOptions(publicKey), requested=page.requestOptions(publicKey);
+const created=page.creationOptions(publicKey, "p_requester"), requested=page.requestOptions(publicKey);
 assert.equal(created.rp.id,'localhost');assert.equal(created.authenticatorSelection.userVerification,'required');
 assert.deepEqual(created.pubKeyCredParams.map(x=>x.alg),[-7,-257]);
+assert.equal(created.attestation,'none');
+assert.deepEqual(new Uint8Array(created.user.id),new TextEncoder().encode('p_requester'));
+assert.throws(()=>page.creationOptions(publicKey,'p_other'));
+assert.throws(()=>page.creationOptions({...publicKey,user:{...publicKey.user,id:b64(new TextEncoder().encode('alice'))}},'p_requester'));
 assert.equal(requested.rpId,'localhost');assert.equal(requested.userVerification,'required');
 assert.deepEqual(new Uint8Array(requested.allowCredentials[0].id),new Uint8Array(bytes(0,255,2)));
 assert.throws(()=>page.creationOptions({...publicKey,rp:{id:'evil.example',name:'evil'}}));
@@ -148,8 +152,8 @@ view.app.dispose();
 def test_unsupported_registration_and_user_cancellation_never_select_a_weak_fallback(tmp_path):
     run_js(tmp_path, r'''
 const unsupported=setup({enrolled:false,credentials:{create:async()=>{const c=credential(true);delete c.response.getPublicKey;return c;}}});
-await unsupported.app.load();await unsupported.app.enrol();
-assert.match(unsupported.elements.status.textContent,/cannot export/);
+await unsupported.app.load();await unsupported.app.approve();
+assert.match(unsupported.elements.status.textContent,/human-started/);
 assert.equal(unsupported.calls.filter(x=>x[0]==='fetch' && x[1].endsWith('/result')).length,0);
 unsupported.app.dispose();
 const cancelled=setup({credentials:{get:async()=>{throw new DOMException('denied','NotAllowedError');}}});
@@ -199,19 +203,15 @@ for (const change of ['missing','origin','query']) {
 ''')
 
 
-def test_enrolment_requires_an_explicit_click_and_forwards_spki_without_a_trust_claim(tmp_path):
+def test_a_request_window_cannot_enrol_a_key_even_when_none_exists(tmp_path):
     run_js(tmp_path, r'''
-const view=setup({enrolled:false});await view.app.load();assert.equal(view.prompts.length,0);
-await view.elements.enrol.handlers.click();
-assert.equal(view.prompts.length,1);assert.equal(view.prompts[0][0],'create');
-assert.equal(view.prompts[0][1].publicKey.rp.id,'localhost');
-const request=view.calls.find(x=>x[1]==='/consent/r_test/enrol/result');assert.ok(request);
-const sent=JSON.parse(request[2].body);
-assert.equal(sent.credential.response.publicKey,b64(bytes(6,7)));
-assert.equal(sent.credential.response.publicKeyAlgorithm,-7);
-assert.equal(sent.credential.response.attestationObject,b64(bytes(4,5)));
-assert.equal(sent.credential.attested,undefined);assert.equal(sent.credential.strong,undefined);
-assert.match(view.elements.status.textContent,/Hub response: enrolled/);view.app.dispose();
+const view=setup({enrolled:false});await view.app.load();
+assert.equal(view.app.enrol,undefined);
+assert.equal(view.elements.enrol.handlers.click,undefined);
+await view.app.approve();
+assert.equal(view.prompts.length,0);
+assert.equal(view.calls.filter(x=>x[0]==='fetch' && x[1].includes('/enrol/')).length,0);
+assert.match(view.elements.status.textContent,/human-started/);view.app.dispose();
 ''')
 
 
@@ -253,7 +253,7 @@ unsupported.app.dispose();
 ''')
 
 
-@pytest.mark.parametrize("action", ["approve", "enrol", "decline"])
+@pytest.mark.parametrize("action", ["approve", "decline"])
 def test_cancel_after_forwarding_keeps_actions_frozen_until_confirmed_status_refresh(tmp_path, action):
     run_js(tmp_path, "const action=" + repr(action) + r''';
 let release;const delayed=new Promise(resolve=>release=resolve);
@@ -263,9 +263,9 @@ await view.app.load();const pending=view.app[action]();await flush();
 assert.ok(view.calls.find(x=>x[1]===`/consent/r_test/${suffix}`));
 view.app.cancel();
 assert.match(view.elements.status.textContent,/Status unknown.*Check status/);
-for(const name of ['approve','enrol','decline'])assert.equal(view.elements[name].disabled,true);
+for(const name of ['approve','decline'])assert.equal(view.elements[name].disabled,true);
 const count=view.calls.filter(x=>x[0]==='fetch').length;
-await view.app.approve();await view.app.decline();await view.app.enrol();
+await view.app.approve();await view.app.decline();
 assert.equal(view.calls.filter(x=>x[0]==='fetch').length,count);
 release(new Response(JSON.stringify({status:'approved',message:'late'}),{headers:{'content-type':'application/json'}}));
 await pending;

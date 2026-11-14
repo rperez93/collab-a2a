@@ -67,9 +67,13 @@ function descriptors(values, required = false) {
   });
 }
 
-export function creationOptions(value) {
+export function creationOptions(value, participantId) {
   if (!value || !value.rp || value.rp.id !== "localhost" || !value.user) {
     throw new Error("Enrolment must use the localhost relying party.");
+  }
+  if (typeof participantId !== "string" || !/^p_[A-Za-z0-9_-]{1,126}$/.test(participantId) ||
+      encodeBinary(decodeBinary(value.user.id, 64, "user ID"), 64) !== encodeBinary(utf8.encode(participantId), 64)) {
+    throw new Error("Enrolment user ID must contain the participant ID bytes.");
   }
   return {challenge: challenge(value.challenge),
     rp: {id: "localhost", name: boundedText(value.rp.name, 256, "relying party name")},
@@ -78,7 +82,7 @@ export function creationOptions(value) {
       displayName: boundedText(value.user.displayName, 256, "display name")},
     pubKeyCredParams: [{type: "public-key", alg: -7}, {type: "public-key", alg: -257}],
     authenticatorSelection: {userVerification: "required"},
-    attestation: "direct", timeout: timeout(value.timeout),
+    attestation: "none", timeout: timeout(value.timeout),
     excludeCredentials: descriptors(value.excludeCredentials)};
 }
 
@@ -150,8 +154,8 @@ export async function readJSON(response) {
 
 export function createApp(environment = globalThis) {
   const {document, location, history, navigator, fetch, AbortController} = environment;
-  const elements = Object.fromEntries(["status", "subject", "requester", "destination", "authority", "digest",
-    "expires", "trust", "trust-detail", "review", "approve", "decline", "cancel", "refresh", "enrol"]
+  const elements = Object.fromEntries(["status", "subject", "requester", "requester-id", "destination", "authority", "digest",
+    "expires", "trust", "trust-detail", "review", "approve", "decline", "cancel", "refresh"]
     .map(name => [name, document.getElementById(name)]));
   const path = /^\/consent\/([A-Za-z0-9_-]{1,128})\/?$/.exec(location.pathname);
   const token = location.hash.slice(1);
@@ -165,7 +169,6 @@ export function createApp(environment = globalThis) {
   function buttons() {
     const ready = Boolean(review) && !expired() && !done && !uncertain && !disposed;
     elements.approve.disabled = !ready || Boolean(active) || !review.enrolled;
-    elements.enrol.disabled = !ready || Boolean(active) || review.enrolled;
     elements.decline.disabled = !ready || Boolean(active);
     elements.refresh.disabled = Boolean(active) || disposed;
     elements.cancel.disabled = !active;
@@ -233,9 +236,16 @@ export function createApp(environment = globalThis) {
       }
       boundedText(data.canonical_review, LIMITS.review, "canonical review");
       if (!Number.isFinite(data.summary.expires) || data.summary.expires <= 0) throw new Error("Invalid review expiry.");
-      for (const name of ["subject", "requester", "destination", "authority", "digest"]) {
+      for (const name of ["subject", "destination", "authority", "digest"]) {
         elements[name].textContent = boundedText(data.summary[name], 8192, name);
       }
+      const requester = data.summary.requester;
+      if (!requester || typeof requester !== "object" || Array.isArray(requester) ||
+          typeof requester.participant_id !== "string" || !/^p_[A-Za-z0-9_-]{1,126}$/.test(requester.participant_id)) {
+        throw new Error("The review is missing its requester participant ID.");
+      }
+      elements.requester.textContent = boundedText(requester.display_name, 256, "requester name");
+      elements["requester-id"].textContent = requester.participant_id;
       elements.review.textContent = data.canonical_review;
       elements.expires.textContent = new environment.Date(data.summary.expires * 1000).toISOString();
       elements.trust.textContent = boundedText(data.trust.label, 256, "reported trust");
@@ -276,17 +286,18 @@ export function createApp(environment = globalThis) {
     }
     throw new Error("The hub did not confirm the requested operation.");
   }
-  async function ceremony(enrolment) {
+  async function ceremony() {
     return run(async operation => {
       if (!review || expired() || done || uncertain) throw new Error("A current confirmed review is required before deciding; refresh to check status.");
-      if (!navigator.credentials || typeof navigator.credentials[enrolment ? "create" : "get"] !== "function") {
+      if (!review.enrolled) throw new Error("Enrol through the separate human-started consent flow first.");
+      if (!navigator.credentials || typeof navigator.credentials.get !== "function") {
         throw new Error("This browser has no supported passkey API. No weaker fallback was selected.");
       }
-      const prefix = enrolment ? "enrol" : "approve";
+      const prefix = "approve";
       const options = await rpc(`${prefix}/options`, operation, {});
       boundedText(options.ceremony_id, 256, "ceremony ID");
       if (!options.ceremony_id) throw new Error("Missing ceremony ID.");
-      const publicKey = enrolment ? creationOptions(options.publicKey) : requestOptions(options.publicKey);
+      const publicKey = requestOptions(options.publicKey);
       if (!Number.isFinite(options.expires)) throw new Error("Missing ceremony expiry.");
       const remaining = Math.min(120000, operation.deadline - monotonic(),
         options.expires * 1000 - now(), review.summary.expires * 1000 - now());
@@ -296,13 +307,12 @@ export function createApp(environment = globalThis) {
       operation.timer = environment.setTimeout(() => stop("The ceremony expired. Refresh the review."), remaining);
       publicKey.timeout = Math.min(publicKey.timeout, Math.floor(remaining));
       current(operation);
-      const credential = await navigator.credentials[enrolment ? "create" : "get"]({publicKey, signal: operation.controller.signal});
+      const credential = await navigator.credentials.get({publicKey, signal: operation.controller.signal});
       current(operation);
-      const evidence = serializeCredential(credential, enrolment);
+      const evidence = serializeCredential(credential, false);
       const result = await rpc(`${prefix}/result`, operation, {ceremony_id: options.ceremony_id, credential: evidence});
-      if (!confirm(result, enrolment ? "enrolled" : "approved")) return;
-      if (enrolment) review.enrolled = true;
-      else { done = true; if (expiryTimer) environment.clearTimeout(expiryTimer); }
+      if (!confirm(result, "approved")) return;
+      done = true; if (expiryTimer) environment.clearTimeout(expiryTimer);
     });
   }
   function decline() {
@@ -313,10 +323,10 @@ export function createApp(environment = globalThis) {
       done = true; if (expiryTimer) environment.clearTimeout(expiryTimer);
     });
   }
-  const app = {load, enrol: () => ceremony(true), approve: () => ceremony(false), decline,
+  const app = {load, approve: ceremony, decline,
     cancel: () => stop("Cancelled locally. Refresh the review to check its status before trying again."),
     dispose: () => { disposed = true; stop(); if (expiryTimer) environment.clearTimeout(expiryTimer); }};
-  for (const name of ["approve", "enrol", "decline", "refresh", "cancel"]) {
+  for (const name of ["approve", "decline", "refresh", "cancel"]) {
     elements[name].addEventListener("click", () => app[name === "refresh" ? "load" : name]());
   }
   buttons();
