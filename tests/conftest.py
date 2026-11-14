@@ -47,6 +47,8 @@ def _never_the_machines_own_config(tmp_path, monkeypatch):
     # real tokens. Tests of automatic setup remove it explicitly.
     monkeypatch.setenv("COLLAB_NO_WORKER", "1")
     monkeypatch.setenv("COLLAB_CONFIG", str(tmp_path / "collab" / "config.json"))
+    # This agent's own settings (R21), isolated per test like the machine file.
+    monkeypatch.setenv("COLLAB_AGENT_CONFIG", str(tmp_path / "collab" / "agent-settings.json"))
     monkeypatch.setenv("COLLAB_HOME", "")
     monkeypatch.setenv("COLLAB_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("COLLAB_AGENT_ID", "test-agent")
@@ -54,8 +56,10 @@ def _never_the_machines_own_config(tmp_path, monkeypatch):
     # a value read under one test's config would otherwise still be answered
     # under the next one's.
     config._CACHE.clear()
+    config._AGENT_CACHE.clear()
     yield
     config._CACHE.clear()
+    config._AGENT_CACHE.clear()
 
 
 @pytest.fixture(autouse=True)

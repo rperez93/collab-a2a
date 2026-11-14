@@ -157,9 +157,9 @@ def test_clear_gives_back_the_shipped_one(monkeypatch):
 
     assert code == 0 and "shipped one again" in out
     assert _text(True) == config.shipped_reminder(True)
-    assert "remind_host" not in json.loads(
-        (config.global_config_path()).read_text()), \
-        "cleared means the key is gone, not that it holds the shipped text"
+    for path in (config.global_config_path(), config.agent_config_path()):
+        assert not path.exists() or "remind_host" not in json.loads(path.read_text()), \
+            "cleared means the key is gone, not that it holds the shipped text"
 
 
 # --- the two roles are two -----------------------------------------------------------

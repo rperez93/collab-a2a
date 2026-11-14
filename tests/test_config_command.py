@@ -61,7 +61,8 @@ def test_the_json_form_carries_the_default_and_the_description(capsys):
     data = json.loads(capsys.readouterr().out)
     assert set(data) == {item.name for item in config.settings()}
     assert data["watch_status"] == {"value": True, "default": True,
-                                    "about": data["watch_status"]["about"]}
+                                    "about": data["watch_status"]["about"],
+                                    "scope": "machine", "source": "default"}
 
 
 # --- changing them -----------------------------------------------------------
@@ -70,7 +71,9 @@ def test_it_writes_the_key_the_older_command_reads(isolated):
     """Two routes to one setting that wrote two keys would be worse than one."""
     assert _run("share_stats", "off") == 0
     assert config.share_stats_enabled() is False
-    assert json.loads(isolated.read_text())["share_stats"] is False
+    # R21: share_stats is this agent's, so it lands in the agent's own file.
+    assert json.loads(config.agent_config_path().read_text())["share_stats"] is False
+    assert not isolated.exists() or "share_stats" not in json.loads(isolated.read_text())
 
 
 def test_a_value_the_setter_refuses_is_not_written(isolated, capsys):
@@ -126,7 +129,7 @@ def test_on_and_off_are_what_a_person_types(isolated):
     for text, stored in (("on", True), ("yes", True), ("1", True),
                          ("off", False), ("no", False), ("0", False)):
         assert _run("share_stats", text) == 0
-        assert json.loads(isolated.read_text())["share_stats"] is stored
+        assert json.loads(config.agent_config_path().read_text())["share_stats"] is stored
 
 
 def test_segments_are_taken_with_commas_or_with_spaces(isolated):
