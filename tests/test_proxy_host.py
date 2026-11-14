@@ -353,3 +353,69 @@ def test_an_agent_kind_cannot_choose_the_machines_proxy(capsys):
     assert config.proxy_mode() == 'off'
     assert main(['config', 'proxy', 'on']) == 0
     assert config.proxy_mode() == 'on'
+
+
+def test_the_machine_wide_proxy_carries_no_sessions_identity(tmp_path, monkeypatch):
+    """It was started with the starting hub's environment whole: that hub's
+    COLLAB_HOME, its agent kind and its OWNER — and an owner is what makes a
+    collab process follow one agent and stop when it leaves, which the
+    process serving every session on the machine must never do."""
+    from collab import owner
+
+    monkeypatch.setenv('COLLAB_PEERS_DIR', str(tmp_path / 'registry'))
+    monkeypatch.setenv('COLLAB_HOME', str(tmp_path / 'one-session'))
+    monkeypatch.setenv('COLLAB_AGENT_KIND', 'claude')
+    monkeypatch.setenv(owner.ENV_OWNER, 'some-agent-stamp')
+    monkeypatch.setenv('COLLAB_KEEP_THIS', 'yes')
+    seen = []
+
+    class Child:
+        def poll(self):
+            return 1
+
+        def wait(self):
+            return 1
+
+    def launch(command, **kw):
+        seen.append(kw['env'])
+        return Child()
+
+    monkeypatch.setattr(proxy_host.subprocess, 'Popen', launch)
+    proxy_host.SharedProxy('s_a', timeout=0.2).start()
+    env = seen[0]
+    for gone in ('COLLAB_HOME', 'COLLAB_AGENT_KIND', owner.ENV_OWNER):
+        assert gone not in env, gone
+    assert env['COLLAB_KEEP_THIS'] == 'yes'
+    assert env['COLLAB_PEERS_DIR'] == str(tmp_path / 'registry')
+
+
+@pytest.mark.parametrize('which', ['upload', 'download'])
+def test_a_file_transfer_never_follows_a_redirect_with_the_bearer(tmp_path, which):
+    """Behind the shared proxy a relative Location such as `/files` is the
+    bare domain — the PRIMARY session. Following it carried this session's
+    bearer token there. Every other call already refused redirects; the two
+    file calls did not."""
+    import httpx
+
+    from collab.client.hub_client import HubClient, HubError
+
+    asked = []
+
+    def hub(request):
+        asked.append((request.url.path, request.headers.get('authorization')))
+        return httpx.Response(307, headers={'location': '/ext/collab/v1/files'})
+
+    client = HubClient('https://proxy.test/s/s_mine', 'secret-token')
+    client._client = httpx.Client(transport=httpx.MockTransport(hub),
+                                  follow_redirects=True)
+    client._verified_url = client.base_url     # the compatibility probe, done
+    path = tmp_path / 'f.txt'
+    path.write_text('x')
+    with pytest.raises(HubError) as raised:
+        if which == 'upload':
+            client.upload_file(path, to='bob')
+        else:
+            client.download_file('F_1', tmp_path / 'out')
+    assert 'redirect' in str(raised.value)
+    assert len(asked) == 1, f'followed: {asked}'
+    assert asked[0][0].startswith('/s/s_mine/')

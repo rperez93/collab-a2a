@@ -570,6 +570,15 @@ def test_the_no_tunnel_variable_alone_is_recorded_like_the_flag(hosting, monkeyp
 # standing in for its public one wherever these tests are not about ngrok.
 
 
+def _orphan() -> int:
+    """A process that is nobody's child here — as a real ngrok or listener is
+    not — so its death is seen by its stamp and never left as our zombie."""
+    import subprocess
+
+    return int(subprocess.run(["sh", "-c", "sleep 120 >/dev/null 2>&1 & echo $!"],
+                              capture_output=True, text=True, check=True).stdout)
+
+
 def _a_proxy_without_ngrok(root):
     """A real `collab.proxy_main`, serving `http://127.0.0.1:<port>` as its
     public address. Returned with that address; the caller stops it."""
@@ -772,16 +781,28 @@ def test_moving_a_running_kept_session_leaves_one_hub_on_the_proxy(
     cfg = hosted_sessions(hosting / ".collab")[0]
     old_hub = cfg.hub_stamp()
     assert old_hub.alive()
-    held = int(subprocess.run(
-        ["sh", "-c", "sleep 120 >/dev/null 2>&1 & echo $!"],
-        capture_output=True, text=True, check=True).stdout)
+    held = _orphan()
     old_tunnel = exclusive.stamp_for(held)
     update_fields(cfg.dir, tunnel="ngrok", tunnel_pid=held,
                   tunnel_stamp=old_tunnel.encode())
+    # The session's listener, which is what revives a dead hub: it must be
+    # the FIRST thing stopped (review of #163).
+    listening = _orphan()
+    (cfg.dir / "daemon.pid").write_text(exclusive.stamp(listening))
+    listener = exclusive.stamp_for(listening)
+    signalled = []
+    real_kill = os.kill
+
+    def kill(pid, sig):
+        if sig:                              # 0 is a question, not an act
+            signalled.append(pid)
+        return real_kill(pid, sig)
+
+    monkeypatch.setattr(os, "kill", kill)
 
     _fake_ngrok_on_path(
         hosting, monkeypatch,
-        f"for p in {old_hub.pid} {held}; do kill -0 $p 2>/dev/null && "
+        f"for p in {old_hub.pid} {held} {listening}; do kill -0 $p 2>/dev/null && "
         f"echo $p >> '{hosting}/clash.txt'; done\nexit 1\n")
     try:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
@@ -789,7 +810,8 @@ def test_moving_a_running_kept_session_leaves_one_hub_on_the_proxy(
                          "--resume", cfg.session_id, "--tunnel", "proxy",
                          "--primary", "--keep"])
         assert code == 0, out.getvalue()
-        assert not old_hub.alive() and not old_tunnel.alive()
+        assert not old_hub.alive() and not old_tunnel.alive() and not listener.alive()
+        assert signalled[0] == listening, f"stopped in the order {signalled}"
         assert (hosting / "argv.txt").exists(), out.getvalue()
         assert not (hosting / "clash.txt").exists(), (
             "the proxy's ngrok started while the old hub or its ngrok was up")
@@ -804,8 +826,9 @@ def test_moving_a_running_kept_session_leaves_one_hub_on_the_proxy(
         if latest is not None:
             stop_session(latest)
         _stop_the_proxy_it_recorded()
-        if old_tunnel.alive():
-            os.kill(held, signal.SIGKILL)
+        for stamp in (old_tunnel, listener):
+            if stamp.alive():
+                real_kill(stamp.pid, signal.SIGKILL)
 
 
 def test_a_session_asking_for_a_held_primary_is_told_and_does_not_get_it(
@@ -854,3 +877,192 @@ def test_a_session_asking_for_a_held_primary_is_told_and_does_not_get_it(
             stop_session(HubConfig.load(cfg.session_id, cfg.home) or cfg)
         shared.terminate()
         shared.wait(timeout=10)
+
+
+def test_a_hub_revived_in_the_middle_of_the_move_stops_the_move(hosting, monkeypatch):
+    """The listener revives a dead hub. Had one been revived between the old
+    hub's stop and the proxy's start, it was a second hub on the session, and
+    its proxy hit ERR_NGROK_334 (review of #163). The cutover requires that
+    hub.json still names the hub it stopped, and otherwise starts nothing."""
+    import subprocess
+    import sys
+
+    from collab import proxy
+    from collab.cli import main
+    from collab.server import session as session_module
+    from collab.server.session import HubConfig, hosted_sessions, stop_session
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        assert main(["host", "--no-daemon", "--no-update-check", "--name", "alice",
+                     "--no-tunnel", "--keep"]) == 0
+    cfg = hosted_sessions(hosting / ".collab")[0]
+    old_hub = cfg.hub_stamp()
+    _fake_ngrok_on_path(hosting, monkeypatch, "exit 1\n")
+    real_stop = session_module.stop_session
+    revived = []
+
+    def stop_then_revive(previous, **kw):
+        result = real_stop(previous, **kw)
+        deadline = time.monotonic() + 15
+        while old_hub.alive() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        revived.append(subprocess.Popen(
+            [sys.executable, "-m", "collab.hub_main", previous.session_id],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL, start_new_session=True,
+            env={**os.environ, "COLLAB_HOME": previous.home}))
+        while (HubConfig.load(previous.session_id, previous.home).pid != revived[0].pid
+               and time.monotonic() < deadline):
+            time.sleep(0.05)
+        return result
+
+    monkeypatch.setattr(session_module, "stop_session", stop_then_revive)
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            code = main(["host", "--no-daemon", "--no-update-check", "--name", "alice",
+                         "--resume", cfg.session_id, "--tunnel", "proxy", "--primary"])
+        assert code == 1, out.getvalue()
+        assert "while it was being moved" in out.getvalue()
+        assert f"pid {revived[0].pid}" in out.getvalue()
+        assert not (hosting / "argv.txt").exists(), "a proxy was started beside it"
+        assert proxy.ProxyState.load().pid == 0
+    finally:
+        monkeypatch.setattr(session_module, "stop_session", real_stop)
+        for child in revived:
+            child.terminate()
+            child.wait(timeout=10)
+        latest = HubConfig.load(cfg.session_id, cfg.home)
+        if latest is not None:
+            stop_session(latest)
+
+
+def test_moving_a_session_whose_hub_has_no_tunnel_leaves_one_hub(hosting, monkeypatch):
+    """The cutover stops ANY live hub of the session, whatever its tunnel: a
+    hub with tunnel `none` (or `proxy`) used to be left running, and the move
+    put a second hub on the session beside it (review of #163)."""
+    from collab.cli import main
+    from collab.server.session import HubConfig, hosted_sessions, stop_session
+
+    _fake_ngrok_on_path(hosting, monkeypatch, "exit 1\n")
+    shared, base = _a_proxy_without_ngrok(hosting)
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            assert main(["host", "--no-daemon", "--no-update-check", "--name", "alice",
+                         "--no-tunnel", "--keep"]) == 0
+        cfg = hosted_sessions(hosting / ".collab")[0]
+        assert HubConfig.load(cfg.session_id, cfg.home).tunnel == "none"
+        old_hub = cfg.hub_stamp()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            assert main(["host", "--no-daemon", "--no-update-check", "--name", "alice",
+                         "--resume", cfg.session_id, "--tunnel", "proxy"]) == 0, out.getvalue()
+        assert not old_hub.alive()
+        latest = HubConfig.load(cfg.session_id, cfg.home)
+        assert _hubs_of(hosting / ".collab") == [latest.pid]
+        assert latest.tunnel == "proxy" and latest.public_url == f"{base}/s/{cfg.session_id}"
+    finally:
+        for each in hosted_sessions(hosting / ".collab"):
+            stop_session(HubConfig.load(each.session_id, each.home) or each)
+        shared.terminate()
+        shared.wait(timeout=10)
+
+
+def test_purging_the_primary_session_frees_the_bare_route_and_stopping_does_not(
+        hosting, monkeypatch):
+    """The strict rule keeps a primary through every stop: its guests' links
+    come back with it. A PURGED session never comes back, so `kill --purge`
+    is the one thing that releases its slot (review of #163)."""
+    from collab import proxy
+    from collab.cli import main
+    from collab.server.session import hosted_sessions
+
+    _host(hosting, "--no-tunnel")
+    sid = hosted_sessions(hosting / ".collab")[0].session_id
+    assert proxy.claim_primary(sid) == sid
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        assert main(["kill", "--all"]) == 0
+    assert proxy.ProxyState.load().primary == sid, "a plain stop released it"
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        assert main(["kill", "--all", "--purge", "--yes"]) == 0
+    assert proxy.ProxyState.load().primary == ""
+
+
+def test_a_session_kept_local_is_a_404_through_the_running_proxy_even_revived(
+        hosting, monkeypatch):
+    """Decided for #163: a session its host kept local has NO public path,
+    token or not. The proxy routed every loopback host on the machine; it now
+    reads each session's own record and skips `no_tunnel` ones — and a hub the
+    daemon revives keeps that record, so it stays out. A published session on
+    the same proxy answers, so the 404 is not the proxy being down."""
+    import httpx
+
+    from collab.cli import main
+    from collab.server.session import HubConfig, hosted_sessions, stop_session
+
+    _fake_ngrok_on_path(hosting, monkeypatch, "exit 1\n")
+    shared, base = _a_proxy_without_ngrok(hosting)
+    out = io.StringIO()
+    revived = None
+
+    def status(sid):
+        deadline = time.monotonic() + 5
+        got = 0
+        while time.monotonic() < deadline:
+            got = httpx.get(f"{base}/s/{sid}/ext/collab/v1/health", timeout=2).status_code
+            if got == 200:
+                break
+            time.sleep(0.2)                  # the route table is cached for 1 s
+        return got
+
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            assert main(["host", "--no-daemon", "--no-update-check", "--name", "alice",
+                         "--no-tunnel"]) == 0
+            local = hosted_sessions(hosting / ".collab")[0]
+            assert main(["host", "--no-daemon", "--no-update-check", "--name", "bob",
+                         "--tunnel", "proxy", "--fresh"]) == 0
+        public = next(c for c in hosted_sessions(hosting / ".collab")
+                      if c.session_id != local.session_id)
+        assert status(public.session_id) == 200
+        assert status(local.session_id) == 404
+
+        stop_session(HubConfig.load(local.session_id, local.home))
+        revived, up = _revive_like_the_daemon_one(hosting, local)
+        assert up
+        assert status(local.session_id) == 404, "a revived local-only hub was routed"
+    finally:
+        if revived is not None:
+            revived.terminate()
+            revived.wait(timeout=10)
+        for each in hosted_sessions(hosting / ".collab"):
+            stop_session(HubConfig.load(each.session_id, each.home) or each)
+        shared.terminate()
+        shared.wait(timeout=10)
+
+
+def _revive_like_the_daemon_one(root, cfg):
+    """`_revive_like_the_daemon` for one named session among several, with the
+    daemon's environment (no COLLAB_NO_TUNNEL)."""
+    import subprocess
+    import sys
+
+    from collab.server.session import HubConfig
+
+    deadline = time.monotonic() + 15
+    while cfg.hub_stamp().alive() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    env = {k: v for k, v in os.environ.items() if k != "COLLAB_NO_TUNNEL"}
+    env["COLLAB_HOME"] = cfg.home
+    proc = subprocess.Popen([sys.executable, "-m", "collab.hub_main", cfg.session_id],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            stdin=subprocess.DEVNULL, start_new_session=True, env=env)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        latest = HubConfig.load(cfg.session_id, cfg.home)
+        if latest and latest.pid == proc.pid:
+            time.sleep(1.5)                  # let it announce, and the cache turn
+            return proc, True
+        time.sleep(0.1)
+    return proc, False

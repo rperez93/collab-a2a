@@ -104,4 +104,7 @@ Stopping one hub leaves the shared proxy and other hubs alone. A distinct
 reserved domain requires `collab host --tunnel own`; do not stop another
 session to resolve a domain conflict. `--no-tunnel` keeps hosting local-only.
 The proxy recovers on the hub watcher cycle, and exits after the last live
-hub disappears. Confirm the actual URL with `collab url`.
+hub disappears. Confirm the actual URL with `collab url`. A `--no-tunnel`
+session is never routed by the proxy. Moving a running session onto it
+(`collab host --resume <id> --tunnel proxy`) stops its listener, hub and own
+tunnel first, and refuses if a hub was started for it meanwhile.

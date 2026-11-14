@@ -680,60 +680,87 @@ CUTOVER_WAIT = 20.0
 
 def _release_own_tunnel_for_the_proxy(previous: Any, mode: str, primary: bool,
                                       no_tunnel: bool) -> int | None:
-    """THE ORDERED CUTOVER: release a session's own reserved domain before the
-    shared proxy is started on it. None to carry on, else an exit code.
+    """THE ORDERED CUTOVER: stop everything the session is running before the
+    shared proxy is started for it. None to carry on, else an exit code.
 
     A session moving onto the proxy (`collab host --resume <id> --tunnel proxy
     [--primary]`) usually has its old hub still running, and that hub's own
     ngrok holds the domain — the account's one endpoint. Started beside it,
     the proxy's ngrok is refused with ERR_NGROK_334 and the session is nowhere
-    public; started before the hub was stopped, the hub's tunnel watcher would
-    relaunch its own ngrok into the gap. So, in this order:
+    public; and ANY hub left running beside the new one is a second hub on the
+    session. So, in this order:
 
-    1. record the new mode in hub.json, keyed (`update_fields`), so a hub the
-       daemon revives in the meantime comes up attached, not with its own
-       tunnel;
-    2. stop the session's hub, listener and own tunnel by their stamps, as
-       `collab kill` does;
-    3. wait until the hub and the tunnel are both gone — a SIGTERM is a
-       request, and the endpoint is released only when ngrok has exited;
-    4. only then return, and the new hub starts the proxy on the same domain.
+    1. record the new mode in hub.json, keyed (`update_fields`), so a hub
+       revived in the meantime comes up attached, not with its own tunnel;
+    2. stop the session's LISTENER first and wait until it is gone: it is the
+       process that revives a dead hub, and a hub it revived in the window
+       between (3) and (5) was a second hub whose own proxy then hit 334
+       (review of #163);
+    3. stop the hub and its own ngrok by their stamps, as `collab kill` does —
+       whatever the hub's tunnel, `none` and `proxy` included;
+    4. wait until both are gone — a SIGTERM is a request, and the endpoint is
+       released only when ngrok has exited;
+    5. require that hub.json still names the hub we stopped: anything else
+       means some other process started one meanwhile, and the move stops
+       rather than putting a second hub beside it.
 
-    A session whose hub is not up, or that is staying on its own tunnel, is
-    left exactly as it was.
+    A session with nothing running, or staying on its own tunnel, is left
+    exactly as it was.
     """
+    import signal
+
     from .config import proxy_mode
     from .proxy_host import use_proxy
-    from .server.session import stop_session, update_fields
+    from .server.session import HubConfig, daemon_stamp, stop_session, update_fields
 
     if no_tunnel or not use_proxy(mode or previous.tunnel_mode, proxy_mode()):
         return None
-    hub_alive = previous.hub_stamp().alive()
+    old_hub = previous.hub_stamp()
     own_tunnel = previous.tunnel_process()
-    holding = own_tunnel.alive() or (hub_alive and previous.tunnel == "ngrok")
-    if not holding:
+    if not (old_hub.alive() or own_tunnel.alive()):
         return None
     fields = {"tunnel_mode": mode or previous.tunnel_mode}
     if primary:
         fields["proxy_primary"] = True
     update_fields(previous.dir, **fields)
     what = previous.domain or "its public address"
-    note = f"releasing {what} from the session's own tunnel first"
+    note = f"stopping the session's running hub to move it, releasing {what}"
     print(f"       {dim(note)}")
-    stop_session(previous)
-    deadline = time.monotonic() + CUTOVER_WAIT
-    while time.monotonic() < deadline:
-        if not previous.hub_stamp().alive() and not own_tunnel.alive():
-            ok(f"released {what}")
-            return None
-        time.sleep(0.1)
-    still = [f"{label} (pid {who.pid})" for label, who in
-             (("hub", previous.hub_stamp()), ("ngrok", own_tunnel)) if who.alive()]
-    fail(f"the session's own {' and '.join(still)} did not stop within "
-         f"{CUTOVER_WAIT:.0f} s; the shared proxy was not started, since ngrok "
-         "would refuse it the domain (ERR_NGROK_334)")
-    print(dim("  stop it with `collab kill`, then run this again"))
-    return 1
+
+    def gone(*who: Any) -> bool:
+        deadline = time.monotonic() + CUTOVER_WAIT
+        while any(w.alive() for w in who):
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.1)
+        return True
+
+    listener = daemon_stamp(previous)
+    if listener.alive():
+        with contextlib.suppress(OSError):
+            os.kill(listener.pid, signal.SIGTERM)
+    still: list[str] = []
+    if not gone(listener):
+        still.append(f"listener (pid {listener.pid})")
+    else:
+        stop_session(previous)
+        if not gone(old_hub, own_tunnel):
+            still = [f"{label} (pid {w.pid})" for label, w in
+                     (("hub", old_hub), ("ngrok", own_tunnel)) if w.alive()]
+    if still:
+        fail(f"the session's own {' and '.join(still)} did not stop within "
+             f"{CUTOVER_WAIT:.0f} s; the shared proxy was not started, since ngrok "
+             "would refuse it the domain (ERR_NGROK_334)")
+        print(dim("  stop it with `collab kill`, then run this again"))
+        return 1
+    latest = HubConfig.load(previous.session_id, previous.home)
+    if latest is None or latest.pid != previous.pid:
+        fail(f"a hub was started for {previous.session_id} while it was being moved"
+             f" (pid {latest.pid if latest else '?'}); nothing was started beside it")
+        print(dim("  stop it with `collab kill`, then run this again"))
+        return 1
+    ok(f"released {what}")
+    return None
 
 
 @_preserve_cwd()
@@ -3347,6 +3374,15 @@ def cmd_kill(args: argparse.Namespace) -> int:
     for cfg in targets:
         counts = session_summary(cfg) if not args.purge else {}
         result = stop_session(cfg, purge=args.purge)
+        if result["purged"]:
+            # The one release of the shared proxy's primary: a purged session
+            # is never hosted again, so its bare-domain slot would be held for
+            # nobody, for good. Stopping without --purge keeps it (the strict
+            # rule — see `proxy.claim_primary`).
+            from . import proxy
+            with contextlib.suppress(OSError):
+                if proxy.release_primary(cfg.session_id):
+                    print(dim("       the shared proxy's bare-domain route is free again"))
         # Leaving means leaving: a lock that outlives the session is exactly
         # the failure this file is meant to avoid.
         held = lockfile.read(cfg.home)
