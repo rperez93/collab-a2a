@@ -330,3 +330,27 @@ def test_machine_confirmation_says_what_was_written_and_its_scope(capsys):
     assert cli.cmd_config(args) == 0
     out = capsys.readouterr().out
     assert "set to 20 for every agent here" in out and "still uses its own 10" in out
+
+
+def test_a_kind_level_stats_command_is_this_agents_explicit_choice(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from collab import telemetry_setup
+    monkeypatch.setenv("COLLAB_AGENT_KIND", "codex")
+    config._KIND_CACHE.clear()
+    config.WRITE_KIND.update(on=True, key="stats_command", kind="codex")
+    try:
+        config.save_config({**config.load_config(), "stats_command": "my-codex-probe"})
+    finally:
+        config.WRITE_KIND.update(on=False, key=None, kind=None)
+    assert config.set_by_this_agent("stats_command")
+    command, _, _ = telemetry_setup.source(SimpleNamespace(home=str(tmp_path), dir=tmp_path))
+    assert command == "my-codex-probe", "the kind's explicit probe, not an automatic one"
+
+
+def test_kind_is_refused_for_a_machine_setting(capsys):
+    import argparse
+    from collab import cli
+    args = argparse.Namespace(key="editor", value="nano", unset=False, json=False, tui=False,
+                              edit=False, machine=False, kind="codex")
+    assert cli.cmd_config(args) == 2
+    assert "belongs to the machine" in capsys.readouterr().err
