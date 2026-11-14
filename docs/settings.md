@@ -24,16 +24,20 @@ Precedence for an agent setting: **this agent's file, then its agent kind's
 file, then the machine file, then the default.** The kind layer
 (`~/.config/collab/kinds/<kind>.json`, kind = `claude-code`, `codex`, … as
 detected, or `COLLAB_AGENT_KIND`) is what outlives one conversation: `collab
-config display_name friday --kind` keeps that name, or a Codex quota probe,
-for every Codex conversation on this machine without reaching Claude agents. A machine-wide key found in an agent's file is ignored.
+config stats_command '<probe>' --kind codex` keeps a Codex quota probe (or a
+worker model) for every Codex conversation on this machine without reaching
+Claude agents. `display_name` and `color` are an agent's identity and refuse
+`--kind`; a machine-scoped key refuses it too. A machine-wide key found in an agent's file is ignored.
 `collab config KEY VALUE` writes an agent setting for the current agent only;
 `--machine` sets it as everyone's shared default instead. `--unset` removes this
 agent's own value only, so it follows the shared one again; `--unset --machine`
 clears the shared default. An agent's own values last as long as its collab
 state (one agent session in one workspace); a new conversation starts from the
-shared defaults, so set lasting preferences with `--machine`. `collab config` marks
-each value `[this agent]` or `[shared by every agent here]`, and `--json`
-carries `scope` and `source`. A value written to the machine file before this
+shared defaults, so set lasting preferences with `--machine`. `collab config` and
+`collab config KEY` print the layer each value comes from (this agent, agent
+kind, machine, legacy or default; an empty value at a layer reads `disabled
+(explicit empty)`), and `--json` carries `scope` and `source`. Daemons and
+hubs started by the CLI inherit its agent kind, so they read the same layer. A value written to the machine file before this
 split keeps applying until an agent sets its own, except for the identity keys
 `display_name`, `color`, `stats_command` and `stats_auto_setup`: those are never
 inherited (a machine value is shown as legacy, and host and join say how to
