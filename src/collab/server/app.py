@@ -382,6 +382,22 @@ def create_app(
                         f"({where}) — join again with a different one "
                         "(collab join <url> --name <another>)"),
             )
+        # AN OFFLINE NAME IS NOT A FREE NAME. Handing the row back on the name
+        # alone let anyone with an invite become an offline participant: their
+        # history, direct messages and private files. Only the participant can
+        # take it back, by proving it with the token their own state still holds.
+        if holder is not None:
+            resume = body.get("resume_token")
+            proven = (isinstance(resume, str) and 0 < len(resume) <= 512
+                      and (owner := await asyncio.to_thread(store.participant_for_token, resume)) is not None
+                      and owner.id == holder.id)
+            if not proven:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(f"the name {requested!r} belongs to a participant who is offline; only "
+                            "they can take it back, from the collab state that joined as them. "
+                            "Join with a different name (collab join <url> --name <another>)"),
+                )
         token = new_secret()
         if holder is not None:
             person = await asyncio.to_thread(

@@ -102,12 +102,14 @@ class HubClient:
 
     # --- session --------------------------------------------------------------
 
-    def join(self, invite: str, name: str, hello: dict[str, Any]) -> dict[str, Any]:
+    def join(self, invite: str, name: str, hello: dict[str, Any],
+             resume_token: str = "") -> dict[str, Any]:
         from ..compatibility import advertisement
         self.check_host(force=True)
         return self._request(
             "POST", f"{EXT_PREFIX}/join",
-            json={"invite": invite, "name": name, "hello": hello, **advertisement()},
+            json={"invite": invite, "name": name, "hello": hello, **advertisement(),
+                  **({"resume_token": resume_token} if resume_token else {})},
         )
 
     def health(self) -> dict[str, Any]:

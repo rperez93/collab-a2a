@@ -128,6 +128,28 @@ def ensure_daemon(profile: SessionProfile, *, wait: bool = True,
     return wait_until_live(profile) if wait else read_status(profile)
 
 
+def _resume_token(base: str, original: str, session_id: str, name: str) -> str:
+    """This state's own token for the same session and name, if it joined before.
+
+    The hub hands an offline participant's row back only to whoever proves
+    to be them; the token a previous join saved here is that proof. Nothing
+    is sent when no saved profile matches.
+    """
+    from ..config import session_dir
+    roots = {base.rstrip("/"), original.rstrip("/")}
+    try:
+        sessions = session_dir("probe").parent
+        candidates = sorted(sessions.glob("*/profile.json"))
+    except (OSError, ValueError):
+        return ""
+    for path in candidates:
+        profile = SessionProfile.load_from(path.parent)
+        if (profile is not None and profile.token and profile.name == name and not profile.is_host
+                and (profile.session_id == session_id or profile.url.rstrip("/") in roots)):
+            return profile.token
+    return ""
+
+
 def join_session(
     url: str,
     *,
@@ -149,8 +171,9 @@ def join_session(
     hello = ctx.gather(focus, cwd=cwd)
     wanted = resolve_name(name)
 
+    resume = _resume_token(base, original, (hinted or {}).get("session_id", ""), wanted)
     with HubClient(base) as client:
-        result = client.join(invite, wanted, hello)
+        result = client.join(invite, wanted, hello, resume_token=resume)
     if hinted and result.get("session_id") != hinted["session_id"]:
         raise HubError("the join response belongs to a different session")
 
