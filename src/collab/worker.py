@@ -467,6 +467,46 @@ class Store:
             db.execute("UPDATE records SET kind='answer',data=? WHERE id=?",
                        (json.dumps({"text": text, "prompt": prompt}), escalation_id))
 
+    def repair_legacy_answers(self, resolve) -> dict[str, int]:
+        """Make answers queued before #146 runnable again, or set them aside. Idempotent.
+
+        A legacy answer (one with a peer source but no decision_source) used to
+        stop every turn. resolve(seq) returns the original authenticated inbox
+        event's provenance in THIS session, or None. With an unambiguous source
+        the answer is repaired in place, keeping its audience and routing;
+        otherwise it is quarantined with its content and references intact,
+        is never delivered, and one recovery decision names it. Fail-closed:
+        nothing unresolved is ever released.
+        """
+        repaired = quarantined = 0
+        with self._db() as db:
+            for row in self._records(db, "answer"):
+                prompt = row.get("prompt") or {}
+                if not prompt.get("seq") or (prompt.get("decision_source") or {}).get("sender_id"):
+                    continue
+                data = {k: v for k, v in row.items() if k not in ("id", "created_at")}
+                source = resolve(prompt["seq"])
+                if source and source.get("sender_id"):
+                    data["prompt"] = {**prompt, "decision_source": {
+                        "sender_id": source["sender_id"], "sender": source.get("sender", ""),
+                        "room": source.get("room", ""),
+                        "broadcast": bool(source.get("room")) and source.get("broadcast") is True}}
+                    db.execute("UPDATE records SET data=? WHERE id=? AND kind='answer'",
+                               (json.dumps(data), row["id"]))
+                    repaired += 1
+                    continue
+                db.execute("UPDATE records SET kind='quarantine', data=? WHERE id=? AND kind='answer'",
+                           (json.dumps({**data, "quarantined_at": time.time(),
+                                        "reason": "no unambiguous original sender"}), row["id"]))
+                once = f"quarantine:{row['id']}"
+                if not any(r.get("once") == once for r in self._records(db, "escalation")):
+                    self._add(db, "escalation", {"reason": "blocker", "seq": 0, "once": once, "question": (
+                        f"Your answer {row['id']} was queued before this upgrade and its original asker "
+                        f"cannot be verified, so it was set aside, not sent: {str(row.get('text', ''))[:300]!r}. "
+                        "If it still matters, send it yourself with `collab worker send --to NAME`.")})
+                quarantined += 1
+        return {"repaired": repaired, "quarantined": quarantined}
+
     def await_human(self, escalation_id: str, note: str, *, to: str = "", room: str = "") -> str:
         """The main agent took the question to its human (R18).
 

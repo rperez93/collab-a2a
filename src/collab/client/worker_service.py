@@ -453,6 +453,16 @@ class Conversation:
 
         return await asyncio.wait_for(send(), timeout=timeout)
 
+    def _persisted_source(self, seq):
+        """The authenticated inbox event at seq in this session, as a decision source."""
+        events = self.daemon.inbox.after(seq - 1, limit=1) if seq else []
+        if not events or events[0].seq != seq or not getattr(events[0], "sender_id", ""):
+            return None
+        event = events[0]
+        room = event.room if isinstance(event.room, str) and len(event.room) <= 200 else ""
+        return {"sender_id": event.sender_id, "sender": event.sender or "", "room": room or "",
+                "broadcast": bool(room) and not (event.to or getattr(event, "to_id", None))}
+
     def _source(self, record):
         """A compact summary cannot be trusted to remember a reply address."""
         if "question" in record:
@@ -543,6 +553,13 @@ class Conversation:
                     break
                 selected.append(candidate)
             cursor = events[-1].seq if events else snapshot["cursor"]
+            if any((row.get("prompt") or {}).get("seq") and
+                   not ((row.get("prompt") or {}).get("decision_source") or {}).get("sender_id")
+                   for row in snapshot["answers"]):
+                # Answers queued before #146: repair from the persisted inbox
+                # event, or quarantine with a recovery decision; never block.
+                store.repair_legacy_answers(self._persisted_source)
+                snapshot = store.snapshot()
             contexts = _page(snapshot["context"])
             answers = _page([self._source(row) for row in snapshot["answers"]])
             if any(answer.get("prompt", {}).get("seq", 0) > 0
