@@ -79,10 +79,13 @@ Code, `AskUserQuestion` — and meanwhile keep the peer informed:
 
 ```bash
 collab worker reply e_EXAMPLE --awaiting-human 'My human is deciding; I will answer here.'
-collab worker reply e_EXAMPLE 'Approved: merge after CI.'   # once they answer
+collab worker reply e_EXAMPLE 'Approved: merge after CI.'   # sent to the peer as written
 ```
 
-`--awaiting-human` keeps the decision open, tells the asking peer your note once,
+`reply` normally gives the worker an instruction it words; `--verbatim` sends your
+text to the asking peer exactly as written (the default for a decision waiting on
+your human; `--instruct` overrides that). `--awaiting-human` keeps the decision
+open, tells the asking peer your note once,
 stops repeat notices, and shows peers an `awaiting_human` count on your worker
 figures. The worker never addresses your human and never waits silently.
 

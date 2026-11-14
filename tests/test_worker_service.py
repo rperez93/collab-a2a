@@ -639,3 +639,32 @@ async def test_the_worker_sees_the_open_board(conversation, tmp_path, monkeypatc
     await conversation.turn()
     assert payloads[0]["board"] == [{"id": "T_22", "title": "R22 consent primitive", "owner": "arma",
                                      "state": "working"}]
+
+
+@pytest.mark.asyncio
+async def test_the_leak_guard_compares_participant_ids_across_a_rename(conversation, tmp_path, monkeypatch):
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    conversation.daemon.inbox.record(Envelope(seq=1, kind="chat", sender="bob", sender_id="p_b",
+                                              text="May we drop the legacy API in 3.0?"))
+    snap = store.snapshot()
+    store.commit_turn(expected_cursor=snap["cursor"], cursor=1, summary="", replies=[],
+                      escalations=[{"reason": "decision", "seq": 1,
+                                    "question": "Bob asks: may we drop the legacy API in 3.0?"}])
+    # bob renamed to robert; a carol joined under the old name 'bob'
+    conversation.daemon.snapshot["participants"] = [{"name": "robert", "id": "p_b"},
+                                                    {"name": "bob", "id": "p_c"}, {"name": "alice", "id": "p_a"}]
+    incoming(conversation, 2, "any news?")
+    async def run(*args, **kwargs):
+        return {"summary": "", "escalations": [], "replies": [
+            {"text": "Bob asks: may we drop the legacy API in 3.0? still open", "to": "robert", "room": ""},
+            {"text": "Bob asks: may we drop the legacy API in 3.0? still open", "to": "bob", "room": ""}]}
+    monkeypatch.setattr("collab.worker_runtime.run_turn", run)
+    sent = []
+    async def transport(request):
+        sent.append(json.loads(request.content)["to"])
+        return httpx.Response(200, json={"seq": 3})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        conversation.daemon._http = client
+        await conversation.turn()
+    assert sent == ["robert"], "the asker under its new name only; never the new holder of the old name"
