@@ -42,6 +42,14 @@ repeating, and the worker figures show `awaiting_human` to everyone.
 `--no-daemon` prepares the worker but does not run it. Provider failures remain
 visible in `collab worker status`; there is no automatic provider fallback.
 
+The main agent's own sends are kept for the worker as a bounded, durable
+ledger (latest 16 within 16 KiB, idempotent by outbox id, with
+queued/delivered/failed status). It is context only: it never resolves a
+pending decision and never starts a model turn. Escalations may carry a
+versioned subject; one from the same asker (participant id), the same
+audience and the exact same subject joins the open decision as a follow-up
+instead of opening a second one. There is no fuzzy matching.
+
 Provider failures are classified. A rate limit waits for the provider's
 stated retry time, at least 15 minutes and at most one hour, and status shows
 `(rate limit)`. Network and other failures use the normal retry delay; a wait
