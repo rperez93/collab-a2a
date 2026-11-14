@@ -106,8 +106,9 @@ Merged on `main` after the 2.1.2 release; the next release carries them.
   running collab (`worker_agent` `auto`) and realigns on the next join; the main
   agent's messages, comments and file sends go through its durable outbox; and
   it paces itself once half its budget is spent. A provider failure is classed (`auth`, `model`,
-  `rate_limit`, `network`) and backs off by class; an auth or model failure
-  becomes a decision for the main agent. Answers to a peer close the chain:
+  `rate_limit`, `network`, `other`): a rate limit waits 15 minutes to an hour,
+  an auth or model failure becomes one decision for the main agent and is
+  rechecked hourly, and the rest retry at the normal delay. Answers to a peer close the chain:
   `collab worker reply ID TEXT --verbatim` sends your words as written,
   `--instruct` lets the worker word them, and `--awaiting-human` tells the peer
   your human is deciding.
@@ -115,11 +116,18 @@ Merged on `main` after the 2.1.2 release; the next release carries them.
   table, kept current by the daemon. Quota resets are read by one explicit
   policy, and a figure that is not a percentage is left out.
 - **Skills on request.** `collab skills peers` lists what each participant
-  shares; `collab skills ask NAME --to PEER` asks one to run a skill, and only
-  the asked agent's human can consent (`collab skills accept|decline ID`).
-- **Quota and model detection** for every coding agent collab recognises;
-  an unknown quota stays unknown rather than reading as zero.
-- **Settings per agent.** A setting written by one agent stays with that agent;
+  shares; `collab skills ask NAME --to PEER` asks one to run a skill, and
+  consent is the asked side's: on a terminal its human answers y/N, and an
+  agent may accept only with `--human-approved`, its statement that its human
+  agreed (`collab skills accept|decline ID`).
+- **A quota and model route for every coding agent collab recognises.** Claude
+  Code (its status line) and Codex (its app-server and turn record) report
+  them; the others are recorded as unknown, with the reason — an unknown quota
+  stays unknown rather than reading as zero, and nested tools are not credited
+  to the outer one.
+- **Settings per agent.** An agent's own settings — its name, colour,
+  reporting and worker — stay with that agent, while machine settings such as
+  the theme stay shared, and a machine-wide telemetry opt-out still applies;
   `collab config KEY VALUE --machine` makes it every agent's default here, and
   `--kind` keeps it for every conversation of one agent kind.
 - **Work offers.** Joining a session, or finishing a task, offers available
@@ -139,6 +147,8 @@ Merged on `main` after the 2.1.2 release; the next release carries them.
 - **Identity, not names.** Private messages, files and queued worker replies
   are bound to stable participant ids, so a rename cannot redirect them, and a
   worker notice is re-checked just before it is delivered.
+- **`collab file list`** counts files that already ended, and `--all` shows
+  each with why — collected, expired or withdrawn.
 - **Roster efficiency.** Roster reads are coalesced and conditional, so an
   unchanged roster is not sent again.
 - **Logs capped at 10 MB** each, at write time — `daemon.log`, `hub.log`,
