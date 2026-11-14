@@ -441,3 +441,13 @@ def test_answering_the_failure_decision_lets_the_next_failure_escalate(tmp_path)
     store.answer(store.pending()[0]["id"], "logged in again")
     store.escalate_once("provider-auth", "fix login", expected_generation=g)
     assert len(store.pending()) == 1
+
+
+def test_an_unanchored_escalation_or_a_waiting_peer_counts_as_routed():
+    from collab.worker_runtime import unrouted_deferrals
+    selected = [{"seq": 5, "sender": "bob", "to": "alice", "room": "", "text": "any update?"}]
+    defer = {"text": "Hold tight, I'll get back to you.", "to": "bob", "room": ""}
+    assert unrouted_deferrals({"replies": [defer], "escalations": [{"seq": 0, "reason": "decision", "question": "q"}]},
+                              selected, pending=[]) == []
+    assert unrouted_deferrals({"replies": [defer], "escalations": []}, selected,
+                              pending=[{"seq": 2, "sender": "bob", "awaiting_human": True}]) == []

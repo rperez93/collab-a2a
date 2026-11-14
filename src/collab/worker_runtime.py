@@ -199,10 +199,21 @@ def unrouted_deferrals(result: dict, selected: list[dict], pending: list[dict],
     # pending one. By message, not by peer: a peer already waiting on one
     # decision may ask a NEW question, and that one must be routed too.
     waiting = {row.get("seq") for row in pending} | {e["seq"] for e in result["escalations"]}
+
+
+    by_seq = {e["seq"]: e for e in selected}
+    # Routed already: an escalation this turn about this peer, or a pending one
+    # (including one waiting on the human, whose follow-ups carry new seqs).
+    waiting = {row.get("seq") for row in pending} | {e["seq"] for e in result["escalations"]}
+    routed_to = ({by_seq[s]["sender"] for s in waiting if s in by_seq}
+                 | {row["sender"] for row in pending if row.get("sender")})
+    unanchored = any(e["seq"] == 0 for e in result["escalations"])
     added = []
     for reply in result["replies"]:
         if not DEFERRAL.search(reply["text"]):
             continue
+        if unanchored:
+            continue  # this turn routed a question it could not tie to a message
         # A peer whose question the main agent answered this turn is being
         # given that answer, however the worker words it; a decision about
         # the relay would loop. By peer, not by matching the text.
