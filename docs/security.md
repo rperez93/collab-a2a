@@ -282,10 +282,14 @@ challenges and verification arrive with the strong-approval core; until that
 merges, nothing in collab calls the adapter. When it does:
 
 - **Approvals start in collab's own window**, not from a command the agent could
-  type. The window shows who is asking (participant id and name), a one-line
-  summary of what is asked, and the full review marked as untrusted text, with
-  **Approve with Windows Hello**, **Decline** and **Use a passkey instead**.
-  Approve is followed by the Hello prompt; a cancelled prompt is a decline.
+  type. The window shows who is asking — the participant id the hub assigned
+  first, then the name the requester chose for itself, marked as such — a
+  one-line summary of what is asked, and the full review marked as untrusted
+  text, with control and invisible characters shown as `\u{XXXX}` rather than
+  obeyed. Its buttons are **Approve with Windows Hello**, **Decline** and **Use
+  a passkey instead**; Enter and Esc decline. Approve is followed by the Hello
+  prompt; a cancelled prompt is a decline, and a window nobody answers within
+  ten minutes lets the request expire.
 - **The window is the front door; the gesture is the lock.** A same-user
   process can redraw a window or drive it, so what proves the approval is the
   signature, checked by the hub against the key enrolled for you.
