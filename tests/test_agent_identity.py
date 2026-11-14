@@ -141,7 +141,8 @@ def test_an_agent_with_no_colour_says_so_rather_than_inventing_one(repo):
 # --- the colour resolves per agent -------------------------------------------
 
 def test_this_agents_colour_wins_over_the_machines(repo, tmp_path, monkeypatch):
-    """The global one is a default for agents that have none, not an override."""
+    """R21: colour is an agent's identity; a machine-file colour is legacy and
+    never names another agent, so only this agent's own applies."""
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"color": "#ff7f50"}), encoding="utf-8")
     monkeypatch.setattr(config, "global_config_path", lambda: cfg)
@@ -149,7 +150,7 @@ def test_this_agents_colour_wins_over_the_machines(repo, tmp_path, monkeypatch):
     config._CACHE.clear()
     config._HOME_CACHE.clear()
 
-    assert config.default_color() == "#ff7f50"          # nothing of its own yet
+    assert config.default_color() != "#ff7f50"          # legacy machine colour: not inherited
     identity.save(repo / ".collab-alice", color="#00cccc")
     config._HOME_CACHE.clear()
     assert config.default_color() == "#00cccc"
