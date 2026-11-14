@@ -205,15 +205,23 @@ def _table(chain: list[int]) -> dict[int, list[str]]:
     Empty on failure, which sends the caller to the per-pid route rather than to
     a wrong answer. On Linux it is never called at all.
     """
+    import shlex
     import subprocess
+    from .source_command import run
 
+    if not chain:
+        return {}
     try:
-        done = subprocess.run(["ps", "-o", "pid=,comm=,command=", "-p",
-                               ",".join(str(p) for p in chain)],
-                              capture_output=True, text=True, timeout=5,
-                              check=False)
+        # COLUMNS=80 also cut the shared ancestry table before -m/session
+        # markers. Match the per-pid wide request and its bounded group runner;
+        # a stalled/flooding ps must not retain unlimited stdout or children.
+        done = run("exec " + shlex.join(["ps", "-ww", "-o", "pid=,comm=,command=", "-p",
+                                       ",".join(str(p) for p in chain)]),
+                   timeout=2, max_bytes=64 * 1024)
     except (OSError, subprocess.SubprocessError):
         return {}
+    if done.returncode != 0:
+        return {}  # partial output from a failed process proves no identity
     out: dict[int, list[str]] = {}
     for line in done.stdout.splitlines():
         parts = line.split()
