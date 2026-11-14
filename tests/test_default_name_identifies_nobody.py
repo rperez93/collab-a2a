@@ -147,6 +147,50 @@ def test_only_the_first_agent_on_the_machine_takes_the_legacy_name(person, tmp_p
     assert config.setting_source("display_name") == "default"
 
 
+def test_agents_holding_a_stale_machine_config_still_adopt_it_once(person, tmp_path):
+    """Each process READS the machine config first — caching the legacy name —
+    and only then, all at once, asks for its name. A claim decided on that
+    cached copy rather than on a re-read inside the lock lets every one of them
+    adopt it. Several rounds, so the window is hit and not merely possible."""
+    import time
+
+    probe = ("import sys, time\n"
+             "from collab import config\n"
+             "config._agent_name = lambda: ''\n"
+             "config.load_machine_config(); config.setting_source('display_name')\n"
+             "start = float(sys.argv[1])\n"
+             "while time.time() < start: pass\n"
+             "print(config.resolve_name())\n")
+    env = {**os.environ, "PYTHONPATH": os.path.dirname(os.path.dirname(config.__file__))}
+    for round_ in range(5):
+        _machine({"display_name": "friday"})
+        start = time.time() + 1.0
+        procs = []
+        for n in range(4):
+            home = tmp_path / f"round-{round_}-agent-{n}" / ".collab"
+            home.mkdir(parents=True)
+            procs.append(subprocess.Popen(
+                [sys.executable, "-c", probe, str(start)], text=True,
+                stdout=subprocess.PIPE,
+                env={**env, "COLLAB_HOME": str(home),
+                     "COLLAB_AGENT_CONFIG": str(home / "agent-settings.json")}))
+        names = [p.communicate(timeout=60)[0].strip() for p in procs]
+        assert names.count("friday") == 1, (round_, names)
+        assert len(set(names)) == 4, (round_, names)
+
+
+def test_an_agent_that_named_itself_meanwhile_does_not_claim_the_legacy_name(person):
+    """Between the cached «legacy» answer and the lock, this agent was given a
+    name of its own. The claim re-reads the agent's file inside the lock and
+    leaves the machine name for an agent that has none."""
+    _machine({"display_name": "friday"})
+    assert config.setting_source("display_name") == "legacy"      # cached now
+    config.agent_config_path().write_text(json.dumps({"display_name": "cortana"}))
+    assert config.adopt_legacy_name() is None
+    machine = json.loads(config.global_config_path().read_text())
+    assert machine.get("display_name") == "friday", "not retired for nobody"
+
+
 def test_two_agents_racing_for_the_legacy_name_get_it_once(person, tmp_path):
     """Two processes in two homes resolving their names at the same moment:
     the settings lock lets exactly one of them claim the machine name."""
