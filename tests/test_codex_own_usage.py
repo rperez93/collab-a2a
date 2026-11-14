@@ -67,3 +67,49 @@ def test_claude_cannot_borrow_its_codex_parents_thread(monkeypatch):
     monkeypatch.setenv('CLAUDECODE', '1')
     monkeypatch.setenv('CODEX_THREAD_ID', 'inherited-parent')
     assert codex_usage.current_usage() == {}
+
+
+def turn(model, when):
+    return json.dumps({"timestamp": when, "type": "turn_context",
+                       "payload": {"model": model, "cwd": "/x"}}).encode() + b"\n"
+
+
+def test_a_model_switched_between_turns_is_the_one_reported(monkeypatch, tmp_path):
+    """The thread's setting is not the model that answered; the last turn's record is."""
+    from collab import quotas
+    path = tmp_path / "rollout"
+    log(path)
+    with path.open("ab") as fh:
+        fh.write(turn("model-before", "2026-09-20T22:30:00Z"))
+        fh.write(turn("model-after", "2026-09-20T22:40:00Z"))
+    stats = codex_usage.read_snapshot(str(path), "mine")
+    assert stats["model"] == "model-after"
+    assert stats["model_observed_at"] == 1789944000, "stamped with the turn, not with now"
+    assert stats["context_pct"] == 50, "the counters still come from the token record"
+
+    monkeypatch.setenv("CODEX_THREAD_ID", "mine")
+    monkeypatch.setattr(quotas, "from_codex", lambda **kw: (
+        {"thread": {"id": "mine", "model": "thread-setting", "path": str(path)}}, ""))
+    assert codex_usage.current_usage()["model"] == "model-after"
+
+
+def test_a_tail_of_malformed_turn_records_costs_a_bounded_pass(tmp_path):
+    """Looking past the token record for a turn must not become an unbounded parse.
+
+    Measured on the machine this was written on: 2 MiB of 6.6 KB look-alike
+    records cost 0.009 s of CPU and no measurable growth in peak RSS; the
+    bounds below leave a wide margin.
+    """
+    path = tmp_path / "rollout"
+    junk = (b'{"type":"turn_context","payload":{"model":' + b'1' * 6600 + b'}}\n')
+    log(path)
+    with path.open("ab") as fh:
+        fh.write(junk * (codex_usage.TAIL_BYTES // len(junk) + 50))
+    before = resource.getrusage(resource.RUSAGE_SELF)
+    started = time.monotonic()
+    stats = codex_usage.read_snapshot(str(path), "mine")
+    after = resource.getrusage(resource.RUSAGE_SELF)
+    assert "model" not in stats, "no model was readable, so none is reported"
+    assert time.monotonic() - started < 1
+    assert after.ru_utime - before.ru_utime + after.ru_stime - before.ru_stime < .5
+    assert after.ru_maxrss - before.ru_maxrss < 16 * 1024

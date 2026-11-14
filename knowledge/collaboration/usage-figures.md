@@ -314,5 +314,7 @@ Claude Code by its status line hook, Codex by its app-server probe, and every
 other tool with no route, so its quota is recorded as unknown with the reason.
 A participant that switches to a tool with no route loses the earlier route and
 its stored windows, rather than publishing another tool's account as its own.
-Gemini CLI 0.32.1 was read and keeps its quota in process memory only. This
+Gemini CLI 0.32.1 was read and keeps its quota in process memory only. The
+Codex model now comes from the last turn record in the rollout tail, and a
+switch withdraws the previous tool's model and context as well. This
 observation does not move the bundle pin or its verified stamps.

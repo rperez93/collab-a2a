@@ -81,7 +81,8 @@ fresh quota and explicit concurrency/cost assumptions.
 
 The Codex built-in probe also resolves the inherited CODEX_THREAD_ID through
 thread/read. It reads bounded token records only from that exact, identity-checked
-thread path – no session-directory scan. Model/context/tokens use their native
+thread path – no session-directory scan. The model is the last turn's
+`turn_context.model` in that tail, else thread/read. Model/context/tokens use their native
 observation clocks; quota keeps its separate polling clock.
 
 ### Automatic telemetry and freshness (2.1.2)
