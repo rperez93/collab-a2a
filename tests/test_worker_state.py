@@ -520,3 +520,41 @@ def test_any_collab_command_mentions_decisions_waiting(tmp_path, monkeypatch, ca
     assert 'await your answer' in capsys.readouterr().err
     cli._decisions_banner(SimpleNamespace(command='worker'))
     assert capsys.readouterr().err == ''
+
+
+@pytest.mark.parametrize('refused', [False, True])
+def test_worker_off_preserves_guarded_remote_transport(tmp_path, monkeypatch, refused):
+    """Disabling the worker must not bypass recipient guards or discard refused offers."""
+    import argparse
+    from collab.config import SessionProfile
+    from collab.client.hub_client import HubError
+    profile = SessionProfile(session_id='test', url='http://hub.invalid', name='alice',
+                             host_name='bob', token='t', home=str(tmp_path), room='general')
+    requests = []
+    class Hub:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def send(self, env): pytest.fail('remote offer must not use ordinary send')
+        def _request(self, method, path, **kwargs):
+            assert method == 'POST'
+            requests.append((path, kwargs['json']))
+            if refused:
+                raise HubError('old hub has no guarded route')
+    monkeypatch.setattr(cli, '_require_own_profile', lambda args: profile)
+    monkeypatch.setattr(cli, '_client', lambda profile: Hub())
+    store = worker.Store(profile.dir)
+    store.configure({'agent': 'claude', 'scope': 'Coordinate'})
+    record = store.send('private offer', to='bob', recipient_id='p_bob',
+                        thread='t_remote', body={'context': 'unchanged'})
+    before = store.outbox()[0]
+    assert cli.cmd_worker(argparse.Namespace(worker_action='off')) == 0
+    assert requests[0][0].endswith('/remote-messages')
+    assert len(requests) == 1
+    assert requests[0][1] == {
+        'text': 'private offer', 'to': 'bob', 'thread': 't_remote',
+        'body': {'context': 'unchanged', 'collab_worker_delivery': record,
+                 'collab_expected_recipient_id': 'p_bob'}}
+    assert not store.status()['enabled']
+    assert bool(store.outbox()) is refused
+    if refused:
+        assert store.outbox()[0] == before, 'refusal preserves the full original queued record'

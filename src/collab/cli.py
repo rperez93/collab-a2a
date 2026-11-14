@@ -6273,6 +6273,15 @@ def cmd_worker(args: argparse.Namespace) -> int:
                                     "text": record["text"], "collab_worker_delivery": record["id"]})
                                 store.acknowledge(record["id"])
                                 continue
+                            if record.get('recipient_id'):
+                                client._request('POST', f'{protocol_prefix}/remote-messages', json={
+                                    'text': record['text'], 'to': record.get('to'),
+                                    'thread': record.get('thread') or None,
+                                    'body': {**(record.get('body') or {}),
+                                             'collab_worker_delivery': record['id'],
+                                             'collab_expected_recipient_id': record['recipient_id']}})
+                                store.acknowledge(record['id'])
+                                continue
                             client.send(Envelope(kind=KIND_CHAT, text=record["text"], sender=profile.name,
                                                  to=record.get("to") or None,
                                                  room=None if record.get("to") else (record.get("room") or None),
