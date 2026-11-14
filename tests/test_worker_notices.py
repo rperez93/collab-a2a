@@ -366,3 +366,43 @@ def test_p4_the_banner_reads_the_session_given_with_session(tmp_path, monkeypatc
     monkeypatch.delenv("COLLAB_WORKER", raising=False)
     cli._decisions_banner(argparse.Namespace(command="who", session="s_chosen"))
     assert loaded == ["s_chosen"] and "1 worker decision" in capsys.readouterr().err
+
+
+def test_a_notice_answered_after_its_claim_is_not_delivered(tmp_path):
+    """T_92b04cf94662: the daemon claims, then wakes from an async task; an answer in between wins."""
+    store = configured(tmp_path)
+    decision(store)
+    claimed = notices.claim(tmp_path)
+    assert claimed and notices.still_current(tmp_path, claimed["token"])
+    store.answer(store.pending()[0]["id"], "done")
+    assert not notices.still_current(tmp_path, claimed["token"]), "answered: drop the stale notice"
+    notices.release(tmp_path, claimed["token"])
+    assert notices.claim(tmp_path) is None, "nothing is due once the decision is answered"
+
+
+def test_a_changed_set_of_decisions_is_reclaimed_with_the_new_text(tmp_path):
+    store = configured(tmp_path)
+    decision(store, "first question")
+    claimed = notices.claim(tmp_path)
+    decision(store, "second question")
+    assert not notices.still_current(tmp_path, claimed["token"])
+    notices.release(tmp_path, claimed["token"])
+    fresh = notices.claim(tmp_path, min_gap=0)
+    assert fresh and "second question" in fresh["text"]
+
+
+def test_the_daemon_does_not_wake_with_a_stale_notice(tmp_path):
+    import asyncio
+    from types import SimpleNamespace
+    from collab.client.daemon import Daemon
+    store = configured(tmp_path)
+    decision(store)
+    claimed = notices.claim(tmp_path)
+    store.answer(store.pending()[0]["id"], "done")
+    woke = []
+    async def wake(batch, text):
+        woke.append(text)
+    fake = SimpleNamespace(profile=SimpleNamespace(dir=tmp_path), _wake=wake,
+                           waker=SimpleNamespace(last_delivery=0))
+    asyncio.run(Daemon._deliver_worker_notice(fake, claimed))
+    assert woke == [], "a decision answered before delivery is not announced"

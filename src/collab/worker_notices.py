@@ -52,6 +52,36 @@ def _save(db, data):
     db.execute("INSERT OR REPLACE INTO notice VALUES(1,?)", (json.dumps(data),))
 
 
+def _due(root: Path, now: float):
+    """(state, pending, error, fingerprint) of what a notice would say now, or None."""
+    state = Store(root).status()
+    # A decision already with the human is not news to the main agent, until it
+    # has waited long enough that a compaction may have lost it.
+    pending = [r for r in state["pending"] if not r.get("awaiting_human")
+               or now - float(r.get("awaiting_since") or now) > AWAITING_REMIND]
+    error = state["error"]
+    if not pending and not error:
+        return None
+    fingerprint = hashlib.sha256(json.dumps({"ids": [r["id"] for r in pending],
+        "error": error, "generation": state["generation"]}, sort_keys=True).encode()).hexdigest()
+    return state, pending, error, fingerprint
+
+
+def still_current(root: Path, token: str, *, now: float | None = None) -> bool:
+    """Whether a claimed notice still says what is true, checked just before delivery.
+
+    The daemon claims a notice and delivers it from an async task; a decision
+    answered in between must not be announced as still waiting.
+    """
+    now = time.time() if now is None else now
+    with _db(root) as db:
+        prior = _load(db)
+    if prior.get("token") != token:
+        return False
+    current = _due(root, now)
+    return current is not None and current[3] == prior.get("claimed_fingerprint")
+
+
 def claim(root: Path, *, now: float | None = None, repeat: float | None = None,
           min_gap: float | None = None, lease: float = 120) -> dict | None:
     from .runtime_settings import get
@@ -59,18 +89,11 @@ def claim(root: Path, *, now: float | None = None, repeat: float | None = None,
     min_gap = get("worker_notice_gap") if min_gap is None else min_gap
     if not enabled(root):
         return None
-    state = Store(root).status()
-    # A decision already with the human is not news to the main agent, until it
-    # has waited long enough that a compaction may have lost it.
-    now_ = time.time() if now is None else now
-    pending = [r for r in state["pending"] if not r.get("awaiting_human")
-               or now_ - float(r.get("awaiting_since") or now_) > AWAITING_REMIND]
-    error = state["error"]
-    if not pending and not error:
-        return None
     now = time.time() if now is None else now
-    fingerprint = hashlib.sha256(json.dumps({"ids": [r["id"] for r in pending],
-        "error": error, "generation": state["generation"]}, sort_keys=True).encode()).hexdigest()
+    current = _due(root, now)
+    if current is None:
+        return None
+    state, pending, error, fingerprint = current
     # R18: the question itself, so the main agent can answer without a
     # second command. It is the worker's wording of a peer's request:
     # scrubbed, capped, and framed as data. Provider stderr stays out.

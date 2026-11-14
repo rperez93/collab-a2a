@@ -1698,6 +1698,11 @@ class Daemon:
 
         before = self.waker.last_delivery
         try:
+            # Revalidated here, not only at claim: an answer may land between
+            # the claim and this task running. A stale notice is dropped and
+            # the next tick claims whatever is true then.
+            if not worker_notices.still_current(self.profile.dir, notice["token"]):
+                return
             await self._wake(None, notice["text"])
             if self.waker.last_delivery > before:
                 worker_notices.commit(self.profile.dir, notice["token"])
