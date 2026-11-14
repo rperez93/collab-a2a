@@ -257,6 +257,12 @@ def test_only_the_recorded_primary_may_set_the_primary(tmp_path, monkeypatch):
     assert refused.primary_holder == 's_live'
     assert proxy.ProxyState.load().primary == 's_live'
 
+    # Refused once, asked no more: after the holder is purged, the refused
+    # hub's next start() (a proxy restart) must not take the slot silently.
+    assert proxy.release_primary('s_live') is True
+    refused._claim()
+    assert proxy.ProxyState.load().primary == ''
+
 
 def test_a_running_proxys_own_save_never_reverts_a_claimed_primary(tmp_path, monkeypatch):
     """The proxy holds the state it loaded at start and saves it whole every
