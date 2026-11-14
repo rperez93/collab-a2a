@@ -359,17 +359,26 @@ def format_lines(value, *, detailed=False, now=None):
         return ['resources unknown (missing or stale sample)']
     def amount(value, scale=1, suffix=''):
         return 'unknown' if value is None else f'{value / scale:.3g}{suffix}'
+    def byte_amount(value, *, rate=False):
+        if value is None:
+            return 'unknown'
+        for unit in ('B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB'):
+            if value < 1024 or unit == 'EiB':
+                break
+            value /= 1024
+        number = f'{value:.2f}'.rstrip('0').rstrip('.')
+        return f"{number} {unit}{'/s' if rate else ''}"
     result = []
     for role in (ROLES if detailed else ('daemon', 'worker')):
         row = data['roles'].get(role, {})
         if not row.get('complete'):
             result.append(f'{role}: resources unknown')
             continue
-        line = (f"{role}: RSS {amount(row.get('rss_bytes'), 1024**2, ' MiB')}"
+        line = (f"{role}: RSS {byte_amount(row.get('rss_bytes'))}"
                 f" · CPU {amount(row.get('cpu_pct'), suffix='%')} (one core)")
         if detailed:
-            line += (f" · IO read {amount(row.get('read_bps'), 1024, ' KiB/s')}"
-                     f" write {amount(row.get('write_bps'), 1024, ' KiB/s')}")
+            line += (f" · IO read {byte_amount(row.get('read_bps'), rate=True)}"
+                     f" write {byte_amount(row.get('write_bps'), rate=True)}")
         if role in ('agent', 'work', 'proxy'):
             line += ' (shared estimate; do not sum across participants)'
         result.append(line)
@@ -380,7 +389,7 @@ def format_lines(value, *, detailed=False, now=None):
         if any(row.get(key) is not None and row[key] > 10 * 1024**2 for key in ('read_bps', 'write_bps')):
             result.append(f'WARNING: {role} storage IO exceeds 10 MiB/s')
     machine = data['machine']
-    result.append(f"machine: available {amount(machine.get('memory_available_bytes'), 1024**3, ' GiB')}"
+    result.append(f"machine: available {byte_amount(machine.get('memory_available_bytes'))}"
                   f" · load/core {amount(machine.get('load_per_cpu'))}")
     for warning in machine['warnings']:
         result.append('WARNING: ' + {'low_memory': 'less than 10% machine memory available',
