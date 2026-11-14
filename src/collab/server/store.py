@@ -122,9 +122,6 @@ CREATE TABLE IF NOT EXISTS files (
 -- changes nothing. A participant who joins afterwards may still fetch it and
 -- gets a row when they do, marked `awaited` 0: the history says they have it,
 -- and they hold nothing up and complete nothing.
-CREATE TABLE IF NOT EXISTS file_announced (
-    file_id TEXT PRIMARY KEY
-);
 CREATE TABLE IF NOT EXISTS file_collections (
     file_id        TEXT NOT NULL,
     participant_id TEXT NOT NULL,
@@ -308,11 +305,7 @@ class Store:
         self._db = sqlite3.connect(self.path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         with self._lock:
-            fresh = self._db.execute("SELECT 1 FROM sqlite_master WHERE name='file_announced'").fetchone() is None
             self._db.executescript(SCHEMA)
-            if fresh:  # files stored before this table existed were announced then
-                self._db.execute("INSERT OR IGNORE INTO file_announced SELECT id FROM files")
-                self._db.commit()
             # WAL before the migration, not after: the back-fills below are DML,
             # sqlite3 opens an implicit transaction for them, and journal_mode
             # cannot change inside one.  Run after, the pragma quietly does
@@ -582,7 +575,8 @@ class Store:
         and event commit together, including across independent hub handles.
         """
         key = (env.body or {}).get("collab_worker_delivery")
-        dedup = env.kind == "chat" and env.sender_id and isinstance(key, str) and 0 < len(key) <= 128
+        # Chat replies and file announcements (key "file:<id>") are delivered once.
+        dedup = env.kind in ("chat", "file") and env.sender_id and isinstance(key, str) and 0 < len(key) <= 128
         with self._lock:
             self._db.execute("BEGIN IMMEDIATE")
             try:
@@ -1664,16 +1658,6 @@ class Store:
                 "                 AND p.revoked = 0)"
             ).fetchall()
         return [dict(r) for r in rows]
-
-    def file_announced(self, file_id: str) -> bool:
-        with self._lock:
-            return self._db.execute("SELECT 1 FROM file_announced WHERE file_id=?",
-                                    (file_id,)).fetchone() is not None
-
-    def mark_file_announced(self, file_id: str) -> None:
-        with self._lock:
-            self._db.execute("INSERT OR IGNORE INTO file_announced (file_id) VALUES (?)", (file_id,))
-            self._db.commit()
 
     def get_file(self, file_id: str) -> dict[str, Any] | None:
         with self._lock:

@@ -78,18 +78,37 @@ def test_concurrent_uploads_of_one_delivery_leave_one_matching_blob(client, host
     assert hashlib.sha256(fetched).hexdigest() == record["sha256"]
 
 
-def test_a_stored_but_unannounced_delivery_is_announced_by_its_retry(client, host_headers, monkeypatch):
-    """The first request stored the file and died before publishing; the retry announces it."""
+def _file_events(store, file_id):
+    with store._lock:
+        rows = store._db.execute("SELECT payload FROM events WHERE kind='file'").fetchall()
+    return [r for r in rows if file_id in r[0]]
+
+
+def test_a_stored_but_unannounced_delivery_is_announced_once_by_its_retry(client, host_headers):
+    """The first request stored the file and died before publishing; the retry announces it, once."""
     params = {"room": "general", "delivery": "o_lost"}
     body = {"file": ("x.bin", b"payload", "application/octet-stream")}
     first = client.post("/ext/collab/v1/files", headers=host_headers, files=body, params=params).json()
     store = client.app.state.store
     with store._lock:
-        store._db.execute("DELETE FROM file_announced WHERE file_id=?", (first["id"],))
+        store._db.execute("DELETE FROM worker_deliveries WHERE delivery_key=?", (f"file:{first['id']}",))
+        store._db.execute("DELETE FROM events WHERE kind='file'")
         store._db.commit()
-    assert not store.file_announced(first["id"])
-    again = client.post("/ext/collab/v1/files", headers=host_headers, files=body, params=params).json()
-    assert again["duplicate"] and store.file_announced(first["id"])
+    for _ in range(2):
+        again = client.post("/ext/collab/v1/files", headers=host_headers, files=body, params=params).json()
+        assert again["duplicate"]
+    assert len(_file_events(store, first["id"])) == 1
+
+
+def test_a_row_whose_blob_never_landed_is_completed_not_acknowledged(client, host_headers):
+    params = {"room": "general", "delivery": "o_noblob"}
+    body = {"file": ("x.bin", b"payload", "application/octet-stream")}
+    first = client.post("/ext/collab/v1/files", headers=host_headers, files=body, params=params).json()
+    from pathlib import Path
+    blob = Path(client.app.state.store.path).parent / "files" / first["id"]
+    blob.unlink()  # the row committed, the blob never landed
+    client.post("/ext/collab/v1/files", headers=host_headers, files=body, params=params)
+    assert client.get(f"/ext/collab/v1/files/{first['id']}/content", headers=host_headers).content == b"payload"
 
 
 def test_worker_off_sends_its_queue_with_the_delivery_key_and_checks_bytes(tmp_path, monkeypatch):
