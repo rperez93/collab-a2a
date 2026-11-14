@@ -2695,7 +2695,10 @@ class Daemon:
         try:
             async with client.stream(
                     "GET", f"{self.profile.url}{EXT_PREFIX}/participant-skills",
-                    headers=request_headers(self.profile.token, {"If-None-Match": etag} if etag else None),
+                    # identity: the read limit must bound bytes on the wire, and
+                    # a small gzip body could inflate far past it in memory.
+                    headers=request_headers(self.profile.token, {"Accept-Encoding": "identity",
+                                                                 **({"If-None-Match": etag} if etag else {})}),
                     timeout=10.0) as r:
                 if r.status_code == 304 and etag:
                     data = None

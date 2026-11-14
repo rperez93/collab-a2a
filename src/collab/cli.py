@@ -2687,7 +2687,15 @@ def dashboard_rows(snapshot: dict[str, Any], skills: dict[str, Any] | None, *,
         from .stats import _stamp_of, reported_age
         # The QUOTA's own observation time, not the report's: a six-hour-old
         # window re-reported five seconds ago is six hours old.
-        quota_stamp = _stamp_of({"reported_at": stats.get("quota_observed_at")}) or _stamp_of(stats)
+        from .stats import CLOCK_SKEW
+        # The OLDER of the two stamps: a peer controls quota_observed_at, and a
+        # future one must not make a 7 h-old report look fresh. A stamp beyond
+        # the clock-skew allowance ahead is unknown, so stale.
+        stamps = [t for t in (_stamp_of({"reported_at": stats.get("quota_observed_at")}), _stamp_of(stats))
+                  if t is not None]
+        quota_stamp = min(stamps) if stamps else None
+        if quota_stamp is not None and quota_stamp - time.time() > CLOCK_SKEW:
+            quota_stamp = None
         stale = bool(stats.get("quotas") or stats.get("quota_used_pct") is not None) and (
             quota_stamp is None or time.time() - quota_stamp > stats_stale_after())
         quota_age = reported_age({"reported_at": quota_stamp}) if quota_stamp is not None else "age unknown"
