@@ -14,7 +14,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-from .protocol import Envelope
+from .protocol import Envelope, KIND_SYSTEM
 
 try:
     import fcntl
@@ -22,6 +22,21 @@ except ImportError:  # daemon locking already requires WSL on Windows
     fcntl = None
 
 KINDS = ("chat", "task", "project", "request", "response")
+
+
+def approval_security(kind: str, body: object = None) -> bool:
+    """Recognize the hub-owned alarm, independently of labels or prose."""
+    return kind == KIND_SYSTEM and isinstance(body, dict) and body.get("event") == "approval-security"
+
+
+def relevant(kind: str, body: object = None) -> bool:
+    """Wake on conversation or a hub-stamped approval security event.
+
+    The server refuses client KIND_SYSTEM. Neither a participant named collab
+    nor SECURITY prose nor chat body metadata may become a trusted alarm.
+    Other system bookkeeping remains quiet.
+    """
+    return kind in KINDS or approval_security(kind, body)
 
 
 def notice(session: str, count: int, seq: int) -> str:
@@ -141,7 +156,7 @@ class Digest:
         self.settle, self.gap = settle, gap
 
     def add(self, env: Envelope, now: float) -> None:
-        if env.kind not in KINDS:
+        if not relevant(env.kind, env.body):
             return
         if self.started is None:
             self.started = now

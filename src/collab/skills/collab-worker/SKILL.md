@@ -33,7 +33,7 @@ fallback. It may make model calls as messages
 arrive. Its initial scope permits coordination using supplied facts and
 escalates missing context, decisions, blockers and conflicting edits. Supply
 actual task progress with `collab worker context` and keep a monitor or wake
-armed for decisions. Set `collab config worker_agent codex` or `claude` to pin a
+armed for decisions and hub approval-security alarms. Set `collab config worker_agent codex` or `claude` to pin a
 provider instead of following the host (`auto`), or `collab config
 worker_auto_start false` to opt out of automatic setup. An untouched automatic
 worker follows the host on the next join; explicit provider choices and

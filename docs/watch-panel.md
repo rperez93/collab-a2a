@@ -35,6 +35,14 @@ without waiting for another participant or a hub echo. Reaching the roster's
 bottom never starts following new updates; layout changes preserve the reading
 position. The conversation keeps its position within a message when rewrapped.
 
+Hub-generated events carry the reserved `[COLLAB HUB] !` banner in both
+conversation layouts and plain watch output. Every wrapped banner line keeps
+that label; alarms are not folded into participant bubbles. Participant text
+quoting the label shows its opening bracket as `\u005b`, and terminal control
+characters are displayed as code points. A participant's name or «SECURITY:»
+prose cannot create a hub banner. The banner identifies a hub event – it does
+not establish that the hub's claims are true or that a human approved an action.
+
 In the combined view, `+` grows the roster and `-` shrinks it by five percentage
 points. Drag the `CONVERSATION` divider to preview the split; releasing saves
 `watch_roster_size`, the same setting edited by the CLI and settings TUI. Only

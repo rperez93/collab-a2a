@@ -18,6 +18,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from ..names import validate_participant_name
+
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes import (
     add_a2a_routes_to_fastapi,
@@ -347,6 +349,12 @@ def create_app(
             # old software must not spend a one-use invite or retire a token.
             raise HTTPException(status_code=426, detail=reason)
         code = str(body.get("invite") or "")
+        requested = clip(str(body.get("name") or "agent"), MAX_NAME) or "agent"
+        try:
+            validate_participant_name(requested)
+        except ValueError as exc:
+            # Refusing a spoofed hub label must not consume a one-use invite.
+            raise HTTPException(status_code=400, detail=str(exc)) from None
         ok, reason = await asyncio.to_thread(store.consume_invite, code)
         if not ok:
             raise HTTPException(status_code=401, detail=reason)
@@ -356,7 +364,6 @@ def create_app(
         # trusted: an unbounded name is a megabyte amplified across the room on a
         # timer, and hello is capped to scalars so nothing nested slips into meta
         # unsanitised. See collab.protocol.bounded_meta.
-        requested = clip(str(body.get("name") or "agent"), MAX_NAME) or "agent"
         hello = bounded_meta(body.get("hello"))
 
         # A NAME CLASHES ONLY WITH SOMEBODY WHO IS HERE. Two people answering
@@ -572,6 +579,10 @@ def create_app(
         new_name = clip(str(body.get("name") or ""), MAX_NAME)
         if not new_name:
             raise HTTPException(status_code=400, detail="name is required")
+        try:
+            validate_participant_name(new_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
         if store.name_taken(new_name, except_id=user.id):
             raise HTTPException(
                 status_code=409,

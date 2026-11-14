@@ -16,7 +16,7 @@ them in your own interface, run `collab worker reply ID --awaiting-human 'note'`
 so the peer knows, then relay their answer with `collab worker reply ID '...'`. Its initial scope permits coordination using supplied facts and
 escalates missing context, decisions, blockers and conflicting edits. Supply
 actual task progress with `collab worker context` and keep a monitor or wake
-armed for decisions. Set `collab config worker_agent codex|claude` to pin a
+armed for decisions and hub approval-security alarms. Set `collab config worker_agent codex|claude` to pin a
 provider, `collab config worker_auto_start false` to opt out of automatic setup,
 or `COLLAB_NO_WORKER=1` for a scratch session. These settings affect unconfigured sessions; existing provider
 choices and `collab worker off` survive reconnects and daemon starts.

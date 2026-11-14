@@ -32,6 +32,7 @@ from ..protocol import (
     task_line,
 )
 from .inbox import Inbox
+from ..terminal_text import display_label, display_text, hub_lines
 
 RESET = "\033[0m"
 DIM = "\033[2m"
@@ -79,57 +80,62 @@ def _clock(ts: str) -> str:
 
 def format_event(env: Envelope, *, me: str | None = None, width: int = 80) -> str:
     """One event, laid out for reading rather than for parsing."""
+    if env.kind == KIND_SYSTEM:
+        # This label belongs to the server kind, never to a sender's name or
+        # SECURITY-looking prose. Every physical line retains the label.
+        return "\n".join(hub_lines(env.text or env.body, width))
     mark = KIND_MARK.get(env.kind, " ")
-    when = _paint(_clock(env.ts), DIM)
-    speaker = env.sender or "?"
+    when = _paint(display_label(_clock(env.ts)), DIM)
+    speaker = display_label(env.sender or "?")
     label = speaker + (" (you)" if me and speaker == me else "")
     who = _paint(f"{label:>14.14}", _speaker_color(speaker))
 
     if env.kind == KIND_CHAT:
-        where = _paint(f"→{env.to}", DIM) if env.to else _paint(f"#{env.room}", DIM)
-        body = env.text
+        where = _paint(f"→{display_label(env.to)}", DIM) if env.to else _paint(f"#{display_label(env.room)}", DIM)
+        body = display_text(env.text)
         indent = " " * 24
         wrapped = _wrap(body, max(width - 24, 30), indent)
-        return f"{when} {who} {mark} {where}\n{indent}{wrapped}" if len(body) > width - 30 \
+        return f"{when} {who} {mark} {where}\n{indent}{wrapped}" if "\n" in body or len(body) > width - 30 \
             else f"{when} {who} {mark} {where}  {body}"
 
     if env.kind == KIND_HELLO:
         b = env.body
         bits = ", ".join(x for x in (b.get("repo"), b.get("branch")) if x)
-        focus = b.get("focus") or ""
+        focus = display_text(b.get("focus") or "")
         detail = f"joined" + (f" from {bits}" if bits else "")
         if focus:
             detail += f" — working on {focus}"
+        detail = display_text(detail).replace("\n", "\\n")
         return f"{when} {who} {mark} {_paint(detail, DIM)}"
 
     if env.kind == KIND_PRESENCE:
-        return f"{when} {who} {mark} {_paint(env.body.get('event', ''), DIM)}"
+        return f"{when} {who} {mark} {_paint(display_label(env.body.get('event', '')), DIM)}"
 
     if env.kind == KIND_ACTIVITY:
         from ..activity import describe, is_working
 
-        said = describe(env.body) or 'idle'
+        said = display_label(describe(env.body) or 'idle')
         tone = BOLD if is_working(env.body) else DIM
         return f"{when} {who} {mark} {_paint(said, tone if _color_enabled() else '')}"
 
     if env.kind == KIND_TASK:
-        line = task_line(env.body)
+        line = display_label(task_line(env.body))
         return f"{when} {who} {mark} {_paint(line, BOLD if _color_enabled() else '')}"
 
     if env.kind == KIND_PROJECT:
-        line = project_line(env.body)
+        line = display_label(project_line(env.body))
         return f"{when} {who} {mark} {_paint(line, BOLD if _color_enabled() else '')}"
 
     if env.kind == KIND_FILE:
         b = env.body
         if b.get("action") == "received":
-            said = f"collected {b.get('name')} ({file_outcome(b)})"
+            said = f"collected {display_label(b.get('name'))} ({file_outcome(b)})"
             return f"{when} {who} {mark} {_paint(said, DIM)}"
         size = int(b.get("size") or 0)
-        hint = f"({size / 1024:.0f} KB) · collab file get {b.get('id')}"
-        return f"{when} {who} {mark} shared {b.get('name')} {_paint(hint, DIM)}"
+        hint = f"({size / 1024:.0f} KB) · collab file get {display_label(b.get('id'))}"
+        return f"{when} {who} {mark} shared {display_label(b.get('name'))} {_paint(hint, DIM)}"
 
-    return f"{when} {who} {mark} {env.text or env.body}"
+    return f"{when} {who} {mark} {display_label(env.text or env.body)}"
 
 
 def _wrap(text: str, width: int, indent: str) -> str:
@@ -146,7 +152,7 @@ def _wrap(text: str, width: int, indent: str) -> str:
 
 
 def header(profile: SessionProfile, width: int) -> str:
-    title = f" collab · {profile.session_id} · you are {profile.name} · host {profile.host_name} "
+    title = f" collab · {display_label(profile.session_id)} · you are {display_label(profile.name)} · host {display_label(profile.host_name)} "
     bar = "─" * max(width - len(title) - 2, 0)
     return _paint(f"┌{title}{bar}┐", DIM)
 

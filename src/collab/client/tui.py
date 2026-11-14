@@ -64,6 +64,7 @@ from .statusbar import money_text
 from . import participant_metrics
 from .daemon_files import DaemonPaths, effective_state, is_running, read_status
 from .inbox import Inbox
+from ..terminal_text import display_label, display_text, hub_lines
 
 #: A share fixed by `--roster-size` on the command line. That is the reader
 #: saying «this pane, this size», and the saved setting does not overrule it.
@@ -1313,38 +1314,41 @@ _TL, _TR, _BL, _BR, _H, _V = "╭", "╮", "╰", "╯", "─", "│"
 #: Events that are NOT conversation. In a messaging app «X joined the group» is
 #: not a bubble: it is a centred, quiet line, because it is not something
 #: somebody said to you.
-_SYSTEM = (KIND_HELLO, KIND_PRESENCE)
+_SYSTEM = (KIND_HELLO, KIND_PRESENCE, KIND_SYSTEM)
 
 
 def _body_lines(env: Envelope, width: int) -> list[str]:
     """An event's text, already wrapped to the inside width of the bubble."""
+    def wrap(value: object, size: int) -> list[str]:
+        return _wrap(display_text(value, peer=env.kind != KIND_SYSTEM), size)
+
     if env.kind == KIND_CHAT:
-        where = f"→{env.to}" if env.to else ""
+        where = f"→{display_label(env.to)}" if env.to else ""
         head = f"{where}  " if where else ""
-        return _wrap(f"{head}{env.text}", width)
+        return wrap(f"{head}{env.text}", width)
     if env.kind == KIND_HELLO:
         b = env.body
         loc = ", ".join(x for x in (b.get("repo"), b.get("branch")) if x)
         detail = "joined" + (f" from {loc}" if loc else "")
         if b.get("focus"):
             detail += f" — {b['focus']}"
-        return _wrap(detail, width)
+        return wrap(detail, width)
     if env.kind == KIND_PRESENCE:
-        return _wrap(str(env.body.get("event", "")), width)
+        return wrap(str(env.body.get("event", "")), width)
     if env.kind == KIND_TASK:
-        return _wrap(task_line(env.body), width)
+        return wrap(task_line(env.body), width)
     if env.kind == KIND_PROJECT:
-        return _wrap(project_line(env.body), width)
+        return wrap(project_line(env.body), width)
     if env.kind == KIND_FILE:
         b = env.body
         if b.get("action") == "received":
             # The protocol's words for what the ack did, the same ones `watch`
             # prints: a room file is not gone when one person has it.
-            return _wrap(f"collected {b.get('name')} ({file_outcome(b)})", width)
+            return wrap(f"collected {b.get('name')} ({file_outcome(b)})", width)
         size = int(b.get("size") or 0)
-        return _wrap(f"shared {b.get('name')} ({size / 1024:.0f} KB) · "
+        return wrap(f"shared {b.get('name')} ({size / 1024:.0f} KB) · "
                      f"collab file get {b.get('id')}", width)
-    return _wrap(env.text or str(env.body), width)
+    return wrap(env.text or str(env.body), width)
 
 
 #: SPELLED OUT RATHER THAN ASKED OF strftime. `%b` is locale-dependent, so the
@@ -1424,6 +1428,19 @@ def _fold_lines_to(lines: list[str], fold: int, open_now: bool) -> tuple[list[st
     return (lines if open_now or not hidden else lines[:fold]), hidden
 
 
+def hub_rows(env: Envelope, width: int) -> list[Row]:
+    """A server-owned banner in every layout, never a speaker bubble.
+
+    Repeat the reserved label on every wrapped line: folding an alarm or
+    retaining an unlabelled continuation would hide the authority distinction.
+    The hub refuses client-authored system events before publication.
+    """
+    seq = int(getattr(env, "seq", 0) or 0)
+    return [Row(_clip(line, width), C_INFO, curses.A_BOLD, seq, False)
+            for line in hub_lines(env.text or env.body, width)]
+
+
+
 def event_rows(env: Envelope, width: int, me: str,
                expanded: set[int] | None = None,
                fold: int = FOLD_LINES,
@@ -1436,16 +1453,18 @@ def event_rows(env: Envelope, width: int, me: str,
     reading the name. The text inside stays left-aligned — a paragraph justified
     right is unreadable past two lines.
     """
+    if env.kind == KIND_SYSTEM:
+        return hub_rows(env, width)
     expanded = expanded if expanded is not None else set()
     T = theme or _current_theme()
     seq = int(getattr(env, "seq", 0) or 0)
-    speaker = env.sender or "?"
+    speaker = display_label(env.sender or "?")
     estrecho = int(T["narrow_at"])
     # When narrow nobody goes right: there is no room for the gap that makes
     # the distinction readable, and without it all you get is text out of place.
     mine = (_is_mine(speaker, me) and width >= estrecho
             and T["own_side"] == "right")
-    clock = local_clock(env.ts)
+    clock = display_label(local_clock(env.ts))
     pair = _theme_colour(T["header"], speaker)
     border = _theme_colour(T["frame"], speaker)
     body_pair = _theme_colour(T["text"], speaker)
@@ -1579,12 +1598,14 @@ def classic_rows(env: Envelope, width: int, me: str,
       other theme — see themes.FOLD. `collab fold off` is still there for
       whoever really does want it all.
     """
+    if env.kind == KIND_SYSTEM:
+        return hub_rows(env, width)
     expanded = expanded if expanded is not None else set()
     T = theme or _current_theme()
     seq = int(getattr(env, "seq", 0) or 0)
-    clock = _stamp(env.ts)
+    clock = display_label(_stamp(env.ts))
     mark = KIND_MARK.get(env.kind, " ")
-    speaker = env.sender or "?"
+    speaker = display_label(env.sender or "?")
     label = f"{speaker}{' (you)' if _is_mine(speaker, me) else ''}"
     head = f"{clock} {HEADER_SEPARATOR} {label:>14.14} {mark} "
     # EVERYTHING HERE IN COLUMNS.
@@ -1749,7 +1770,7 @@ def conversation_rows(events, width: int, me: str,
     for env in events:
         day = _day(env.ts)
         if T["day_separators"] and day and day != last_day:
-            label = f" {_day_label(env.ts)} "
+            label = f" {display_label(_day_label(env.ts))} "
             side = max(0, (width - len(label)) // 2)
             rows.append(Row(_H * side + label + _H * side, C_DIM,
                             curses.A_DIM, 0, False))

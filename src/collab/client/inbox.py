@@ -385,8 +385,11 @@ class Inbox:
         A hundred presence rows or own echoes must not conceal a request just
         beyond the first page. No row is consumed by ringing the doorbell.
         """
-        query = ("SELECT payload FROM inbox WHERE read=0 AND kind IN "
-                 "('chat','task','project','request','response')")
+        # Filter the server-owned alarm before LIMIT as well as in the live
+        # digest. Otherwise restart/backlog polling silently loses the alarm.
+        query = ("SELECT payload FROM inbox WHERE read=0 AND (kind IN "
+                 "('chat','task','project','request','response') OR "
+                 "(kind='system' AND json_extract(payload, '$.body.event')='approval-security'))")
         params: list[Any] = []
         if kinds:
             query += " AND kind IN (" + ",".join("?" for _ in kinds) + ")"
@@ -395,10 +398,10 @@ class Inbox:
             query += " AND json_extract(payload, '$.room')=?"
             params.append(room)
         if exclude_sender_id:
-            query += " AND NOT (sender_id=? OR (sender_id='' AND sender=?))"
+            query += " AND (kind='system' OR NOT (sender_id=? OR (sender_id='' AND sender=?)))"
             params.extend([exclude_sender_id, exclude_sender])
         elif exclude_sender:
-            query += " AND sender!=?"
+            query += " AND (kind='system' OR sender!=?)"
             params.append(exclude_sender)
         query += " ORDER BY seq LIMIT ?"
         params.append(limit)
