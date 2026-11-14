@@ -483,7 +483,7 @@ async def test_a_failed_worker_turn_logs_its_class_of_failure(
     monkeypatch.setattr("collab.worker_runtime.run_turn", provider)
     await service.turn()
     row = json.loads(_worker_log(tmp_path).splitlines()[-1])
-    assert row["outcome"] == "failed" and row["error"] == "WorkerRuntimeError"
+    assert row["outcome"] == "failed" and row["error_class"] == "WorkerRuntimeError"
     assert row["phase"] == "launched"
 
     _incoming(service, 2, "Question")
@@ -496,7 +496,7 @@ async def test_a_failed_worker_turn_logs_its_class_of_failure(
     await service.turn()
     rows = [json.loads(line) for line in
             _worker_log(tmp_path).splitlines()]
-    assert rows[-1]["error"] == "KeyError" and rows[-1]["outcome"] == "failed"
+    assert rows[-1]["error_class"] == "KeyError" and rows[-1]["outcome"] == "failed"
     assert "private detail" not in _worker_log(tmp_path)
 
 
@@ -523,7 +523,7 @@ async def test_a_turn_that_produced_a_reply_is_output_with_its_counts(
     async def provider(*args, **kwargs):
         return {"summary": "s", "escalations": [
                     {"seq": 1, "reason": "decision", "question": "MAY BOB CHANGE IT"}],
-                "replies": [{"text": "THE ANSWER IS 42", "to": "bob", "room": ""}]}
+                "replies": [{"text": "THE ANSWER IS ZEBRA", "to": "bob", "room": ""}]}
 
     monkeypatch.setattr("collab.worker_runtime.run_turn", provider)
     await service.turn()
@@ -531,7 +531,7 @@ async def test_a_turn_that_produced_a_reply_is_output_with_its_counts(
     row = json.loads(text.splitlines()[-1])
     assert (row["phase"], row["outcome"]) == ("committed", "output")
     assert row["reply_count"] == 1 and row["escalation_count"] == 1
-    assert "42" not in text and "MAY BOB" not in text
+    assert "ZEBRA" not in text and "MAY BOB" not in text
 
 
 @pytest.mark.asyncio
@@ -552,7 +552,7 @@ async def test_an_answer_that_fails_validation_is_invalid_not_failed(
     monkeypatch.setattr("collab.worker_runtime.run_turn", unknown_recipient)
     await service.turn()
     row = json.loads(_worker_log(tmp_path).splitlines()[-1])
-    assert (row["outcome"], row["error"]) == ("invalid", "ValueError")
+    assert (row["outcome"], row["error_class"]) == ("invalid", "ValueError")
 
     async def bad_json(*args, **kwargs):
         raise WorkerRuntimeError("Worker did not return valid JSON")
@@ -1400,8 +1400,10 @@ def test_settle_waits_for_the_collector_rather_than_guessing(tmp_path):
 
 def test_a_failed_collector_write_keeps_the_dropped_count(tmp_path, monkeypatch):
     """A «dropped here» note that failed to be written was counted as one lost
-    line: five dropped and one new line came back as 2, five alone as 1. The
-    note carries its count forward, so here the gap said is 6."""
+    line: five dropped and one new line came back as 2, five alone as 1. Each
+    count is carried to its own cause: the five the window dropped are still
+    said as such, the one the failed write lost is said as a write failure,
+    and that note stands before the first line written after recovery."""
     import threading
 
     path = tmp_path / "ngrok.log"
@@ -1427,5 +1429,61 @@ def test_a_failed_collector_write_keeps_the_dropped_count(tmp_path, monkeypatch)
         worker.join(10)
         os.close(read_end)
     text = path.read_text()
-    assert "collab: 6 lines dropped here" in text, text
-    assert "after" in text
+    assert "collab: 5 lines dropped here (over" in text, text
+    assert "collab: 1 lines lost here (write failed)" in text, text
+    lines = text.splitlines()
+    assert lines.index("collab: 1 lines lost here (write failed)") < lines.index("after")
+
+
+@pytest.mark.asyncio
+async def test_an_unrouted_deferral_counts_in_the_attempts_escalations(
+        conversation, tmp_path, monkeypatch):
+    """A reply that promises an answer later («I'll check with alice») is
+    turned into a decision by `unrouted_deferrals`. It is part of what the turn
+    put in front of the main agent, so `escalation_count` counts it."""
+    from collab import worker_runtime
+
+    service = conversation
+    _configure(service, tmp_path)
+    _incoming(service, 1, "Can you change the API?")
+
+    async def provider(*args, **kwargs):
+        return {"summary": "s", "escalations": [],
+                "replies": [{"text": "I'll check with alice and get back to you.",
+                             "to": "bob", "room": ""}]}
+
+    monkeypatch.setattr("collab.worker_runtime.run_turn", provider)
+    filed = worker_runtime.unrouted_deferrals(
+        {"replies": [{"text": "I'll check with alice and get back to you.",
+                      "to": "bob", "room": ""}], "escalations": []},
+        [{"seq": 1, "sender": "bob", "room": "", "to": "",
+          "text": "Can you change the API?"}], [])
+    assert filed, "the phrasing is one the runtime treats as a deferral"
+    await service.turn()
+    row = json.loads(_worker_log(tmp_path).splitlines()[-1])
+    assert row["escalation_count"] == len(filed) and row["reply_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_provider_auth_failure_records_its_kind_and_the_decision(
+        conversation, tmp_path, monkeypatch):
+    """The runtime classifies a provider failure (`kind`); an auth or model
+    one becomes a decision for the main agent. The ledger line carries the
+    kind and `decision: true` — and no escalation_count, because a decision
+    raised by a failure is not part of any turn's result."""
+    from collab.worker_runtime import WorkerRuntimeError
+
+    service = conversation
+    _configure(service, tmp_path)
+    _incoming(service, 1, "Question")
+
+    async def provider(*args, **kwargs):
+        raise WorkerRuntimeError("Worker provider exited with status 1", kind="auth")
+
+    monkeypatch.setattr("collab.worker_runtime.run_turn", provider)
+    await service.turn()
+    row = json.loads(_worker_log(tmp_path).splitlines()[-1])
+    assert row["outcome"] == "failed" and row["error_class"] == "WorkerRuntimeError"
+    assert row["kind"] == "auth" and row["decision"] is True
+    assert row["escalation_count"] == 0
+    assert service.next_at - time.time() > 600, "main's provider back-off is kept"

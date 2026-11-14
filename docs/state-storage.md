@@ -56,7 +56,10 @@ remains with this agent and session.
 when the worker was turned off or reconfigured mid-turn, `skipped-local` for a
 counted turn that called no model), the trigger as counts by event kind, the
 provider and model, tokens and cost where the provider reports them,
-`reply_count` and `escalation_count`, the exception class of any failure, and
+`reply_count` and `escalation_count` (the model's escalations, unrouted
+deferrals and skill requests together), the exception class of any failure as
+`error_class` with the provider failure's `kind` and `decision: true` when it
+was put to the main agent, and
 the duration. It never holds message text, names or provider output. Lines are
 written by a background thread off a bounded queue, so a worker turn never
 waits on the disk; code reading the file back in the same process calls
