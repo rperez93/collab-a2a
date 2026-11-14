@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 
 from . import consent, wake
-from .remote_requests import Inbox, make_offer, wire_text, digest, binding_digest
+from .remote_requests import Inbox, make_offer, wire_text, digest, binding_digest, supports_remote_consent
 from .remote_delivery import working_directory
 
 
@@ -35,6 +35,8 @@ def run(args, profile):
         if len(matches) != 1 or not matches[0].get('id'):
             raise ValueError('recipient must identify one authenticated participant')
         person = matches[0]
+        if not supports_remote_consent(person):
+            raise ValueError('recipient has not advertised supported remote consent; update and reconnect it first')
         offer = make_offer(session_id=profile.session_id, sender_id=profile.participant_id,
                            recipient_id=person['id'], target=args.target,
                            kind=args.kind, text=args.text)
