@@ -18,6 +18,13 @@ from collab.compatibility import request_headers
 from collab.protocol import Envelope, EXT_PREFIX
 
 
+
+@pytest.fixture(autouse=True)
+def workers_allowed(monkeypatch):
+    """These drive the worker service with fake providers; conftest's
+    COLLAB_NO_WORKER (no real spend in tests) would keep it idle."""
+    monkeypatch.delenv("COLLAB_NO_WORKER", raising=False)
+
 def make_service(root, url, name, token, http, participant_id=""):
     daemon = SimpleNamespace(
         profile=SimpleNamespace(dir=root, name=name, participant_id=participant_id,

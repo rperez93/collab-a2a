@@ -219,5 +219,16 @@ def test_collab_no_worker_skips_automatic_setup_only(tmp_path, monkeypatch):
     store = worker.Store(tmp_path)
     store.ensure_default()
     assert store.configuration() is None
+    monkeypatch.delenv('COLLAB_NO_WORKER')
+    store.ensure_default()
+    assert store.configuration() is None, 'the off persists for a later join without the variable'
     store.configure({'agent': 'claude', 'scope': 'Coordinate'})
     assert store.status()['enabled'], 'an explicit start still works'
+
+
+
+def test_collab_no_worker_is_read_as_a_boolean():
+    for value, expected in (('', False), ('0', False), ('false', False), ('No', False),
+                            ('off', False), ('1', True), ('yes', True), ('true', True)):
+        assert worker.no_worker({'COLLAB_NO_WORKER': value}) is expected
+    assert worker.no_worker({}) is False

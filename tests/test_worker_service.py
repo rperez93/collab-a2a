@@ -13,6 +13,13 @@ from collab.client.worker_service import Conversation
 from collab.protocol import Envelope
 
 
+
+@pytest.fixture(autouse=True)
+def workers_allowed(monkeypatch):
+    """These drive the worker service with fake providers; conftest's
+    COLLAB_NO_WORKER (no real spend in tests) would keep it idle."""
+    monkeypatch.delenv("COLLAB_NO_WORKER", raising=False)
+
 @pytest.fixture
 def conversation(tmp_path):
     inbox = Inbox(tmp_path)
@@ -472,11 +479,11 @@ async def test_main_send_is_delivered_while_a_model_turn_is_in_flight(conversati
 
 
 @pytest.mark.asyncio
-async def test_a_daemon_with_collab_no_worker_never_runs_an_automatic_worker(conversation, monkeypatch):
-    """The env reaches the daemon through spawn; an older automatic config stays idle."""
+async def test_a_daemon_with_collab_no_worker_runs_no_worker_at_all(conversation, monkeypatch):
+    """The env reaches the daemon through spawn; even an enabled worker.db stays idle."""
     monkeypatch.delenv('COLLAB_NO_WORKER', raising=False)
     store = worker.Store(conversation.root)
-    store.ensure_default()
+    store.configure({'agent': 'claude', 'scope': 'Coordinate'})
     monkeypatch.setenv('COLLAB_NO_WORKER', '1')
     calls = []
     monkeypatch.setattr("collab.worker_runtime.run_turn", lambda *a, **k: calls.append(a))

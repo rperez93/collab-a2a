@@ -42,6 +42,13 @@ def host_provider(env: dict[str, str] | None = None) -> str:
     return HOST_PROVIDERS.get(detect(env), "")
 
 
+def no_worker(env: dict[str, str] | None = None) -> bool:
+    """COLLAB_NO_WORKER read as a boolean: unset, '', 0, false, no and off mean no."""
+    import os
+    value = ((os.environ if env is None else env).get("COLLAB_NO_WORKER") or "").strip().lower()
+    return value not in ("", "0", "false", "no", "off")
+
+
 def default_agent(env: dict[str, str] | None = None) -> str:
     """The provider automatic setup uses, or '' when there is none to use."""
     from .runtime_settings import get
@@ -147,12 +154,18 @@ class Store:
         existence is not a choice. A changed generation records even an off
         issued before the first configuration and must survive reconnects.
         """
-        import os
         from .runtime_settings import get
-        # Scratch and test sessions: a throwaway hub spent ~287k tokens in
-        # three minutes on a worker nobody asked for. Explicit `worker start`
-        # still works; only automatic setup is skipped.
-        if not get("worker_auto_start") or os.environ.get("COLLAB_NO_WORKER"):
+        if not get("worker_auto_start"):
+            return
+        if no_worker():
+            # Scratch and test sessions: a throwaway hub spent ~287k tokens in
+            # three minutes on a worker nobody asked for. Recorded as an
+            # explicit off, so a later join without the variable keeps it off.
+            with self._db() as db:
+                state = self._state(db)
+                if state["config"] is None and not state["generation"]:
+                    state.update(generation=1, running=False)
+                    self._save(db, state)
             return
         with self._db() as db:
             state = self._state(db)

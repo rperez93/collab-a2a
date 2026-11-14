@@ -5910,6 +5910,9 @@ def cmd_worker(args: argparse.Namespace) -> int:
             store.configure(config)
             onboard.ensure_daemon(profile)
             ok("collaboration worker enabled; the listener owns its lifecycle")
+            from .worker import no_worker
+            if no_worker():
+                warn("COLLAB_NO_WORKER is set: a listener started from this environment runs no worker")
             print("  `collab worker status` reports provider errors and pending decisions")
         elif args.worker_action == "off":
             # Queued main-agent sends are delivered before the worker stops:
