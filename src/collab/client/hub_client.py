@@ -353,11 +353,18 @@ class HubClient:
         """
         if not expected_id:
             raise HubError("no stable recipient id to deliver to; not sent")
-        result = self._request("POST", f"{EXT_PREFIX}/messages", json={
-            "kind": "chat", "text": env.text, "to": env.to, "to_id_expected": expected_id,
-            "body": env.body or {}})
+        # A dedicated route: an older hub 404s before writing anything, and
+        # there is no fallback to name-addressed /messages.
+        try:
+            result = self._request("POST", f"{EXT_PREFIX}/messages/to-id", json={
+                "text": env.text, "to_id": expected_id, "body": env.body or {}})
+        except HubError as exc:
+            if "404" in str(exc) and "recipient" not in str(exc):
+                raise HubError("this session's hub cannot address a participant by id; "
+                               "not sent (it needs a newer collab)") from exc
+            raise
         if result.get("to_id") != expected_id:
-            raise HubError("the hub could not confirm the recipient's identity (older hub?)")
+            raise HubError("the hub could not confirm the recipient's identity; not confirmed")
         return result
 
     def send(self, env: Envelope) -> dict[str, Any]:

@@ -321,9 +321,28 @@ def test_a_reply_goes_to_the_requesters_id_and_fails_closed_without_one(monkeypa
 def test_the_hub_delivers_by_the_expected_id_and_refuses_an_unknown_one(client, host_headers):
     me = client.get('/ext/collab/v1/participants', headers=host_headers).json()
     my_id = me.get('you_id') or me['participants'][0]['id']
-    ok = client.post('/ext/collab/v1/messages', headers=host_headers,
-                     json={'text': 'hi', 'to': 'someone-renamed', 'to_id_expected': my_id})
+    ok = client.post('/ext/collab/v1/messages/to-id', headers=host_headers,
+                     json={'text': 'hi', 'to_id': my_id})
     assert ok.status_code == 200 and ok.json()['to_id'] == my_id
-    missing = client.post('/ext/collab/v1/messages', headers=host_headers,
-                          json={'text': 'hi', 'to': 'x', 'to_id_expected': 'p_nobody'})
+    missing = client.post('/ext/collab/v1/messages/to-id', headers=host_headers,
+                          json={'text': 'hi', 'to_id': 'p_nobody'})
     assert missing.status_code == 404
+
+
+def test_an_old_hub_gets_nothing_written_when_it_cannot_address_by_id(monkeypatch):
+    """Mixed versions: a hub without the route must 404 before any write."""
+    import httpx
+    from collab.client.hub_client import HubClient, HubError
+    from collab.protocol import Envelope as E
+    writes = []
+    def old_hub(method, path, **kw):
+        if path.endswith('/messages/to-id'):
+            raise HubError(f"{method} {path} failed (404): Not Found")
+        writes.append(path)
+        return {'seq': 1}
+    client = HubClient('http://hub', 'token')
+    monkeypatch.setattr(client, '_request', old_hub)
+    with pytest.raises(HubError, match='cannot address a participant by id'):
+        client.send_to_id(E(kind='chat', text='declined', to='alice'), 'p_alice')
+    assert writes == [], 'no fallback to name-addressed /messages: zero events'
+
