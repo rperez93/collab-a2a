@@ -62,6 +62,25 @@ def cost_text(stats: dict[str, Any]) -> str:
     return f"{label} {money_text(value)} · {stats.get('cost_scope') or 'scope unknown'}"
 
 
+def _budget_line(worker: dict[str, Any]) -> list[str]:
+    """«worker budget 9 calls left · resets in 30m» — once the worker paces.
+
+    The worker publishes what is left of its call budget when it starts pacing
+    itself (worker.pace); a peer deciding whether to wait on it for an answer
+    reads it here. Nothing when the figure is absent or not a count."""
+    left = worker.get("budget_remaining")
+    if not isinstance(left, int) or isinstance(left, bool) or left < 0:
+        return []
+    line = f"worker budget {left} call{'' if left == 1 else 's'} left"
+    reset = _number(worker.get("budget_reset_at"))
+    if reset is not None:
+        import time
+
+        minutes = max(0, int((reset - time.time()) // 60))
+        line += f" · resets in {minutes}m" if minutes < 120 else f" · resets in {minutes // 60}h"
+    return [line]
+
+
 def metric_lines(person: dict[str, Any], fields: list[str] | tuple[str, ...],
                  *, detailed: bool) -> list[str]:
     """Ordered visible fields; expanded rows retain source and measurement age."""
@@ -124,6 +143,7 @@ def metric_lines(person: dict[str, Any], fields: list[str] | tuple[str, ...],
                 extra.extend([
                     f"worker {worker.get('agent') or 'agent unknown'} · configured {worker.get('model') or 'unknown'}",
                     f"attempts {_count(worker.get('attempts'))} · pending {_count(worker.get('pending'))} · errors {_count(worker.get('errors'))}",
+                    *_budget_line(worker),
                     f"worker {cost_text(worker)}",
                     f"worker tokens in {_count(worker.get('tokens_in'))} · out {_count(worker.get('tokens_out'))} · cached {_count(worker.get('tokens_cached'))}",
                     f"worker usage history: last model {worker.get('last_model') or 'not yet reported'}",
@@ -143,6 +163,11 @@ def metric_lines(person: dict[str, Any], fields: list[str] | tuple[str, ...],
             branch = person.get("branch")
             line = f"{repo}/{branch}" if branch else str(repo)
             line += f" · {person.get('machine') or 'machine unknown'}"
+            # How many skills this participant shares (R4), counted by the hub.
+            # Only a count: the names are `collab skills peers`' business.
+            skills = person.get("skills_count")
+            if isinstance(skills, int) and not isinstance(skills, bool) and skills >= 0:
+                line += f" · {skills} skill{'' if skills == 1 else 's'} shared"
         if line:
             group = "context" if field == "context" else field
             if group in ("context", "cost", "model") and group + "_observed_at" in stats:

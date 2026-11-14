@@ -46,7 +46,7 @@ def scene(which):
         for i, person in enumerate(data['participants']):
             person['color'] = ('#79b8ff', '#56d4dd', '#d2a8ff')[i]
             stats = person['stats']
-            stats.update(model='gpt-6-astra' if i == 1 else 'claude-opus-5' if i == 0 else 'claude-sonnet-5',
+            stats.update(model='gpt-6-astra' if i == 1 else 'claude-opus-5' if i == 0 else 'gpt-5.6-luna',
                          tokens_out=12500, tokens_cached=48000, context_tokens=82000 if i == 0 else 44000,
                          context_limit=200000, cost_usd=2.35 if i == 0 else 1.10,
                          cost_kind='estimated', cost_scope='session', source='demo fixture',
@@ -67,7 +67,10 @@ def scene(which):
                 quota_scope='shared_account')
             if i == 0:
                 stats['worker'].update(last_model='claude-haiku-4-5', context_pct=3,
-                    context_tokens=6000, context_limit=200000, context_observed_at=now-5)
+                    context_tokens=6000, context_limit=200000, context_observed_at=now-5,
+                    budget_remaining=9, budget_reset_at=now+1800,
+                    # The «waiting on their human» state a peer sees (R18).
+                    awaiting_human=1, awaiting_age=420)
         return data
 
     demo.snapshot = snapshot
@@ -116,7 +119,7 @@ def capture_all():
                 'watch_background':'image' if name == 'theme-image' else 'theme',
                 'watch_background_image':str(home/'sample.png'),
                 'watch_background_dim':65 if theme == 'matrix' or name == 'theme-image' else 85,
-                'watch_participant_fields':['model','context','quota','cost','subagents','worker']}))
+                'watch_participant_fields':['model','context','quota','cost','subagents','worker','location']}))
             env = {**os.environ, 'COLLAB_CONFIG':str(config), 'COLLAB_HOME':str(home/'state'),
                    'COLLAB_STATE_DIR':str(home/'state'), 'PYTHONPATH':str(ROOT/'src'),
                    'COLLAB_DOC_PALETTE':str(home/(name+'.palette.json')),
