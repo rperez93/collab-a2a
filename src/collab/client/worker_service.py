@@ -488,17 +488,20 @@ class Conversation:
                 rooms.add("general")
                 if reply["room"] and reply["room"] not in rooms:
                     raise ValueError("worker proposed an unknown room")
+            escalations = result["escalations"] + skill_requests(
+                [e for e in events if e.seq <= cursor], result["escalations"],
+                self.daemon.profile.name, self.daemon.profile.participant_id)
             committed = store.commit_turn(
                 expected_cursor=snapshot["cursor"], cursor=cursor,
                 summary=result["summary"], replies=result["replies"],
-                escalations=result["escalations"] + skill_requests(
-                    [e for e in events if e.seq <= cursor], result["escalations"],
-                    self.daemon.profile.name, self.daemon.profile.participant_id),
+                escalations=escalations,
                 context_ids=[row["id"] for row in contexts],
                 answer_ids=[row["id"] for row in answers],
                 expected_generation=snapshot["generation"], expected_turn=snapshot["turn"])
+            # Every escalation committed, the skill-consent decisions included:
+            # the ledger counts what the turn put in front of the main agent.
             counts = {"reply_count": len(result["replies"]),
-                      "escalation_count": len(result["escalations"])}
+                      "escalation_count": len(escalations)}
             if committed:
                 logged["phase"] = "committed"
                 self._log_turn(logged, "output" if any(counts.values()) else "no-op",
