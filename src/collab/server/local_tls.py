@@ -239,6 +239,13 @@ class LocalTLS:
 
     async def _from_socket(self, connection: socket.socket) -> None:
         try:
+            # Manual accepts retain proto=0, bypassing asyncio's automatic
+            # _set_nodelay guard (which requires IPPROTO_TCP). In an owned
+            # comparison, delayed TLS shutdown notifications caused 3/20
+            # pooled failures versus 0/20 with NODELAY; one socket still looked
+            # unreadable 21 ms after the notification write. Set it before TLS
+            # handoff; this does not eliminate every keep-alive close race.
+            connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             loop = asyncio.get_running_loop()
             reader = asyncio.StreamReader(limit=CHUNK_BYTES)
             protocol = asyncio.StreamReaderProtocol(reader)
