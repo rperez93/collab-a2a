@@ -43,6 +43,10 @@ class Route:
     reason: str         # one sentence a person reads: how, or why not
     verified: str       # what was checked, against which version, and how
     probe: str = ""     # the `quotas.PROBES` key, for a PROBE route
+    #: Where the MAIN agent's model comes from, by the same route and at the
+    #: same cadence as its quota, or why it cannot be read. «Unknown» is drawn
+    #: as `m:?` on the roster; nothing is guessed from a quota bucket's name.
+    model: str = "unknown: no local source names the model in use"
 
 
 #: One row per `hosttool.NAMES` key — a test holds the two together, so a tool
@@ -51,12 +55,15 @@ ROUTES: dict[str, Route] = {
     "claude-code": Route(
         HOOK,
         "the Claude Code status line hands collab its rate-limit windows",
-        "existing route (collab.statusline); not re-verified in this change"),
+        "existing route (collab.statusline); not re-verified in this change",
+        model="the status line's `model.display_name` (or `id`), on every render"),
     "codex": Route(
         PROBE,
         "collab asks `codex app-server` for account/rateLimits/read",
         "codex-cli 0.169.0 on 2026-11-13: quotas.from_codex() answered one"
-        " seven_day window in 0.84 s wall, 0.33 s child CPU", probe="codex"),
+        " seven_day window in 0.84 s wall, 0.33 s child CPU", probe="codex",
+        model="the last `turn_context.model` in the thread's own rollout tail,"
+              " else thread/read's `thread.model`; every probe cycle"),
     # READ FROM THE INSTALLED PACKAGE, not from documentation. The CLI fetches
     # its quota with an authenticated Code Assist call (`retrieveUserQuota`)
     # and keeps it in `Config.lastRetrievedQuota`, in memory; nothing writes
@@ -71,7 +78,12 @@ ROUTES: dict[str, Route] = {
         "Gemini CLI fetches its quota with its own credentials and keeps it in"
         " process memory only; no file, subcommand or variable exposes it",
         "gemini-cli 0.32.1 on 2026-11-13: read config.js, code_assist/server.js,"
-        " shellExecutionService.js and hookRunner.js in the installed package"),
+        " shellExecutionService.js and hookRunner.js in the installed package",
+        # ITS CHAT FILES DO NAME A MODEL per message, under ~/.gemini/tmp — but
+        # nothing a command can see says WHICH file is this session, and
+        # picking the newest is a guess that names another session's model.
+        model="unknown: chat files name a model, but no variable says which"
+              " session is this one"),
     "opencode": Route(
         NONE,
         "no local quota source for opencode is known to collab",

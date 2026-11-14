@@ -18,7 +18,11 @@ def test_every_tool_detect_can_name_has_a_row_and_every_probe_row_a_probe():
     assert set(quota_sources.ROUTES) == set(hosttool.NAMES)
     for kind, route in quota_sources.ROUTES.items():
         assert route.kind in (quota_sources.HOOK, quota_sources.PROBE, quota_sources.NONE), kind
-        assert route.reason and route.verified, kind
+        assert route.reason and route.verified and route.model, kind
+        # A tool with no quota route has no model route either: both would
+        # come from the same source, and there is none.
+        if route.kind == quota_sources.NONE:
+            assert route.model.startswith("unknown"), kind
         if route.kind == quota_sources.PROBE:
             assert route.probe in quotas.PROBES, kind
         else:
@@ -95,8 +99,8 @@ def test_check_says_the_quota_is_unknown_rather_than_nothing_or_a_failure(profil
     assert fix == "", "an OK verdict carries no fix, as every other one does"
 
 
-def test_a_switch_to_gemini_takes_the_codex_windows_off_the_file(profile, monkeypatch):
-    """The daemon posts the stored file: Codex windows left in it stayed on the roster."""
+def test_a_switch_to_gemini_withdraws_the_codex_windows_and_model(profile, monkeypatch):
+    """The daemon posts the stored file: Codex windows and model left in it stayed on the roster."""
     from collab import stats
     monkeypatch.setenv("CODEX_THREAD_ID", "thread-a")
     setup.ensure(profile)
@@ -108,7 +112,9 @@ def test_a_switch_to_gemini_takes_the_codex_windows_off_the_file(profile, monkey
 
     held = stats.read_stats(profile)
     assert held["quotas"] == {}, "an explicit empty map, so the hub clears too"
-    assert held["model"] == "gpt-x", "only quota is taken back"
+    assert "model" in held and held["model"] is None, "an explicit null: the old tool's model is withdrawn"
+    assert held["cost_usd"] == 1, "history stays; only what describes the tool in use goes"
+    assert stats.sanitise(held)["model"] is None, "and the null survives to the wire"
     (profile.dir / "status.json").write_text(json.dumps(
         {"state": "live", "heartbeat": time.time(), "stats": {"setup": setup.state(profile)}}))
     verdict, detail, _fix = cli._stats_health(profile)

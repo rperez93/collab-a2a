@@ -23,6 +23,12 @@ Every other agent collab detects (Gemini CLI, opencode, Cursor, Copilot CLI,
 goose, Amp) is recorded with its quota unknown and the reason, which
 `collab stats` and `collab check` show; an earlier Codex or Claude route is
 not carried over, and nothing is published in place of the missing figure.
+The main agent's model travels by the same route and at the same cadence as
+its quota: Claude Code's status line `model.display_name` on every render, and
+for Codex the last `turn_context.model` in the thread's own rollout tail (else
+thread/read), so a `/model` switch shows after the next turn and probe. Other
+agents show `m:?` – unknown, never guessed. Switching to a tool with no route
+withdraws the previous tool's quota, model and context.
 
 Explicit `stats_command` settings override automatic routing. Clearing with
 `collab stats --source ''` is a persistent opt-out; `collab config --unset

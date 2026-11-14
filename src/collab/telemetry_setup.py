@@ -57,16 +57,16 @@ def ensure(profile) -> None:
     if (why := unknown_reason(provider)):
         value['quota_unknown'] = why
         _write(profile.dir / 'telemetry-setup.json', value)
-        # AND THE WINDOWS THE OLD ROUTE LEFT BEHIND GO TOO. Removing the route
+        # AND THE FIGURES THE OLD ROUTE LEFT BEHIND GO TOO. Removing the route
         # stops new Codex figures, but the stored file still held the Codex
-        # account's windows, and the daemon posts that file — so the roster
-        # went on showing them under the Gemini participant. Cleared exactly
-        # as `collab stats --clear-quota` clears: on disk, keeping everything
-        # that is not quota, with an explicit empty map the daemon carries up.
+        # account's windows and model, and the daemon posts that file — so the
+        # roster went on showing them under the Gemini participant. Withdrawn
+        # on disk, as `collab stats --clear-quota` does for quota, so the
+        # daemon carries the withdrawal up; see `_forget_previous_tool`.
         # Only on a SWITCH from another tool, and only when no explicit source
         # owns the figures: a person's own report under the same tool is theirs.
         if previous.get('provider') not in ('', None, provider) and not explicit:
-            _clear_stored_quota(profile)
+            _forget_previous_tool(profile)
         return
     try:
         if provider == 'codex':
@@ -85,14 +85,27 @@ def ensure(profile) -> None:
 
 
 
-def _clear_stored_quota(profile) -> None:
-    """Replace any stored quota with an explicit empty map, keeping the rest."""
+#: What describes the tool IN USE rather than the participant's history. On a
+#: switch these belong to the previous tool and are withdrawn; cost and token
+#: totals are what was spent, and stay, ageing on their own clocks.
+NOW_FIELDS = ('model', 'context_pct', 'context_tokens', 'context_limit')
+
+
+def _forget_previous_tool(profile) -> None:
+    """Withdraw the previous tool's quota, model and context, keeping the rest.
+
+    QUOTA AS `quotas: {}`, the rest as explicit null — the two spellings the
+    hub reads as «no longer true» (see `stats.sanitise`). Left in the file, the
+    daemon kept posting them: the roster showed a Gemini participant with the
+    Codex account's windows and `m:gpt-…`, a model it was not running.
+    """
     from . import stats as statmod
     stored = statmod.read_stats(profile)
-    if not any(stored.get(k) for k in statmod.QUOTA_FIELDS):
+    held = [k for k in (*statmod.QUOTA_FIELDS, *NOW_FIELDS) if stored.get(k) not in (None, {}, '')]
+    if not held:
         return              # nothing to take back, so nothing to rewrite
-    kept = {k: v for k, v in stored.items() if k not in statmod.QUOTA_FIELDS}
-    statmod.write_stats(profile, {**kept, 'quotas': {}})
+    kept = {k: v for k, v in stored.items() if k not in statmod.QUOTA_FIELDS and k not in NOW_FIELDS}
+    statmod.write_stats(profile, {**kept, 'quotas': {}, **{k: None for k in NOW_FIELDS}})
 
 
 def source(profile) -> tuple[str, int, dict]:
