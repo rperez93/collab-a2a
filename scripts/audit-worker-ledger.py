@@ -114,9 +114,12 @@ def summarize(paths, *, since, until):
                         # interval affected. Even a later marker can describe
                         # lines lost inside this window.
                         diagnostics['drop_markers'] += 1
-                        count = row.get('count')
-                        if measure(count, 'reply_count'):
-                            diagnostics['reported_dropped_lines'] += count
+                        # R14 uses lines; its earlier shared draft used count.
+                        # Never add both, or choose a side when they disagree.
+                        counts = [row[key] for key in ('lines', 'count') if key in row]
+                        if (counts and all(measure(value, 'reply_count') for value in counts)
+                                and all(value == counts[0] for value in counts)):
+                            diagnostics['reported_dropped_lines'] += counts[0]
                         else:
                             diagnostics['unknown_drop_counts'] += 1
                         continue
