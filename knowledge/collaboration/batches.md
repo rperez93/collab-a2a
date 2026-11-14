@@ -261,3 +261,13 @@ fetched them, on its own clock, and a stale figure carries no ETA at all.
 [^app-src]: collab.server.app — the batch route, and one denominator at a time
 [^batch-run]: Live run — the batch arithmetic
 [^daemon-src]: collab.client.daemon — the scope-change marker, and the rule it does not apply
+
+## Conditional pace observations (later than the pin)
+
+New clients negotiate small authoritative pace headers on an unchanged roster
+response. This keeps elapsed time and ETA current without retransmitting the
+whole board. Clock headers must be complete, bounded and valid before renewing
+local freshness; otherwise the next scheduled request asks for full JSON.
+Overdue transitions, task completions and terminal timing remain real state.
+Older clients keep pace in their validators and continue receiving full bodies
+when those figures change.

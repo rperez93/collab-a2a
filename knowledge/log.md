@@ -106,3 +106,9 @@ polling is cancellable and bounded. The pin remains unchanged.
 - **Update (later than the pin)**: Recorded fixed-window roster coalescing,
   conditional private revalidation and finite JSON compression in the existing
   client-daemon architecture page. No pin or verified stamp changed.
+
+# 2026-11-13
+
+* **Update (later than the pin):** Recorded conditional roster pace observations
+  in [batches](collaboration/batches.md), including freshness recovery and
+  compatibility for clients that do not negotiate clock headers.
