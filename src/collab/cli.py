@@ -3791,8 +3791,9 @@ def cmd_file(args: argparse.Namespace) -> int:
                     # the clock is the other way it ends.
                     awaited = record.get("remaining", 0)
                     minutes = ROOM_FILE_TTL_SECONDS // 60
-                    print(f"       {dim(f'kept on the host until all {awaited} of them have it, '
-                                        f'or for {minutes} minutes')}")
+                    retention = (f"kept on the host until all {awaited} of them have it, "
+                                 f"or for {minutes} minutes")
+                    print(f"       {dim(retention)}")
                 return 0
 
             if args.action == "list":
