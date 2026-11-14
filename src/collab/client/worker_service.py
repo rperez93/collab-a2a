@@ -726,7 +726,8 @@ class Conversation:
                 result = {**result, "replies": kept}
             escalations = result["escalations"] + worker_runtime.unrouted_deferrals(
                 result, selected, pending_now,
-                answered={a["source"]["sender"] for a in answers if a.get("source", {}).get("sender")})
+                answered={a["source"]["sender"]: int(a["source"].get("seq") or 0)
+                          for a in answers if a.get("source", {}).get("sender")})
             escalations += skill_requests(
                 [e for e in events if e.seq <= cursor], escalations,
                 self.daemon.profile.name, self.daemon.profile.participant_id)

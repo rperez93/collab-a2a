@@ -1281,8 +1281,12 @@ def create_app(
             file_id = "f_" + hashlib.sha256(f"{user.id}|{delivery}".encode()).hexdigest()[:20]
             # A stored row whose blob never landed is an upload to complete,
             # not a duplicate: acknowledging it would lose the file.
-            if (existing := store.get_file(file_id)) is not None and _blob(file_id).exists():
-                await _announce(existing, user)  # a retry repairs a lost announcement
+            # A delivery that already ended (collected, withdrawn, expired) is
+            # acknowledged as it is, never recreated.
+            if (existing := store.get_file(file_id)) is not None and (
+                    existing["state"] != "available" or _blob(file_id).exists()):
+                if existing["state"] == "available":
+                    await _announce(existing, user)  # a retry repairs a lost announcement
                 return {**_file_view(existing), "duplicate": True}
         else:
             file_id = new_id("f")
@@ -1339,6 +1343,10 @@ def create_app(
                 with contextlib.suppress(OSError):
                     target.unlink()
                 raise
+            if existing["state"] != "available":
+                with contextlib.suppress(OSError):
+                    target.unlink()
+                return {**_file_view(existing), "duplicate": True}
             if not final.exists() and existing["sha256"] == digest.hexdigest():
                 os.replace(target, final)
             with contextlib.suppress(OSError):

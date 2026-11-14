@@ -747,3 +747,17 @@ async def test_the_leak_guard_compares_participant_ids_across_a_rename(conversat
         conversation.daemon._http = client
         await conversation.turn()
     assert sent == ["robert"], "the asker under its new name only; never the new holder of the old name"
+
+
+@pytest.mark.asyncio
+async def test_no_worker_daemon_holds_a_queue_that_worker_off_holds(conversation, tmp_path, monkeypatch):
+    """M21: under COLLAB_NO_WORKER, a disabled worker's outbox is not flushed."""
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    store.send("held", to="bob")
+    cfg = store.configuration()
+    store.configure({**cfg, "enabled": False})
+    monkeypatch.setenv("COLLAB_NO_WORKER", "1")
+    conversation.daemon._http = object()
+    await conversation.tick()
+    assert conversation.delivery is None

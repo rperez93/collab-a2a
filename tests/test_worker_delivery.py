@@ -109,3 +109,43 @@ def test_a_row_whose_blob_never_landed_is_completed_not_acknowledged(client, hos
     blob.unlink()  # the row committed, the blob never landed
     client.post("/ext/collab/v1/files", headers=host_headers, files=body, params=params)
     assert client.get(f"/ext/collab/v1/files/{first['id']}/content", headers=host_headers).content == b"payload"
+
+
+def test_a_queued_file_send_reports_json(tmp_path, monkeypatch, capsys):
+    """M23: collab file send --json while the worker is on prints the queued record."""
+    import argparse
+    import json
+    from types import SimpleNamespace
+    from collab import cli, worker
+    monkeypatch.delenv("COLLAB_NO_WORKER", raising=False)  # conftest sets it; the worker must be on
+    path = tmp_path / "a.txt"
+    path.write_text("hi")
+    worker.Store(tmp_path).configure({"agent": "claude", "scope": "Coordinate", "enabled": True})
+    profile = SimpleNamespace(dir=tmp_path, name="me", room="general", session_id="s")
+    class Hub:
+        def __enter__(self): return self
+        def __exit__(self, *e): return False
+    monkeypatch.setattr(cli, "_require_profile", lambda a: profile)
+    monkeypatch.setattr(cli, "_client", lambda p: Hub())
+    monkeypatch.setattr(cli.onboard, "ensure_daemon", lambda *a, **k: None)
+    args = cli.build_parser().parse_args(["file", "send", str(path), "--json"])
+    assert cli.cmd_file(args) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["queued"] and out["outbox_id"] and out["name"] == "a.txt"
+
+
+def test_a_retry_of_a_delivery_already_collected_is_acknowledged_not_recreated(client, host_headers):
+    from pathlib import Path
+    params = {"room": "general", "delivery": "o_done"}
+    body = {"file": ("x.bin", b"payload", "application/octet-stream")}
+    first = client.post("/ext/collab/v1/files", headers=host_headers, files=body, params=params).json()
+    store = client.app.state.store
+    with store._lock:
+        store._db.execute("UPDATE files SET state='collected' WHERE id=?", (first["id"],))
+        store._db.commit()
+    blob = Path(store.path).parent / "files" / first["id"]
+    blob.unlink(missing_ok=True)
+    other = {"file": ("x.bin", b"different", "application/octet-stream")}
+    again = client.post("/ext/collab/v1/files", headers=host_headers, files=other, params=params)
+    assert again.status_code == 200 and again.json()["duplicate"]
+    assert not blob.exists(), "an ended delivery is never recreated"
