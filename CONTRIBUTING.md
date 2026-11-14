@@ -17,6 +17,54 @@ Everything runs from `.venv`. Nothing is installed globally, and `install.sh`
 will never use `sudo` or touch system packages — if it cannot find a Python
 ≥3.10 it stops and tells you what to install.
 
+## Fast author iteration and merge waves
+
+Use the checkout helper with the same Python environment as the test suite:
+
+```bash
+.venv/bin/python scripts/collab-dev test --fast --list
+.venv/bin/python scripts/collab-dev test --fast
+.venv/bin/python scripts/collab-dev test --fast --test tests/test_tunnel.py
+.venv/bin/python scripts/collab-dev test --fast --test tests/test_tunnel.py::test_no_url_in_the_log_yet
+```
+
+`--base origin/main` is the default. Selection includes branch changes since the
+merge base, staged and unstaged edits, and untracked test/source files. Changed
+test files and tests that directly import a changed module are selected, along
+with the documentation, skill-settings registry and OKF checks. This is a
+heuristic for iteration: it cannot discover dynamic imports or every indirect
+consumer. Use repeated `--test FILE[::NODE]` for the affected behavior you are
+working on; that explicit selection replaces automatic inference but keeps the
+three checks. Unmatched source changes, script changes and shared test/build
+configuration require an explicit selection instead of silently running only
+the three checks. `--list` is a preview, never test evidence.
+
+Aim for less than 60 seconds by choosing focused behavioral tests. The helper
+reports the actual duration and pytest's result; it does not cut off tests or
+silently omit slow cases to meet that target. It sets an absolute checkout
+`PYTHONPATH` for child hubs, disables automatic workers and update checks, and
+never updates the installed CLI. Before pytest, it behavior-checks the runtime
+worker opt-out in isolated state; older checkouts without that prerequisite
+refuse to run tests. `--list` remains available there. The bounded selector requires POSIX descriptor
+and process-group support (use WSL on Windows). It caps captured command output
+while reading, terminates its own command group on completion/error, refuses
+non-regular files and symlinks, and enforces total entry, depth, source-byte and
+selection-time budgets. Incomplete selection is an error, never a partial green
+result. These bounds cover selection; trusted pytest execution is intentionally
+not time-limited. Run it on each meaningful change. Record the
+commit, selected tests, result, and any untested contracts with the PR.
+
+**The full suite remains the merge gate.** For a wave of reviewed PRs, compose
+all reviewed heads in an isolated integration worktree, freeze its exact commit,
+and run the serialized full suite once on that candidate. A green fast subset
+cannot replace that run. Review and test evidence must identify the candidate
+SHA; adding or changing a commit invalidates the old candidate's acceptance.
+Coordinate the suite owner before starting another full run. Preserve failures
+and explicit skips, and resolve them before the lead merges that tested wave.
+The release additionally requires the live-session checks and participant
+agreement in the accepted collaboration brief. This helper does not merge,
+approve a PR, or declare a candidate accepted.
+
 ## Running it against yourself
 
 You do not need two machines. Three environment variables isolate everything a
