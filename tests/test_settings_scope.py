@@ -201,3 +201,26 @@ def test_an_unknown_agent_refuses_agent_writes_instead_of_sharing_them(monkeypat
     machine = config.global_config_path()
     assert not machine.exists() or "worker_max_attempts" not in json.loads(machine.read_text())
     runtime_settings.set_value("participant_stale_after", 40)  # machine keys still work
+
+
+def test_a_stale_view_from_one_home_never_carries_its_private_values_to_another(tmp_path, monkeypatch):
+    """Friday's acceptance check: A and B differ in an unrelated private value."""
+    monkeypatch.delenv("COLLAB_AGENT_CONFIG")
+    monkeypatch.delenv("COLLAB_HOME", raising=False)
+    home_a, home_b = tmp_path / "a" / ".collab", tmp_path / "b" / ".collab"
+    for home, text in ((home_a, "A only"), (home_b, "B only")):
+        home.mkdir(parents=True)
+        (home / config.AGENT_SETTINGS).write_text(json.dumps({"worker_instructions": text}))
+    chosen = {"home": home_a}
+    monkeypatch.setattr(config, "collab_home", lambda *a, **k: chosen["home"])
+    config._AGENT_PATH.clear()
+    config._AGENT_CACHE.clear()
+    view = config.load_config()            # read under A
+    assert view["worker_instructions"] == "A only"
+    chosen["home"] = home_b                # another process selects B
+    view["worker_max_attempts"] = 11       # the setter's one change
+    config.save_config(view)
+    b = json.loads((home_b / config.AGENT_SETTINGS).read_text())
+    assert b == {"worker_instructions": "B only", "worker_max_attempts": 11}
+    a = json.loads((home_a / config.AGENT_SETTINGS).read_text())
+    assert a == {"worker_instructions": "A only"}

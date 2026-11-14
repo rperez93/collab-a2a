@@ -622,6 +622,15 @@ def save_config(cfg: dict[str, Any]) -> None:
     import fcntl
     if WRITE_MACHINE["on"] and WRITE_MACHINE.get("key") in IDENTITY_KEYS:
         raise ValueError(f"{WRITE_MACHINE['key']} is each agent's own and has no shared default")
+    # The caller edited the view it READ, possibly under an earlier selection:
+    # only the keys it changed relative to that view are its change. They are
+    # applied to the identity selected NOW, and nothing else of the old view
+    # (another home's private overrides) is ever carried across.
+    seen = load_config()
+    changed = {k for k in set(cfg) | set(seen)
+               if (k in cfg) != (k in seen) or (k in cfg and cfg[k] != seen[k])}
+    if WRITE_MACHINE["on"] and WRITE_MACHINE.get("key"):
+        changed.add(WRITE_MACHINE["key"])
     _AGENT_PATH.clear()  # a write resolves the selected identity fresh, never from a cache
     machine_path, agent_path = global_config_path(), agent_config_path()
     machine_path.parent.mkdir(parents=True, exist_ok=True)
@@ -629,7 +638,7 @@ def save_config(cfg: dict[str, Any]) -> None:
     lock = open(machine_path.with_name(machine_path.name + ".lock"), "a")
     fcntl.flock(lock, fcntl.LOCK_EX)
     try:
-        _save_locked(cfg, machine_path, agent_path)
+        _save_locked(cfg, machine_path, agent_path, changed)
     finally:
         fcntl.flock(lock, fcntl.LOCK_UN)
         lock.close()
@@ -637,13 +646,14 @@ def save_config(cfg: dict[str, Any]) -> None:
     _AGENT_CACHE.clear()
 
 
-def _save_locked(cfg: dict[str, Any], machine_path: Path, agent_path: Path | None) -> None:
+def _save_locked(cfg: dict[str, Any], machine_path: Path, agent_path: Path | None,
+                 changed: set[str]) -> None:
     machine, agent = _read_raw(machine_path), _read_raw(agent_path)
     current = {k: v for k, v in machine.items() if k not in IDENTITY_KEYS}
     current.update({k: v for k, v in agent.items() if agent_scoped(k)})
     changed_machine = changed_agent = False
     machine_key = WRITE_MACHINE.get("key") if WRITE_MACHINE["on"] else None
-    for key in set(cfg) | set(current):
+    for key in changed:
         if WRITE_MACHINE["on"] and agent_scoped(key) and key != machine_key:
             continue  # --machine names one key; the rest of this agent's stay put
         to_agent = agent_scoped(key) and not WRITE_MACHINE["on"]
