@@ -2337,7 +2337,8 @@ diagnostics off it still writes the header and tells you how to capture a log.
 
 Beside it, `daemon.log` and `hub.log` are the two processes' own output at more
 length, `ngrok.log` is the tunnel agent's, and `worker.log` has one JSON line per
-conversation-worker attempt — how far it got (`reserved`, `launched`,
+conversation-worker attempt — an opaque random `attempt` id, how far it got
+(`reserved`, `launched`,
 `committed`), its outcome (`output`, `no-op`, `invalid`, `failed`, `cancelled`,
 or `skipped-local` for a counted turn that called no model), what triggered it
 as counts by kind, the model, tokens and cost, reply and escalation counts, the

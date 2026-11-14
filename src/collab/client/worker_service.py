@@ -133,7 +133,21 @@ def classify(exc: BaseException) -> tuple[str, str]:
     return "failed", name
 
 
-def turn_record(*, phase: str, outcome: str, agent: str = "", model: str = "",
+def new_attempt_id() -> str:
+    """Twelve hex characters naming one attempt, and saying nothing else.
+
+    Random rather than derived: an id built from a pid, a clock or the turn's
+    content would be a second, smaller copy of exactly what this file promises
+    not to hold. It exists so that the audit of the worker's call cap (R15) can
+    tie a line to the attempt it records without reading anything into it.
+    """
+    import secrets
+
+    return secrets.token_hex(6)
+
+
+def turn_record(*, phase: str, outcome: str, attempt: str, agent: str = "",
+                model: str = "",
                 trigger: dict | None = None, contexts: int = 0, answers: int = 0,
                 usage: list = (), reply_count: int = 0, escalation_count: int = 0,
                 error: str = "", seconds: float = 0.0) -> str:
@@ -157,7 +171,7 @@ def turn_record(*, phase: str, outcome: str, agent: str = "", model: str = "",
                 totals[key] = totals.get(key, 0) + value
     line = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "event": "turn", "phase": phase, "outcome": outcome,
+        "event": "turn", "attempt": attempt, "phase": phase, "outcome": outcome,
         "agent": _safe(agent), "model": _safe(model),
         "trigger": {str(k)[:20]: int(v) for k, v in sorted((trigger or {}).items())},
         "contexts": contexts, "answers": answers,
@@ -290,7 +304,7 @@ class Conversation:
             return
         try:
             line = turn_record(
-                phase=logged["phase"], outcome=outcome,
+                phase=logged["phase"], outcome=outcome, attempt=logged["attempt"],
                 agent=logged["agent"], model=logged["model"],
                 trigger=logged["trigger"], contexts=logged["contexts"],
                 answers=logged["answers"], usage=logged["usage"],
@@ -301,7 +315,8 @@ class Conversation:
 
     def _log_skip(self, cfg, trigger: dict, escalations: int = 0) -> None:
         """A commit of the turn counter that called no model: `skipped-local`."""
-        self._log_turn({"phase": "committed", "agent": str(cfg.get("agent") or ""),
+        self._log_turn({"phase": "committed", "attempt": new_attempt_id(),
+                        "agent": str(cfg.get("agent") or ""),
                         "model": "", "trigger": trigger, "contexts": 0, "answers": 0,
                         "usage": [], "began": time.monotonic()}, "skipped-local",
                        escalation_count=escalations)
@@ -450,7 +465,10 @@ class Conversation:
                 return
             # THE ATTEMPT EXISTS FROM HERE: a budget slot is spent, and the
             # line is written whatever happens next — one per attempt.
-            logged = {"phase": "reserved", "agent": str(cfg.get("agent") or ""), "model": "",
+            # The attempt's id is minted here, at reservation, and kept for
+            # its one line whatever phase it reaches.
+            logged = {"phase": "reserved", "attempt": new_attempt_id(),
+                      "agent": str(cfg.get("agent") or ""), "model": "",
                       "trigger": _tally(e["kind"] for e in selected),
                       "contexts": len(contexts), "answers": len(answers),
                       "usage": [], "began": time.monotonic()}

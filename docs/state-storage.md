@@ -42,7 +42,8 @@ replies. It is separate from the main inbox's read cursor. Model turns use
 private temporary directories outside the repository; durable worker state
 remains with this agent and session.
 
-`worker.log` records one JSON line per worker attempt: its `phase`
+`worker.log` records one JSON line per worker attempt: an opaque `attempt` id
+(twelve random hex characters, minted when the attempt is reserved), its `phase`
 (`reserved`, `launched`, `committed`), its `outcome` (`output`, `no-op`,
 `invalid` when the provider's answer failed validation, `failed`, `cancelled`
 when the worker was turned off or reconfigured mid-turn, `skipped-local` for a
