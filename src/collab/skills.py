@@ -172,6 +172,8 @@ def installed_list(env: dict[str, str] | None = None) -> list[dict[str, str]]:
         return []
     found = []
     for entry in sorted(target.path.iterdir()):
+        if entry.name.startswith(".") or entry.name.endswith(".collab-old"):
+            continue  # an interrupted install's scratch is not a skill to publish
         if not (entry / "SKILL.md").is_file():
             continue
         try:
@@ -206,19 +208,52 @@ def skills_target(agent: str | None = None) -> Target:
     return target
 
 
-def installed_text(content: str, install_name: str) -> str:
-    """The text as installed: its front-matter name is the namespaced one.
+FRONT_KEY = re.compile(r"""^\s*["']?([A-Za-z0-9_-]+)["']?\s*:""")
+# Characters that render as nothing or as something else: a review would differ
+# from what is installed. Controls other than newline/tab, format characters,
+# variation selectors and the blank-looking fillers.
+INVISIBLE = {0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x2800, 0x3164, 0xFFA0}
 
-    Agents take a skill's name from its front matter, so writing the peer's
-    `name: commit` verbatim let it shadow the user's own `commit` skill
-    whatever the directory was called.
-    """
+
+def hidden_characters(text: str) -> list[str]:
+    import unicodedata
+    found = []
+    for ch in text.lstrip("\ufeff"):
+        cp = ord(ch)
+        if ((unicodedata.category(ch) == "Cc" and ch not in "\n\t")
+                or unicodedata.category(ch) == "Cf" or cp in INVISIBLE
+                or 0xFE00 <= cp <= 0xFE0F or 0xE0100 <= cp <= 0xE01EF or 0x180B <= cp <= 0x180F):
+            found.append(f"U+{cp:04X}")
+    return sorted(set(found))
+
+
+def split_front_matter(content: str) -> tuple[list[str], str]:
+    """(front-matter lines, body); no front matter gives ([], content)."""
     lines = content.split("\n")
     if lines and lines[0].strip() == "---" and "---" in [l.strip() for l in lines[1:]]:
         end = 1 + [l.strip() for l in lines[1:]].index("---")
-        head = [l for l in lines[1:end] if not l.startswith("name:")]
-        return "\n".join(["---", f"name: {install_name}", *head] + lines[end:])
-    return f"---\nname: {install_name}\n---\n" + content
+        return lines[1:end], "\n".join(lines[end + 1:])
+    return [], content
+
+
+def dropped_keys(content: str) -> list[str]:
+    """Front-matter keys the install will NOT keep (only name and description are)."""
+    head, _ = split_front_matter(content)
+    keys = {m.group(1) for line in head if (m := FRONT_KEY.match(line))}
+    return sorted(keys - {"name", "description"})
+
+
+def installed_text(content: str, install_name: str, description: str) -> str:
+    """The text as installed, its front matter REBUILT from parsed fields.
+
+    Only the namespaced name and the publication's description survive. A
+    peer's `name : commit`, a duplicate name key, or `allowed-tools: Bash(*)`
+    (which pre-grants tools in Claude Code) can no longer ride along.
+    """
+    import json as _json
+    _, body = split_front_matter(content)
+    return (f"---\nname: {install_name}\ndescription: {_json.dumps(description, ensure_ascii=False)}\n---\n"
+            + body)
 
 
 def check_installable(record: dict, *, target: Target, force: bool) -> Path:
@@ -229,11 +264,11 @@ def check_installable(record: dict, *, target: Target, force: bool) -> Path:
     peer's skill whose namespaced name happens to collide.
     """
     import json as _json
-    import unicodedata
     content = str(record.get("content") or "")
-    if any(unicodedata.category(ch) == "Cf" for ch in content.lstrip("\ufeff")):
-        raise ValueError("the text contains invisible formatting characters (bidi or zero-width) "
-                         "that can make the review differ from what is installed; not installing it")
+    if hidden := hidden_characters(content + str(record.get("description") or "")):
+        raise ValueError("the text contains invisible or control characters ("
+                         + ", ".join(hidden[:6]) + ") that can make the review differ from "
+                         "what is installed; not installing it")
     dest = target.path / shared_install_name(str(record.get("owner") or "peer"), str(record.get("name") or ""))
     if dest.is_symlink() or (dest.exists() and not dest.is_dir()):
         raise ValueError(f"{dest} exists and is not a skill directory")
@@ -264,10 +299,28 @@ def install_shared(record: dict, *, target: Target, session_id: str, force: bool
     import tempfile
     import time as _time
     from .skill_sharing import validate_publication
+    import fcntl
     clean = validate_publication({k: record.get(k) for k in ("name", "description", "content", "sha256")})
-    dest = check_installable(record, target=target, force=force)
-    text = installed_text(clean["content"], dest.name)
     target.path.mkdir(parents=True, exist_ok=True)
+    # Check and swap under one lock: concurrent installs raced, and a second
+    # publisher could replace the first between the check and the rename.
+    lock = open(target.path / ".collab-install.lock", "a")
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    try:
+        return _install_locked(record, clean, target=target, session_id=session_id, force=force)
+    finally:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        lock.close()
+
+
+def _install_locked(record, clean, *, target: Target, session_id: str, force: bool) -> Path:
+    import hashlib
+    import json as _json
+    import shutil
+    import tempfile
+    import time as _time
+    dest = check_installable(record, target=target, force=force)
+    text = installed_text(clean["content"], dest.name, clean["description"])
     fresh = Path(tempfile.mkdtemp(prefix=".collab-install-", dir=target.path))
     try:
         (fresh / "SKILL.md").write_text(text, encoding="utf-8")
@@ -300,6 +353,8 @@ def shared_installs(target: Target) -> list[dict]:
     if not target.path.is_dir():
         return found
     for entry in sorted(target.path.iterdir()):
+        if entry.name.startswith(".") or entry.name.endswith(".collab-old"):
+            continue  # an interrupted install's scratch, never a skill
         meta = entry / PROVENANCE
         if entry.is_dir() and not entry.is_symlink() and meta.is_file():
             try:

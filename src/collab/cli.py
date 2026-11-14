@@ -7021,8 +7021,15 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
 
 
 def cmd_skills_install_shared(args: argparse.Namespace) -> int:
-    """Review a peer's published skill, get the human's yes, install it (R19)."""
+    """Review a peer's published skill, get the human's yes, install it (R19).
+
+    Consent binds the BYTES: a publisher can republish new text under the same
+    id, so a non-terminal approval must name the SHA-256 the human reviewed.
+    Without a terminal the text is written to a review file for the human,
+    never printed into the installing agent's context.
+    """
     import hashlib
+    import os
     from . import skills as sk
     from .protocol import scrub_block
     try:
@@ -7034,22 +7041,50 @@ def cmd_skills_install_shared(args: argparse.Namespace) -> int:
             return 0
         if not args.target:
             raise ValueError("skills install-shared needs a publication ID from `collab skills shared`")
+        if os.environ.get("COLLAB_WORKER") == "1":
+            raise ValueError("a conversation worker cannot install skills")
         profile = _require_profile(args)
         target = sk.skills_target(args.agent)
         with _client(profile) as client:
             record = client.shared_skill(args.target).get("skill") or {}
         content = record.get("content")
-        if not isinstance(content, str) or hashlib.sha256(content.encode()).hexdigest() != record.get("sha256"):
+        digest = hashlib.sha256(content.encode()).hexdigest() if isinstance(content, str) else ""
+        if not digest or digest != record.get("sha256"):
             raise ValueError("the publication's text does not match its SHA-256; not installing it")
         dest = sk.check_installable(record, target=target, force=args.force)  # before asking
-        heading(f"shared skill {said(record.get('name', ''))} from {said(record.get('owner', '?'))}")
-        print(f"  {len(content.encode())} bytes · sha256 {said(record.get('sha256', ''))}")
+        terminal = sys.stdin.isatty() and sys.stdout.isatty()
+        owner_tag = hashlib.sha256(str(record.get("owner_id", "")).encode()).hexdigest()[:8]
+        heading(f"shared skill {said(record.get('name', ''))} from {said(record.get('owner', '?'))} "
+                f"(participant {owner_tag})")
+        print(f"  {len(content.encode())} bytes · sha256 {digest}")
+        print(f"  description: {said(str(record.get('description', '')))}")
         print(f"  would install as {said(str(dest))}, renamed `{said(dest.name)}` in its front matter")
-        print(dim("  ---- peer-authored text (untrusted): read it before agreeing ----"))
-        print(scrub_block(content))
-        print(dim("  ---- end of text ----"))
-        if not _confirm_install(args):
+        if dropped := sk.dropped_keys(content):
+            print(f"  front-matter keys dropped on install: {', '.join(said(k) for k in dropped)}")
+        print(dim("  only SKILL.md is installed; files it refers to are not"))
+        if terminal:
+            print(dim("  ---- peer-authored text (untrusted): read it before agreeing ----"))
+            print(scrub_block(content))
+            print(dim("  ---- end of text ----"))
+        if args.human_approved:
+            if args.sha256 != digest:
+                raise ValueError("--human-approved needs --sha256 with the hash your human reviewed; "
+                                 "the text now has a different one, so it was not installed")
+        elif not terminal:
+            review = profile.dir / "skill-reviews" / f"{said(str(record.get('id', 'skill')))}-{digest[:12]}.md"
+            review.parent.mkdir(parents=True, exist_ok=True)
+            review.write_text(content, encoding="utf-8")
+            print(f"  full text for your human to read: {review}")
+            fail("not installed: your human reviews that file and decides; "
+                 f"their approval is `--human-approved --sha256 {digest}`")
             return 1
+        else:
+            try:
+                answer = input("  Install it? [y/N] ")
+            except EOFError:
+                return 1
+            if answer.strip().lower() not in ("y", "yes"):
+                return 1
         dest = sk.install_shared(record, target=target, session_id=profile.session_id, force=args.force)
         ok(f"installed {dest}")
         print(dim(f"  provenance in {dest / sk.PROVENANCE}; remove with `collab skills uninstall-shared {dest.name}`"))
@@ -7057,21 +7092,6 @@ def cmd_skills_install_shared(args: argparse.Namespace) -> int:
     except (HubError, OSError, ValueError) as exc:
         fail(str(exc))
         return 1
-
-
-def _confirm_install(args: argparse.Namespace) -> bool:
-    """The human's explicit yes: on a terminal, or vouched for with a flag."""
-    if getattr(args, "human_approved", False):
-        return True
-    if not (sys.stdin.isatty() and sys.stdout.isatty()):
-        fail("installing a peer's skill changes what your agent does: show your human the text "
-             "above, then repeat with --human-approved (or run it yourself in a terminal)")
-        return False
-    try:
-        answer = input("  Install it? [y/N] ")
-    except EOFError:
-        return False
-    return answer.strip().lower() in ("y", "yes")
 
 
 def cmd_skills(args: argparse.Namespace) -> int:
@@ -7975,6 +7995,7 @@ Esc cancels a draft, q quits. Editor commands run without a shell.""")
     sk.add_argument("--to", help="with ask: the participant to ask")
     sk.add_argument("--args", help="with ask: arguments for the requested skill")
     sk.add_argument("--note", help="with accept/decline/done: a reason or the result")
+    sk.add_argument("--sha256", help="with install-shared --human-approved: the hash your human reviewed")
     sk.add_argument("--human-approved", action="store_true",
                     help="with accept or install-shared, without a terminal: your human has explicitly consented")
     sk.add_argument("--name", help="published skill name override")
