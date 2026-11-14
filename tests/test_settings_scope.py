@@ -224,3 +224,27 @@ def test_a_stale_view_from_one_home_never_carries_its_private_values_to_another(
     assert b == {"worker_instructions": "B only", "worker_max_attempts": 11}
     a = json.loads((home_a / config.AGENT_SETTINGS).read_text())
     assert a == {"worker_instructions": "A only"}
+
+
+def test_a_view_saved_after_its_cache_expired_still_carries_only_its_own_change(tmp_path, monkeypatch):
+    """Friday's repro: the read cache expires between read (A) and save (B)."""
+    monkeypatch.delenv("COLLAB_AGENT_CONFIG")
+    monkeypatch.delenv("COLLAB_HOME", raising=False)
+    home_a, home_b = tmp_path / "a" / ".collab", tmp_path / "b" / ".collab"
+    for home, text in ((home_a, "A only"), (home_b, "B only")):
+        home.mkdir(parents=True)
+        (home / config.AGENT_SETTINGS).write_text(json.dumps({"worker_instructions": text}))
+    chosen = {"home": home_a}
+    monkeypatch.setattr(config, "collab_home", lambda *a, **k: chosen["home"])
+    config._AGENT_PATH.clear()
+    config._AGENT_CACHE.clear()
+    view = config.load_config()                 # read under A
+    chosen["home"] = home_b                     # B selected elsewhere
+    config._AGENT_PATH.clear()                  # every cache expired before the save
+    config._AGENT_CACHE.clear()
+    config._CACHE.clear()
+    view["worker_max_attempts"] = 11
+    config.save_config(view)
+    assert json.loads((home_b / config.AGENT_SETTINGS).read_text()) == {
+        "worker_instructions": "B only", "worker_max_attempts": 11}
+    assert json.loads((home_a / config.AGENT_SETTINGS).read_text()) == {"worker_instructions": "A only"}
