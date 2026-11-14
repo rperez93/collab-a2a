@@ -6190,6 +6190,26 @@ def _settle_in_the_session(name: str, args: argparse.Namespace) -> int:
     return 0
 
 
+def _decision_source(profile: SessionProfile, store, decision_id: str) -> tuple[str, str]:
+    """Who asked the question a decision is about: (recipient, room) for a reply."""
+    from .client.inbox import Inbox
+    record = next((r for r in store.pending() if r["id"] == decision_id), None)
+    if record is None:
+        raise ValueError(f"no pending worker decision {decision_id}")
+    seq = record.get("seq") or 0
+    if not seq:
+        return "", ""
+    inbox = Inbox(profile.dir, readonly=True)
+    try:
+        events = inbox.after(seq - 1, limit=1)
+    finally:
+        inbox.close()
+    if not events or events[0].seq != seq:
+        return "", ""
+    event = events[0]
+    return ("", event.room or "general") if event.room and not event.to else (event.sender, "")
+
+
 def cmd_worker(args: argparse.Namespace) -> int:
     """Delegate coordination without consuming the coding agent's inbox."""
     from .worker import Store
@@ -6256,6 +6276,13 @@ def cmd_worker(args: argparse.Namespace) -> int:
                     return 0
             store.off()
             ok("collaboration worker disabled; pending decisions and replies are preserved")
+        elif args.worker_action == "reply" and getattr(args, "awaiting_human", False):
+            to, room = _decision_source(profile, store, args.decision_id)
+            record = store.await_human(args.decision_id, args.text, to=to, room=room)
+            onboard.ensure_daemon(profile, wait=False)
+            ok("decision kept open while your human decides"
+               + (f"; the peer is told: {record}" if record else ""))
+            print(dim("  reply again without --awaiting-human once your human has answered"))
         elif args.worker_action == "reply":
             store.answer(args.decision_id, args.text)
             ok("decision queued for the collaboration worker")
@@ -6275,7 +6302,8 @@ def cmd_worker(args: argparse.Namespace) -> int:
                 print("No pending collaboration decisions.")
             else:
                 for item in pending:
-                    print(f"{said(item['id'])} [{said(item['reason'])}] {said(item['question'])}")
+                    waiting = " (with your human)" if item.get("awaiting_human") else ""
+                    print(f"{said(item['id'])} [{said(item['reason'])}]{waiting} {said(item['question'])}")
                 print("Reply with: collab worker reply ID 'your decision'")
         else:
             state = store.status()
@@ -8156,6 +8184,8 @@ Esc cancels a draft, q quits. Editor commands run without a shell.""")
         elif action == "reply":
             wp.add_argument("decision_id")
             wp.add_argument("text")
+            wp.add_argument("--awaiting-human", action="store_true",
+                            help="keep the decision open: your human is deciding; TEXT goes to the peer")
         elif action == "context":
             wp.add_argument("text")
         elif action == "send":

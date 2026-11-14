@@ -388,6 +388,25 @@ class Store:
             db.execute("UPDATE records SET kind='answer',data=? WHERE id=?",
                        (json.dumps({"text": text, "prompt": prompt}), escalation_id))
 
+    def await_human(self, escalation_id: str, note: str, *, to: str = "", room: str = "") -> str:
+        """The main agent took the question to its human (R18).
+
+        The decision stays open, so nothing re-escalates it and the deferral
+        repair sees it as routed; the peer is told once, verbatim, that a
+        human is deciding. The final `answer` later closes it as usual.
+        """
+        note = _text(note, "note")
+        with self._db() as db:
+            row = db.execute("SELECT data FROM records WHERE id=? AND kind='escalation'", (escalation_id,)).fetchone()
+            if row is None:
+                raise ValueError(f"no pending worker decision {escalation_id}")
+            data = json.loads(row[0])
+            data.update(awaiting_human=True, awaiting_since=time.time())
+            db.execute("UPDATE records SET data=? WHERE id=?", (json.dumps(data), escalation_id))
+            if not (to or room) or not (self._state(db)["config"] or {}).get("enabled"):
+                return ""
+            return self._add(db, "outbox", {"text": note, "to": to, "room": room})
+
     def commit_turn(self, *, expected_cursor: int, cursor: int, summary: str,
                     replies: list[dict[str, Any]], escalations: list[dict[str, Any]],
                     context_ids: list[str] = (), answer_ids: list[str] = (),
@@ -661,6 +680,7 @@ def metrics(root):
     return {**state.get("usage", {}), **state.get("reported_stats", {}), "enabled": state["enabled"], "running": state["running"],
         "agent": cfg.get("agent", ""), "model": model or state.get("reported_stats", {}).get("model", ""), "turns": state["turn"],
         "attempts": state.get("attempts_total", 0), "pending": len(state["pending"]),
+        "awaiting_human": sum(1 for p in state["pending"] if p.get("awaiting_human")),
         **_budget_figures(store),
         "errors": int(bool(state["error"])), "source": state.get("reported_stats", {}).get("source") or "collab-worker",
         "observed_at": max(state.get("last_progress", 0), state.get("usage", {}).get("observed_at", 0),

@@ -147,7 +147,9 @@ async def test_cancellation_and_deadlines_kill_the_exact_worker_group(tmp_path, 
     marker = tmp_path / "pids.json"
     script = ("import json,os,subprocess,sys,time; "
               "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(100)']); "
-              f"open({str(marker)!r},'w').write(json.dumps([os.getpid(),child.pid])); "
+              # Atomic: under load the reader saw a half-written file.
+              f"open({str(marker) + '.tmp'!r},'w').write(json.dumps([os.getpid(),child.pid])); "
+              f"os.replace({str(marker) + '.tmp'!r},{str(marker)!r}); "
               "time.sleep(100)")
     task = asyncio.create_task(runtime.run_turn("command", "cheap", {}, tmp_path,
         command=python(script), timeout=0.4 if not cancel else 10))
