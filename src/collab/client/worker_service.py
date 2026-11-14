@@ -442,15 +442,9 @@ class Conversation:
             # A wrong seq used to throw the whole paid turn away and back off.
             # Keep the question, but unanchored: guessing an anchor could show
             # the human one peer's text and route the answer to another.
-
-
-            # A wrong seq used to throw the whole paid turn away and back off;
-            # the question is still worth routing, so keep it unanchored.
-            only = {e["seq"] for e in selected}
             for escalation in result["escalations"]:
                 if escalation["seq"] not in valid_seqs:
-                    # One message in the turn can only be the one it meant.
-                    escalation["seq"] = next(iter(only)) if len(only) == 1 else 0
+                    escalation["seq"] = 0
             for reply in result["replies"]:
                 if reply["to"] and reply["to"] not in known:
                     raise ValueError("worker proposed an unknown recipient")
