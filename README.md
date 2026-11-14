@@ -2483,8 +2483,8 @@ collab config --json              # the same table, for an agent to read
 | `timezone` | the zone dates and times are read in; an IANA name, or `auto` for the computer's own | — | `auto` |
 | `share_stats` | share your usage with the session | `collab stats --share on\|off` | `on` |
 | `rules` | print collab's rules of conduct at `host` and `join`; the pointer to the repo's own `COLLAB.md` always prints | — | `on` |
-| `proxy` | shared machine tunnel policy: auto/on, or per-hub off | `collab host --tunnel own` | auto |
 | `ngrok_domain` | reserved ngrok domain `collab host` uses when `--domain` is not given; a session you gave its own `--domain` keeps it | `collab host --domain` | empty |
+| `proxy` | shared machine tunnel policy: on/auto share one machine tunnel, off gives each hub its own | `collab host --tunnel own\|proxy` | `off` this release |
 | `watch_layout` | `split`, `tmux`, `chat` or `roster` | `collab watch --layout <l> --save` | `split` |
 | `watch_roster_size` | how much room the roster gets, in percent | `collab watch --roster-size <n> --save` | `30` |
 | `watch_roster_position` | `top`, `bottom`, `left` or `right` | `collab watch --roster-position <p> --save` | `top` |
@@ -2972,7 +2972,9 @@ Provider call duration still contributes to reply time. See
 
 ### Shared public tunnel
 
-Hosting uses one machine proxy by default: sessions receive `/s/<id>` links
-under the shared domain. The primary session retains old bare-domain links.
-Use `collab host --tunnel own` for a separate session tunnel or `--no-tunnel`
-for local-only hosting. See [proxy hosting and migration](docs/proxy-hosting.md).
+One machine proxy can serve every hosted session through one tunnel: sessions
+receive `/s/<id>` links under the shared domain. It is opt-in this release —
+`collab config proxy on`, or `collab host --tunnel proxy` for one session — and
+each hub keeps its own tunnel otherwise. The session named with `collab host
+--primary` keeps the bare-domain links handed out before. See [proxy hosting
+and migration](docs/proxy-hosting.md).

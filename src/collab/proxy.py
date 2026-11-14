@@ -107,6 +107,39 @@ def state_path() -> Path:
     return state_dir() / "proxy" / STATE_FILE
 
 
+def log_path() -> Path:
+    """The proxy's own log: its stdout and stderr, and its `logging` through
+    the write-time cap. One name for the spawner, the proxy and the report
+    that points a person at it, which had each spelled it themselves."""
+    return state_dir() / "proxy" / "proxy.log"
+
+
+@contextlib.contextmanager
+def _state_locked():
+    """Hold the state file still for one read-modify-write.
+
+    The proxy saves its whole state from memory whenever its tunnel changes,
+    and a hub claims the primary from another process: without this, a claim
+    landing between the proxy's read and its write was reverted by it. Only
+    ever held for a JSON read and a rename, so a blocking lock is enough; a
+    platform or filesystem that cannot lock proceeds unlocked rather than
+    refusing to serve."""
+    try:
+        import fcntl
+    except ImportError:                     # Windows: no flock to take
+        yield
+        return
+    path = state_path().with_suffix(".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        with contextlib.suppress(OSError):
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)                        # closing releases the lock
+
+
 @dataclass
 class ProxyState:
     pid: int = 0
@@ -145,12 +178,46 @@ class ProxyState:
             return cls()
 
     def save(self) -> None:
+        with _state_locked():
+            # THE PRIMARY IS NEVER WRITTEN HERE. It is set once, by
+            # `claim_primary`, and every whole-object save keeps whatever the
+            # file already names: the running proxy saves the state it loaded
+            # at start every time its tunnel changes, and that copy would
+            # otherwise revert a primary claimed since — the bare-domain links
+            # of the session that claimed it then reach nobody.
+            recorded = ProxyState.load().primary
+            if recorded:
+                self.primary = recorded
+            self._write()
+
+    def _write(self) -> None:
         path = state_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(asdict(self), indent=2))
         os.chmod(tmp, 0o600)
         tmp.replace(path)
+
+
+def claim_primary(session_id: str) -> str:
+    """Make `session_id` the session a bare-domain link reaches, if no other
+    session already is; return whichever session is recorded afterwards.
+
+    EXPLICIT, AND ONLY THE RECORDED PRIMARY MAY SET IT AGAIN. Every link handed
+    out before the proxy existed is a bare-domain link naming one session, so
+    which session that is cannot be decided by which hub happened to start the
+    proxy first: that is how a test session could have taken the live
+    session's guests. A request from any other session is refused here and
+    told who holds it; the recorded primary asking again is a no-op.
+    """
+    if not session_id:
+        return ProxyState.load().primary
+    with _state_locked():
+        state = ProxyState.load()
+        if not state.primary:
+            state.primary = session_id
+            state._write()
+        return state.primary
 
 
 class BodyStalled(Exception):

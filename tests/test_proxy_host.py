@@ -53,12 +53,23 @@ def test_proxy_tunnel_recovery_updates_prefixed_url(monkeypatch):
 
 
 def test_proxy_config_is_validated_and_persisted():
-    assert config.proxy_mode() == 'auto'
-    assert config.set_proxy_mode('off') == 'off'
+    """OFF by default this release: an upgrade must not move every host onto
+    the shared proxy and a new address. Opting in persists; junk is refused."""
     assert config.proxy_mode() == 'off'
+    assert config.set_proxy_mode('on') == 'on'
+    assert config.proxy_mode() == 'on'
     with pytest.raises(ValueError):
         config.set_proxy_mode('sometimes')
-    assert config.proxy_mode() == 'off'
+    assert config.proxy_mode() == 'on'
+
+
+def test_proxy_is_a_machine_setting_after_ngrok_domain():
+    """One proxy and one tunnel serve the whole machine, so whether to use them
+    is the machine's setting, never one agent's — and it sits beside the other
+    setting `collab host` reads."""
+    names = [s.name for s in config.settings()]
+    assert names.index('proxy') == names.index('ngrok_domain') + 1
+    assert not config.agent_scoped('proxy')
 
 
 def test_shared_proxy_error_points_to_its_real_log(tmp_path, monkeypatch):
@@ -110,21 +121,24 @@ sys.exit(proxy_main.main(sys.argv[1:]))
         children.append(child)
         return child
     monkeypatch.setattr(proxy_host.subprocess, 'Popen', launch)
-    a, b = proxy_host.SharedProxy('s_a'), proxy_host.SharedProxy('s_b')
+    # Only `a` asked to be the primary (`collab host --primary`); `b` merely
+    # attached. Racing to start the proxy must not decide it.
+    a, b = proxy_host.SharedProxy('s_a', primary=True), proxy_host.SharedProxy('s_b')
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(lambda item: item.start(), (a, b)))
         assert results == ['https://fixture.test/s/s_a', 'https://fixture.test/s/s_b']
         assert (tmp_path / 'starts').read_text().splitlines() == ['start']
         state = proxy.ProxyState.load()
-        primary = state.primary
-        assert primary in ('s_a', 's_b')
+        assert state.primary == 's_a'
         holder = next(child for child in children if child.pid == state.pid)
         holder.terminate()
         holder.wait(timeout=10)
+        # Restarted by the hub that did NOT ask: it must not take the primary.
+        assert b.ensure() == ('https://fixture.test/s/s_b', False)
         assert a.ensure() == ('https://fixture.test/s/s_a', False)
         assert proxy.ProxyState.load().pid != holder.pid
-        assert proxy.ProxyState.load().primary == primary
+        assert proxy.ProxyState.load().primary == 's_a'
         assert (tmp_path / 'starts').read_text().splitlines() == ['start', 'start']
         assert a.own_pid() == b.own_pid() == 0
     finally:
@@ -198,3 +212,131 @@ def test_real_hubs_publish_prefixed_urls_without_owning_shared_proxy(tmp_path, m
             if child.poll() is None:
                 child.terminate()
             child.wait(timeout=10)
+
+
+# ── R11d-2: the primary is explicit, and only the recorded primary sets it ──
+
+
+def test_starting_the_proxy_never_makes_a_session_its_primary(tmp_path, monkeypatch):
+    """Every hub used to pass `--primary <itself>` when it started the proxy,
+    so the session that bare-domain links reach — every link handed out before
+    the proxy existed — was whichever hub got there first, or noticed a dead
+    proxy first once the state had been lost."""
+    monkeypatch.setenv('COLLAB_PEERS_DIR', str(tmp_path / 'registry'))
+    spawned = []
+
+    class Child:
+        def poll(self):
+            return 1
+
+        def wait(self):
+            return 1
+
+    def launch(command, **kw):
+        spawned.append(command)
+        return Child()
+
+    monkeypatch.setattr(proxy_host.subprocess, 'Popen', launch)
+    shared = proxy_host.SharedProxy('s_attached', timeout=0.2)
+    assert shared.start() == ''
+    assert spawned and '--primary' not in spawned[0]
+    assert proxy.ProxyState.load().primary == ''
+
+
+def test_only_the_recorded_primary_may_set_the_primary(tmp_path, monkeypatch):
+    """A second session asking is refused and told who holds it; the recorded
+    one asking again changes nothing."""
+    monkeypatch.setenv('COLLAB_PEERS_DIR', str(tmp_path / 'registry'))
+    assert proxy.claim_primary('s_live') == 's_live'
+    assert proxy.claim_primary('s_other') == 's_live'
+    assert proxy.claim_primary('s_live') == 's_live'
+    assert proxy.ProxyState.load().primary == 's_live'
+
+    refused = proxy_host.SharedProxy('s_other', primary=True, timeout=0.2)
+    refused._claim()
+    assert refused.primary_holder == 's_live'
+    assert proxy.ProxyState.load().primary == 's_live'
+
+
+def test_a_running_proxys_own_save_never_reverts_a_claimed_primary(tmp_path, monkeypatch):
+    """The proxy holds the state it loaded at start and saves it whole every
+    time its tunnel changes. A primary claimed after it started — by a hub
+    attaching to it, the usual case — was reverted by the next such save."""
+    monkeypatch.setenv('COLLAB_PEERS_DIR', str(tmp_path / 'registry'))
+    running = proxy.ProxyState.load()          # the proxy's copy, primary ''
+    running.pid = 4242
+    running.save()
+    proxy_host.SharedProxy('s_live', primary=True)._claim()
+    running.public_url = 'https://moved.test'  # its tunnel changed address
+    running.save()
+    on_disk = proxy.ProxyState.load()
+    assert on_disk.primary == 's_live'
+    assert on_disk.public_url == 'https://moved.test'
+
+
+def test_the_proxys_log_stays_under_the_cap_while_it_runs(tmp_path, monkeypatch):
+    """`proxy.log` was the proxy's stderr with a bare `basicConfig` writing
+    into it: trimmed when a hub next spawned a proxy and never while one ran —
+    and one proxy serves every session on the machine for as long as any is
+    up. Flooded for three seconds through `logging`, the file is sampled every
+    5 ms and must never pass the 10 MB budget (#139's strict write-time cap).
+    Measured: 6.3 MB at its peak with the cap; 76.5 MB with `basicConfig`
+    back, the watcher's once-a-second trim notwithstanding."""
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+    import time
+
+    from collab import logcap
+
+    monkeypatch.setenv('COLLAB_PEERS_DIR', str(tmp_path / 'registry'))
+    monkeypatch.setenv('PYTHONPATH', str(Path(__file__).resolve().parents[1] / 'src'))
+    done = tmp_path / 'flooded'
+    provider = f'''
+import logging, sys, time
+from collab.server import tunnel
+class Provider:
+    public_url = 'https://fixture.test'
+    last_error = ''
+    restarts = 0
+    def __init__(self, *a, **kw): pass
+    def start(self):
+        flood = logging.getLogger('collab.flood')
+        line = 'x' * 1000
+        until = time.monotonic() + 3
+        while time.monotonic() < until:
+            flood.warning(line)
+        open({str(done)!r}, 'w').close()
+        return self.public_url
+    def own_pid(self): return 0
+    def ensure(self): return self.public_url, False
+    def stop(self): pass
+tunnel.TunnelSupervisor = Provider
+from collab import proxy_main
+sys.exit(proxy_main.main(sys.argv[1:]))
+'''
+    log = proxy.log_path()
+    log.parent.mkdir(parents=True, exist_ok=True)
+    # Spawned exactly as `SharedProxy.start` spawns it: stdout and stderr are
+    # the log file itself.
+    with open(log, 'ab') as fh:
+        child = subprocess.Popen([sys.executable, '-c', provider, '--idle-exit', '30'],
+                                 stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
+                                 start_new_session=True)
+    peak = 0
+    try:
+        deadline = time.monotonic() + 30
+        while not done.exists():
+            assert time.monotonic() < deadline, 'the flood never finished'
+            assert child.poll() is None, 'the proxy exited: ' + log.read_text()[-2000:]
+            peak = max(peak, logcap.total(log))
+            time.sleep(0.005)
+        for _ in range(100):                 # what the queue still held
+            peak = max(peak, logcap.total(log))
+            time.sleep(0.005)
+    finally:
+        child.terminate()
+        child.wait(timeout=10)
+    assert peak > 1_000_000, 'the flood never reached the log'
+    assert peak <= logcap.BUDGET, f'proxy.log reached {peak:,} bytes'

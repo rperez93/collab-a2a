@@ -200,6 +200,11 @@ def hosting(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
     monkeypatch.setattr(config, "repo_root", lambda cwd=None: tmp_path)
     config._CACHE.clear()
+    # THE SHARED PROXY ON, as a machine may well have it: every case here that
+    # is about a hub's OWN ngrok says `--tunnel own` (see `_host`), and this is
+    # what makes that load-bearing rather than decorative while the default is
+    # `off` (R11d-2).
+    config.set_proxy_mode("on")
     yield tmp_path
     # EVERY HUB THIS TEST STARTED, WHATEVER HAPPENED. `_host` stops what
     # `hosted_sessions` lists, but a failed assertion, a test that hosts
@@ -236,7 +241,12 @@ def _host(root, *extra) -> str:
     out = io.StringIO()
     try:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-            main(["host", "--no-daemon", "--no-update-check", "--name", "alice", *extra])
+            # `--tunnel own`: these cases are about a hub's OWN ngrok — its
+            # argv, its refusal, its domain. Under the shared proxy (R11d-2)
+            # the tunnel belongs to the proxy, so without this a `proxy` setting
+            # on the machine would make them test something else entirely.
+            main(["host", "--no-daemon", "--no-update-check", "--name", "alice",
+                  "--tunnel", "own", *extra])
     finally:
         for cfg in hosted_sessions(root / ".collab"):
             stop_session(HubConfig.load(cfg.session_id, cfg.home) or cfg)
@@ -551,3 +561,190 @@ def test_the_no_tunnel_variable_alone_is_recorded_like_the_flag(hosting, monkeyp
     monkeypatch.setenv("COLLAB_NO_TUNNEL", "1")
     _host(hosting)
     assert hosted_sessions(hosting / ".collab")[0].no_tunnel is True
+
+
+# ── R11d-2: a session on the shared proxy ────────────────────────────────────
+#
+# Real hubs and a real proxy, started the way `collab host` starts them; only
+# ngrok is a fake on PATH. The proxy runs `--no-tunnel` with a loopback address
+# standing in for its public one wherever these tests are not about ngrok.
+
+
+def _a_proxy_without_ngrok(root):
+    """A real `collab.proxy_main`, serving `http://127.0.0.1:<port>` as its
+    public address. Returned with that address; the caller stops it."""
+    import subprocess
+    import sys
+
+    from collab import proxy
+    from collab.server.tunnel import free_port
+
+    port = free_port()
+    env = {**os.environ,
+           "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "collab.proxy_main", "--no-tunnel",
+         "--port", str(port), "--idle-exit", "120"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL, env=env)
+    deadline = time.monotonic() + 15
+    while proxy.ProxyState.load().pid != proc.pid:
+        assert time.monotonic() < deadline, "the proxy never recorded itself"
+        assert proc.poll() is None, "the proxy exited"
+        time.sleep(0.05)
+    base = f"http://127.0.0.1:{port}"
+    state = proxy.ProxyState.load()
+    state.public_url = base
+    state.save()
+    return proc, base
+
+
+def _stop_the_proxy_it_recorded():
+    """The proxy a hub started is nobody's child here: stopped by the pid AND
+    start time it recorded, never by name."""
+    import signal
+
+    from collab import proxy
+    from collab.client import exclusive
+
+    state = proxy.ProxyState.load()
+    stamp = exclusive.decode(state.stamp)
+    if stamp and stamp.pid == state.pid and stamp.alive():
+        os.kill(state.pid, signal.SIGTERM)
+        deadline = time.monotonic() + 10
+        while stamp.alive() and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+
+def test_a_proxy_mode_hub_revived_by_its_daemon_reattaches_and_starts_no_ngrok(
+        hosting, monkeypatch):
+    """`--tunnel proxy` lives in hub.json, and the hub the daemon revives reads
+    only that: with the machine setting OFF, a revived hub that forgot the
+    mode would start its own ngrok — and take the domain from the proxy."""
+    from collab.server.session import HubConfig, hosted_sessions, stop_session
+
+    config.set_proxy_mode("off")
+    _fake_ngrok_on_path(hosting, monkeypatch, "exit 1\n")
+    shared, base = _a_proxy_without_ngrok(hosting)
+    try:
+        _host(hosting, "--tunnel", "proxy")
+        cfg = hosted_sessions(hosting / ".collab")[0]
+        assert cfg.tunnel_mode == "proxy"
+        assert not (hosting / "argv.txt").exists()
+
+        proc, up = _revive_like_the_daemon(hosting)
+        try:
+            assert up, "the revived hub did not come up"
+            latest = HubConfig.load(cfg.session_id, cfg.home)
+            assert latest.tunnel == "proxy"
+            assert latest.public_url == f"{base}/s/{cfg.session_id}"
+            assert latest.tunnel_pid == 0
+            assert not (hosting / "argv.txt").exists(), "the revived hub started ngrok"
+        finally:
+            stop_session(HubConfig.load(cfg.session_id, cfg.home) or cfg)
+            with contextlib.suppress(Exception):
+                proc.wait(timeout=10)
+    finally:
+        shared.terminate()
+        shared.wait(timeout=10)
+
+
+def test_kill_all_stops_the_hubs_and_leaves_the_shared_proxy_serving(
+        hosting, monkeypatch):
+    """The proxy serves every session on the machine and no hub owns it
+    (`SharedProxy.own_pid` is 0). `collab kill --all` in one workspace must
+    withdraw only its own sessions: stopping the proxy would take every other
+    workspace's guests with it."""
+    from collab import proxy
+    from collab.cli import main
+    from collab.server.session import HubConfig, hosted_sessions
+
+    _fake_ngrok_on_path(hosting, monkeypatch, "exit 1\n")
+    shared, base = _a_proxy_without_ngrok(hosting)
+    try:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            main(["host", "--no-daemon", "--no-update-check", "--name", "alice",
+                  "--tunnel", "proxy"])
+        cfg = hosted_sessions(hosting / ".collab")[0]
+        assert HubConfig.load(cfg.session_id, cfg.home).tunnel == "proxy"
+        assert _hubs_of(hosting / ".collab")
+
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            assert main(["kill", "--all"]) == 0
+        deadline = time.monotonic() + 15
+        while _hubs_of(hosting / ".collab") and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not _hubs_of(hosting / ".collab"), "kill --all left a hub"
+
+        assert shared.poll() is None, "kill --all stopped the shared proxy"
+        state = proxy.ProxyState.load()
+        assert state.pid == shared.pid and state.public_url == base
+        assert not (hosting / "argv.txt").exists()
+    finally:
+        shared.terminate()
+        shared.wait(timeout=10)
+
+
+def test_moving_onto_the_proxy_releases_the_sessions_own_tunnel_first(
+        hosting, monkeypatch):
+    """THE CUTOVER, IN ORDER. A session's own ngrok holds its reserved domain,
+    the account's one endpoint; a proxy whose ngrok starts while that one is
+    still up is refused with ERR_NGROK_334 and the session is public nowhere.
+    `collab host --resume <id> --tunnel proxy --primary` must stop the old
+    tunnel, see it gone, and only then let the proxy take the same domain —
+    and make this session the one bare-domain links reach."""
+    import signal
+    import subprocess
+
+    from collab import proxy
+    from collab.client import exclusive
+    from collab.server.session import HubConfig, hosted_sessions
+
+    _host(hosting, "--no-tunnel", "--domain", "live.ngrok.app")
+    cfg = hosted_sessions(hosting / ".collab")[0]
+
+    # The session's own ngrok, still holding the domain: a process that is
+    # nobody's child here (as a real one is not), recorded by stamp.
+    held = int(subprocess.run(
+        ["sh", "-c", "sleep 120 >/dev/null 2>&1 & echo $!"],
+        capture_output=True, text=True, check=True).stdout)
+    cfg = HubConfig.load(cfg.session_id, cfg.home)
+    cfg.tunnel = "ngrok"
+    cfg.record_tunnel(held)
+    cfg.save()
+    old = exclusive.stamp_for(held)
+    assert old.alive()
+
+    # The proxy's ngrok says whether the old one was still up when it started.
+    _fake_ngrok_on_path(hosting, monkeypatch,
+                        f"kill -0 {held} 2>/dev/null && echo held >> "
+                        f"'{hosting}/clash.txt'\nexit 1\n")
+    try:
+        out = _host(hosting, "--resume", cfg.session_id, "--tunnel", "proxy",
+                    "--primary")
+        assert not old.alive(), "the session's own tunnel was left running"
+        assert (hosting / "argv.txt").exists(), "the proxy never started ngrok:\n" + out
+        assert not (hosting / "clash.txt").exists(), (
+            "the proxy's ngrok started while the session's own still held the domain")
+        assert _domains(hosting) == ["live.ngrok.app"]
+        assert proxy.ProxyState.load().primary == cfg.session_id
+        saved = HubConfig.load(cfg.session_id, cfg.home)
+        assert saved.tunnel_mode == "proxy" and saved.proxy_primary is True
+    finally:
+        _stop_the_proxy_it_recorded()
+        if old.alive():
+            os.kill(held, signal.SIGKILL)
+
+
+def test_primary_is_refused_with_a_per_session_tunnel(hosting, monkeypatch, capsys):
+    """`--primary` is the shared proxy's notion; with `--tunnel own` or
+    `--no-tunnel` it would be recorded and silently mean nothing."""
+    from collab.cli import main
+    from collab.server.session import hosted_sessions
+
+    for extra in (["--tunnel", "own"], ["--no-tunnel"]):
+        assert main(["host", "--no-daemon", "--no-update-check", "--primary",
+                     *extra]) == 2
+    assert "--primary" in capsys.readouterr().err
+    assert not hosted_sessions(hosting / ".collab")

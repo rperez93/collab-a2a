@@ -632,7 +632,7 @@ def tunnel_report(cfg: Any, *, installed: bool) -> list[str]:
     log = cfg.dir / "ngrok.log"
     if getattr(cfg, 'tunnel', '') == 'proxy':
         from . import proxy
-        log = (proxy.state_path().parent / 'proxy.log' if error.startswith('shared proxy')
+        log = (proxy.log_path() if error.startswith('shared proxy')
                else proxy.state_dir() / 'proxy-ngrok.log')
     if not installed:
         return [warn_text("no public tunnel"), NO_NGROK_HELP.format(port=cfg.port)]
@@ -670,6 +670,72 @@ def _preserve_cwd():
             os.environ["COLLAB_HOME"] = old_home
 
 
+#: How long `collab host` waits for a session's previous hub and its own ngrok
+#: to be gone before the shared proxy may take the domain. The hub stops its
+#: ngrok in its shutdown and gives it 5 s there (`Tunnel.stop`), after
+#: uvicorn's own shutdown; 20 s covers both with room, and is the longest a
+#: person waits at the prompt for a cutover that is not going to happen.
+CUTOVER_WAIT = 20.0
+
+
+def _release_own_tunnel_for_the_proxy(previous: Any, mode: str, primary: bool,
+                                      no_tunnel: bool) -> int | None:
+    """THE ORDERED CUTOVER: release a session's own reserved domain before the
+    shared proxy is started on it. None to carry on, else an exit code.
+
+    A session moving onto the proxy (`collab host --resume <id> --tunnel proxy
+    [--primary]`) usually has its old hub still running, and that hub's own
+    ngrok holds the domain — the account's one endpoint. Started beside it,
+    the proxy's ngrok is refused with ERR_NGROK_334 and the session is nowhere
+    public; started before the hub was stopped, the hub's tunnel watcher would
+    relaunch its own ngrok into the gap. So, in this order:
+
+    1. record the new mode in hub.json, keyed (`update_fields`), so a hub the
+       daemon revives in the meantime comes up attached, not with its own
+       tunnel;
+    2. stop the session's hub, listener and own tunnel by their stamps, as
+       `collab kill` does;
+    3. wait until the hub and the tunnel are both gone — a SIGTERM is a
+       request, and the endpoint is released only when ngrok has exited;
+    4. only then return, and the new hub starts the proxy on the same domain.
+
+    A session whose hub is not up, or that is staying on its own tunnel, is
+    left exactly as it was.
+    """
+    from .config import proxy_mode
+    from .proxy_host import use_proxy
+    from .server.session import stop_session, update_fields
+
+    if no_tunnel or not use_proxy(mode or previous.tunnel_mode, proxy_mode()):
+        return None
+    hub_alive = previous.hub_stamp().alive()
+    own_tunnel = previous.tunnel_process()
+    holding = own_tunnel.alive() or (hub_alive and previous.tunnel == "ngrok")
+    if not holding:
+        return None
+    fields = {"tunnel_mode": mode or previous.tunnel_mode}
+    if primary:
+        fields["proxy_primary"] = True
+    update_fields(previous.dir, **fields)
+    what = previous.domain or "its public address"
+    note = f"releasing {what} from the session's own tunnel first"
+    print(f"       {dim(note)}")
+    stop_session(previous)
+    deadline = time.monotonic() + CUTOVER_WAIT
+    while time.monotonic() < deadline:
+        if not previous.hub_stamp().alive() and not own_tunnel.alive():
+            ok(f"released {what}")
+            return None
+        time.sleep(0.1)
+    still = [f"{label} (pid {who.pid})" for label, who in
+             (("hub", previous.hub_stamp()), ("ngrok", own_tunnel)) if who.alive()]
+    fail(f"the session's own {' and '.join(still)} did not stop within "
+         f"{CUTOVER_WAIT:.0f} s; the shared proxy was not started, since ngrok "
+         "would refuse it the domain (ERR_NGROK_334)")
+    print(dim("  stop it with `collab kill`, then run this again"))
+    return 1
+
+
 @_preserve_cwd()
 def cmd_host(args: argparse.Namespace) -> int:
     from .server.session import (HubConfig, create_session,
@@ -702,6 +768,15 @@ def cmd_host(args: argparse.Namespace) -> int:
     if args.domain and not host_domain(args.domain, "", "", "")[0]:
         fail(f"--domain {args.domain!r} is not a domain ngrok can serve")
         return 2
+    primary = bool(getattr(args, "primary", False))
+    no_tunnel = bool(args.no_tunnel) or os.environ.get("COLLAB_NO_TUNNEL") == "1"
+    if primary:
+        from .config import proxy_mode
+        from .proxy_host import use_proxy
+        if no_tunnel or not use_proxy(args.tunnel or "proxy", proxy_mode()):
+            fail("--primary names the shared proxy's primary session; it cannot "
+                 "go with --no-tunnel or a per-session tunnel")
+            return 2
     if ignored := ngrok_domain_ignored():
         warn(f"ignoring the ngrok_domain setting {ignored!r}: not a domain "
              "ngrok can serve — `collab config ngrok_domain <domain>` fixes it")
@@ -724,6 +799,10 @@ def cmd_host(args: argparse.Namespace) -> int:
         previous[0].home = str(Path(previous[0].home).resolve())
         os.environ["COLLAB_HOME"] = previous[0].home
         os.chdir(directory)
+        if (code := _release_own_tunnel_for_the_proxy(
+                previous[0], args.tunnel or ("proxy" if primary else ""),
+                primary, no_tunnel)) is not None:
+            return code
         domain, source = host_domain(args.domain, previous[0].domain,
                                      previous[0].domain_from, ngrok_domain())
         cfg = resume_session(previous[0], port, bind=args.bind, domain=domain)
@@ -753,7 +832,12 @@ def cmd_host(args: argparse.Namespace) -> int:
 
     if getattr(args, 'tunnel', None):
         cfg.tunnel_mode = args.tunnel
-        cfg.save()
+    if primary:
+        # Explicit, and kept with the session like the mode: a revived hub
+        # asks again, which is a no-op for the recorded primary.
+        cfg.proxy_primary = True
+        cfg.tunnel_mode = args.tunnel or "proxy"
+    cfg.save()
     env = {**os.environ, "COLLAB_HOME": cfg.home, **config_module_kind_env()}
     if args.no_tunnel:
         env["COLLAB_NO_TUNNEL"] = "1"
@@ -814,6 +898,15 @@ def cmd_host(args: argparse.Namespace) -> int:
     else:
         for line in tunnel_report(cfg, installed=ngrok_path() is not None):
             print(line)
+    if cfg.tunnel == "proxy" and cfg.proxy_primary:
+        # Said here, to the person who asked: the hub's refusal is in hub.log,
+        # where nobody would read it before a guest's old link reached the
+        # wrong session — or none.
+        from . import proxy
+        holder = proxy.ProxyState.load().primary
+        if holder != cfg.session_id:
+            warn(f"the shared proxy's primary session is {holder or 'nobody'}: "
+                 "bare-domain links reach that session, not this one")
 
     # The host is participant #0: it joins its own session and comes up
     # listening, so it is live before anyone else connects.
@@ -7870,6 +7963,10 @@ def build_parser() -> argparse.ArgumentParser:
     h.add_argument("--no-tunnel", action="store_true", help="skip ngrok even if installed")
     h.add_argument("--tunnel", choices=('own', 'proxy', 'auto'),
                    help="use a per-session tunnel, shared proxy, or the proxy setting")
+    h.add_argument("--primary", action="store_true",
+                   help="through the shared proxy, make this the session bare-domain "
+                        "links reach (implies --tunnel proxy; refused if another "
+                        "session already is)")
     h.add_argument("--no-daemon", action="store_true", help="do not start listening")
     h.add_argument("--keep", action="store_true",
                    help="leave it running when this agent quits")

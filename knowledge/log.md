@@ -1,5 +1,8 @@
 # Bundle Update Log
 
+## 2026-11-14 (R11d-2 shared proxy)
+* **Update (later than the pin)**: Recorded in [the command surface](operating/cli-surface.md) that `collab host` now attaches to the shared-machine proxy when the `proxy` machine setting or `--tunnel proxy` asks — `off` by default this release — that `--primary` names the bare-domain session explicitly, and that moving a session onto the proxy releases its own tunnel first. The pin and verification stamps are unchanged.
+
 ## 2026-11-14 (default name)
 * **Update (later than the pin)**: Recorded in [state ownership](architecture/state-ownership.md) that the default display name no longer comes from git's `user.name` or `$USER` — a legacy machine name is adopted once, else the agent kind and a stable suffix. The pin and verification stamps are unchanged.
 

@@ -299,5 +299,10 @@ list.
   terminal split.
 - `collab file list --all` shows every file, including those that ended, with
   why — collected, expired or withdrawn; without it the list counts them.
-- The shared-machine proxy (`python -m collab.proxy_main`) exists but no
-  command starts it yet.
+- The shared-machine proxy (`python -m collab.proxy_main`) is started by
+  `collab host` when the `proxy` machine setting is `on`/`auto` or the host
+  passes `--tunnel proxy`; the setting defaults to `off` this release.
+  `collab host --primary` names the session bare-domain links reach (only the
+  recorded primary may set it), and `host --resume <id> --tunnel proxy` stops
+  the session's own tunnel before the proxy takes its domain. (Later than the
+  pin, R11d-2.)

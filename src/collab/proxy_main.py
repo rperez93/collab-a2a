@@ -19,8 +19,9 @@ import os
 import sys
 import time
 
-from . import proxy
+from . import logcap, proxy
 from .client import exclusive
+from .client.daemon_files import capture_logging_into, setup_logging
 
 logger = logging.getLogger("collab.proxy")
 
@@ -177,11 +178,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--idle-exit", type=float, default=proxy.IDLE_EXIT_SECONDS)
     args = parser.parse_args(argv)
 
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    # basicConfig does nothing when the root logger already has a handler, and
-    # silently drops the level with it (CLAUDE.md). Set it explicitly too.
-    logging.getLogger().setLevel(logging.INFO)
+    # THE SAME CAP AS THE HUB AND THE DAEMON (#139). `proxy.log` is the
+    # proxy's stderr, opened by whoever spawned it and trimmed only then; with
+    # a bare `basicConfig` every line went straight to it, so a proxy left up
+    # for days — it serves every session on the machine — grew it without
+    # bound. `setup_logging` puts the handlers behind the queue (and sets the
+    # level outright, since `basicConfig` alone drops it when a handler
+    # exists); `capture_logging_into` swaps the stderr handler for a capped
+    # one; the watcher trims what still reaches raw stderr, and the tunnel's
+    # own log, which its collector already writes under the cap.
+    setup_logging()
+    logcap.watch(proxy.log_path(), proxy.state_dir() / "proxy-ngrok.log")
+    capture_logging_into(proxy.log_path())
 
     lock = exclusive.DaemonLock(lock_root())
     if not lock.acquire():
@@ -196,9 +204,13 @@ def main(argv: list[str] | None = None) -> int:
 
     port = args.port or free_port()
     routes = proxy.Routes()
+    # EXPLICIT ONLY, AND NEVER OVER ANOTHER SESSION: see `proxy.claim_primary`.
+    if args.primary:
+        holder = proxy.claim_primary(args.primary)
+        if holder != args.primary:
+            logger.warning("the primary session stays %s; %s asked for it and "
+                           "was refused", holder, args.primary)
     state = proxy.ProxyState.load()
-    if not state.primary:
-        state.primary = args.primary
     state.pid, state.port, state.started_at = os.getpid(), port, time.time()
     state.stamp = exclusive.stamp_for(os.getpid()).encode()
 
@@ -232,6 +244,12 @@ def main(argv: list[str] | None = None) -> int:
             descriptors, DESCRIPTOR_FLOOR)
     config = uvicorn.Config(proxy.build_app(routes), host="127.0.0.1", port=port,
                             log_level="warning", lifespan="on",
+                            # Or uvicorn gives its loggers their own stderr
+                            # handlers, which write `proxy.log` around the cap
+                            # — the path that logged one line 129,086 times in
+                            # ten seconds (`_OnceEvery`). Without a config they
+                            # propagate to the root logger, behind the cap.
+                            log_config=None,
                             # A ceiling at the door derived from the real
                             # descriptor limit, so a flood is refused with 503
                             # before the process runs out of descriptors.
