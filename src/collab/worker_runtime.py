@@ -76,6 +76,9 @@ def classify_exit(stderr_tail: bytes) -> tuple[str, float]:
     return kind, min(wait, MAX_PROVIDER_WAIT)
 
 
+MAX_SUBJECT = 120
+
+
 def _object(properties: dict) -> dict:
     return {"type": "object", "properties": properties,
             "required": list(properties), "additionalProperties": False}
@@ -95,6 +98,9 @@ OUTPUT_SCHEMA = _object({
         "reason": {"type": "string", "enum": ["blocker", "decision", "conflict", "scope"]},
         "question": _string(MAX_TEXT, nonempty=True),
         "seq": {"type": "integer", "minimum": 0},
+        # A versioned subject, e.g. "PR#141@087570a" or "T_c144c7ad2773"; empty
+        # when there is none. Exact matches from the same asker join one decision.
+        "subject": _string(MAX_SUBJECT),
     })},
 })
 
@@ -173,7 +179,10 @@ def validate_result(value: object) -> dict:
         string(reply["to"], 200, True)
         string(reply["room"], 200)
     for escalation in value["escalations"]:
-        keys(escalation, {"reason", "question", "seq"})
+        if set(escalation) == {"reason", "question", "seq"}:
+            escalation["subject"] = ""  # an older provider schema: no subject, no dedupe
+        keys(escalation, {"reason", "question", "seq", "subject"})
+        string(escalation["subject"], MAX_SUBJECT)
         if escalation["reason"] not in ("blocker", "decision", "conflict", "scope"):
             raise WorkerRuntimeError("Worker returned an invalid escalation reason")
         string(escalation["question"], MAX_TEXT, True)

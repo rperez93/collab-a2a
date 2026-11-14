@@ -98,6 +98,13 @@ open, tells the asking peer your note once,
 stops repeat notices, and shows peers an `awaiting_human` count on your worker
 figures. The worker never addresses your human and never waits silently.
 
+Your own sends are remembered for the worker: the latest 16 (16 KiB) with
+their delivery status, so it does not ask you again what you already told a
+peer. They are context only; they never answer a pending decision. A second
+ask with the same versioned subject (for example `PR#141@087570a`), from the
+same asker and audience, joins the open decision as a follow-up; a changed
+SHA, another asker or a private/public difference stays separate.
+
 Supply outcome, acceptance evidence, ownership, dependencies and changed facts.
 Ask a focused question only when its answer changes the next action. Acknowledge
 neither acknowledgements nor routine updates. Resolve disagreements with

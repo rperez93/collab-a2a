@@ -18,6 +18,9 @@ from typing import Any
 
 MAX_TEXT = 16000
 MAX_PENDING = 1000
+#: The main agent's own recent sends kept as worker context (T_c144c7ad2773).
+MAIN_SENT_KEEP = 16
+MAIN_SENT_BYTES = 16_384
 DEFAULT_MODELS = {"codex": "gpt-5.6-luna", "claude": "claude-haiku-5-5"}
 # Automatic delegation has no private task context. Permit coordination only;
 # promises about code, scope, and progress must come from the main agent.
@@ -281,6 +284,28 @@ class Store:
         with self._db() as db:
             return self._add(db, "context", {"text": text})
 
+    @staticmethod
+    def _note_sent(state: dict, record_id: str, *, to: str, room: str, text: str, status: str) -> None:
+        """Remember what the main agent itself said, so the worker never re-asks it.
+
+        Bounded (the latest MAIN_SENT_KEEP entries within MAIN_SENT_BYTES),
+        durable (worker state), and idempotent by outbox id. It is context only:
+        it never resolves a decision and never starts a model turn.
+        """
+        ledger = [e for e in state.get("main_sent", []) if e.get("id") != record_id]
+        ledger.append({"id": record_id, "to": to, "room": room, "private": bool(to),
+                       "text": text[:1000], "at": time.time(), "status": status})
+        ledger = ledger[-MAIN_SENT_KEEP:]
+        while ledger and len(json.dumps(ledger, ensure_ascii=False).encode()) > MAIN_SENT_BYTES:
+            ledger.pop(0)
+        state["main_sent"] = ledger
+
+    @staticmethod
+    def _mark_sent(state: dict, record_id: str, status: str) -> None:
+        for entry in state.get("main_sent", []):
+            if entry.get("id") == record_id:
+                entry["status"] = status
+
     def send(self, text: str, *, to: str, room: str = "", thread: str = "",
              body: dict[str, Any] | None = None) -> str:
         """Queue the main agent's exact message without asking a model to repeat it.
@@ -313,7 +338,11 @@ class Store:
                 if len(json.dumps(body)) > MAX_TEXT:
                     raise ValueError("message body is too large to queue")
                 data["body"] = body
-            return self._add(db, "outbox", data)
+            record_id = self._add(db, "outbox", data)
+            state = self._state(db)
+            self._note_sent(state, record_id, to=to, room=room, text=text, status="queued")
+            self._save(db, state)
+            return record_id
 
     def queue_file(self, path: Path, *, to: str = "", room: str = "") -> str:
         """A file the main agent shares, delivered by the worker in order (R3).
@@ -384,6 +413,9 @@ class Store:
             data = json.loads(row[0])
             db.execute("DELETE FROM records WHERE id=?", (record_id,))
             _drop_stash(row)
+            state = self._state(db)
+            self._mark_sent(state, record_id, "failed")  # the worker must not assume it arrived
+            self._save(db, state)
             target = (f"{data['subject']} {data['subject_id']}" if data.get("kind") == "comment"
                       else "@" + data["to"] if data.get("to") else "#" + (data.get("room") or "general"))
             self._add(db, "escalation", {"reason": "blocker", "seq": 0, "question": (
@@ -479,7 +511,16 @@ class Store:
             seq = e.get("seq", cursor)
             if not isinstance(seq, int) or seq < 0 or seq > cursor:
                 raise ValueError("invalid worker escalation sequence")
-            decisions.append({"reason": e["reason"], "question": _text(e.get("question"), "question"), "seq": seq})
+            subject = e.get("subject") or ""
+            if not isinstance(subject, str) or len(subject) > 120 or "\0" in subject:
+                raise ValueError("invalid worker escalation subject")
+            decision = {"reason": e["reason"], "question": _text(e.get("question"), "question"), "seq": seq}
+            if subject:
+                decision["subject"] = subject
+            for key in ("source_id", "private"):  # set by the service from the source message
+                if key in e:
+                    decision[key] = e[key]
+            decisions.append(decision)
         with self._db() as db:
             state = self._state(db)
             if (state["cursor"] != expected_cursor or not (state["config"] or {}).get("enabled")
@@ -501,17 +542,47 @@ class Store:
                 db.executemany("DELETE FROM records WHERE id=? AND kind=?", [(rid, kind) for rid in ids])
             for reply in outgoing:
                 self._add(db, "outbox", reply)
-            pending = {(entry["seq"], entry["reason"], entry["question"])
-                       for entry in self._records(db, "escalation")}
+            open_rows = self._records(db, "escalation")
+            pending = {(entry["seq"], entry["reason"], entry["question"]) for entry in open_rows}
             for decision in decisions:
                 identity = (decision["seq"], decision["reason"], decision["question"])
-                if identity not in pending:
-                    self._add(db, "escalation", decision)
-                    pending.add(identity)
+                if identity in pending:
+                    continue
+                same = self._same_subject(open_rows, decision)
+                if same is not None:
+                    # Exactly the same versioned subject, asker and audience:
+                    # a second ask joins the open decision instead of a new one.
+                    follow = (same.get("follow_ups") or [])[-4:] + [decision["question"][:500]]
+                    merged = {k: v for k, v in same.items() if k not in ("id", "created_at")}
+                    merged["follow_ups"] = follow
+                    db.execute("UPDATE records SET data=? WHERE id=? AND kind='escalation'",
+                               (json.dumps(merged), same["id"]))
+                    same.update(merged)
+                    continue
+                self._add(db, "escalation", decision)
+                pending.add(identity)
+                open_rows = self._records(db, "escalation")
             state.update(cursor=cursor, summary=summary, turn=state.get("turn", 0) + 1, last_progress=time.time(),
                          error="", retry_at=0, running=False)
             self._save(db, state)
             return True
+
+    @staticmethod
+    def _same_subject(open_rows: list[dict[str, Any]], decision: dict[str, Any]) -> dict[str, Any] | None:
+        """An open decision that is the same question: never a fuzzy match.
+
+        All of subject (versioned, compared exactly), asker id and audience
+        must be present and equal; anything missing means no dedupe.
+        """
+        subject, source = decision.get("subject"), decision.get("source_id")
+        if not subject or not source:
+            return None
+        for row in open_rows:
+            if (row.get("subject") == subject and row.get("source_id") == source
+                    and bool(row.get("private")) == bool(decision.get("private"))
+                    and not row.get("awaiting_human")):
+                return row
+        return None
 
     def outbox(self) -> list[dict[str, Any]]:
         with self._db() as db:
@@ -521,6 +592,12 @@ class Store:
         with self._db() as db:
             row = db.execute("SELECT data FROM records WHERE id=? AND kind='outbox'", (record_id,)).fetchone()
             db.execute("DELETE FROM records WHERE id=? AND kind='outbox'", (record_id,))
+            # Only a row still queued was delivered now: after a rejection the
+            # row is already gone, and its failed status must stand.
+            if row is not None:
+                state = self._state(db)
+                self._mark_sent(state, record_id, "delivered")
+                self._save(db, state)
         _drop_stash(row)
 
     def defer(self, record_id: str, *, retry_at: float, error: str) -> bool:
