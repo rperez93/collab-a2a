@@ -182,6 +182,84 @@ def installed_list(env: dict[str, str] | None = None) -> list[dict[str, str]]:
     return sanitise_list(found)
 
 
+PROVENANCE = ".collab-provenance.json"
+
+
+def _slug(text: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return slug[:32] or "peer"
+
+
+def shared_install_name(publisher: str, name: str) -> str:
+    """Namespaced so a peer's skill can never shadow one of the user's own."""
+    return f"shared-{_slug(publisher)}-{name}"[:64]
+
+
+def skills_target(agent: str | None = None) -> Target:
+    """The skills directory of the named agent, or of the one running collab."""
+    from .hosttool import detect
+    key = agent or detect()
+    target = next((t for t in known_targets() if t.key == key and t.kind == "skills"), None)
+    if target is None:
+        raise ValueError("no skills directory for this coding agent; pass --agent "
+                         + "|".join(t.key for t in known_targets() if t.kind == "skills"))
+    return target
+
+
+def install_shared(record: dict, *, target: Target, session_id: str, force: bool = False) -> Path:
+    """Write a reviewed, consented peer skill and the provenance beside it (R19).
+
+    The caller has verified the hash and obtained the human's consent; this
+    only refuses to overwrite and keeps the record of where the text came from.
+    """
+    import hashlib
+    import json as _json
+    import time as _time
+    from .skill_sharing import validate_publication
+    clean = validate_publication({k: record.get(k) for k in ("name", "description", "content", "sha256")})
+    dest = target.path / shared_install_name(str(record.get("owner") or "peer"), clean["name"])
+    if dest.is_symlink() or (dest.exists() and not dest.is_dir()):
+        raise ValueError(f"{dest} exists and is not a skill directory")
+    if dest.exists() and not force:
+        raise ValueError(f"{dest.name} is already installed; pass --force to replace it")
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / "SKILL.md").write_text(clean["content"], encoding="utf-8")
+    (dest / "SKILL.md").chmod(0o644)
+    provenance = {"session_id": session_id, "publisher": record.get("owner", ""),
+                  "publisher_id": record.get("owner_id", ""), "publication_id": record.get("id", ""),
+                  "name": clean["name"], "sha256": hashlib.sha256(clean["content"].encode()).hexdigest(),
+                  "installed_at": _time.time()}
+    (dest / PROVENANCE).write_text(_json.dumps(provenance, indent=2), encoding="utf-8")
+    return dest
+
+
+def shared_installs(target: Target) -> list[dict]:
+    """Every skill in the directory that carries collab provenance."""
+    import json as _json
+    found = []
+    if not target.path.is_dir():
+        return found
+    for entry in sorted(target.path.iterdir()):
+        meta = entry / PROVENANCE
+        if entry.is_dir() and not entry.is_symlink() and meta.is_file():
+            try:
+                found.append({"dir": entry.name, **_json.loads(meta.read_text(encoding="utf-8"))})
+            except (OSError, ValueError):
+                found.append({"dir": entry.name, "error": "unreadable provenance"})
+    return found
+
+
+def uninstall_shared(name: str, *, target: Target) -> Path:
+    """Remove a shared install; only directories collab installed qualify."""
+    import shutil
+    dest = target.path / name
+    if (not re.fullmatch(r"shared-[a-z0-9-]+", name) or dest.is_symlink()
+            or not (dest / PROVENANCE).is_file()):
+        raise ValueError(f"{name} is not a shared skill collab installed")
+    shutil.rmtree(dest)
+    return dest
+
+
 def instructions_block(skills_dir: Path, executable: str) -> str:
     """A cheap capability index, not an entire workflow on every prompt."""
     routes = {

@@ -2803,6 +2803,8 @@ withdraw their own entry. Shared text is never installed or executed automatical
 Each participant's installed skill names are shared by default (`collab skills
 peers`; `collab config share_skill_list false` opts out), and `collab skills ask
 SKILL --to NAME` requests a run that only the receiver's human can `accept`.
+`collab skills install-shared ID` installs a peer's published skill after showing
+its full text and getting the human's explicit yes, with provenance beside it.
 `collab capacity --json` estimates additional native teammates only when the
 concurrency, active count, fresh quota and per-task budget are known.
 [Capability and capacity guide](docs/skills-and-capacity.md).

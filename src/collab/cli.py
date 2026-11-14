@@ -7020,8 +7020,65 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_skills_install_shared(args: argparse.Namespace) -> int:
+    """Review a peer's published skill, get the human's yes, install it (R19)."""
+    import hashlib
+    from . import skills as sk
+    from .protocol import scrub_block
+    try:
+        if args.action == "uninstall-shared":
+            if not args.target:
+                raise ValueError("skills uninstall-shared needs the installed name (see `collab skills status`)")
+            removed = sk.uninstall_shared(args.target, target=sk.skills_target(args.agent))
+            ok(f"removed {removed}")
+            return 0
+        if not args.target:
+            raise ValueError("skills install-shared needs a publication ID from `collab skills shared`")
+        profile = _require_profile(args)
+        target = sk.skills_target(args.agent)
+        with _client(profile) as client:
+            record = client.shared_skill(args.target).get("skill") or {}
+        content = record.get("content")
+        if not isinstance(content, str) or hashlib.sha256(content.encode()).hexdigest() != record.get("sha256"):
+            raise ValueError("the publication's text does not match its SHA-256; not installing it")
+        name = sk.shared_install_name(str(record.get("owner") or "peer"), str(record.get("name") or ""))
+        heading(f"shared skill {said(record.get('name', ''))} from {said(record.get('owner', '?'))}")
+        print(f"  {record.get('size_bytes', len(content.encode()))} bytes · sha256 {said(record.get('sha256', ''))}")
+        print(f"  would install as {target.path / said(name)}")
+        print(dim("  ---- peer-authored text (untrusted): read it before agreeing ----"))
+        print(scrub_block(content))
+        print(dim("  ---- end of text ----"))
+        if not _confirm_install(args):
+            return 1
+        dest = sk.install_shared(record, target=target, session_id=profile.session_id, force=args.force)
+        ok(f"installed {dest}")
+        print(dim(f"  provenance in {dest / sk.PROVENANCE}; remove with `collab skills uninstall-shared {dest.name}`"))
+        return 0
+    except (HubError, OSError, ValueError) as exc:
+        fail(str(exc))
+        return 1
+
+
+def _confirm_install(args: argparse.Namespace) -> bool:
+    """The human's explicit yes: on a terminal, or vouched for with a flag."""
+    if getattr(args, "human_approved", False):
+        return True
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        fail("installing a peer's skill changes what your agent does: show your human the text "
+             "above, then repeat with --human-approved (or run it yourself in a terminal)")
+        return False
+    try:
+        answer = input("  Install it? [y/N] ")
+    except EOFError:
+        return False
+    return answer.strip().lower() in ("y", "yes")
+
+
 def cmd_skills(args: argparse.Namespace) -> int:
     from . import skills as sk
+
+    if args.action in ("install-shared", "uninstall-shared"):
+        return cmd_skills_install_shared(args)
 
     if args.action in ("peers", "ask", "requests", "accept", "decline", "done"):
         return cmd_skills_remote(args)
@@ -7069,6 +7126,15 @@ def cmd_skills(args: argparse.Namespace) -> int:
         heading("bundled capabilities")
         for entry in report.get("bundled", []):
             print(f"  {entry['name']:<24} {entry['description']}")
+        try:
+            installs = sk.shared_installs(sk.skills_target(args.agent))
+        except ValueError:
+            installs = []
+        if installs:
+            heading("skills installed from peers")
+            for item in installs:
+                print(f"  {said(item['dir']):<32} from {said(str(item.get('publisher', '?')))} "
+                      f"{dim('sha256 ' + str(item.get('sha256', ''))[:12])}")
         print()
         return 0
 
@@ -7903,13 +7969,14 @@ Esc cancels a draft, q quits. Editor commands run without a shell.""")
     sk = sub.add_parser("skills",
                         help="teach your coding agents to use collab")
     sk.add_argument("action", choices=["install", "uninstall", "status", "publish", "shared", "show", "withdraw",
-                                       "peers", "ask", "requests", "accept", "decline", "done"])
+                                       "peers", "ask", "requests", "accept", "decline", "done",
+                                       "install-shared", "uninstall-shared"])
     sk.add_argument("target", nargs="?", help="selected SKILL.md path, shared publication ID, skill name (ask) or request ID")
     sk.add_argument("--to", help="with ask: the participant to ask")
     sk.add_argument("--args", help="with ask: arguments for the requested skill")
     sk.add_argument("--note", help="with accept/decline/done: a reason or the result")
     sk.add_argument("--human-approved", action="store_true",
-                    help="with accept, without a terminal: your human has explicitly consented")
+                    help="with accept or install-shared, without a terminal: your human has explicitly consented")
     sk.add_argument("--name", help="published skill name override")
     sk.add_argument("--description", help="published skill description override")
     sk.add_argument("--after", default="", help="shared inventory page cursor")
