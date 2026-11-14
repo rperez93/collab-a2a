@@ -123,6 +123,10 @@ class Tunnel:
             self.process.terminate()
             with contextlib.suppress(subprocess.TimeoutExpired):
                 self.process.wait(timeout=5)
+        if self.process is not None:
+            from ..logcap import release_collector
+
+            release_collector(self.process)
 
 
 def _all_tunnels() -> list[dict]:
@@ -313,6 +317,7 @@ def start_tunnel(port: int, *, log_path: str | None = None,
                 _settle(log_path, getattr(proc, "collector", None))
                 errors.append(failure_from_log(log_path, offset)
                               or f"ngrok exited with status {proc.returncode}")
+            _release(proc)
             return None
         # Our own log first: it is definitive for our agent regardless of which
         # API port it landed on.
@@ -337,7 +342,16 @@ def start_tunnel(port: int, *, log_path: str | None = None,
         proc.kill()
         with contextlib.suppress(subprocess.TimeoutExpired, OSError):
             proc.wait(timeout=5)
+    _release(proc)
     return None
+
+
+def _release(proc) -> None:
+    """Close our end of a failed ngrok's log pipe; nothing will revive it."""
+    if getattr(proc, "collector_fd", None) is not None:
+        from ..logcap import release_collector
+
+        release_collector(proc)
 
 
 #: For a machine where ngrok IS installed but did not give us a tunnel. The
@@ -415,6 +429,12 @@ class TunnelSupervisor:
         Returns ``(url, changed)`` — ``changed`` is True when the public URL is
         different from before, which means previously shared links are dead.
         """
+        if self.tunnel is not None and self.tunnel.process is not None:
+            # ngrok's log collector, restarted if it died: without a reader
+            # ngrok would block on its log, and without ours it would SIGPIPE.
+            from ..logcap import revive_collector
+
+            revive_collector(self.tunnel.process)
         if self.tunnel is not None and self.tunnel.alive():
             return self.public_url, False
 

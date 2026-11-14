@@ -1349,3 +1349,50 @@ def test_only_a_non_terminal_stderr_handler_is_captured(tmp_path, monkeypatch):
     finally:
         sys.unraisablehook, __import__("threading").excepthook = hooks
         logging.captureWarnings(False)
+
+
+def test_a_killed_collector_is_restarted_and_the_child_lives(tmp_path):
+    """A collector killed from outside used to leave ngrok writing into a pipe
+    with no reader: SIGPIPE, exit -13, and the tunnel gone. The read end is
+    kept, so the child's lines wait in the pipe; the supervisor's check starts
+    a new collector on it, and the child finishes normally."""
+    import signal
+
+    path = tmp_path / "ngrok.log"
+    child = logcap.spawn_collected(
+        [sys.executable, "-c",
+         "import sys, time\n"
+         "for n in range(300):\n"
+         "    sys.stdout.write(f'lvl=info msg=beat n={n}\\n'); sys.stdout.flush()\n"
+         "    time.sleep(0.01)\n"],
+        path, stdin=subprocess.DEVNULL, start_new_session=True,
+        env={**os.environ, "PYTHONPATH": _src()})
+    try:
+        time.sleep(0.5)
+        first = child.collector
+        os.kill(first.pid, signal.SIGKILL)
+        first.wait(5)
+        assert logcap.revive_collector(child) is True
+        assert child.collector is not first
+        assert child.wait(30) == 0, "no SIGPIPE: the child ran to its end"
+        child.collector.wait(10)
+        assert "n=299" in path.read_text()
+    finally:
+        logcap.release_collector(child)
+
+
+def test_settle_waits_for_the_collector_rather_than_guessing(tmp_path):
+    """`_settle` returned after one unchanged 50 ms sample, which a collector
+    that started late could still be behind. Given the collector, it waits for
+    it to finish — which is when the log is complete."""
+    from collab.server.tunnel import _settle
+
+    class Collector:
+        waited = None
+
+        def wait(self, timeout=None):
+            Collector.waited = timeout
+            return 0
+
+    _settle(str(tmp_path / "ngrok.log"), Collector())
+    assert Collector.waited == 1.0

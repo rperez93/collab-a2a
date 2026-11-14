@@ -751,8 +751,9 @@ def watch(*paths: Path | str) -> Watcher | None:
 
 __all__ = ["BUDGET", "GENERATION_CAP", "CHECK_EVERY", "CHECK_FASTEST", "LINES_MAX",
            "LINE_MAX", "CappedFile", "LineWriter", "WRITER", "Watcher", "append_line",
-           "capped_handler", "collect", "flush", "rotated", "spare_for",
-           "spawn_collected", "total", "trim", "watch"]
+           "capped_handler", "collect", "flush", "release_collector",
+           "revive_collector", "rotated", "spare_for", "spawn_collected", "total",
+           "trim", "watch"]
 
 
 # --- collab's own `logging`, capped where it is written -----------------------
@@ -951,21 +952,76 @@ def spawn_collected(argv: list[str], log_path: Path | str, **popen):
     import sys
 
     read_end, write_end = os.pipe()
+    env = dict(popen.get("env") or os.environ)
     try:
-        env = dict(popen.get("env") or os.environ)
-        collector = subprocess.Popen(
-            [sys.executable, "-m", "collab.logpipe", str(log_path)],
-            stdin=read_end, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True, close_fds=True, env=env)
+        collector = _collector(read_end, log_path, env)
     except BaseException:
+        os.close(read_end)
         os.close(write_end)
         raise
-    finally:
-        os.close(read_end)
     try:
         child = subprocess.Popen(argv, stdout=write_end, stderr=subprocess.STDOUT,
                                  **popen)
+    except BaseException:
+        os.close(read_end)
+        raise
     finally:
         os.close(write_end)
+    # THE READ END IS KEPT, not closed. While this process holds it the pipe
+    # has a reader even if the collector dies — so the child's next line waits
+    # in the pipe's buffer instead of killing it with SIGPIPE — and a new
+    # collector can be started on the same pipe (`revive_collector`). Not
+    # inherited by anything else this process starts: `os.pipe` descriptors
+    # are non-inheritable.
     child.collector = collector                   # type: ignore[attr-defined]
+    child.collector_fd = read_end                 # type: ignore[attr-defined]
+    child.collector_env = env                     # type: ignore[attr-defined]
+    child.log_path = str(log_path)                # type: ignore[attr-defined]
     return child
+
+
+def _collector(read_end: int, log_path: Path | str, env: dict):
+    import subprocess
+    import sys
+
+    return subprocess.Popen(
+        [sys.executable, "-m", "collab.logpipe", str(log_path)],
+        stdin=read_end, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True, close_fds=True, env=env)
+
+
+def revive_collector(child) -> bool:
+    """Start a new collector for `child` if its collector has died. True when
+    one was started. Reaps the dead one; releases the pipe once the child has
+    gone. Never raises.
+
+    A collector killed from outside (an OOM kill, a stray signal) left ngrok
+    writing into a pipe nobody read, and SIGPIPE ended the tunnel — and, on a
+    free plan, its URL. The supervisor calls this on every check.
+    """
+    collector = getattr(child, "collector", None)
+    fd = getattr(child, "collector_fd", None)
+    if collector is None or fd is None:
+        return False
+    try:
+        if child.poll() is not None:
+            if collector.poll() is not None:
+                release_collector(child)
+            return False
+        if collector.poll() is None:
+            return False
+        child.collector = _collector(fd, child.log_path, child.collector_env)
+        return True
+    except Exception:                                         # noqa: BLE001
+        return False
+
+
+def release_collector(child) -> None:
+    """Close this process's read end of `child`'s pipe. Idempotent."""
+    fd = getattr(child, "collector_fd", None)
+    if fd is not None:
+        child.collector_fd = None
+        try:
+            os.close(fd)
+        except OSError:
+            pass
