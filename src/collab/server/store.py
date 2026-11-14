@@ -1551,11 +1551,15 @@ class Store:
         """
         now = time.time()
         with self._lock:
-            self._db.execute(
-                "INSERT INTO files (id,name,size,sha256,sender,recipient,room,created_at)"
-                " VALUES (?,?,?,?,?,?,?,?)",
-                (file_id, name, size, sha256, sender, recipient, room, now),
-            )
+            try:
+                self._db.execute(
+                    "INSERT INTO files (id,name,size,sha256,sender,recipient,room,created_at)"
+                    " VALUES (?,?,?,?,?,?,?,?)",
+                    (file_id, name, size, sha256, sender, recipient, room, now),
+                )
+            except sqlite3.IntegrityError:
+                self._db.rollback()  # a concurrent retry of the same delivery won
+                raise
             self._db.executemany(
                 "INSERT OR IGNORE INTO file_collections (file_id, participant_id)"
                 " VALUES (?,?)",

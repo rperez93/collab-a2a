@@ -58,3 +58,21 @@ def test_a_retried_worker_upload_is_stored_once(client, host_headers):
     assert first.json()["id"] == second.json()["id"] and second.json().get("duplicate")
     listed = client.get("/ext/collab/v1/files", headers=host_headers).json()["files"]
     assert [f["id"] for f in listed].count(first.json()["id"]) == 1
+
+
+def test_concurrent_uploads_of_one_delivery_leave_one_matching_blob(client, host_headers):
+    """Two retries racing for the same key: one record, and its blob matches its hash."""
+    import hashlib
+    from concurrent.futures import ThreadPoolExecutor
+    bodies = [b"A" * 200_000, b"B" * 200_000]
+    def upload(body):
+        return client.post("/ext/collab/v1/files", headers=host_headers,
+                           files={"file": ("same.bin", body, "application/octet-stream")},
+                           params={"room": "general", "delivery": "o_race"}).json()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(upload, bodies))
+    assert results[0]["id"] == results[1]["id"]
+    fetched = client.get(f"/ext/collab/v1/files/{results[0]['id']}/content", headers=host_headers).content
+    recorded = client.get("/ext/collab/v1/files", headers=host_headers).json()["files"]
+    record = next(f for f in recorded if f["id"] == results[0]["id"])
+    assert hashlib.sha256(fetched).hexdigest() == record["sha256"]
