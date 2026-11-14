@@ -1,0 +1,137 @@
+# Strong approval API v1 — contract proposal
+
+Status: **proposed, not implemented or accepted**. This document is an interface
+for review by the core, Hello and passkey owners. It is not evidence that an
+endpoint exists. Clients must remain visibly unavailable until the capability
+endpoint and the corresponding implementation tests exist. Do not fall back to
+terminal approval when strong approval was requested.
+
+Core owner: Arma; Hello/front-door owner: Jarvis; passkey adapter owner: Friday.
+Source design: shared artifact `f_bcb2c024e2892f9067f1`, SHA-256
+`41abc56ea8bda4ea24214ab9ac6c6b57f83e2532a6ba00f7c2a297abc63eb9d9`.
+
+## Transport and representation
+
+Proposed prefix: `/ext/collab/v1/approval`. Existing participant authentication
+is required on every route. Session and participant identity come from that
+authentication, never from a supplied display name. The hub checks target
+ownership for each request, challenge and credential lookup. Bearer possession
+alone cannot approve a strong request or replace an enrolled key.
+
+JSON responses carry `api_version: 1`. Unknown fields are rejected in writes.
+Binary fields use **unpadded canonical base64url**: ASCII A–Z/a–z/0–9/`-`/`_`,
+no whitespace, `=`, standard-base64 alphabet or alternate encoding. Decode with
+field-specific limits and require encoding the decoded bytes to reproduce the
+input exactly. `digest` and key fingerprints are lowercase SHA-256 hex.
+
+IDs are opaque, case-sensitive hub-issued strings; adapters must not derive or
+interchange `request_id`, `challenge_id`, `credential_id`, or `nonce`. Expiry is
+an integer Unix-second instant. The hub clock is authoritative. Challenges
+expire at `now >= expires_at`, 120 seconds after issuance, and are single-use.
+
+Proposed limits: 64 KiB canonical review, 128 KiB request body, 4 KiB DER SPKI,
+4 KiB decoded signature, 8 KiB decoded client data, 8 KiB decoded authenticator
+data, 1 KiB decoded credential ID. Attestation is not accepted in this first
+wire proposal; a client boolean must never establish attestation. A later
+attestation implementation needs its own bounded format and trust policy.
+
+## Routes and schemas
+
+All route names below are proposals to freeze before implementation.
+
+* `GET /capabilities` returns `{api_version:1, methods:["hello","passkey"],
+  algorithms:{hello:[-257],passkey:[-7,-257]}, attestation_verification:false}`
+  only when the implementation is available. An old hub's 404 means unavailable.
+* `GET /keys` returns the authenticated participant's credential metadata:
+  `credential_id`, `method`, `algorithm`, `fingerprint`, `created_at`,
+  `trust` (`tofu-unverified` initially), `state` and alarms. It never exposes a
+  private key or silently substitutes a credential for a missing one.
+* `POST /enrol/begin` accepts `{method, origin?}`. `origin` is mandatory for
+  passkeys. It returns `{api_version, challenge_id, challenge, expires_at,
+  method, rp_id?, origin?, algorithms, bootstrap:"tofu-unverified"}`.
+  A first-key ceremony reserves the enrolment generation. Concurrent first-key
+  finishes cannot both succeed. Existing-key enrolment is refused here pending
+  the separately reviewed signed rotation protocol; no overwrite path exists.
+* `POST /enrol/finish` accepts `{challenge_id, credential_id, algorithm,
+  public_key_spki, proof}`. `public_key_spki` contains DER SPKI in base64url;
+  `algorithm` is the COSE integer, not a caller-selected verifier name. The hub
+  checks key type/parameters, algorithm consistency and proof of possession.
+  The response is `{api_version, credential:{...}, alarm_id}`. TOFU enrolment
+  is announced loudly and never labelled attested.
+* `GET /requests/{request_id}/review` returns `{api_version, request_id,
+  review, canonical_review, digest, state, required_strength}`. The hub builds
+  `review` from its stored operation: subject, stable requester/target IDs,
+  exact destination, authority and payload. `canonical_review` is base64url of
+  the UTF-8 bytes the hub hashes. The UI displays the full decoded review as
+  untrusted text. Reading it grants no dispatch authority; payload secrecy
+  from the reviewing same-UID agent is not claimed.
+* `POST /requests/{request_id}/challenge` accepts `{credential_id, origin?}`
+  and returns `{api_version, request_id, challenge_id, credential_id, method,
+  challenge, expires_at, digest, rp_id?, origin?}`. The request is frozen to
+  the reviewed operation; a changed operation requires a new request/challenge.
+* `POST /requests/{request_id}/approve` accepts `{challenge_id,
+  credential_id, proof}`. The hub verifies and atomically consumes the challenge
+  before issuing `{api_version, request_id, state:"approved", receipt}`.
+  The opaque receipt is bound to the exact operation and consumed by the
+  adopting execution path; it is not a general approval token.
+* `POST /requests/{request_id}/decline` accepts `{reason_code?}` and returns
+  `{api_version, request_id, state:"declined"}`. It invalidates outstanding
+  challenges atomically. An authenticated decline is a refusal, **not proof
+  of a human gesture**; audit must not label it a verified-human decision.
+
+## Proof bytes and origin binding
+
+`proof` is a tagged union. Hello: `{type:"hello", signature}`. Passkey:
+`{type:"webauthn.get", client_data_json, authenticator_data, signature}`.
+The adapter forwards original byte arrays encoded once; it must not parse and
+reserialize client data before forwarding or assign receipt strength itself.
+
+The hub constructs the challenge as SHA-256 of canonical JSON containing
+`api_version`, `purpose` (`enrol` or `approve`), authenticated `session_id`,
+`target_id`, `request_id` (null for enrol), `subject`, `requester_id`, `digest`,
+`credential_id` (null for first enrol), fresh 32-byte `nonce`, `origin` and
+`expires_at`. Null fields are explicit. Canonical JSON uses sorted keys,
+compact separators, ASCII escaping and no nonfinite numbers. Only hub-issued
+bytes are signed; clients do not reconstruct this envelope.
+
+Hello signs the decoded 32 challenge bytes using RSA-2048 PKCS#1 v1.5/SHA-256.
+Passkey authentication uses those bytes as the WebAuthn challenge, rpId
+`localhost`, user verification required, and the selected credential ID.
+The hub checks signed client-data type/challenge, exact stored origin,
+rpIdHash, UP/UV, algorithm, signature and credential counter policy. The origin
+must be an exact canonical `http://localhost:<port>` or
+`https://localhost:<port>` origin, without path, credentials, query or fragment;
+the local adapter binds its actual port before starting the ceremony. Origin
+validation is not authentication of a local process.
+
+**Enrolment proof question requiring frontend agreement:** `create()` plus
+`getPublicKey()` alone does not prove possession of that supplied SPKI without
+verifying attestation. This proposal uses a subsequent `get()` assertion by
+the new credential over the enrolment challenge, verified against the supplied
+SPKI. That can require another gesture. The create ceremony is not itself the
+hub-accepted proof. No fake or software-key fixture establishes real human
+approval; unverified TOFU remains explicitly unverified even after proof of
+possession. Jarvis and Friday must agree on this before freezing the contract.
+
+## Errors, receipts and remaining protocol work
+
+Errors have `{api_version:1,error:{code,message}}` with fixed, content-free
+messages: 400 malformed/unsupported proof, 401 authentication required,
+403 wrong participant/origin/verification failed, 404 unknown owned resource,
+409 already consumed/changed/frozen key, 410 expired challenge,
+413 oversized input, 429 bounded rate limit. No error triggers weak fallback.
+Invalid proofs issue no receipt. Successful replay cannot execute twice.
+
+Hub-owned receipt/event/audit metadata separates `strength` (`strong` or
+`weak`), `method`, `credential_trust`, fingerprint and reviewed digest.
+Strong means verified proof under the accepted enrolled-key policy; it does
+not turn TOFU into attestation or prove software keys impossible. Terminal
+codes are weak and cannot satisfy `required_strength:"strong"`.
+
+Before declaring v1 ready, specify and test signed key addition/replacement,
+host-strong recovery, missing-key alarm reporting, request creation/adoption,
+receipt consumption/idempotence, bounded audit retention, rate limits and
+counter rules (including authenticators with no counter). These are core
+acceptance requirements, not implicit behavior supplied by this proposal.
+Then publish the exact source SHA and contract tests; only afterward connect
+the production adapters. Final real enrolment/signing remains a human gate.
