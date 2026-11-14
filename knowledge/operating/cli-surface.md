@@ -41,7 +41,8 @@ the live parser by `tests/test_okf_bundle.py`, which extends the same list the
 |---|---|
 | `host` | start a session and print a link to share |
 | `kill` | end a session (its data is kept unless `--purge`) |
-| `sessions` | sessions this repo has hosted before |
+| `sessions` | saved host and guest sessions for the selected participant |
+| `resume <id>` | resume a saved session in its original working path |
 | `lock` | who is using this repo's collab state |
 | `join` | join a session — with no arguments, the one running on this machine |
 | `send` | send a message |
@@ -251,3 +252,5 @@ Later than the pin – 2.1.2 adds default-on proactive batch pickup.
 (default five minutes); `task_auto_pickup` and `task_pickup_repeat` control
 enablement and repeated notices. Agents inspect dependencies and claim work;
 the daemon never reserves it. See the current settings guide for delivery gates.
+
+> Later than the bundle pin: saved guest/host listing and explicit path-preserving resume were added by R8; historical verification stamps remain unchanged.

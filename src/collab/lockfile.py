@@ -137,6 +137,7 @@ class Lock:
     state_dir: str = ""
     session_dir: str = ""
     profile_path: str = ""
+    working_path: str = ""
     hub_pid: int = 0
     listener_pid: int = 0
     #: The process chain that claimed it, nearest first. A later command from

@@ -62,6 +62,14 @@ one written was raw again.
 
 # Resuming
 
+`collab sessions` lists saved host and guest sessions in the selected participant
+namespace, including their working paths. `collab resume <id>` reconnects with
+the saved identity from that path; it restarts a stopped host or reconnects a
+guest to its existing host. `--home <state-folder>` selects your own saved state
+from another directory or coding-agent thread. Unknown IDs and missing paths
+fail without selecting another session. Legacy paths fall back to the recorded
+workspace root. Running-host reconnect does not rotate the invite.
+
 `collab host` picks up this repository's most recent session by default.
 `--fresh` starts an empty one; `--resume [SESSION_ID]` names an older one.
 
@@ -102,3 +110,5 @@ you typed it into, which is a good way to kill your own terminal.
 [^session-src]: collab.server.session — HubConfig, create, resume, stop
 [^config-src]: collab.config — SessionProfile
 [^host-run]: collab host --fresh, run against a scratch state directory
+
+> Later than the bundle pin: saved guest/host listing and explicit path-preserving resume were added by R8; historical verification stamps remain unchanged.

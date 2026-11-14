@@ -592,6 +592,22 @@ def tunnel_report(cfg: Any, *, installed: bool) -> list[str]:
     return [warn_text(head), NGROK_FAILED_HELP.format(log=log)]
 
 
+@contextlib.contextmanager
+def _preserve_cwd():
+    """Let an embedded CLI invocation resume elsewhere without moving its caller."""
+    original = Path.cwd()
+    old_home = os.environ.get("COLLAB_HOME")
+    try:
+        yield
+    finally:
+        os.chdir(original)
+        if old_home is None:
+            os.environ.pop("COLLAB_HOME", None)
+        else:
+            os.environ["COLLAB_HOME"] = old_home
+
+
+@_preserve_cwd()
 def cmd_host(args: argparse.Namespace) -> int:
     from .server.session import (HubConfig, create_session,
                                  hosted_sessions, join_line,
@@ -609,15 +625,16 @@ def cmd_host(args: argparse.Namespace) -> int:
     # after a restart that is a pid belonging to something else entirely.
     _sweep_a_previous_boot()
     name = resolve_name(args.name)
-    port = args.port or free_port()
-
     # A session is a conversation and a task board. Closing the terminal should
     # not throw those away, so a repo's previous session is picked up by
     # default and starting clean is the deliberate choice.
     previous = hosted_sessions()
     wanted = args.resume if isinstance(args.resume, str) else None
     if wanted:
-        previous = [c for c in previous if c.session_id == wanted] or previous
+        previous = [c for c in previous if c.session_id == wanted]
+        if not previous:
+            fail(f"no saved hosted session {wanted}; use `collab sessions`")
+            return 1
 
     if args.domain and not host_domain(args.domain, "", "", "")[0]:
         fail(f"--domain {args.domain!r} is not a domain ngrok can serve")
@@ -626,7 +643,24 @@ def cmd_host(args: argparse.Namespace) -> int:
         warn(f"ignoring the ngrok_domain setting {ignored!r}: not a domain "
              "ngrok can serve — `collab config ngrok_domain <domain>` fixes it")
 
+    port = args.port or free_port()
     if previous and not args.fresh:
+        from .saved_sessions import working_directory
+        try:
+            directory = working_directory(previous[0])
+        except ValueError as exc:
+            if wanted:
+                fail(str(exc))
+                return 1
+            directory = repo_for_home(previous[0].home)
+            if not directory.is_dir():
+                fail(f"saved workspace is unavailable: {directory}; restore it or use `collab host --fresh`")
+                return 1
+            warn(f"Saved directory is unavailable; using workspace {directory}. Use `collab host --fresh` to start clean.")
+        # Pin state before changing cwd: namespace selection depends on cwd.
+        previous[0].home = str(Path(previous[0].home).resolve())
+        os.environ["COLLAB_HOME"] = previous[0].home
+        os.chdir(directory)
         domain, source = host_domain(args.domain, previous[0].domain,
                                      previous[0].domain_from, ngrok_domain())
         cfg = resume_session(previous[0], port, bind=args.bind, domain=domain)
@@ -711,6 +745,7 @@ def cmd_host(args: argparse.Namespace) -> int:
         session_id=cfg.session_id, url=cfg.public_url or cfg.local_url,
         name=cfg.host_name, host_name=cfg.host_name, token=cfg.host_token,
         is_host=True, room=DEFAULT_ROOM, home=cfg.home,
+        working_path=cfg.working_path,
     )
     # The listener recognises itself by id, so look ours up before it starts.
     try:
@@ -943,6 +978,7 @@ def _take_lock(profile: SessionProfile, *, role: str, hub_pid: int = 0) -> None:
         state_dir=str(home),
         session_dir=str(profile.dir),
         profile_path=str(profile.dir / "profile.json"),
+        working_path=profile.working_path or str(repo_for_home(home)),
         # Recorded from this process, so every later command this agent runs
         # can recognise its own directory without being told which it is.
         owner_pids=lockfile.ancestry(),
@@ -3023,38 +3059,125 @@ def _retire_state_dir(home: Path | str) -> None:
 
 
 def cmd_sessions(args: argparse.Namespace) -> int:
-    """Previous sessions in this repo, and what resuming one would bring back."""
-    from .server.session import hosted_sessions, session_summary
+    """List saved host and guest sessions without exposing credentials."""
+    from .saved_sessions import saved_sessions
 
-    found = hosted_sessions()
+    home = _home_from(args.home) if getattr(args, "home", "") else collab_home()
+    found = saved_sessions(home)
     if args.json:
-        print(json.dumps([{"session_id": cfg.session_id, "title": cfg.title,
-                           **session_summary(cfg)} for cfg in found], indent=2))
+        print(json.dumps(found, indent=2))
         return 0
-
-    heading(f"sessions hosted in {collab_home()}")
+    heading(f"saved sessions in {home}")
     if not found:
-        print(dim("  none yet — `collab host` starts one"))
+        print(dim("  none yet — host or join a session first"))
         return 0
-
-    current = SessionProfile.current()
-    for i, cfg in enumerate(found):
-        counts = session_summary(cfg)
-        mark = "*" if current and current.session_id == cfg.session_id else " "
-        latest = dim(" (most recent)") if i == 0 else ""
-        title = f"  {cfg.title}" if cfg.title else ""
-        print(f" {mark} {c(cfg.session_id, '36')}{title}{latest}")
-        if counts:
-            detail = " · ".join((plural(counts["messages"], "message"),
-                                 plural(counts["tasks"], "task"),
-                                 plural(counts["participants"], "participant")))
-            print(f"      {dim(detail)}")
-    print()
-    print(dim("  collab host                resumes the most recent"))
-    print(dim("  collab host --resume <id>  resumes a particular one"))
-    print(dim("  collab host --fresh        starts an empty one"))
-    print()
+    for row in found:
+        markers = ", ".join(label for key, label in (("current", "current"), ("most_recent", "most recent")) if row.get(key))
+        print(f"  {c(row['session_id'], '36')}  {row['role']}  {row['title']}  [{markers}]" if markers else
+              f"  {c(row['session_id'], '36')}  {row['role']}  {row['title']}")
+        print(f"      working path: {row['working_path']}")
+        if not row["path_exists"]:
+            print(dim("      path unavailable — restore it before resuming"))
+        if "messages" in row:
+            print(dim(f"      {row['messages']} messages · {row['open_tasks']} open tasks"))
+    print(dim("  collab resume <id> [--home <state-folder>]"))
+    print(dim("  resumes in the saved working path; your shell stays where it is"))
     return 0
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    """Resume exactly one saved session, preserving identity and working path."""
+    from .saved_sessions import saved_sessions, working_directory
+    from .server.session import HubConfig
+
+    home = (_home_from(args.home) if args.home else collab_home()).resolve()
+    rows = saved_sessions(home)
+    matches = [row for row in rows if row["session_id"] == args.session_id]
+    if not matches:
+        fail(f"no saved session {args.session_id}; use `collab sessions`")
+        return 1
+    profile = SessionProfile.load_from(home / "sessions" / args.session_id)
+    cfg = HubConfig.load(args.session_id, home)
+    # Older records may have stored a relative home. Bind to the directory
+    # actually selected before cwd changes, for credentials and child processes.
+    if profile is not None:
+        profile.home = str(home)
+    if cfg is not None:
+        cfg.home = str(home)
+    record = cfg or profile
+    assert record is not None
+    try:
+        directory = working_directory(record)
+    except ValueError as exc:
+        fail(str(exc))
+        return 1
+    lock = lockfile.read(home)
+    if lock and lock.held and lock.session_id != args.session_id:
+        fail(f"{lock.describe()} is still active; stop it before resuming another session")
+        return 1
+    recorded_owner = exclusive.decode(lock.owner) if lock else None
+    legacy_foreign = (lock and lock.held and not recorded_owner and lock.owner_pids
+                      and any(lockfile.process_alive(pid) for pid in lock.owner_pids)
+                      and not lock.owned_by(lockfile.ancestry())
+                      and not owner.kept(record.dir))
+    if legacy_foreign or (recorded_owner and recorded_owner.alive()
+            and recorded_owner.pid not in lockfile.ancestry()):
+        fail(f"{lock.describe()} belongs to another live agent; refusing to take its identity")
+        return 1
+    original = Path.cwd()
+    old_home = os.environ.get("COLLAB_HOME")
+    os.environ["COLLAB_HOME"] = str(home)
+    try:
+        os.chdir(directory)
+        if cfg and not cfg.hub_stamp().alive():
+            host_args = build_parser().parse_args([
+                "host", "--resume", args.session_id, "--home", str(home),
+                "--no-update-check",
+                *(["--keep"] if args.keep else []),
+                *(["--no-tunnel"] if args.no_tunnel else []),
+                *(["--no-daemon"] if args.no_daemon else []),
+            ])
+            return cmd_host(host_args)
+        if profile is None:
+            fail("saved session has no participant profile; cannot resume credentials")
+            return 1
+        # Resolve only trusted local host records, then check session identity
+        # without credentials before making an authenticated request.
+        from .client.daemon import saved_hub_address
+        from .client.hub_client import HubClient
+        address = saved_hub_address(profile, prefer_local=True) or profile.url
+        try:
+            with HubClient(address) as probe:
+                health = probe.health()
+            if health.get("session_id") != profile.session_id:
+                fail("saved address answers for a different session; refusing to resume")
+                return 1
+            profile.url = address
+            with _client(profile) as client:
+                snapshot = client.snapshot()
+        except HubError as exc:
+            fail(f"cannot resume {args.session_id}: {exc}")
+            return 1
+        if snapshot.get("session_id") != profile.session_id:
+            fail("saved address answers for a different session; refusing to resume")
+            return 1
+        profile.save()
+        if args.keep:
+            owner.keep(profile.dir)
+        status = (onboard.ensure_daemon(profile, follow=not owner.kept(profile.dir))
+                  if not args.no_daemon else {})
+        _take_lock(profile, role="host" if profile.is_host else "guest",
+                   hub_pid=cfg.pid if cfg else 0)
+        ok(f"resumed {profile.session_id} as {profile.name} in {directory}")
+        if not args.no_daemon and not _is_listening(profile, status):
+            warn("listener did not report live yet; check `collab status`")
+        return 0
+    finally:
+        os.chdir(original)
+        if old_home is None:
+            os.environ.pop("COLLAB_HOME", None)
+        else:
+            os.environ["COLLAB_HOME"] = old_home
 
 
 def cmd_discover(args: argparse.Namespace) -> int:
@@ -6858,7 +6981,8 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("join", "join the session running on this machine — no link needed"),
         ("join <url>#<invite>", "join someone else's session, from their link"),
         ("discover", "collab sessions running on this machine"),
-        ("sessions", "sessions this repo has hosted before"),
+        ("sessions", "saved host and guest sessions for this participant"),
+        ("resume", "resume a saved session in its original working path"),
         ("kill", "end a session (its history is kept)"),
         ("lock", "who you are here, and who holds this repo"),
     ]),
@@ -7010,9 +7134,18 @@ def build_parser() -> argparse.ArgumentParser:
                     help="required with --purge")
     kl.set_defaults(func=cmd_kill)
 
-    ss = sub.add_parser("sessions", help="sessions this repo has hosted before")
+    ss = sub.add_parser("sessions", help="saved host and guest sessions for this participant")
     ss.add_argument("--json", action="store_true")
+    ss.add_argument("--home", default="", metavar="FOLDER", help="explicit participant state folder")
     ss.set_defaults(func=cmd_sessions)
+
+    rs = sub.add_parser("resume", help="resume a saved session in its original working path")
+    rs.add_argument("session_id", help="saved session id from `collab sessions`")
+    rs.add_argument("--home", default="", metavar="FOLDER", help="explicit participant state folder")
+    rs.add_argument("--keep", action="store_true", help="keep this session after the coding agent exits")
+    rs.add_argument("--no-daemon", action="store_true", help="do not start listening")
+    rs.add_argument("--no-tunnel", action="store_true", help="disable tunnel when restarting a hosted session")
+    rs.set_defaults(func=cmd_resume)
 
     lk = sub.add_parser("lock", help="who is using this repo's collab state")
     lk.add_argument("action", nargs="?", default="show", choices=["show", "clear"],

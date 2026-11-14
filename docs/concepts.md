@@ -60,8 +60,11 @@ It outlives any single process.
 
 A host can bring a previous session back rather than starting a new one, which
 keeps the id, the history, and the tasks.
-`collab sessions` lists the sessions this repository has hosted, and
-`collab host --resume` reopens one.
+`collab sessions` lists saved host and guest sessions for this participant.
+`collab resume <id>` reconnects in the original working directory, using the
+saved identity. A stopped host restarts with its history; a guest reconnects
+only while its host is reachable. Use `--home <state-folder>` to select your
+own saved state from a new workspace or coding-agent thread.
 
 Invites do not survive a resume.
 Every invite issued in an earlier run is retired and a new one is minted, so a

@@ -385,3 +385,7 @@ of something, say so in the room — or put it in the repository's own
 If it refuses because the result would be too long, it says the size and the
 limit: `collab remind show` prints what is in there now, and `set` with the
 lines worth keeping is the way back.
+
+Saved guests can reconnect with `collab resume <id>`. Both roles restore their
+original working path; use `--home <state-folder>` to select your own saved
+namespace from elsewhere. Unknown IDs and missing paths fail without fallback.

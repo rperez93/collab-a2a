@@ -17,7 +17,7 @@ from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 from .. import owner as ownership
-from ..config import SessionProfile, resolve_name
+from ..config import SessionProfile, resolve_name, repo_for_home
 from ..protocol import DEFAULT_ROOM
 from . import context as ctx
 from . import exclusive
@@ -71,10 +71,14 @@ def spawn_daemon(profile: SessionProfile, *, follow: bool = True) -> int:
         ownership.keep(profile.dir)
     env = (ownership.without_owner(env) if ownership.kept(profile.dir)
            else ownership.spawn_env(env))
+    directory = Path(profile.working_path) if profile.working_path else repo_for_home(profile.home)
+    if not directory.is_absolute() or not directory.is_dir():
+        directory = repo_for_home(profile.home)
     proc = subprocess.Popen(
         [sys.executable, "-m", "collab.daemon_main", profile.session_id],
         stdout=log, stderr=log, stdin=subprocess.DEVNULL,
         start_new_session=True, env=env,
+        cwd=str(directory) if directory.is_absolute() and directory.is_dir() else None,
     )
     return proc.pid
 
@@ -151,6 +155,7 @@ def join_session(
         is_host=False,
         room=room,
         participant_id=result.get("id", ""),
+        working_path=str(Path(cwd or Path.cwd()).resolve()),
     )
     profile.save()
     if not follow:

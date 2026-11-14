@@ -71,6 +71,7 @@ class HubConfig:
     #: number. The plain fields stay because an older collab reads them.
     pid_stamp: str = ""
     tunnel_stamp: str = ""
+    working_path: str = ""
 
     def __post_init__(self) -> None:
         if not self.home:
@@ -230,6 +231,9 @@ class HubConfig:
         # up, logging `no such session` about a file sitting next to it.
         # `lockfile.read` has always filtered this way; this is the same rule.
         known = set(cls.__dataclass_fields__)
+        # The selected location owns this record, including old relative homes
+        # and state moved to another folder. Never resolve it again after chdir.
+        data["home"] = str(base.resolve())
         try:
             return cls(**{k: v for k, v in data.items() if k in known})
         except TypeError:
@@ -253,6 +257,7 @@ def create_session(host_name: str, port: int, bind: str = "127.0.0.1",
         host_token=new_secret(),
         domain=domain,
         title=title,
+        working_path=str(Path.cwd().resolve()),
     )
     cfg.save()
 

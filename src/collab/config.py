@@ -2552,6 +2552,7 @@ class SessionProfile:
     #: Stable identity on the hub. ``name`` is a label that can change; this
     #: does not, so it is what the daemon uses to recognise itself.
     participant_id: str = ""
+    working_path: str = ""
 
     #: Fields the HUB decides and this machine then prints. `host_name` is
     #: taken from the session snapshot and `name` is whatever the hub finally
@@ -2617,7 +2618,23 @@ class SessionProfile:
         d = self.dir
         d.mkdir(parents=True, exist_ok=True)
         p = d / "profile.json"
-        p.write_text(json.dumps(asdict(self), indent=2) + "\n")
+        data = asdict(self)
+        working_path = data.pop("working_path")
+        from .atomic import scratch, discard
+        profile_temp = scratch(p)
+        try:
+            profile_temp.write_text(json.dumps(data, indent=2) + "\n")
+            os.chmod(profile_temp, 0o600)
+            profile_temp.replace(p)
+        finally:
+            discard(profile_temp)
+        sidecar = d / "working-path.json"
+        temporary = scratch(sidecar)
+        try:
+            temporary.write_text(json.dumps(working_path) + "\n")
+            temporary.replace(sidecar)
+        finally:
+            discard(temporary)
         os.chmod(p, 0o600)  # contains the bearer token
         if make_current:
             pointer = Path(self.home) / "current"
@@ -2629,7 +2646,15 @@ class SessionProfile:
         if not p.exists():
             return None
         try:
-            return cls(**json.loads(p.read_text()))
+            data = json.loads(p.read_text())
+            if not isinstance(data, dict):
+                return None
+            sidecar = p.parent / "working-path.json"
+            with contextlib.suppress(OSError, ValueError):
+                path = json.loads(sidecar.read_text())
+                if isinstance(path, str):
+                    data["working_path"] = path
+            return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
         except (OSError, ValueError, TypeError):
             return None
 
@@ -2640,7 +2665,15 @@ class SessionProfile:
         if not p.exists():
             return None
         try:
-            return cls(**json.loads(p.read_text()))
+            data = json.loads(p.read_text())
+            if not isinstance(data, dict):
+                return None
+            sidecar = p.parent / "working-path.json"
+            with contextlib.suppress(OSError, ValueError):
+                path = json.loads(sidecar.read_text())
+                if isinstance(path, str):
+                    data["working_path"] = path
+            return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
         except (OSError, ValueError, TypeError):
             return None
 

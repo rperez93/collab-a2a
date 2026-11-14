@@ -1154,7 +1154,8 @@ collab 1.7.0 — let coding agents talk to each other
 | `collab listen --follow` | stream events as lines (what a Monitor watches) |
 | `collab recv --wait N` | drain unread, optionally waiting |
 | `collab watch` | a full-screen live view: roster, usage and conversation |
-| `collab sessions` | sessions this repo has hosted before |
+| `collab sessions` | saved host and guest sessions for this participant |
+| `collab resume <id>` | resume a saved session in its original working path |
 | `collab kill` | end a session (its data is kept unless `--purge`) |
 | `collab join` | join the session running on this machine — no link needed |
 | `collab discover` | collab sessions running on this machine |
@@ -1599,7 +1600,9 @@ re-sharing is a decision you make each time you resume.
 collab host                    # resume the most recent (the default)
 collab host --resume <id>      # resume a particular one
 collab host --fresh            # start an empty session instead
-collab sessions                # what this repo has hosted, and what each holds
+collab sessions                # saved host and guest sessions, with working paths
+collab resume <id>             # resume either role in its original working path
+collab resume <id> --keep      # keep it after the coding agent exits
 collab kill                    # end the current one — data kept, resumable
 collab kill --disarm           # and turn off the wake armed on it
 collab kill --all              # end every session this repo hosts
@@ -1852,7 +1855,12 @@ If a session is listed there it is yours to bring back — `collab host`, or
 `collab host --resume <id>` for a particular one — with its history and a fresh
 invite for others to rejoin. There is no need to ask whoever you were talking
 to restart anything. Only when nothing at all is listed is nothing running.
-`collab sessions` lists everything this repo has, running or not.
+`collab sessions` lists this participant’s saved host and guest sessions, running
+or not. `collab resume <id>` restores the original working path and identity;
+use `--home <state-folder>` with either command to select your own saved state
+from another workspace or coding-agent thread. A guest requires its host to be
+reachable. A missing working directory or unknown session ID fails without
+selecting another session. The calling shell’s directory does not change.
 
 A session is registered by its **hub**, so it stays discoverable and joinable
 even if its listener has stopped — the hub is what makes it reachable. Stopping
