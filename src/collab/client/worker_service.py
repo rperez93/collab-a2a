@@ -855,17 +855,32 @@ class Conversation:
                     # private: only a DM (room '') binds. A broadcast also allows its room.
                     source_rooms.setdefault(ident, set()).add(
                         (source.get("room") or "") if source.get("broadcast") is True else "")
+                # The human's answer text may reach only its own asker: a reply
+                # to anyone else repeating it is withheld, never sent.
+                answer_snippets = [str(answer.get("text", ""))[:60] for answer in peer_answers
+                                   if len(str(answer.get("text", ""))) >= 20]
+                kept = []
                 for reply in result["replies"]:
                     ident = reply.get("to_id")
-                    if (ident not in targets or (reply.get("room")
-                            and reply["room"] not in source_rooms.get(ident, set()))):
+                    if ident not in targets:
+                        # An ordinary reply to another peer in the same turn: it is
+                        # no reason to hold anyone's answer (T_9e266ef03035).
+                        if not any(snippet in reply["text"] for snippet in answer_snippets):
+                            kept.append(reply)
+                        continue
+                    if reply.get("room") and reply["room"] not in source_rooms.get(ident, set()):
+                        # Only this asker's answers are held, never every answer.
                         affected = {answer["id"] for answer in peer_answers
                                     if (answer["prompt"].get("decision_source") or {}).get("sender_id") == ident}
-                        self._hold_model_answers(store, affected or active_answers, snapshot, logged)
+                        self._hold_model_answers(store, affected, snapshot, logged)
                         return
                     sequences = {answer["prompt"]["seq"] for answer in peer_answers
                                  if (answer["prompt"].get("decision_source") or {}).get("sender_id") == ident}
                     reply["source_seq"] = next(iter(sequences)) if len(sequences) == 1 else 0
+                    kept.append(reply)
+                if dropped := len(result["replies"]) - len(kept):
+                    store.count_dropped(dropped)
+                    result = {**result, "replies": kept}
             # What the turn puts in front of the main agent: the model's
             # escalations, the deferrals it left unrouted, and every skill
             # request — the ledger's `escalation_count` counts all three.
