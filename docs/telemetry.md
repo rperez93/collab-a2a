@@ -65,7 +65,9 @@ A slow usage command no longer delays the daemon heartbeat or conversation.
 Participant refresh defaults to three seconds; presence and activity events
 share a fixed 100 ms refresh window without making chat wait for HTTP. Events
 arriving during a read trigger one trailing read. A private ETag permits an
-unchanged roster to return an empty 304 response, which renews its fetch age.
+unchanged roster to return an empty 304 response, which renews its fetch age. New clients negotiate bounded authoritative batch
+pace headers on 304 responses, so elapsed time and ETA remain current. A
+missing or malformed clock observation forces a full read on the next refresh.
 Older hubs without ETags continue returning complete rosters. Finite roster
 responses negotiate gzip; SSE chat and file streams are not buffered for it.
 A roster older than `participant_stale_after` (30 seconds) becomes unknown even

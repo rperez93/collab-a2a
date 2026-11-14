@@ -18,6 +18,9 @@
 * **Update (later than the pin)**: Recorded the shared skill list and consented skill requests (`collab skills peers|ask|requests|accept|decline|done`) in [the CLI surface](operating/cli-surface.md). The pin and verification stamps are unchanged.
 
 ## 2026-11-13
+* **Update (later than the pin):** Recorded conditional roster pace observations
+  in [batches](collaboration/batches.md), including freshness recovery and
+  compatibility for clients that do not negotiate clock headers.
 * **Update (later than the pin)**: Added elapsed time and a rate-based ETA to [batches](collaboration/batches.md), measured from a new `tasks.completed_at` recorded in [the task board](collaboration/task-board.md). The pin and verification stamps are unchanged.
 * **Update (later than the pin)**: Recorded R8 saved host/guest sessions and explicit resume with original working paths. Historical pin and verification stamps are unchanged.
 * **Update (later than the pin)**: Recorded original-URL-first joining,

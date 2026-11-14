@@ -160,12 +160,21 @@ All of these require `Authorization: Bearer <participant token>` except
 Finite `/participants` and `/snapshot` JSON responses negotiate gzip above
 1 KiB and up to 2 MiB; SSE and file streams remain unbuffered. Both responses
 are `Cache-Control: private, no-cache`, varying on authorization and encoding.
-The roster's weak ETag covers all viewer-visible state except `server_time`
-and `batch.counted_at`, which are sampling clocks retained in full responses;
-a matching `If-None-Match` returns 304 after authentication. Clients retain
-their cached roster and renew its fetch age, discarding the validator when
-the authenticated URL or token changes. Unconditional requests still return
-complete JSON, including the current server clock.
+The roster's weak ETag excludes the observation clocks `server_time` and
+`batch.counted_at`. Clients offering `Collab-Roster-Clocks: 1` also use a
+separate validator mode excluding supported derived pace clocks: `since_last`,
+running `elapsed` and `eta`, and running-overdue `per_task`. Pace state,
+completion count, overdue transitions and terminal elapsed/rate remain semantic.
+A matching conditional request returns 304 after authentication, carrying the
+current `Collab-Batch-Pace` JSON and `Collab-Batch-Counted-At` timestamp when
+pace exists. The combined clock values are capped at 2 KiB. Unknown pace
+schemas take the full 200 path. Responses vary on `Collab-Roster-Clocks` too.
+Clients validate both clock headers atomically before renewing fetch age;
+missing or malformed observations leave freshness unchanged and force the next
+scheduled read to be unconditional. Older clients retain full pace in their
+validator, so their clock changes still return full JSON. Validators are bound
+to the authenticated URL and token. Unconditional requests return complete JSON.
+
 
 ## 4. The join handshake
 
