@@ -9,12 +9,12 @@ capability exposes registration. The separate human-started service is
 core integration gates. This module does not provide a hub
 approval API, register a real credential by itself, or turn a terminal receipt
 into cryptographic approval. With no adapter it reports «unsupported» and
-submits no decision. Every operation checks capability discovery: the current
+submits no decision. The authenticated adapter checks capability discovery: the current
 draft core reports «operation_integration_pending» and refuses production
 availability. No local flag overrides it. Real human enrolment and approval
 remain integration gates.
 
-The dispatcher awaits `passkey.open(request_id, adapter=adapter)` on its existing
+The asynchronous adapter entrypoint awaits `passkey.open(request_id, adapter=adapter)` on its existing
 daemon event loop, then calls `passkey.close()` during shutdown. The adapter
 must stay on that loop. The module neither launches Windows Hello nor chooses
 a fallback. The dispatch contract sends Windows and WSL to native Hello;
@@ -44,7 +44,7 @@ OS user; such software can redraw the page or read the request.
 The review displays the complete bounded UTF-8 canonical bytes as text alongside
 their SHA-256 digest, subject, requester, destination, authority and expiry.
 Rendering never interprets embedded request markup. The requester is an explicit
-`Requester(participant_id, display_name)` and both fields are displayed. The
+`Requester(participant_id, display_name)` with its hub ID displayed first and its name marked «Calls itself: … (self-chosen)». The
 adapter obtains the participant ID from the canonical hub review. The dispatcher
 may supply a display name from the authenticated source event; it remains an
 untrusted label and does not affect authority or receipt binding. Missing labels
@@ -63,8 +63,10 @@ binding before consuming a decision.
 The core must refuse approvals using a key enrolled less than ten minutes ago,
 allowing time for the loud enrolment announcement and human intervention. The
 draft core implements this cooldown; combined integration remains a gate. The
-page displays the hub's usable-at metadata and cannot waive it using its own
-clock. Acceptance must include attempted virtual-authenticator enrolment
+page displays the hub's usable-at metadata. Client readiness and maximum future
+challenge expiry allow thirty seconds of clock skew; expired challenges remain
+refused and authenticator runtime remains capped at 120 seconds. The hub alone
+enforces credential cooldown and authoritative expiry. Acceptance must include attempted virtual-authenticator enrolment
 using a stolen request capability and a real human-approved path.
 
 First enrolment is trust on first use. Software and virtual authenticators can
@@ -92,6 +94,38 @@ bytes. A changed route, token or certificate invalidates transport work before
 another request is sent. A successful proof releases an opaque receipt only
 through a private one-use dispatcher handoff, never to the browser; taking it
 is not execution of the operation.
+
+The synchronous dispatcher entrypoint is
+`passkey.approve_with_passkey(request, fetch_challenge)`. Its trusted caller
+owns authenticated readiness, preparation, credential selection and route
+policy before opening the window. The request requires the hub's original
+`canonical_review` bytes encoded as base64url and their lowercase hex digest,
+`expires_at` from the authenticated preparation, request and credential IDs,
+requester ID/name, subject, destination and authority. The page verifies the
+original bytes against the digest and displayed fields; it never reconstructs
+canonical bytes from the pretty review text. Optional caller-supplied session,
+target and source-sequence bindings must also match the canonical operation.
+
+Only an explicit Approve click calls `fetch_challenge(origin=page_origin)`.
+The origin is the already listening localhost page; the callback owns bounded
+authenticated challenge I/O. The page checks the challenge's credential,
+request, digest, origin, relying party, 32-byte size and expiry. It returns the
+original tagged assertion privately as `{choice: "approve", challenge_id,
+credential_id, proof}`. The browser receives «proof-ready – signed, waiting for
+the hub's confirmation», never a receipt or an approved result. This mode has
+no hub approval transport: the dispatcher alone posts `/approve`, confirms its
+result and consumes any receipt through the adopting execution path. Decline
+returns a choice for the dispatcher; local Cancel and unavailable/expired
+flows submit no hub decision. Actual human enrolment and final dispatcher
+adoption remain separate gates.
+
+The synchronous mode admits one active foreground flow per process. Its
+callback/opening threads have a separate two-slot limit; a stuck callback
+retains its slot until it exits. Timeouts revoke local authority and stop the
+owned listener, while a late callback cannot return a proof. An opted-in
+Cancel can also stop a pending challenge callback without changing ordinary
+asynchronous adapter cancellation semantics. These are bounded local resource
+controls, not a claim to kill a hung Python callback thread.
 
 `EnrolService(page, transport).human_start()` is the local front-door API. It
 mounts separate enrolment routes under the existing guarded listener, with one

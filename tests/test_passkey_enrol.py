@@ -411,3 +411,36 @@ async def test_python_310_deadline_exceptions_get_a_structured_refusal(subject, 
     response = await subject.client.post(subject.root + "/options", headers=subject.headers, json={})
     assert response.status_code == 502 and response.json()["status"] == "refused"
     assert not any(path.startswith("enrol/") for _, path, _ in subject.hub.calls)
+
+
+@pytest.mark.parametrize("algorithm", [-8, -35])
+def test_created_key_algorithms_are_rejected_before_transport_or_ceremony(algorithm):
+    from collab.client.passkey_enrol import CreatedKey
+    with pytest.raises(ValueError):
+        CreatedKey.parse({"credential_id":encoded(b"id"),"algorithm":algorithm,
+                          "public_key_spki":encoded(b"spki")})
+
+
+@pytest.mark.parametrize("algorithm", [-8, -35])
+async def test_unagreed_hub_enrol_algorithm_stops_before_any_proof_submission(subject, algorithm, monkeypatch):
+    original = subject.transport.request
+    async def changed(method,path,body=None):
+        result = await original(method,path,body)
+        if path == "enrol/begin": result["algorithms"] = [algorithm]
+        return result
+    monkeypatch.setattr(subject.transport,"request",changed)
+    response = await subject.client.post(subject.root+"/options",headers=subject.headers,json={})
+    assert response.status_code == 502
+    assert not any(path == "enrol/finish" for _,path,_ in subject.hub.calls)
+
+
+@pytest.mark.parametrize("skew", [-5, 5])
+async def test_a_full_enrol_challenge_allows_small_hub_clock_skew(subject, skew, monkeypatch):
+    original = subject.transport.request
+    async def changed(method,path,body=None):
+        result = await original(method,path,body)
+        if path == "enrol/begin": result["expires_at"] = int(time.time())+120+skew
+        return result
+    monkeypatch.setattr(subject.transport,"request",changed)
+    value = await options(subject)
+    assert value["expires_at"] > time.time()+110

@@ -41,6 +41,9 @@ MAX_CONNECTIONS = 8
 BODY_SECONDS = 3.0
 BACKEND_SECONDS = 10.0
 WINDOW_SECONDS = 600.0
+# Hub and client clocks may differ after sleep; this admits skew, not extra
+# authenticator runtime. Browser ceremony budgets remain capped at120seconds.
+CLOCK_SKEW_SECONDS = 30.0
 CEREMONY_SECONDS = 120.0
 IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 BINARY = re.compile(r"[A-Za-z0-9_-]+\Z")
@@ -83,6 +86,7 @@ class Review:
     trust_label: str = "Unverified enrolment (TOFU)"
     trust_detail: str = "The hub has not established hardware attestation."
     status: str = "pending"
+    local_cancel: bool = False
 
 
 @dataclass(frozen=True)
@@ -179,7 +183,8 @@ def _review_payload(request_id, review):
             or not isinstance(review.digest, bytes) or len(review.digest) != 32
             or not hmac.compare_digest(hashlib.sha256(review.canonical).digest(), review.digest)
             or type(review.enrolled) is not bool or not math.isfinite(review.expires)
-            or review.status not in ("pending", "approved", "declined", "expired", "unknown")):
+            or type(review.local_cancel) is not bool
+            or review.status not in ("pending", "approved", "proof-ready", "cancelled", "declined", "expired", "unknown")):
         raise ValueError("invalid canonical review")
     summary = {name: _text(getattr(review, name), 8192)
                for name in ("subject", "destination", "authority")}
@@ -193,7 +198,7 @@ def _review_payload(request_id, review):
     return {"request_id": request_id, "canonical_review": review.canonical.decode("utf-8"),
             "summary": summary, "trust": {"label": _text(review.trust_label, 256),
             "detail": _text(review.trust_detail, 8192)}, "enrolled": review.enrolled,
-            "status": review.status}
+            "status": review.status, **({"local_cancel": True} if review.local_cancel else {})}
 
 
 def _credential(value, operation):
@@ -202,17 +207,13 @@ def _credential(value, operation):
         raise ValueError("invalid credential")
     _binary(value["rawId"], 1024)
     response = value["response"]
-    required = ({"clientDataJSON", "attestationObject", "publicKey", "publicKeyAlgorithm"}
-                if operation == "enrol" else {"clientDataJSON", "authenticatorData", "signature"})
-    allowed = required | ({"authenticatorData"} if operation == "enrol" else set())
-    if not isinstance(response, dict) or not required <= set(response) <= allowed:
+    if operation != "approve":
+        raise ValueError("request windows only collect assertion evidence")
+    required = {"clientDataJSON", "authenticatorData", "signature"}
+    if not isinstance(response, dict) or set(response) != required:
         raise ValueError("invalid credential response")
     for name, field in response.items():
-        if name == "publicKeyAlgorithm":
-            if type(field) is not int or field not in (-7, -257):
-                raise ValueError("unsupported public key algorithm")
-        else:
-            _binary(field, FIELDS[name])
+        _binary(field, FIELDS[name])
     return value  # validation must not rewrite any signed bytes or their encoding
 
 
@@ -404,7 +405,28 @@ class PasskeyPage:
         origin = request.headers.get("origin")
         if (request.method == "POST" and origin != self.origin) or (origin and origin != self.origin):
             return _reply("refused", "This operation requires the same localhost origin.", 403)
-        if window.busy: return _reply("busy", "Another operation owns this request.", 409)
+        if window.busy:
+            # Only the explicitly opted-in proof collector supports local
+            # cancellation during a challenge fetch. It commits one local
+            # choice before a late callback can publish; hub-forwarding
+            # adapters retain their existing uncertain-operation guard.
+            if (action == "cancel" and request.method == "POST" and window.review
+                    and window.review.local_cancel and callable(getattr(self.adapter, "cancel", None))):
+                try:
+                    data = await self._body(request)
+                    if (data or self._windows.get(request_id) is not window
+                            or time.monotonic() >= window.deadline or time.time() >= window.review.expires):
+                        raise ValueError("cancel context changed")
+                    outcome = await asyncio.wait_for(self.adapter.cancel(request_id, self.origin,
+                        window.review.digest), BACKEND_SECONDS)
+                    if not isinstance(outcome, Outcome) or outcome.status != "cancelled":
+                        raise ValueError("invalid local cancellation")
+                    window.ceremony = None
+                    window.terminal = True
+                    return _reply("cancelled", _text(outcome.message, 2048), 200)
+                except (ValueError, UnicodeError, RecursionError, OverflowError, asyncio.TimeoutError):
+                    return _reply("refused", "This local cancellation could not be confirmed.", 409)
+            return _reply("busy", "Another operation owns this request.", 409)
         if action == "review" and request.method == "GET":
             window.busy = True
             try:
@@ -412,7 +434,7 @@ class PasskeyPage:
                 payload = _review_payload(request_id, review)
                 window.review = review
                 window.ceremony = None
-                window.terminal = review.status in ("approved", "declined", "expired")
+                window.terminal = review.status in ("approved", "proof-ready", "cancelled", "declined", "expired")
                 window.uncertain = review.status == "unknown"
                 return Response(_json(payload), media_type="application/json")
             except NotReady:
@@ -420,7 +442,10 @@ class PasskeyPage:
             except Exception:
                 return _reply("unavailable", "The hub review could not be confirmed.", 502)
             finally: window.busy = False
-        if request.method != "POST" or action not in ("approve/options", "approve/result", "decline"):
+        actions = ("approve/options", "approve/result", "decline")
+        if window.review is not None and window.review.local_cancel and callable(getattr(self.adapter, "cancel", None)):
+            actions += ("cancel",)
+        if request.method != "POST" or action not in actions:
             return _reply("missing", "Not found.", 404)
         if window.terminal or window.uncertain or window.review is None:
             return _reply("refused", "Refresh and confirm the current hub status before deciding.", 409)
@@ -450,25 +475,25 @@ class PasskeyPage:
                 ceremony = await asyncio.wait_for(self.adapter.begin(request_id, operation, self.origin, review.digest), BACKEND_SECONDS)
                 if (not isinstance(ceremony, Ceremony) or not IDENTIFIER.fullmatch(ceremony.ceremony_id)
                         or ceremony.review_digest != review.digest or not math.isfinite(ceremony.expires)
-                        or not 0 < ceremony.expires - time.time() <= CEREMONY_SECONDS
+                        or not 0 < ceremony.expires - time.time() <= CEREMONY_SECONDS + CLOCK_SKEW_SECONDS
                         or ceremony.expires > review.expires or not still_current()
                         or ceremony.expires - time.time() > window.deadline - time.monotonic()):
                     raise ValueError("invalid bound ceremony")
                 public_key = ceremony.public_key
                 if not isinstance(public_key, dict) or len(_binary(public_key.get("challenge"), 32)) != 32:
                     raise ValueError("invalid challenge")
-                if (operation == "enrol" and public_key.get("rp", {}).get("id") != "localhost") or (
-                        operation == "approve" and public_key.get("rpId") != "localhost"):
+                if operation != "approve" or public_key.get("rpId") != "localhost":
                     raise ValueError("invalid relying party")
                 payload = {"ceremony_id": ceremony.ceremony_id, "publicKey": public_key, "expires": ceremony.expires}
                 encoded = _json(payload)
                 window.ceremony = (operation, ceremony)
                 return Response(encoded, media_type="application/json")
-            if action == "decline":
+            if action in ("decline", "cancel"):
                 if data: raise ValueError("unexpected decline fields")
                 window.ceremony = None
                 forwarded = True
-                outcome = await asyncio.wait_for(self.adapter.decline(request_id, self.origin, review.digest), BACKEND_SECONDS)
+                method = self.adapter.decline if action == "decline" else self.adapter.cancel
+                outcome = await asyncio.wait_for(method(request_id, self.origin, review.digest), BACKEND_SECONDS)
             else:
                 if set(data) != {"ceremony_id", "credential"}: raise ValueError("invalid result fields")
                 bound = window.ceremony
@@ -483,10 +508,10 @@ class PasskeyPage:
                 forwarded = True
                 outcome = await asyncio.wait_for(self.adapter.complete(request_id, operation, bound[1].ceremony_id,
                     credential, self.origin, review.digest), BACKEND_SECONDS)
-            if not isinstance(outcome, Outcome) or outcome.status not in ("approved", "enrolled", "declined", "pending", "unknown", "refused"):
+            if not isinstance(outcome, Outcome) or outcome.status not in ("approved", "proof-ready", "cancelled", "enrolled", "declined", "pending", "unknown", "refused"):
                 raise ValueError("invalid hub outcome")
             message = _text(outcome.message, 2048)
-            window.terminal = outcome.status in ("approved", "declined")
+            window.terminal = outcome.status in ("approved", "proof-ready", "cancelled", "declined")
             window.uncertain = outcome.status in ("pending", "unknown")
             return _reply(outcome.status, message, 200)
         except NotReady:
@@ -588,3 +613,9 @@ async def close():
             raise RuntimeError("The passkey listener belongs to another daemon event loop")
         await _page_instance.stop()
         _page_instance = _page_loop = None
+
+
+def approve_with_passkey(request, fetch_challenge):
+    """Synchronous proof-only dispatcher seam; approval stays with its caller."""
+    from .passkey_dispatch import approve_with_passkey as collect
+    return collect(request, fetch_challenge)

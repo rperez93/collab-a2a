@@ -171,7 +171,7 @@ export function createApp(environment = globalThis) {
     elements.approve.disabled = !ready || Boolean(active) || !review.enrolled;
     elements.decline.disabled = !ready || Boolean(active);
     elements.refresh.disabled = Boolean(active) || disposed;
-    elements.cancel.disabled = !active;
+    elements.cancel.disabled = !active && !(ready && review.local_cancel === true);
   }
   function stop(message) {
     sequence += 1;
@@ -244,23 +244,25 @@ export function createApp(environment = globalThis) {
           typeof requester.participant_id !== "string" || !/^p_[A-Za-z0-9_-]{1,126}$/.test(requester.participant_id)) {
         throw new Error("The review is missing its requester participant ID.");
       }
-      elements.requester.textContent = boundedText(requester.display_name, 256, "requester name");
       elements["requester-id"].textContent = requester.participant_id;
+      elements.requester.textContent = `Calls itself: ${boundedText(requester.display_name, 256, "requester name")} (self-chosen)`;
       elements.review.textContent = data.canonical_review;
       elements.expires.textContent = new environment.Date(data.summary.expires * 1000).toISOString();
       elements.trust.textContent = boundedText(data.trust.label, 256, "reported trust");
       elements["trust-detail"].textContent = boundedText(data.trust.detail, 8192, "trust detail");
       const state = data.status ?? (uncertain ? "unknown" : "pending");
-      if (!["pending", "unknown", "uncertain", "busy", "approved", "declined", "refused", "expired"].includes(state)) {
+      if (!["pending", "unknown", "uncertain", "busy", "approved", "proof-ready", "cancelled", "declined", "refused", "expired"].includes(state)) {
         throw new Error("The adapter returned an unknown request status.");
       }
       review = data;
       uncertain = ["unknown", "uncertain", "busy"].includes(state);
-      done = ["approved", "declined", "refused", "expired"].includes(state);
+      done = ["approved", "proof-ready", "cancelled", "declined", "refused", "expired"].includes(state);
       if (expiryTimer) environment.clearTimeout(expiryTimer);
       expiryTimer = environment.setTimeout(() => { stop("This review has expired. Refresh it before deciding."); buttons(); },
         Math.min(2147483647, Math.max(0, data.summary.expires * 1000 - now())));
       status(uncertain ? "Status unknown. Check status again before taking another action." :
+        state === "proof-ready" ? "Signed — waiting for the hub’s confirmation." :
+        state === "cancelled" ? "Cancelled locally; no proof was handed to the dispatcher." :
         done ? `Hub-reported request status: ${state}.` :
         expired() ? "This review has expired. Refresh it before deciding." :
         "Read the complete untrusted review, then choose a decision.", uncertain || expired());
@@ -311,7 +313,9 @@ export function createApp(environment = globalThis) {
       current(operation);
       const evidence = serializeCredential(credential, false);
       const result = await rpc(`${prefix}/result`, operation, {ceremony_id: options.ceremony_id, credential: evidence});
-      if (!confirm(result, "approved")) return;
+      if (result.status === "proof-ready") {
+        status("Signed — waiting for the hub’s confirmation.");
+      } else if (!confirm(result, "approved")) return;
       done = true; if (expiryTimer) environment.clearTimeout(expiryTimer);
     });
   }
@@ -323,8 +327,21 @@ export function createApp(environment = globalThis) {
       done = true; if (expiryTimer) environment.clearTimeout(expiryTimer);
     });
   }
-  const app = {load, approve: ceremony, decline,
-    cancel: () => stop("Cancelled locally. Refresh the review to check its status before trying again."),
+  function cancel() {
+    if (review?.local_cancel === true && !uncertain && !done && !active?.forwardingStarted) {
+      stop();
+      return run(async operation => {
+        const result = await rpc("cancel", operation, {});
+        if (result.status !== "cancelled") {
+          if (!confirm(result, "cancelled")) return;
+        }
+        status("Cancelled locally. No proof was handed to the dispatcher.");
+        done = true; if (expiryTimer) environment.clearTimeout(expiryTimer);
+      });
+    }
+    stop("Cancelled locally. Refresh the review to check its status before trying again.");
+  }
+  const app = {load, approve: ceremony, decline, cancel,
     dispose: () => { disposed = true; stop(); if (expiryTimer) environment.clearTimeout(expiryTimer); }};
   for (const name of ["approve", "decline", "refresh", "cancel"]) {
     elements[name].addEventListener("click", () => app[name === "refresh" ? "load" : name]());

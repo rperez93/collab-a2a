@@ -259,7 +259,7 @@ class EnrolService:
                 or issued.get("bootstrap") != "tofu-unverified"
                 or type(algorithms) is not list or not algorithms
                 or any(type(item) is not int or item not in (-7, -257) for item in algorithms)
-                or type(expires) is not int or not 0 < expires - time.time() <= 120
+                or type(expires) is not int or not 0 < expires - time.time() <= 120 + passkey.CLOCK_SKEW_SECONDS
                 or expires - time.time() > flow.deadline - time.monotonic()
                 or type(issued.get("challenge_id")) is not str
                 or not passkey.IDENTIFIER.fullmatch(issued["challenge_id"])):
