@@ -172,3 +172,63 @@ being tested together in an isolated checkout; that is not a live worker
 pacing improvement. The host machine's separately authorized 120-attempt
 setting is a different baseline and must not be pooled into this 60-attempt
 machine comparison.
+
+## Terminal outcome ledger (R14 contract)
+
+The agreed R14 contract (session messages 1716 and 1729) emits **one final JSON
+line per attempt**. `phase` is the furthest stage reached (`reserved`, `launched`,
+`committed`), not a stream of phase events. `outcome` is explicit (`output`,
+`no-op`, `invalid`, `failed`, `cancelled`, `skipped-local`). The opaque 12-hex
+`attempt` value identifies duplicates across rotation. Token/cost fields appear
+only when reported; a missing value is unknown. `event=dropped` marks lost lines.
+The implementation and deployment of R14 still need verification against this
+contract before a paired before/after audit can be accepted.
+
+Use explicit files from **your own selected worker**, oldest first. Nothing is
+auto-discovered, and the tool never opens another participant's state:
+
+```bash
+python3 scripts/audit-worker-ledger.py /own/session/worker.log.1 /own/session/worker.log --since 1794628800 --until 1794632400 --role guest --participants 4 --build-sha <full-commit-sha>
+```
+
+Omit the rotated file when it does not exist. The window is inclusive at `since`
+and exclusive at `until`, expressed in Unix seconds. Role, participant count and
+build are declared comparison context, not values inferred from log contents.
+Capture logs at the boundaries of a known interval; do not assume their retained
+history spans that interval. Logs from different workers must be audited separately.
+
+The report counts only observed terminal records and explicit outcomes. Its
+provider-launch count uses `launched`/`committed` and excludes `skipped-local`;
+`reserved` alone is not a provider call. Its per-hour figure describes records in
+the requested window, not a verified demand rate or billing rate. It reports
+known usage subtotals separately from totals, leaving the total null whenever
+any included record lacks that measurement. Even an empty sample has unknown
+cost. It does not infer delivery latency, time stalled on budget, or a new cap.
+
+Identical attempts are counted once. Conflicting records for an attempt are
+excluded and flagged. Missing IDs, malformed or partial lines, invalid numbers,
+and dropped-line markers make coverage incomplete. Clean logs still have
+`coverage: not_verified`: rotation, crashes, or missing gap markers cannot prove
+complete coverage. Unknown outcomes never become no-ops. Record text, exception
+messages, paths, prompts and summaries are not emitted; only allowlisted numeric
+fields, agent/model identifiers and diagnostics leave the parser.
+
+The reader accepts at most two regular files, rejects leaf symlinks and special
+files, pins both descriptors before scanning, and reads only their initial sizes.
+Bounds are 10 MiB per file, 64 KiB per line, 50,000 lines and 256 agent/model
+pairs. A ten-second scan budget is checked between reads; it is not an OS-level
+timeout for a stalled filesystem syscall. Limits fail the report instead of
+presenting a partial result as success. File rotation during opening or partial
+writes can require another capture. No provider is called and no settings change.
+
+A dropped marker's timestamp is when loss was reported, not the affected interval.
+Any marker in the supplied files therefore marks coverage incomplete, even when
+its timestamp falls outside the requested window. Its count is a file-set
+loss diagnostic, not a count attributed to that window. Safe nonblocking/no-follow
+file opens currently require POSIX/WSL; native Windows receives an explicit refusal.
+
+Synthetic resource check in a fresh interpreter: 20,000 terminal records (5.2 MB)
+took 0.222 seconds wall, 0.208 seconds CPU and 18,304 KiB peak-RSS growth on this
+machine. A regression checks that workload under 8 seconds wall, 6 seconds CPU
+and 96 MiB RSS growth. These are parser measurements, not worker efficiency,
+real call counts, or postdeployment evidence.
