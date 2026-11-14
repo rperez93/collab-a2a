@@ -81,6 +81,10 @@ ACTIVITY_REFRESH = 300.0
 STATS_REASSERT = 60.0
 #: Seconds between rescans of the installed skill directory (R4).
 SKILL_SCAN = 300.0
+#: Seconds before peers' skill lists are re-read with no count change (R12).
+SKILLS_REFRESH = 600.0
+#: Read limit for peers' skill lists (R12).
+SKILLS_MAX_BYTES = 4 * 1024 * 1024
 #: How long to leave a failed automatic compaction before probing the pane
 #: again. The heartbeat runs every three seconds and an agent sitting over its
 #: threshold sits there for a long time, so without this a pane in copy mode
@@ -2665,6 +2669,7 @@ class Daemon:
                 # people long after the session ended. The reader can only be
                 # careful about the age if the age is written down.
                 self.snapshot["fetched_at"] = time.time()
+                self._maybe_refresh_skills(client)
                 try:
                     tmp = self.paths.root / "snapshot.tmp"
                     tmp.write_text(json.dumps(self.snapshot))
@@ -2675,6 +2680,70 @@ class Daemon:
                 self._snapshot_error = f"hub answered {r.status_code}"
         except (httpx.HTTPError, ValueError) as exc:
             self._snapshot_error = type(exc).__name__
+
+    def _maybe_refresh_skills(self, client: httpx.AsyncClient) -> None:
+        """Fetch peers' skill lists when a count changed, or every SKILLS_REFRESH.
+
+        The roster carries only counts (R4), so a change there is the cue; the
+        lists are read at most once per change, validated with an ETag, and
+        cached for the dashboard, which then needs no hub call of its own (R12).
+        Nothing is fetched while nobody shares a list, and failures back off.
+        """
+        people = self.snapshot.get("participants", [])
+        if not any(p.get("skills_count") for p in people):
+            return
+        signature = tuple(sorted((p.get("id", ""), p.get("skills_count")) for p in people))
+        now = time.time()
+        if now < getattr(self, "_skills_retry_at", 0.0):
+            return
+        if (signature == getattr(self, "_skills_signature", None)
+                and now - getattr(self, "_skills_at", 0.0) < SKILLS_REFRESH):
+            return
+        self._schedule_refresh("skills", lambda: self._fetch_skills(client, signature))
+
+    async def _fetch_skills(self, client: httpx.AsyncClient, signature=None) -> None:
+        # Revalidate only what is on disk: an ETag kept after a failed write
+        # turned every later answer into a 304 and the cache never appeared.
+        etag = getattr(self, "_skills_etag", None) if self.paths.skills.exists() else None
+        try:
+            async with client.stream(
+                    "GET", f"{self.profile.url}{EXT_PREFIX}/participant-skills",
+                    headers=request_headers(self.profile.token, {"If-None-Match": etag} if etag else None),
+                    timeout=10.0) as r:
+                if r.status_code == 304 and etag:
+                    data = None
+                elif r.status_code == 404:
+                    data = {"unsupported": True}  # a hub older than skill lists
+                elif r.status_code == 200:
+                    declared = r.headers.get("content-length", "")
+                    if declared.isdigit() and int(declared) > SKILLS_MAX_BYTES:
+                        raise ValueError("participant skill lists exceed the read limit")
+                    raw = bytearray()
+                    async for chunk in r.aiter_bytes():
+                        if len(raw) + len(chunk) > SKILLS_MAX_BYTES:  # checked before growing
+                            raise ValueError("participant skill lists exceed the read limit")
+                        raw.extend(chunk)
+                    body = json.loads(bytes(raw))
+                    people = body.get("participants") if isinstance(body, dict) else None
+                    if not isinstance(people, list):
+                        raise ValueError("malformed participant skill lists")
+                    data = {"participants": people, "untrusted": True}
+                    new_etag = r.headers.get("etag")
+                else:
+                    raise ValueError(f"hub answered {r.status_code}")
+            if data is not None:
+                data["fetched_at"] = time.time()
+                tmp = self.paths.root / "skills.tmp"
+                tmp.write_text(json.dumps(data))
+                tmp.replace(self.paths.skills)
+                if "participants" in data:
+                    self._skills_etag = new_etag  # only once the cache it validates exists
+        except (httpx.HTTPError, ValueError, OSError):
+            backoff = min(max(2 * getattr(self, "_skills_backoff", 1.5), 3.0), SKILLS_REFRESH)
+            self._skills_backoff, self._skills_retry_at = backoff, time.time() + backoff
+            return
+        self._skills_backoff, self._skills_retry_at = 0.0, 0.0
+        self._skills_signature, self._skills_at = signature, time.time()
 
     def _adopt_identity(self) -> None:
         """Take our current name and id from the hub.

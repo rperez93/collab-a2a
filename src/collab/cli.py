@@ -2675,6 +2675,120 @@ def _stat_bits(person: dict[str, Any]) -> list[str]:
     return bits
 
 
+def dashboard_rows(snapshot: dict[str, Any], skills: dict[str, Any] | None, *,
+                   live: bool = True, own_stats: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Everyone's quota and skills from what the daemon already holds (R12).
+
+    Unknown stays unknown: a window nobody reported is absent, never 0%; a
+    roster that is no longer live shows nobody connected and no quota; a skill
+    list the hub cannot serve or the participant does not share says so.
+    `own_stats` fills this participant's row when it does not share stats.
+    """
+    from .stats import quota_summary
+    lists = {p.get("id") or p.get("name"): p.get("skills") or []
+             for p in (skills or {}).get("participants", []) if isinstance(p, dict)}
+    rows = []
+    for person in snapshot.get("participants") or []:
+        you = (person.get("id") == snapshot.get("you_id") if snapshot.get("you_id")
+               else person.get("name") == snapshot.get("you"))
+        stats = person.get("stats") or {}
+        if you and own_stats and not stats.get("quotas") and stats.get("quota_used_pct") is None:
+            stats = {**stats, **own_stats}
+        if not live:
+            stats = {}
+        quotas = {name: {"used_pct": w.get("used_pct"), "resets_at": w.get("resets_at")}
+                  for name, w in (stats.get("quotas") or {}).items() if isinstance(w, dict)}
+        from .config import stats_stale_after
+        from .stats import _stamp_of, reported_age
+        # The QUOTA's own observation time, not the report's: a six-hour-old
+        # window re-reported five seconds ago is six hours old.
+        quota_stamp = _stamp_of({"reported_at": stats.get("quota_observed_at")}) or _stamp_of(stats)
+        stale = bool(stats.get("quotas") or stats.get("quota_used_pct") is not None) and (
+            quota_stamp is None or time.time() - quota_stamp > stats_stale_after())
+        quota_age = reported_age({"reported_at": quota_stamp}) if quota_stamp is not None else "age unknown"
+        model_stamp = _stamp_of({"reported_at": stats.get("model_observed_at")})
+        worker = stats.get("worker") if isinstance(stats.get("worker"), dict) else {}
+        budget = worker.get("budget_remaining")
+        count = person.get("skills_count")
+        if count is None:
+            skill_state = "unknown"  # a hub or peer older than skill lists
+        elif not count:
+            skill_state = "not shared"
+        elif skills is None:
+            skill_state = "unknown"
+        elif skills.get("unsupported"):
+            skill_state = "hub too old"
+        else:
+            skill_state = "shared"
+        listed = lists.get(person.get("id")) or lists.get(person.get("name")) or []
+        if skill_state == "shared" and not listed:
+            skill_state = "unknown"  # count changed since the lists were read
+        rows.append({"name": person.get("name", ""), "you": you,
+                     "connected": live and bool(person.get("connected")),
+                     "quota": stats.get("quota_used_pct") if not quotas else None,
+                     "quotas": quotas, "quota_summary": quota_summary(stats, with_resets=True),
+                     "quota_stale": stale, "reported": quota_age,
+                     "model_age": reported_age({"reported_at": model_stamp}) if model_stamp else "age unknown",
+                     "main_model": str(stats.get("model") or "unknown"),
+                     "worker_model": str(worker.get("model") or "unknown"),
+                     "model_observed_at": stats.get("model_observed_at"),
+                     "model_changed_at": stats.get("model_changed_at"),
+                     "worker_budget": budget if isinstance(budget, (int, float)) else None,
+                     "skills": listed if skill_state == "shared" else [],
+                     "skills_state": skill_state})
+    return rows
+
+
+def cmd_dashboard(args: argparse.Namespace) -> int:
+    """Read-only view the daemon keeps current; no hub call from here."""
+    from .stats import read_stats
+    from .runtime_settings import get as runtime_setting
+    profile = _require_profile(args)
+    paths = DaemonPaths(profile.dir)
+    try:
+        snapshot = json.loads(paths.snapshot.read_text())
+    except (OSError, ValueError):
+        fail("no roster yet; is the listener running? (`collab check`)")
+        return 1
+    try:
+        skills = json.loads(paths.skills.read_text())
+    except (OSError, ValueError):
+        skills = None
+    age = time.time() - float(snapshot.get("fetched_at") or 0)
+    live = (daemon_state(read_status(profile), running=is_running(profile) is not None) == "live"
+            and 0 <= age <= runtime_setting("participant_stale_after"))
+    own = read_stats(profile) if not share_stats_enabled() else None
+    rows = dashboard_rows(snapshot, skills, live=live, own_stats=own)
+    if args.json:
+        print(json.dumps({"fetched_at": snapshot.get("fetched_at"), "stale": not live,
+                          "skills_fetched_at": (skills or {}).get("fetched_at"),
+                          "untrusted": True, "participants": rows},
+                         indent=2, ensure_ascii=True))
+        return 0
+    note = f"roster {int(age)}s old" + ("" if live else ", not live: quota unknown")
+    if skills and skills.get("fetched_at"):
+        note += f", skill lists {int(time.time() - float(skills['fetched_at']))}s old"
+    heading(f"session dashboard  {dim(f'({note})')}")
+    for row in rows:
+        mark = c("●", "32") if row["connected"] else dim("○")
+        you = dim(" (you)") if row["you"] else ""
+        quota = said(row["quota_summary"]) if row["quota_summary"] else dim("quota unknown")
+        if row["quota_summary"] and row["quota_stale"]:
+            quota += dim(f" ({said(row['reported'])})")  # reported_age already says "old"
+        budget = ("" if row["worker_budget"] is None
+                  else f"  worker {int(row['worker_budget'])} turns left")
+        print(f"  {mark} {c(said(row['name']), '1')}{you}  {quota}{budget}")
+        print(dim(f"      models: main {said(row['main_model'])} ({said(row['model_age'])})"
+                  f" · worker {said(row['worker_model'])}"))
+        if row["skills"]:
+            names = ", ".join(said(s.get("name", "")) for s in row["skills"][:12] if isinstance(s, dict))
+            more = f" +{len(row['skills']) - 12}" if len(row["skills"]) > 12 else ""
+            print(f"      skills: {names}{more}")
+        else:
+            print(dim(f"      skills: {row['skills_state']}"))
+    return 0
+
+
 def cmd_stats(args: argparse.Namespace) -> int:
     """What each agent has reported about its own usage.
 
@@ -7849,6 +7963,11 @@ def build_parser() -> argparse.ArgumentParser:
     ac.add_argument("--json", action="store_true")
     add_session_flag(ac)
     ac.set_defaults(func=cmd_activity)
+
+    dash = sub.add_parser("dashboard", help="everyone's quota and skills, kept current by the daemon")
+    dash.add_argument("--json", action="store_true")
+    add_session_flag(dash)
+    dash.set_defaults(func=cmd_dashboard)
 
     stt = sub.add_parser("stats", help="what each agent reports about its own usage")
     stt.add_argument("--json", action="store_true")

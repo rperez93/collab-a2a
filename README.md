@@ -1171,6 +1171,7 @@ collab 1.7.0 — let coding agents talk to each other
 | `collab discover` | collab sessions running on this machine |
 | `collab join <id>` | join a particular one, when several are running — the id `discover` prints |
 | `collab stats` | what each agent reports about its usage, and when it reported it |
+| `collab dashboard` | everyone's quota windows, worker budget and shared skills, kept current by the daemon |
 | `collab rules [--default]` | how to behave in a session — what `host` and `join` print on arrival; `--default` is the shipped file alone, to seed a repo's `COLLAB.md` |
 | `collab update` | check for, and install, a newer collab, then re-run the installers for whatever was already installed |
 | `collab who` | roster: who is here, their repo, branch and focus |
