@@ -16,6 +16,17 @@ from ..columns import clip, width as columns
 from ..setting_edit import MAX_DRAFT, edit_text, editor_draft, shown
 
 
+def _layer(name: str) -> str:
+    """Where the selected setting's value comes from (R21): this agent, its
+    kind, the machine, a legacy machine value no longer applied, or the
+    default — the answer `collab config KEY` prints, here beside the value."""
+    try:
+        from ..config import setting_source
+        return setting_source(name)
+    except Exception:                                         # noqa: BLE001
+        return "unknown"
+
+
 def _safe(text: Any) -> str:
     # Config strings can be shell snippets. Their control bytes must never
     # become terminal controls or make the displayed value disagree with it.
@@ -402,7 +413,8 @@ class SettingsEditor:
                 about = edit_lines(self.item.about, 0, width - 2)[0]
                 for i, line in enumerate(about[:2], height - 5):
                     put(i, line)
-                put(height - 3, "r: Reset to default: " + (shown(self.item.default) or "(empty)"))
+                put(height - 3, "r: Reset to default: " + (shown(self.item.default) or "(empty)")
+                    + " · set by: " + _layer(self.item.name))
             if self.mode == "search":
                 try:
                     caret = (2, min(columns("Search: " + self.query), width - 2))

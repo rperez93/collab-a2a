@@ -36,6 +36,11 @@ from .protocol import (KIND_CHAT, KIND_FILE, KIND_HELLO, KIND_PRESENCE,
 #: Who the reader is. The bubbles on the right, the «(you)» in the roster.
 YOU = "edith"
 HOST = "jarvis"
+#: The third participant, named the way an agent with no name of its own is
+#: named now: its kind and a stable suffix (config.default_name). A demo is a
+#: picture people copy, and a picture full of first names teaches that a
+#: person's name is what an agent goes by.
+PEER = "codex-5e0a91c2"
 SESSION_ID = "demo"
 TITLE = "demo · a conversation with nobody on the other end"
 
@@ -74,16 +79,16 @@ _BACKLOG = [
     (YOU, "the quick tunnels drop the SSE feed, I measured it twice"),
     (HOST, "measured how?"),
     (YOU, "two sessions, one behind the tunnel, one local. same client build"),
-    ("mila", "and the local one delivered everything?"),
+    (PEER, "and the local one delivered everything?"),
     (YOU, "every event. the tunnel connected 200 and then said nothing"),
     (HOST, "so it is the tunnel swallowing the stream, not our reader"),
-    ("mila", "that matches what I saw on friday"),
+    (PEER, "that matches what I saw on friday"),
     (HOST, "⚠ WARN: do not write that up as a client bug then"),
     (YOU, "already corrected the note"),
-    ("mila", "何が問題なのかやっと分かった 🎉"),
+    (PEER, "何が問題なのかやっと分かった 🎉"),
     (HOST, "so ngrok stays the only real route for now"),
     (YOU, "for remote, yes. same machine does not need any of it"),
-    ("mila", "ok. I will leave the authtoken to you"),
+    (PEER, "ok. I will leave the authtoken to you"),
     (HOST, "fine. tomorrow then"),
 ]
 
@@ -111,10 +116,10 @@ _TODAY: list[tuple[float, str, str, Any]] = [
      "  git log -S'return self.handle_mouse()' --oneline -- src/collab/client/tui.py\n"
      "  python -m pytest tests/test_tui_scroll.py -q"),
     (116, HOST, KIND_CHAT, "and it lands on 86e3ab9, the commit that added the wheel"),
-    (114, "mila", KIND_HELLO, {"repo": "collab-a2a", "branch": "themes",
+    (114, PEER, KIND_HELLO, {"repo": "collab-a2a", "branch": "themes",
                                "focus": "reading the theme files"}),
-    (113, "mila", KIND_CHAT, "morning 🌅"),
-    (112, "mila", KIND_CHAT,
+    (113, PEER, KIND_CHAT, "morning 🌅"),
+    (112, PEER, KIND_CHAT,
      "while you two are in there — the info blue is unreadable on my terminal.\n"
      "it resolves to whatever the palette put in slot 4, which here is navy."),
     (110, YOU, KIND_CHAT, "✗ FAILED on my machine too, same reason"),
@@ -140,17 +145,17 @@ _TODAY: list[tuple[float, str, str, Any]] = [
      "the second one is the ugly one — it would have shipped looking fixed."),
     (74, HOST, KIND_CHAT, "⚠ good catch. the release case is not in my tests"),
     (70, HOST, KIND_CHAT, "added. ✓ 9 passed"),
-    (66, "mila", KIND_CHAT, "テーマの方も見ておくよ 🍵"),
+    (66, PEER, KIND_CHAT, "テーマの方も見ておくよ 🍵"),
     (52, HOST, KIND_TASK, {"action": "done", "id": "t_4", "state": "done",
                            "title": "one mouse handler, not two",
                            "owner": HOST}),
     (40, YOU, KIND_CHAT,
      "next: the bottom bar. it says «End/G: newest» and draws nothing.\n"
      "you cannot see where you are in a conversation, only be told."),
-    (34, "mila", KIND_CHAT, "a drawn scrollbar? in a terminal?", ),
+    (34, PEER, KIND_CHAT, "a drawn scrollbar? in a terminal?", ),
     (32, YOU, KIND_CHAT, "one line of it. a rail, a thumb, a percentage"),
     (30, HOST, KIND_CHAT, "and the jump button only when there is somewhere to jump"),
-    (22, "mila", KIND_PRESENCE, {"event": "mila is away"}),
+    (22, PEER, KIND_PRESENCE, {"event": f"{PEER} is away"}),
     (12, HOST, KIND_CHAT,
      "TODO for whoever picks this up:\n"
      "  - the track measures what is LOADED, not what is on disk\n"
@@ -220,23 +225,35 @@ def snapshot() -> dict[str, Any]:
              # the demo had never carried one, so the screenshot showed
              # everything about an agent except the figure the roster exists
              # for — the one you read before handing somebody more work.
+             "skills_count": 7,
              "stats": {"model": "claude-opus-5", "tokens_in": 184000,
                        "context_pct": 41, "cost_usd": 2.35,
                        "quotas": {"five_hour": {"used_pct": 62.0},
-                                  "seven_day": {"used_pct": 38.0}}}},
+                                  "seven_day": {"used_pct": 38.0}},
+                       # A worker pacing itself: past half its budget, and
+                       # saying how many calls are left before the window
+                       # resets (worker.pace).
+                       "worker": {"enabled": True, "running": True, "turns": 12,
+                                  "budget_remaining": 9,
+                                  "budget_reset_at": now + 1800,
+                                  # …and a question it put to its human seven
+                                  # minutes ago: what a peer sees while it
+                                  # waits (R18).
+                                  "awaiting_human": 1, "awaiting_age": 420}}},
             {"name": YOU, "id": "p_edith", "connected": True,
              "color": "#00cccc", "repo": "collab-a2a", "branch": "main",
              "machine": "workshop", "last_seen": now,
              "activity": {"state": "idle", "what": "reading the diff",
                           "since": now - 240, "updated_at": now},
+             "skills_count": 3,
              "stats": {"model": "claude-opus-5", "tokens_in": 96000,
                        "context_pct": 22,
                        "quotas": {"five_hour": {"used_pct": 21.0}}}},
-            {"name": "mila", "id": "p_mila", "connected": False,
+            {"name": PEER, "id": "p_codex", "connected": False,
              "color": "#c678dd", "repo": "collab-a2a", "branch": "themes",
              "machine": "laptop", "last_seen": now - 1320,
              "focus": "reading the theme files",
-             "stats": {"model": "claude-sonnet-5", "tokens_in": 31000}},
+             "stats": {"model": "gpt-5.6-luna", "tokens_in": 31000}},
         ],
     }
 
@@ -345,7 +362,13 @@ def status() -> dict[str, Any]:
         "batch": {"id": "B_demo", "name": "the bottom bar", "state": "open",
                   "total": 10, "done": 6, "withdrawn": 0, "outstanding": 4,
                   "percent": 60, "complete": False,
-                  "counted_at": now, "fetched_at": now},
+                  "counted_at": now, "fetched_at": now,
+                  # THE PACE, as the hub sends it (collab.batch.pace): six
+                  # done in fifty minutes is a task every eight and a third,
+                  # so four more are a little over half an hour away.
+                  "pace": {"state": "running", "elapsed": 3000.0, "eta": 1900.0,
+                           "overdue": False, "per_task": 500.0, "counted": 6,
+                           "since_last": 200.0}},
         "messages": {"total": 128, "fetched_at": now},
         "activity": activity(),
     }
