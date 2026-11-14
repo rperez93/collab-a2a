@@ -462,6 +462,54 @@ class ApprovalStore:
     def report_missing(self, token, credential_id):
         return self.report_key(token, credential_id)
 
+    def reset_host_credentials(self):
+        """The hub MACHINE's own reset of the host participant's approval keys.
+
+        Deliberately takes NO bearer token and is exposed on NO HTTP route: it
+        is called only by code that already holds this session's database on
+        the hub machine (`collab consent reset-host-key`, run there). Without
+        it, an agent that enrolled a software key for the host first — TOFU
+        over HTTP with the host's bearer — could never be undone: recovery
+        needs a different unique active host, and the host has none
+        (adversarial review of #161, must-fix 3). Every host key is retired,
+        pending approvals for the host are declined, its challenges are
+        dropped, and the host may enrol a first key again — under the same
+        10-minute cooling-off and the same loud session alarm. A same-UID agent
+        on the hub machine could also run this; the announcement is what
+        surfaces it, as with any TOFU enrolment.
+        """
+        with self.store._lock:
+            db = self.store._db
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                now = self._now()
+                hosts = db.execute("SELECT id FROM participants WHERE is_host=1 AND revoked=0").fetchall()
+                if len(hosts) != 1:
+                    raise Rejected("host_unavailable", 409)
+                host = hosts[0][0]
+                keys = db.execute("SELECT credential_id,fingerprint,state FROM approval_keys "
+                                  "WHERE session_id=? AND owner_id=? ORDER BY created_at DESC",
+                                  (self.session_id, host)).fetchall()
+                fingerprint = keys[0]["fingerprint"] if keys else "0" * 64
+                db.execute("UPDATE approval_keys SET state='retired' WHERE session_id=? AND owner_id=?",
+                           (self.session_id, host))
+                db.execute("INSERT INTO approval_generation(session_id,owner_id,generation,bootstrapped) "
+                           "VALUES(?,?,1,0) ON CONFLICT(session_id,owner_id) "
+                           "DO UPDATE SET generation=generation+1, bootstrapped=0",
+                           (self.session_id, host))
+                db.execute("DELETE FROM approval_challenges WHERE session_id=? AND owner_id=?",
+                           (self.session_id, host))
+                db.execute("UPDATE approval_requests SET state='declined',receipt_hash=NULL "
+                           "WHERE session_id=? AND target_id=? AND state IN ('pending','approved')",
+                           (self.session_id, host))
+                self._audit(db, host, "host_credentials_reset", now, fingerprint=fingerprint,
+                            retired=len(keys), verified_human=False, by="hub-machine")
+                db.commit()
+            except BaseException:
+                db.rollback()
+                raise
+            return {"api_version": 1, "owner_id": host, "retired": len(keys), "state": "reset"}
+
     def audit(self, token):
         with self._transaction(token, charge=False) as (db, owner, now):
             return [dict(row) for row in db.execute("SELECT seq,kind,at,request_id,metadata FROM approval_audit WHERE session_id=? AND owner_id=? ORDER BY seq DESC LIMIT ?",

@@ -12,6 +12,7 @@ from ..protocol import Envelope, KIND_CHAT, KIND_SYSTEM
 from ..skill_sharing import NAME_RE
 from . import approval_alarms as events
 from . import approval_challenge as challenges
+from . import approval_crypto as crypto
 from .approval_store import Rejected, _id, _text
 from . import skill_approval_policy
 
@@ -141,6 +142,14 @@ class SkillApprovals:
                 raise Rejected("skill_approval_binding", 403)
             request, key = core._receipt(db, owner, request_id, receipt, request["digest"], now)
             event_id = _id("sa_")
+            # The REVIEWED BYTES travel with the acceptance, so the requester can
+            # recompute the digest and check that what was approved is exactly
+            # what it asked for — the digest alone was a label, not evidence
+            # (adversarial review of #161, must-fix 2). They hold only the
+            # requester's own request data: session, both ids, its source seq and
+            # fingerprint, skill and args. Nothing is disclosed.
+            reviewed = db.execute("SELECT canonical FROM approval_requests WHERE id=?",
+                                  (request_id,)).fetchone()
             person = db.execute("SELECT name FROM participants WHERE id=?", (owner,)).fetchone()
             peer = db.execute("SELECT name FROM participants WHERE id=?", (requester,)).fetchone()
             env = Envelope(kind=KIND_SYSTEM, sender=person[0], sender_id=owner,
@@ -150,7 +159,8 @@ class SkillApprovals:
                 body={"event": "skill-approval", "event_id": event_id,
                     "strong_skill_response": {"id": source["id"], "state": "accepted", "source_seq": binding["source_seq"],
                         "request_id": request_id, "digest": request["digest"], "strength": "strong",
-                        "credential_trust": "tofu-unverified"}})
+                        "credential_trust": "tofu-unverified",
+                        "canonical_review": crypto.encode(bytes(reviewed["canonical"]))}})
             events.enqueue_event(db, core.session_id, now, event_id, env)
             db.execute("UPDATE approval_requests SET state='consumed',receipt_hash=NULL WHERE id=?", (request_id,))
             db.execute("UPDATE approval_skill_bindings SET state='accepted',event_id=? WHERE request_id=?", (event_id, request_id))
