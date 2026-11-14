@@ -224,6 +224,9 @@ def test_the_spare_counts_and_a_stale_one_is_cleared(tmp_path):
     logcap.spare_for(path).write_bytes(b"b" * 1000)
     assert logcap.total(path) == 1020
     watcher = logcap.watch(path)
+    deadline = time.monotonic() + 2
+    while logcap.spare_for(path).exists() and time.monotonic() < deadline:
+        time.sleep(0.01)                  # the first pass runs on its thread
     watcher.stop()
     assert not logcap.spare_for(path).exists()
 
@@ -261,10 +264,13 @@ def test_watch_never_stops_a_process_from_starting(monkeypatch):
     assert logcap.watch("/nonexistent/daemon.log") is None
 
 
-def test_the_daemons_hub_restart_opens_hub_log_through_the_cap(tmp_path, monkeypatch):
-    """The daemon restarted a dead hub into `hub.log` with a bare `open("a")`:
-    no cap for a hub that dies before its own watcher starts — once per feed
-    drop — and one descriptor leaked into the daemon per restart."""
+def test_the_daemons_hub_restart_opens_hub_log_without_trimming_on_the_loop(
+        tmp_path, monkeypatch):
+    """The daemon restarted a dead hub into `hub.log` with a bare `open("a")`,
+    leaking one descriptor into the daemon per restart. It goes through
+    `open_log` now — but WITHOUT the trim, which is a copy of up to a
+    generation and this is the daemon's event loop. The daemon's own watcher
+    thread caps `hub.log` on a host (see daemon_main)."""
     from collab.client import daemon as d
 
     opened = []
@@ -276,7 +282,8 @@ def test_the_daemons_hub_restart_opens_hub_log_through_the_cap(tmp_path, monkeyp
 
     log = tmp_path / "hub.log"
     log.write_bytes(b"old traceback\n" * 100_000)            # past a tiny cap
-    monkeypatch.setattr(d, "open_log", lambda p: spy(p, cap=1000))
+    monkeypatch.setattr(d, "open_log", lambda p, **k: (seen.append(k), spy(p, cap=1000, **k))[1])
+    seen = []
     children = []
     monkeypatch.setattr(d.subprocess, "Popen", lambda *a, **k: children.append(k))
     monkeypatch.setattr(d.lockfile, "process_alive", lambda pid: False)
@@ -287,9 +294,9 @@ def test_the_daemons_hub_restart_opens_hub_log_through_the_cap(tmp_path, monkeyp
     daemon.profile = SimpleNamespace(is_host=True, session_id="s_x", home=str(tmp_path))
     daemon.paths = d.DaemonPaths(tmp_path)
     daemon._revive_hub_if_host()
-    assert opened == [log] and children
+    assert opened == [log] and children and seen == [{"trim": False}]
     assert children[0]["stdout"].closed, "the daemon does not keep the handle"
-    assert log.stat().st_size == 0, "rolled by the capped opener"
+    assert log.stat().st_size == 14 * 100_000, "no copy made on the caller"
 
 
 def test_a_pass_of_the_watcher_costs_almost_nothing():
@@ -331,14 +338,20 @@ def test_trimming_a_full_generation_is_bounded_in_time_and_memory(tmp_path):
 
 
 def test_a_line_at_a_time_log_is_capped_by_its_own_writer(tmp_path):
-    """`worker.log` is written a line per model turn, opened and closed each
-    time, and capped as it is written: no watcher has to know about it."""
+    """`worker.log` is written a line per model turn and capped by the thread
+    that writes it, after each batch: no watcher has to know about it."""
     path = tmp_path / "worker.log"
+    writer = logcap.LineWriter(cap=2000)
     for i in range(500):
-        logcap.append_line(path, json.dumps({"event": "turn", "n": i}), cap=2000)
+        writer.put(path, json.dumps({"event": "turn", "n": i}))
+        if i % 50 == 0:
+            assert writer.flush()
+    assert writer.flush()
     assert logcap.total(path) <= 2 * 2000 + 100
-    last = path.read_text().splitlines()[-1]
-    assert json.loads(last)["n"] == 499
+    # The newest line is the live file's last, or — when the last batch was
+    # the one that crossed the cap — the rotated copy's.
+    text = path.read_text() or logcap.rotated(path).read_text()
+    assert json.loads(text.splitlines()[-1])["n"] == 499
 
 
 def test_following_the_logs_survives_a_trim(tmp_path, monkeypatch, capsys):
@@ -396,6 +409,13 @@ def conversation(tmp_path):
     inbox.close()
 
 
+def _worker_log(tmp_path) -> str:
+    """The worker's log as the disk has it — after a flush, because a line is
+    queued for the writer thread and may not be there yet."""
+    assert logcap.flush()
+    return (tmp_path / "worker.log").read_text()
+
+
 def _configure(service, tmp_path):
     from collab import worker
 
@@ -430,7 +450,7 @@ async def test_a_worker_turn_leaves_one_line_with_figures_and_no_content(
 
     monkeypatch.setattr("collab.worker_runtime.run_turn", provider)
     await service.turn()
-    text = (tmp_path / "worker.log").read_text()
+    text = _worker_log(tmp_path)
     lines = text.splitlines()
     assert len(lines) == 1
     row = json.loads(lines[0])
@@ -462,7 +482,7 @@ async def test_a_failed_worker_turn_logs_its_class_of_failure(
 
     monkeypatch.setattr("collab.worker_runtime.run_turn", provider)
     await service.turn()
-    row = json.loads((tmp_path / "worker.log").read_text().splitlines()[-1])
+    row = json.loads(_worker_log(tmp_path).splitlines()[-1])
     assert row["outcome"] == "failed" and row["error"] == "WorkerRuntimeError"
     assert row["phase"] == "launched"
 
@@ -475,9 +495,9 @@ async def test_a_failed_worker_turn_logs_its_class_of_failure(
     service.next_at = 0
     await service.turn()
     rows = [json.loads(line) for line in
-            (tmp_path / "worker.log").read_text().splitlines()]
+            _worker_log(tmp_path).splitlines()]
     assert rows[-1]["error"] == "KeyError" and rows[-1]["outcome"] == "failed"
-    assert "private detail" not in (tmp_path / "worker.log").read_text()
+    assert "private detail" not in _worker_log(tmp_path)
 
 
 @pytest.mark.asyncio
@@ -487,6 +507,7 @@ async def test_a_poll_with_nothing_to_say_writes_no_line(conversation, tmp_path)
     service = conversation
     _configure(service, tmp_path)
     await service.turn()
+    logcap.flush()
     assert not (tmp_path / "worker.log").exists()
 
 
@@ -506,7 +527,7 @@ async def test_a_turn_that_produced_a_reply_is_output_with_its_counts(
 
     monkeypatch.setattr("collab.worker_runtime.run_turn", provider)
     await service.turn()
-    text = (tmp_path / "worker.log").read_text()
+    text = _worker_log(tmp_path)
     row = json.loads(text.splitlines()[-1])
     assert (row["phase"], row["outcome"]) == ("committed", "output")
     assert row["reply_count"] == 1 and row["escalation_count"] == 1
@@ -530,7 +551,7 @@ async def test_an_answer_that_fails_validation_is_invalid_not_failed(
 
     monkeypatch.setattr("collab.worker_runtime.run_turn", unknown_recipient)
     await service.turn()
-    row = json.loads((tmp_path / "worker.log").read_text().splitlines()[-1])
+    row = json.loads(_worker_log(tmp_path).splitlines()[-1])
     assert (row["outcome"], row["error"]) == ("invalid", "ValueError")
 
     async def bad_json(*args, **kwargs):
@@ -539,7 +560,7 @@ async def test_an_answer_that_fails_validation_is_invalid_not_failed(
     monkeypatch.setattr("collab.worker_runtime.run_turn", bad_json)
     service.next_at = 0
     await service.turn()
-    row = json.loads((tmp_path / "worker.log").read_text().splitlines()[-1])
+    row = json.loads(_worker_log(tmp_path).splitlines()[-1])
     assert row["outcome"] == "invalid" and row["phase"] == "launched"
 
 
@@ -562,7 +583,7 @@ async def test_a_turn_whose_generation_moved_is_cancelled(conversation, tmp_path
 
     monkeypatch.setattr("collab.worker_runtime.run_turn", provider)
     await service.turn()
-    row = json.loads((tmp_path / "worker.log").read_text().splitlines()[-1])
+    row = json.loads(_worker_log(tmp_path).splitlines()[-1])
     assert (row["phase"], row["outcome"]) == ("launched", "cancelled")
 
 
@@ -587,9 +608,9 @@ async def test_a_counted_turn_that_called_no_model_is_skipped_local(
                                          sender_id="p_a", text="my own message"))
     await service.turn()
     assert not calls
-    row = json.loads((tmp_path / "worker.log").read_text().splitlines()[-1])
+    row = json.loads(_worker_log(tmp_path).splitlines()[-1])
     assert (row["phase"], row["outcome"]) == ("committed", "skipped-local")
-    assert "my own" not in (tmp_path / "worker.log").read_text()
+    assert "my own" not in _worker_log(tmp_path)
 
 
 @pytest.mark.asyncio
@@ -620,5 +641,158 @@ async def test_every_attempt_writes_exactly_one_line(conversation, tmp_path,
 
     monkeypatch.setattr(service, "_flush", flush)
     await service.turn()
-    rows = (tmp_path / "worker.log").read_text().splitlines()
+    rows = _worker_log(tmp_path).splitlines()
     assert len(rows) == 1 and json.loads(rows[0])["outcome"] == "output"
+
+
+# --- nothing waits on the disk ----------------------------------------------------
+#
+# MEASURED on this machine, with a 304-byte worker line:
+#
+#   append, disk healthy     median 5.8 µs, p99 52 µs (1,000 calls)
+#   append, disk stalled     median 4.8 µs, p99 25 µs (5,000 calls; 4,000 dropped)
+#   flood, 100,000 lines     1.09 s wall, writer 0.17 s CPU — 1.7 µs a line, 28 MB/s
+#   queue full (1,000 lines) 732 KiB traced, Path objects and strings included
+
+def _line(n: int = 0) -> str:
+    return json.dumps({"ts": "2026-11-13T23:46:07Z", "event": "turn",
+                       "phase": "committed", "outcome": "no-op", "agent": "codex",
+                       "model": "gpt-5.6-luna", "trigger": {"chat": 11}, "n": n,
+                       "tokens_in": 7067, "tokens_out": 85, "seconds": 6.21})
+
+
+def test_a_stalled_disk_does_not_stall_the_caller(tmp_path, monkeypatch):
+    """The worker's line is written from the daemon's event loop. With the
+    writer stuck inside a write that does not return, every call still
+    returns in microseconds — the overflow is dropped and counted, never
+    waited for — and once the disk comes back the gap is said in place."""
+    import threading
+
+    gate = threading.Event()
+    real = logcap._write_lines
+
+    def stuck(batch, cap):
+        gate.wait(10)
+        real(batch, cap)
+
+    monkeypatch.setattr(logcap, "_write_lines", stuck)
+    path = tmp_path / "worker.log"
+    writer = logcap.LineWriter(limit=100)
+    writer.put(path, _line(0))
+    time.sleep(0.05)                          # the writer takes it, and sticks
+    took = []
+    for n in range(1, 2001):
+        began = time.perf_counter()
+        writer.put(path, _line(n))
+        took.append(time.perf_counter() - began)
+    took.sort()
+    assert took[len(took) // 2] < 50e-6, f"median {took[len(took) // 2] * 1e6:.1f} µs"
+    assert sum(took) < 0.5, f"{sum(took):.3f} s for 2,000 calls"
+    assert writer.dropped_total == 2000 - 100
+    gate.set()
+    assert writer.flush()
+    rows = [json.loads(x) for x in path.read_text().splitlines()]
+    assert [r["n"] for r in rows if "n" in r] == list(range(0, 101)), "in order"
+    assert rows[-1] == {**rows[-1], "event": "dropped", "lines": 1900}
+
+
+def test_a_gap_is_said_where_it_happened_when_room_returns(tmp_path, monkeypatch):
+    """Newest dropped, and the line saying so stands between what was kept
+    before the gap and what came after it."""
+    import threading
+
+    gate = threading.Event()
+    real = logcap._write_lines
+    monkeypatch.setattr(logcap, "_write_lines",
+                        lambda batch, cap: (gate.wait(10), real(batch, cap)))
+    path = tmp_path / "worker.log"
+    writer = logcap.LineWriter(limit=3)
+    writer.put(path, _line(0))
+    time.sleep(0.05)
+    for n in range(1, 7):
+        writer.put(path, _line(n))            # 1–3 kept, 4–6 dropped
+    gate.set()
+    assert writer.flush()
+    writer.put(path, _line(7))
+    assert writer.flush()
+    rows = [json.loads(x) for x in path.read_text().splitlines()]
+    assert [r.get("n", r.get("lines")) for r in rows] == [0, 1, 2, 3, 3, 7]
+    assert rows[4]["event"] == "dropped"
+
+
+def test_the_writer_keeps_up_with_a_flood_cheaply(tmp_path):
+    """A hundred thousand lines as fast as the caller can produce them: the
+    writer thread's CPU per line, and the whole drain, measured."""
+    path = tmp_path / "worker.log"
+    writer = logcap.LineWriter()
+    line = _line()
+    caller0, process0 = time.thread_time(), time.process_time()
+    for _ in range(20_000):
+        while not writer.put(path, line):
+            time.sleep(0.0005)
+    assert writer.flush(30)
+    caller = time.thread_time() - caller0
+    writer_cpu = time.process_time() - process0 - caller
+    assert writer_cpu / 20_000 < 50e-6, f"{writer_cpu / 20_000 * 1e6:.1f} µs a line"
+    assert logcap.total(path) <= 2 * logcap.GENERATION_CAP + 1_000_000
+
+
+def test_a_full_queue_is_well_under_a_megabyte(tmp_path, monkeypatch):
+    """`LINES_MAX` worker lines held while the disk is stalled: what they
+    cost in memory, so «bounded» has a figure."""
+    import threading
+    import tracemalloc
+
+    gate = threading.Event()
+    monkeypatch.setattr(logcap, "_write_lines", lambda batch, cap: gate.wait(10))
+    path = tmp_path / "worker.log"
+    writer = logcap.LineWriter()
+    writer.put(path, _line())
+    time.sleep(0.05)
+    tracemalloc.start()
+    try:
+        before = tracemalloc.take_snapshot()
+        for n in range(3 * logcap.LINES_MAX):
+            writer.put(path, _line(n))
+        after = tracemalloc.take_snapshot()
+    finally:
+        tracemalloc.stop()
+        gate.set()
+    held = sum(s.size_diff for s in after.compare_to(before, "filename"))
+    assert len(writer._pending) == logcap.LINES_MAX
+    assert held < 1024 * 1024, f"{held / 1024:.0f} KiB"
+
+
+def test_a_stalled_handler_does_not_stall_a_logging_call():
+    """The daemon's and the hub's `logging` calls go through a QueueHandler
+    to a listener thread. With the handler stuck in a write, a warning still
+    returns at once and the overflow is counted, not waited for."""
+    import logging
+    import threading
+    from logging import handlers
+
+    from collab.client import daemon_files
+
+    gate = threading.Event()
+
+    class Stuck(logging.Handler):
+        def emit(self, record):
+            gate.wait(10)
+
+    pipe = daemon_files._Bounded(50)
+    listener = daemon_files._Listener(pipe, Stuck())
+    log = logging.getLogger("collab.test.stalled")
+    log.propagate = False
+    log.addHandler(handlers.QueueHandler(pipe))
+    listener.start()
+    try:
+        began = time.perf_counter()
+        for n in range(2000):
+            log.warning("line %d", n)
+        took = time.perf_counter() - began
+    finally:
+        gate.set()
+        listener.stop()
+        log.handlers.clear()
+    assert took < 0.5, f"{took:.3f} s for 2,000 warnings"
+    assert pipe.dropped_total >= 2000 - 51

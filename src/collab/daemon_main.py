@@ -35,6 +35,10 @@ def main() -> int:
         asyncio.run(run_daemon(profile))
     except KeyboardInterrupt:
         pass
+    finally:
+        # The worker's last lines may still be queued for the writer thread.
+        # Bounded (`logcap.FLUSH_WAIT`); `atexit` asks again on any other exit.
+        logcap.flush()
     return 0
 
 
