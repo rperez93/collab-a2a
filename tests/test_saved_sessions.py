@@ -293,7 +293,7 @@ def test_sidecar_replace_failure_keeps_previous_path(saved, monkeypatch):
 
 @pytest.mark.parametrize('ownership', ['unowned', 'dead', 'foreign', 'own', 'shell', 'kept-shell', 'kept-dead', 'own-shell'])
 def test_same_session_resume_distinguishes_owner_from_live_listener(
-        saved, monkeypatch, ownership):
+        saved, monkeypatch, ownership, capsys):
     """A kept listener can outlive its agent without locking out explicit resume."""
     import subprocess
     import sys
@@ -352,6 +352,8 @@ def test_same_session_resume_distinguishes_owner_from_live_listener(
         result = cli.main(['resume', p.session_id, '--no-daemon'])
         if ownership in ('foreign', 'shell', 'kept-shell'):
             assert result == 1
+            output = capsys.readouterr()
+            assert f'blocking owner PID {agent.pid}' in output.out + output.err
             assert calls == []
             assert (home / 'current').read_text() == 's_previous\n'
             assert (home / 'agent.lock').read_bytes() == before_lock
@@ -364,6 +366,30 @@ def test_same_session_resume_distinguishes_owner_from_live_listener(
         if agent is not None and agent.poll() is None:
             agent.terminate()
             agent.wait(timeout=5)
+
+
+def test_resume_names_first_live_pid_in_legacy_owner_chain(saved, monkeypatch, capsys):
+    from collab import lockfile
+    from collab.client.exclusive import stamp_for
+
+    home, work = saved
+    profile = guest(home, work)
+    dead, live_a, live_b = 900001, 900002, 900003
+    original_alive = lockfile.process_alive
+    states = {dead: False, live_a: True, live_b: True}
+    monkeypatch.setattr(lockfile, 'process_alive',
+                        lambda pid: states[pid] if pid in states else original_alive(pid))
+    monkeypatch.setattr(lockfile, 'ancestry', lambda: [os.getpid()])
+    lockfile.acquire(lockfile.Lock(
+        name=profile.name, session_id=profile.session_id,
+        listener_pid=os.getpid(), listener=stamp_for(os.getpid()).encode(),
+        owner_pids=[dead, live_a, live_b]), home)
+    before = (home / 'agent.lock').read_bytes()
+    monkeypatch.setattr(cli, '_client', lambda *args: pytest.fail('must refuse before connecting'))
+    assert cli.main(['resume', profile.session_id, '--no-daemon']) == 1
+    output = capsys.readouterr()
+    assert f'blocking owner PID {live_a}' in output.out + output.err
+    assert (home / 'agent.lock').read_bytes() == before
 
 
 def test_automatic_host_falls_back_without_overwriting_original_path(saved, monkeypatch):
