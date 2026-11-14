@@ -217,3 +217,29 @@ def test_worker_throttle_is_visible_and_waits_at_least_a_minute(tmp_path):
     queued = store.outbox()[0]
     assert queued['retry_at'] >= before + 60
     assert '429' in queued['error']
+
+
+def test_by_id_delivery_keeps_identity_refusal_and_rate_limit_statuses(client, session):
+    """A dedicated route must preserve refusal-before-write and retry semantics."""
+    from collab.remote_requests import OFFER_PREFIX
+    headers, _ = _join(client, session, 'sender')
+    _, recipient = _join(client, session, 'recipient')
+    before = len(session['store'].since(0))
+    mismatch = client.post('/ext/collab/v1/messages/to-id', headers=headers, json={
+        'to_id': recipient['id'], 'text': 'private',
+        'body': {'collab_expected_recipient_id': 'p_other'}})
+    assert mismatch.status_code == 409
+    legacy = client.post('/ext/collab/v1/messages/to-id', headers=headers, json={
+        'to_id': recipient['id'], 'text': OFFER_PREFIX + 'untrusted offer'})
+    assert legacy.status_code == 413
+    assert len(session['store'].since(0)) == before
+    with session['store'].edit_meta(recipient['id']) as meta:
+        meta['remote_consent_version'] = 1
+    for _ in range(16):
+        response = client.post('/ext/collab/v1/messages/to-id', headers=headers,
+                               json={'to_id': recipient['id'], 'text': OFFER_PREFIX + 'offer'})
+        assert response.status_code == 200
+    response = client.post('/ext/collab/v1/messages/to-id', headers=headers,
+                           json={'to_id': recipient['id'], 'text': OFFER_PREFIX + 'offer'})
+    assert response.status_code == 429 and response.headers['Retry-After'] == '60'
+    assert len(session['store'].since(0)) == before + 16

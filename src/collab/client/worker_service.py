@@ -59,17 +59,23 @@ def skill_requests(events, escalations, me: str, me_id: str = "") -> list[dict]:
     proposed, so a worker can never accept one by replying on its own.
     """
     routed = {e["seq"] for e in escalations}
-    senders: set[str] = set()
+    senders: set[tuple[str, str]] = set()
     room = max(0, 32 - len(escalations))  # commit_turn's per-turn cap
     added = []
     for event in events:
         ask = (event.body or {}).get("skill_request") if isinstance(event.body, dict) else None
         # By participant id when known: a rename must not bypass consent.
         mine = (event.to_id == me_id) if (me_id and getattr(event, "to_id", "")) else event.to == me
-        if isinstance(ask, dict) and mine and event.sender in senders:
-            continue  # one decision per requesting peer per turn: no flood of prompts
-        if isinstance(ask, dict) and mine and event.seq not in routed:
-            senders.add(event.sender)
+        sender_id = getattr(event, "sender_id", "")
+        requester = ("id", sender_id) if sender_id else ("name", event.sender)
+        if not isinstance(ask, dict) or not mine:
+            continue
+        # A rename cannot multiply prompts, and a reused name cannot suppress
+        # another participant. Reserve preexisting decisions for this turn too.
+        if requester in senders:
+            continue
+        senders.add(requester)
+        if event.seq not in routed:
             if len(added) >= room:
                 # Over the cap, the last decision names the rest instead.
                 if added:

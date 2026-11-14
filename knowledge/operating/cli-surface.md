@@ -234,10 +234,12 @@ one-line descriptions only, never skill text — is published by its own listene
 and shared by default (`share_skill_list`, opt-out; it is withdrawn on every
 switch-off). `collab skills peers` reads everyone's lists. `collab skills ask
 --to NAME` sends a skill request, and the receiver's `requests`, `accept`,
-`decline` and `done` answer it. Acceptance is gated on the human: without a
-terminal `accept` is refused unless `--human-approved` is passed, which is the
-agent's own statement that its human agreed; requests expire after 24 hours,
-and a worker never accepts — it escalates every request to its main agent.
+`decline` and `done` answer it. Acceptance requires the receiving human's
+standalone foreground controlling terminal, outside an agent, daemon or
+multiplexer. A fresh challenge read only from `/dev/tty` produces a short-lived,
+exact-bound, single-use receipt; approval flags, hashes and stdin are not
+accepted. Requests expire after 24 hours. A worker never consents — it escalates
+requests to its main agent for the human's decision.
 Peer-supplied names, ids and arguments are validated on receipt and printed
 scrubbed, on their own line marked untrusted.
 

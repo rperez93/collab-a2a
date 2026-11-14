@@ -3358,13 +3358,21 @@ def cmd_resume(args: argparse.Namespace) -> int:
         # without credentials before making an authenticated request.
         from .client.daemon import saved_hub_address
         from .client.hub_client import HubClient
+        from . import routes
         address = saved_hub_address(profile, prefer_local=True) or profile.url
         try:
-            with HubClient(address) as probe:
-                health = probe.health()
-            if health.get("session_id") != profile.session_id:
-                fail("saved address answers for a different session; refusing to resume")
-                return 1
+            if routes.load(profile):
+                # Reuse the daemon's credential-free, pinned-TLS selection and
+                # bounded public fallback for a saved multi-route session.
+                address = routes.for_resume(profile)
+                if not address:
+                    raise HubError("no trusted reachable route serves the saved session")
+            else:
+                with HubClient(address) as probe:
+                    health = probe.health()
+                if health.get("session_id") != profile.session_id:
+                    fail("saved address answers for a different session; refusing to resume")
+                    return 1
             profile.url = address
             with _client(profile) as client:
                 snapshot = client.snapshot()

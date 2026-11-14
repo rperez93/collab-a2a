@@ -347,3 +347,21 @@ def test_an_old_hub_gets_nothing_written_when_it_cannot_address_by_id(monkeypatc
         client.send_to_id(E(kind='chat', text='declined', to='alice'), 'p_alice')
     assert writes == [], 'no fallback to name-addressed /messages: zero events'
 
+
+@pytest.mark.parametrize('requesters,existing,expected', [
+    ([('one', 'p_1'), ('two', 'p_1'), ('three', 'p_1')], [], 1),
+    ([('alice', 'p_1'), ('alice', 'p_2')], [], 2),
+    ([('before', 'p_1'), ('after', 'p_1')], [1], 0),
+    ([('legacy', ''), ('legacy', '')], [], 1),
+    ([('p_1', ''), ('alice', 'p_1')], [], 2),
+])
+def test_worker_skill_decisions_follow_requester_identity_and_existing_decisions(
+        requesters, existing, expected):
+    """Aliases cannot multiply prompts or hide another peer behind a reused name."""
+    events = [Envelope(seq=i, kind='chat', sender=name, sender_id=identity,
+                       to='receiver', to_id='p_receiver',
+                       body={'skill_request': {'id': f'sr_{i}', 'skill': 'review'}})
+              for i, (name, identity) in enumerate(requesters, 1)]
+    added = skill_requests(events, [{'seq': seq} for seq in existing],
+                           me='receiver', me_id='p_receiver')
+    assert len(added) == expected

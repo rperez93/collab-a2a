@@ -522,6 +522,10 @@ def create_app(
                        body=dict(body.get("body") or {}))
         try:
             env = await hub.publish(env)
+        except RecipientChanged as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except RemoteRateLimited as exc:
+            raise HTTPException(status_code=429, detail=str(exc), headers={'Retry-After': '60'}) from exc
         except MessageRefused as exc:
             raise HTTPException(status_code=413, detail=str(exc)) from exc
         return {"seq": env.seq, "ts": env.ts, "to_id": person.id}

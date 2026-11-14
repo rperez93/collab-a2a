@@ -141,3 +141,8 @@ polling is cancellable and bounded. The pin remains unchanged.
   state and logs in the machine peer registry from each hub's URL and process
   ownership. The fixed primary mapping preserves legacy routing across restarts.
   Historical resource pins and verification stamps remain unchanged.
+
+- Later than the pin: corrected the existing skill-request CLI guidance to the
+  receiving operator terminal and exact-bound, single-use consent receipt.
+  Obsolete approval flags are removed; no historical pin or verification stamp
+  changed.
