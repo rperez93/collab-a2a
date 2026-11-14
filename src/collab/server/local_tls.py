@@ -291,11 +291,16 @@ class LocalTLS:
             for task in pipes:
                 task.cancel()
             await asyncio.gather(*pipes, return_exceptions=True)
-            for connection in (upstream, writer):
-                if connection is not None:
-                    connection.close()
-                    with contextlib.suppress(OSError, asyncio.TimeoutError, ssl.SSLError):
-                        await asyncio.wait_for(connection.wait_closed(), timeout=2)
+            connections = [connection for connection in (upstream, writer) if connection is not None]
+            # Publish closure to both peers before waiting for either transport
+            # to reap. Waiting on the upstream first left TLS apparently open
+            # after its forwarding pumps stopped: a pooled next POST could be
+            # accepted into that dead entrance and receive no response.
+            for connection in connections:
+                connection.close()
+            for connection in connections:
+                with contextlib.suppress(OSError, asyncio.TimeoutError, ssl.SSLError):
+                    await asyncio.wait_for(connection.wait_closed(), timeout=2)
 
     async def close(self) -> None:
         self._closing = True
