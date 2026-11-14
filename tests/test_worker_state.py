@@ -520,3 +520,52 @@ def test_any_collab_command_mentions_decisions_waiting(tmp_path, monkeypatch, ca
     assert 'await your answer' in capsys.readouterr().err
     cli._decisions_banner(SimpleNamespace(command='worker'))
     assert capsys.readouterr().err == ''
+
+
+def test_reply_verbatim_and_instruct_choose_who_words_the_answer(tmp_path, monkeypatch):
+    import argparse
+    from collab.config import SessionProfile
+    from collab.client import onboard
+    from collab.client.inbox import Inbox
+    from collab.protocol import Envelope
+    profile = SessionProfile(session_id='test', url='http://hub.invalid', name='alice',
+                             host_name='bob', token='t', home=str(tmp_path), room='general')
+    monkeypatch.setattr(cli, '_require_own_profile', lambda a: profile)
+    monkeypatch.setattr(onboard, 'ensure_daemon', lambda p, **kw: None)
+    inbox = Inbox(profile.dir)
+    inbox.record(Envelope(kind='chat', sender='bob', to='alice', text='Ship it?', seq=3))
+    inbox.close()
+    store = worker.Store(profile.dir)
+    store.configure({'agent': 'claude', 'scope': 'Coordinate'})
+    for _ in range(2):
+        snap = store.snapshot()
+        store.commit_turn(expected_cursor=snap['cursor'], cursor=3, summary='', replies=[],
+                          escalations=[{'reason': 'decision', 'question': f'Ship? {_}', 'seq': 3}])
+    first, second = [p['id'] for p in store.pending()]
+    def reply(i, text, **flags):
+        args = argparse.Namespace(worker_action='reply', decision_id=i, text=text, awaiting_human=False,
+                                  verbatim=flags.get('verbatim', False), instruct=flags.get('instruct', False))
+        return cli.cmd_worker(args)
+    assert reply(first, 'Yes, exactly this.', verbatim=True) == 0
+    assert [(r['to'], r['text']) for r in store.outbox()] == [('bob', 'Yes, exactly this.')]
+    assert reply(second, 'Tell bob yes, politely.') == 0
+    assert len(store.outbox()) == 1 and store.snapshot()['answers'][0]['text'] == 'Tell bob yes, politely.'
+
+
+def test_the_banner_reads_without_creating_or_locking_and_skips_machinery(tmp_path, monkeypatch, capsys):
+    from collab.config import SessionProfile
+    profile = SessionProfile(session_id='test', url='http://hub.invalid', name='alice',
+                             host_name='bob', token='t', home=str(tmp_path), room='general')
+    monkeypatch.setattr(SessionProfile, 'current', classmethod(lambda cls, *a, **k: profile))
+    cli._decisions_banner(SimpleNamespace(command='who'))
+    assert not (profile.dir / 'worker.db').exists(), 'a read never creates the database'
+    store = worker.Store(profile.dir)
+    store.configure({'agent': 'claude', 'scope': 'Coordinate'})
+    snap = store.snapshot()
+    store.commit_turn(expected_cursor=snap['cursor'], cursor=0, summary='', replies=[],
+                      escalations=[{'reason': 'decision', 'question': 'q?', 'seq': 0}])
+    for command in ('statusline', 'listen', 'daemon', 'check'):
+        cli._decisions_banner(SimpleNamespace(command=command))
+    assert capsys.readouterr().err == ''
+    cli._decisions_banner(SimpleNamespace(command='who'))
+    assert 'await your answer' in capsys.readouterr().err
