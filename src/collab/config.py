@@ -586,6 +586,15 @@ def load_agent_config() -> dict[str, Any]:
     return _load_file(path, _AGENT_CACHE) if path is not None else {}
 
 
+def set_by_this_agent(key: str) -> bool:
+    """Whether this agent (its own file, or its kind's) chose the key at all.
+
+    Telemetry treats such a choice, even an empty one, as explicit; a value
+    inherited from the shared machine file is not this agent's choice.
+    """
+    return agent_scoped(key) and (key in load_agent_config() or key in load_kind_config())
+
+
 def setting_source(key: str) -> str:
     """Where a setting's value comes from: agent, kind, machine, legacy or default.
 

@@ -6081,6 +6081,9 @@ def _cmd_config(args: argparse.Namespace) -> int:
     if kind is not None and getattr(args, "machine", False):
         fail("--kind and --machine choose different layers; use one")
         return 2
+    if kind is not None and args.key and not config_module.agent_scoped(args.key):
+        fail(f"{args.key} belongs to the machine, not to an agent kind; drop --kind")
+        return 2
     config_module.WRITE_KIND.update(on=kind is not None, key=getattr(args, "key", None),
                                     kind=(kind or config_module.current_kind()) if kind is not None else None)
     if getattr(args, "tui", False):
