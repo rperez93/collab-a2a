@@ -178,6 +178,13 @@ block later messages. Full chat text is never silently cut to fit a turn; a
 message that does not fit remains queued. Failed outbox entries retry separately
 and remain visible in worker status.
 
+New conversation arrivals get one fixed 150 ms collection window before a
+model turn starts. More arrivals do not extend it. Human answers, local context
+and queued exact sends bypass or wake that window; delivery remains independent
+of model pacing. Activity, idle and presence updates alone advance the durable
+cursor without a model attempt. Chat, questions and task/project events remain
+conversation input.
+
 Stopping or cancelling the worker kills its own process group and reaps its
 child. The daemon's feed and heartbeat continue while the model is running.
 The default durable limit is 60 model attempts per hour, including failures;

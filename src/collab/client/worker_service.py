@@ -24,6 +24,11 @@ from ..compatibility import request_headers
 TURN_GAP = 5.0
 PAGE_SIZE = 24
 MAX_EVENTS_BYTES = 64_000
+# A fixed 150 ms groups adjacent SSE events before a subprocess is launched.
+# It is deliberately not a resettable debounce: a busy room must never keep
+# extending the wait. Local answers/context wake it; exact delivery bypasses it.
+COALESCE_SECONDS = 0.15
+CONVERSATION_KINDS = frozenset(("chat", "task", "project", "request", "response"))
 
 
 logger = logging.getLogger(__name__)
@@ -101,6 +106,7 @@ class Conversation:
         # and two flushes must never post the same outbox record twice.
         self.delivery: asyncio.Task | None = None
         self.flushing = asyncio.Lock()
+        self._coalescing_wake = asyncio.Event()
 
     def configured(self) -> bool:
         return (self.root / "worker.db").exists()
@@ -129,6 +135,11 @@ class Conversation:
         state = store.snapshot()
         cfg = state["config"]
         generation = state["generation"]
+        urgent = bool(state["context"] or state["answers"] or any(
+            not row.get("identity_quarantined") and row.get("retry_at", 0) <= time.time()
+            for row in store.outbox()))
+        if urgent:
+            self._coalescing_wake.set()
         if worker.no_worker():
             # A daemon told to have no worker runs no model, whatever worker.db
             # says (the variable is inherited through spawn). Anything already
@@ -180,7 +191,28 @@ class Conversation:
             if any(not row.get("identity_quarantined") and row.get("retry_at", 0) <= time.time() for row in store.outbox()):
                 self.task = asyncio.create_task(self._deliver_only(store, generation))
             return
-        self.task = asyncio.create_task(self.turn())
+        events = self.daemon.inbox.after(state["cursor"], limit=setting("worker_page_size"))
+        relevant = any(event.kind in CONVERSATION_KINDS and not (
+            event.sender_id == self.daemon.profile.participant_id
+            if event.sender_id and self.daemon.profile.participant_id
+            else event.sender == self.daemon.profile.name) for event in events)
+        if relevant and not urgent:
+            self._coalescing_wake.clear()
+            self.task = asyncio.create_task(self._coalesced_turn(generation))
+        else:
+            self.task = asyncio.create_task(self.turn())
+
+    async def _coalesced_turn(self, generation) -> None:
+        """Wait once, bounded by arrival-independent time and configuration ownership."""
+        try:
+            await asyncio.wait_for(self._coalescing_wake.wait(), timeout=COALESCE_SECONDS)
+        except asyncio.TimeoutError:
+            pass
+        state = worker.Store(self.root).snapshot()
+        if (state["generation"] != generation or not (state["config"] or {}).get("enabled")
+                or worker.no_worker()):
+            return
+        await self.turn()
 
     async def _deliver_only(self, store, generation) -> None:
         await self._flush(store, generation)
@@ -359,7 +391,7 @@ class Conversation:
                 own = (event.sender_id == self.daemon.profile.participant_id
                        if event.sender_id and self.daemon.profile.participant_id
                        else event.sender == self.daemon.profile.name)
-                if own or event.kind not in ("chat", "task", "project", "request", "response"):
+                if own or event.kind not in CONVERSATION_KINDS:
                     continue
                 body = json.dumps(event.body or {}, ensure_ascii=False)
                 excerpt = _excerpt(body, 4000)
