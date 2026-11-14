@@ -106,6 +106,9 @@ OPEN_EXCLUDES = frozenset({"TASK_STATE_COMPLETED", "TASK_STATE_CANCELED",
 def _on_auth_error(conn, exc: Exception) -> JSONResponse:
     from .auth import CompatibilityError
     incompatible = isinstance(exc, CompatibilityError)
+    from .approval_routes import PREFIX as APPROVAL_PREFIX, error_response
+    if conn.url.path.startswith(APPROVAL_PREFIX + "/"):
+        return error_response("incompatible" if incompatible else "unauthorized", 426 if incompatible else 401)
     return JSONResponse(
         {"error": "incompatible" if incompatible else "unauthorized", "detail": str(exc)},
         status_code=426 if incompatible else 401,
@@ -249,6 +252,10 @@ def create_app(
     app.state.session_id = session_id
     app.state.started_at = time.time()
     app.state.routes = routes
+    from .approval_routes import install as install_approval_routes
+    install_approval_routes(app, store, session_id)
+    from .approval_alarms import install as install_approval_alarms
+    app.state.approval_alarm_wake = install_approval_alarms(app, hub, app.state.approvals)
 
     if local_tls_config is not None:
         @app.on_event("startup")

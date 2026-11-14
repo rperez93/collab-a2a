@@ -1,10 +1,11 @@
 # Strong approval API v1 — contract proposal
 
-Status: **proposed, not implemented or accepted**. This document is an interface
-for review by the core, Hello and passkey owners. It is not evidence that an
-endpoint exists. Clients must remain visibly unavailable until the capability
-endpoint and the corresponding implementation tests exist. Do not fall back to
-terminal approval when strong approval was requested.
+Status: **partial implementation, not production-ready**. Internal state and
+the authenticated routes described below exist in this draft. Capability
+discovery returns `available:false`, an empty `methods` list and
+`reason:"operation_integration_pending"` until operation adoption and adapter
+integration are verified. Do not fall back to terminal approval when strong
+approval was requested.
 
 ### Implementation checkpoint (not production readiness)
 
@@ -38,9 +39,10 @@ pending change storage is capped at 128 globally and eight per owner, with
 600-second expiry. Capacity exhaustion fails closed rather than dropping old
 fingerprints and permitting silent reuse.
 
-API routes, event publication, operation-specific authorization/adoption, adapter wiring and real
-human ceremonies remain outstanding. The capability endpoint must not advertise
-availability based on these internal components alone.
+Bounded HTTP routes and durable security alarms are wired into the hub.
+Operation-specific authorization/adoption, adapter wiring and real human
+ceremonies remain outstanding. The capability endpoint does not advertise
+availability based on these components alone.
 
 The internal store refreshes the clock after SQLite writer admission and after
 signature verification. It rejects expired receipts, replays, name substitution,
@@ -56,8 +58,29 @@ when issuing new work. Failed proofs consume quota. Read failures and rejected
 over-quota calls do not append audit records. Audit retains the latest 1000
 events globally, filtering reads to the authenticated owner; it is bounded
 rolling history, not append-only archival or guaranteed per-owner retention.
-Audit metadata contains no proof, bearer, receipt or review payload. Network
-request limits and loud alarm delivery still belong to the unimplemented API.
+Audit metadata contains no proof, bearer, receipt or review payload. HTTP bodies
+are streamed with a 128 KiB bound and five-second read deadline. Eight requests
+may be in flight per serving app, with immediate busy rejection beyond that.
+Cancellation retains its admission slot until its worker thread has actually
+finished; a disconnected caller must treat a mutation outcome as uncertain.
+An additional per-app ingress limit of 120 requests per participant per minute
+includes malformed bodies and reads; the durable mutation quota remains
+separate. JSON rejects duplicate fields, nonfinite literals, more than 2048
+nodes and depth above 16; write schemas reject unknown fields and wrong types.
+Responses use `Cache-Control: no-store`. There is no public generic request
+creation or receipt consumption route: adopting operations must authorize and
+dispatch through their own execution boundary.
+
+Enrollment, freezing and applied key changes queue a bounded security alarm
+inside the authority transaction. Publication transfers the alarm atomically
+to the durable system-event log before ordered fan-out. Startup and bounded
+periodic retries drain the backlog; a delivery failure closes existing feeds
+so they replay before receiving later sequences. Alarms identify stable
+participant IDs, action, fingerprint and cooldown, never proofs or payloads.
+They remain explicit about TOFU and reports that are not verified gestures.
+The outbox holds at most 256 pending alarms, publishes batches of at most 16,
+and retries every second. A transition that cannot enqueue its alarm returns
+429 and does not commit; the caller must retry after delivery recovers.
 
 The current verifier profile requires RSA-2048/e=65537 for RS256 or P-256 for
 ES256. V1 requests no authenticator extensions and rejects assertions carrying
@@ -85,7 +108,7 @@ Source design: shared artifact `f_bcb2c024e2892f9067f1`, SHA-256
 
 ## Transport and representation
 
-Proposed prefix: `/ext/collab/v1/approval`. Existing participant authentication
+Prefix: `/ext/collab/v1/approval`. Existing participant authentication
 is required on every route. Session and participant identity come from that
 authentication, never from a supplied display name. The hub checks target
 ownership for each request, challenge and credential lookup. Bearer possession
@@ -117,26 +140,29 @@ attestation implementation needs its own bounded format and trust policy.
 
 ## Routes and schemas
 
-All route names below are proposals to freeze before implementation.
+The following routes are implemented in the draft; production readiness is
+reported separately by capability discovery.
 
-* `GET /capabilities` returns `{api_version:1, methods:["hello","passkey"],
-  algorithms:{hello:[-257],passkey:[-7,-257]}, attestation_verification:false}`
-  only when the implementation is available. An old hub's 404 means unavailable.
+* `GET /capabilities` currently returns `{api_version:1, available:false,
+  methods:[], supported_methods:["hello","passkey"],
+  reason:"operation_integration_pending", algorithms:{hello:[-257],passkey:[-7,-257]},
+  attestation_verification:false}`. An old hub's 404 also means unavailable.
 * `GET /keys` returns the authenticated participant's credential metadata:
   `credential_id`, `method`, `algorithm`, `fingerprint`, `created_at`,
-  `trust` (`tofu-unverified` initially), `state` and alarms. It never exposes a
+  `trust` (`tofu-unverified` initially), `usable_at` and `state`, wrapped in
+  `{api_version,credentials:[...]}`. It never exposes a
   private key or silently substitutes a credential for a missing one.
 * `POST /enrol/begin` accepts `{method, origin?}`. `origin` is mandatory for
   passkeys. It returns `{api_version, challenge_id, challenge, expires_at,
   method, rp_id?, origin?, algorithms, bootstrap:"tofu-unverified"}`.
   A first-key ceremony reserves the enrolment generation. Concurrent first-key
-  finishes cannot both succeed. Existing-key enrolment is refused here pending
-  the separately reviewed signed rotation protocol; no overwrite path exists.
+  finishes cannot both succeed. Existing-key enrolment is refused here; use
+  the separate signed key-change protocol, never an overwrite.
 * `POST /enrol/finish` accepts `{challenge_id, credential_id, algorithm,
   public_key_spki, proof}`. `public_key_spki` contains DER SPKI in base64url;
   `algorithm` is the COSE integer, not a caller-selected verifier name. The hub
   checks key type/parameters, algorithm consistency and proof of possession.
-  The response is `{api_version, credential:{...}, alarm_id}`. TOFU enrolment
+  The response is `{api_version, credential:{...}}`. TOFU enrolment
   is announced loudly and never labelled attested.
 * `GET /requests/{request_id}/review` returns `{api_version, request_id,
   review, canonical_review, digest, state, required_strength}`. The hub builds
@@ -154,10 +180,27 @@ All route names below are proposals to freeze before implementation.
   before issuing `{api_version, request_id, state:"approved", receipt}`.
   The opaque receipt is bound to the exact operation and consumed by the
   adopting execution path; it is not a general approval token.
-* `POST /requests/{request_id}/decline` accepts `{reason_code?}` and returns
+* `POST /requests/{request_id}/decline` accepts `{}` and returns
   `{api_version, request_id, state:"declined"}`. It invalidates outstanding
   challenges atomically. An authenticated decline is a refusal, **not proof
   of a human gesture**; audit must not label it a verified-human decision.
+* `POST /keys/report` accepts `{credential_id,observed_spki?}` and returns
+  `{api_version,credential}`. Omitting the observation reports a missing key;
+  a changed observation freezes the stored key, and neither installs a key.
+* `POST /key-changes/begin` accepts `{kind,credential_id,method,algorithm,
+  public_key_spki,replaced_credential_id?,origin?}`. Kinds are `add`, `rotate`
+  and `recover`; rotation requires the replacement identifier. The response
+  includes the new key's possession challenge, `change_id`, `authorizer_id`,
+  full `review` and `canonical_review`.
+* `POST /key-changes/{change_id}/prove` accepts `{challenge_id,proof}` and
+  returns the authorizer's approval `request_id`, digest, expiry, change ID
+  and authorizer ID. The existing request review/challenge/approve routes
+  perform the separate authorization using an already enrolled mature key.
+* `POST /key-changes/{change_id}/apply` accepts `{receipt}` from that
+  authorizer and returns `{api_version,change_id,state:"applied",credential}`.
+* `GET /key-changes/{change_id}` lets the owner inspect state, request ID,
+  authorizer ID and expiry; it releases no receipt.
+* `GET /audit` returns `{api_version,events:[...]}` filtered to the caller.
 
 ## Proof bytes and origin binding
 
@@ -202,7 +245,8 @@ Errors have `{api_version:1,error:{code,message}}` with fixed, content-free
 messages: 400 malformed/unsupported proof, 401 authentication required,
 403 wrong participant/origin/verification failed, 404 unknown owned resource,
 409 already consumed/changed/frozen key, 410 expired challenge,
-413 oversized input, 429 bounded rate limit. No error triggers weak fallback.
+408 body deadline, 413 oversized input, 415 unsupported body media/encoding,
+429 bounded rate/capacity limit and 503 busy admission. No error triggers weak fallback.
 Invalid proofs issue no receipt. Successful replay cannot execute twice.
 
 Hub-owned receipt/event/audit metadata separates `strength` (`strong` or
@@ -211,10 +255,11 @@ Strong means verified proof under the accepted enrolled-key policy; it does
 not turn TOFU into attestation or prove software keys impossible. Terminal
 codes are weak and cannot satisfy `required_strength:"strong"`.
 
-Before declaring v1 ready, specify and test signed key addition/replacement,
-host-strong recovery, missing-key alarm reporting, request creation/adoption,
-receipt consumption/idempotence, bounded audit retention, rate limits and
-counter rules (including authenticators with no counter). These are core
-acceptance requirements, not implicit behavior supplied by this proposal.
-Then publish the exact source SHA and contract tests; only afterward connect
-the production adapters. Final real enrolment/signing remains a human gate.
+Before declaring v1 ready, connect an operation-specific authorized request
+creator and receipt consumer, integrate and test both production adapters,
+and verify actual dispatch behavior, including uncertain outcomes after a
+claimed receipt. The internal and transport tests do not prove those gates.
+Publish the exact source SHA and contract evidence for adapter review.
+Final real enrollment/signing remains a human gate: synthetic software-key
+proofs and a live loopback HTTP server are transport evidence, not human or
+hardware-authenticator acceptance.
