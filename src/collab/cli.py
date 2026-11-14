@@ -2111,6 +2111,8 @@ def cmd_task(args: argparse.Namespace) -> int:
                     fail("`collab task comment --id T_xxx \"what you want to"
                          " say\"`")
                     return 1
+                if (queued := _queue_comment(profile, "task", args.id, args.title)) is not None:
+                    return queued
                 client.add_comment("task", args.id, args.title)
                 ok(f"commented on {said(args.id)}")
                 return 0
@@ -2321,6 +2323,8 @@ def cmd_project(args: argparse.Namespace) -> int:
                     fail("`collab project comment --id P_xxx \"what you want"
                          " to say\"`")
                     return 1
+                if (queued := _queue_comment(profile, "project", args.id, args.title)) is not None:
+                    return queued
                 client.add_comment("project", args.id, args.title)
                 ok(f"commented on {said(args.id)}")
                 return 0
@@ -5911,10 +5915,17 @@ def cmd_worker(args: argparse.Namespace) -> int:
             # Queued main-agent sends are delivered before the worker stops:
             # left behind, a later start posted them stale and out of order.
             queued = store.outbox()
+            from .protocol import EXT_PREFIX as protocol_prefix
             if queued:
                 try:
                     with _client(profile) as client:
                         for record in queued:
+                            if record.get("kind") == "comment":
+                                client._request("POST", f"{protocol_prefix}/comments", json={
+                                    "subject": record["subject"], "id": record["subject_id"],
+                                    "text": record["text"], "collab_worker_delivery": record["id"]})
+                                store.acknowledge(record["id"])
+                                continue
                             client.send(Envelope(kind=KIND_CHAT, text=record["text"], sender=profile.name,
                                                  to=record.get("to") or None,
                                                  room=None if record.get("to") else (record.get("room") or None),
@@ -6148,6 +6159,31 @@ def cmd_new(args: argparse.Namespace) -> int:
 def _new_proposal_id() -> str:
     """Short, and unique enough for one session's worth of proposals."""
     return "fs_" + secrets.token_hex(4)
+
+
+def _queue_comment(profile: SessionProfile, subject: str, subject_id: str,
+                   text: str) -> int | None:
+    """Route a board comment through the enabled worker; None means post it.
+
+    R3: the worker is this participant's one voice while it is on, and a
+    comment is delivered verbatim and in order with the rest of its messages.
+    """
+    from .worker import Store
+    store = Store(profile.dir)
+    if not store.enabled():
+        return None
+    try:
+        record_id = store.queue_comment(subject, subject_id, text)
+    except ValueError as exc:
+        fail(str(exc))
+        return 1
+    try:
+        onboard.ensure_daemon(profile, wait=False)
+    except (OSError, RuntimeError, HubError):
+        pass
+    ok(f"queued for delivery by your worker: {record_id}")
+    print(dim("  `collab worker status` shows it until it is delivered"))
+    return 0
 
 
 def _send_body(profile: SessionProfile, text: str,

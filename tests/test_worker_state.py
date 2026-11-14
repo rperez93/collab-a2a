@@ -399,3 +399,17 @@ def test_worker_off_delivers_queued_sends_first(tmp_path, monkeypatch):
     assert [e.text for e in sent] == ['last word']
     assert sent[0].body['collab_worker_delivery'] == record
     assert not store.outbox() and not store.status()['enabled']
+
+
+def test_task_comment_while_worker_enabled_is_queued(tmp_path, monkeypatch, capsys):
+    from collab.config import SessionProfile
+    from collab.client import onboard
+    profile = SessionProfile(session_id='test', url='http://hub.invalid', name='alice',
+                             host_name='bob', token='t', home=str(tmp_path), room='general')
+    monkeypatch.setattr(onboard, 'ensure_daemon', lambda p, **kw: None)
+    store = worker.Store(profile.dir)
+    assert cli._queue_comment(profile, 'task', 'T_1', 'x') is None, 'no worker: post directly'
+    store.configure({'agent': 'claude', 'scope': 'Coordinate'})
+    assert cli._queue_comment(profile, 'task', 'T_1', 'evidence') == 0
+    assert store.outbox()[0]['kind'] == 'comment'
+    assert 'queued for delivery by your worker' in capsys.readouterr().out

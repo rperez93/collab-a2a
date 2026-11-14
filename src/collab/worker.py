@@ -221,7 +221,8 @@ class Store:
             return {**state, "enabled": bool((state["config"] or {}).get("enabled")),
                     "pending": self._records(db, "escalation"),
                     "outbox_count": len(outbox),
-                    "outbox": [{"id": r["id"], "to": r["to"], "room": r["room"],
+                    "outbox": [{"id": r["id"], "kind": r.get("kind", "chat"),
+                                "to": r.get("to", r.get("subject_id", "")), "room": r.get("room", ""),
                                 "error": r.get("error", ""), "retry_at": r.get("retry_at", 0)}
                                for r in outbox]}
 
@@ -264,6 +265,20 @@ class Store:
                 data["body"] = body
             return self._add(db, "outbox", data)
 
+    def queue_comment(self, subject: str, subject_id: str, text: str) -> str:
+        """A task or project comment from the main agent, delivered in order (R3)."""
+        if subject not in ("task", "project"):
+            raise ValueError("a comment is about a task or a project")
+        text = _text(text, "comment")
+        subject_id = _text(subject_id, "subject id")
+        if len(subject_id) > 200 or "\0" in text + subject_id:
+            raise ValueError("invalid comment subject or NUL in comment")
+        with self._db() as db:
+            if not (self._state(db)["config"] or {}).get("enabled"):
+                raise ValueError("start the worker before queueing a comment")
+            return self._add(db, "outbox", {"kind": "comment", "subject": subject,
+                                            "subject_id": subject_id, "text": text})
+
     def reject(self, record_id: str, *, reason: str) -> None:
         """A send the hub refused for good: drop it and tell the main agent.
 
@@ -276,7 +291,8 @@ class Store:
                 return
             data = json.loads(row[0])
             db.execute("DELETE FROM records WHERE id=?", (record_id,))
-            target = "@" + data["to"] if data.get("to") else "#" + (data.get("room") or "general")
+            target = (f"{data['subject']} {data['subject_id']}" if data.get("kind") == "comment"
+                      else "@" + data["to"] if data.get("to") else "#" + (data.get("room") or "general"))
             self._add(db, "escalation", {"reason": "blocker", "seq": 0, "question": (
                 f"Your message to {target} could not be delivered ({reason}): "
                 f"{data['text'][:300]!r}. Resend it to a valid address or drop it.")})

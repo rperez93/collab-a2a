@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any
@@ -886,10 +887,17 @@ def create_app(
         # `general` reaches the people not working on it and misses the people
         # who are. A project has no room of its own, so it keeps the default.
         room = str(exists.get("room") or DEFAULT_ROOM)
+        # A worker-delivered comment carries its outbox id: the comment id is
+        # derived from it per sender, so an uncertain retry cannot add it twice.
+        key = body.get("collab_worker_delivery")
+        comment_id = (new_id("C") if not isinstance(key, str) or not 0 < len(key) <= 80
+                      else "C_" + hashlib.sha256(f"{user.id}|{key}".encode()).hexdigest()[:20])
         try:
             record = await asyncio.to_thread(
-                store.add_comment, new_id("C"), subject=subject,
+                store.add_comment, comment_id, subject=subject,
                 subject_id=subject_id, author=user.name, text=text)
+        except sqlite3.IntegrityError:
+            return {"comment": {"id": comment_id, "duplicate": True}}
         except UnknownProject as gone:
             raise HTTPException(
                 status_code=404,

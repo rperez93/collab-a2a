@@ -192,16 +192,23 @@ class Conversation:
                 # response field was used. Close the stream after its headers;
                 # a total deadline also bounds slow trickles, not only silence.
                 timeout = setting("worker_delivery_timeout")
+                if message.get("kind") == "comment":
+                    route, payload = "comments", {
+                        "subject": message["subject"], "id": message["subject_id"],
+                        "text": message["text"], "collab_worker_delivery": message["id"]}
+                else:
+                    route, payload = "messages", {
+                        "kind": "chat", "text": message["text"],
+                        "to": message.get("to") or None,
+                        "room": message.get("room") or None,
+                        "thread": message.get("thread") or None,
+                        "body": {**(message.get("body") or {}),
+                                 "collab_worker_delivery": message["id"]}}
                 async def acknowledge():
                     async with self.daemon._http.stream(
-                        "POST", f"{self.daemon.profile.url}{EXT_PREFIX}/messages",
+                        "POST", f"{self.daemon.profile.url}{EXT_PREFIX}/{route}",
                         headers=request_headers(self.daemon.profile.token),
-                        json={"kind": "chat", "text": message["text"],
-                              "to": message.get("to") or None,
-                              "room": message.get("room") or None,
-                              "thread": message.get("thread") or None,
-                              "body": {**(message.get("body") or {}),
-                                       "collab_worker_delivery": message["id"]}}, timeout=timeout) as response:
+                        json=payload, timeout=timeout) as response:
                         if 400 <= response.status_code < 500 and response.status_code not in (401, 408, 425, 429):
                             store.reject(message["id"], reason=f"hub answered {response.status_code}")
                             return
