@@ -133,8 +133,14 @@ def _lock(fh) -> bool:
     return True
 
 
-def trim(path: Path | str, cap: int = GENERATION_CAP, *, sacrifice: bool = False) -> bool:
+def trim(path: Path | str, cap: int = GENERATION_CAP, *, sacrifice: bool = False,
+         keep: int | None = None, locked: bool = False) -> bool:
     """Rotate `path` into `path.1` if it is past `cap`. True when it rotated.
+
+    `keep` is how much of the tail goes into `.1` — `cap` unless given. The
+    write-time cap (`CappedFile`) rotates BEFORE a write would carry the live
+    file past `GENERATION_CAP`, so it passes the room the write needs as `cap`
+    and a full generation as `keep`.
 
     THE LIVE FILE IS TRUNCATED ONLY ONCE ITS COPY IS ON DISK. The first version
     truncated inside the `with` that was still writing the copy, so a full
@@ -158,8 +164,12 @@ def trim(path: Path | str, cap: int = GENERATION_CAP, *, sacrifice: bool = False
     try:
         if path.stat().st_size <= cap:
             return False
+        keep = cap if keep is None else keep
         with open(path, "rb") as fh:
-            if not _lock(fh):
+            # `locked`: the caller holds the trim lock already, through its own
+            # descriptor — `CappedFile.write` — and a second `flock` from this
+            # one would find it held by that and give up.
+            if not locked and not _lock(fh):
                 return False
             size = os.fstat(fh.fileno()).st_size
             if size <= cap:
@@ -173,14 +183,18 @@ def trim(path: Path | str, cap: int = GENERATION_CAP, *, sacrifice: bool = False
             copied_ok = False
             try:
                 with open(spare, "wb") as out:
-                    fh.seek(_tail_start(fh, size, cap))
+                    fh.seek(_tail_start(fh, size, keep))
                     done = _copy(fh, out, size)
+                    # BOUNDED: the late rounds may add at most LATE_ROUNDS ×
+                    # LATE_ENOUGH to the copy, so `.1` is never more than a
+                    # generation and 320 KiB — the figure the budget is
+                    # proved against in `CappedFile`.
                     for _ in range(LATE_ROUNDS):
                         now = os.fstat(fh.fileno()).st_size
                         if now - done <= 0:
                             break
                         small = now - done < LATE_ENOUGH
-                        done = _copy(fh, out, now)
+                        done = _copy(fh, out, min(now, done + LATE_ENOUGH))
                         if small:
                             break
                     out.flush()
@@ -213,6 +227,151 @@ def _copy(src, dst, until: int) -> int:
             break
         dst.write(block)
     return src.tell()
+
+
+# --- the write-time cap: a log that can never pass its budget -------------------
+#
+# A WATCHER IS EVENTUAL, and a maximum is not. Validation wrote 192 records of
+# 64 KiB in 16 ms and the log stood at 12.58 MB before the watcher's next pass
+# brought it down. So every byte collab writes to a log goes through
+# `CappedFile`, which rotates BEFORE a write would carry the live file past a
+# generation. The arithmetic that makes it a maximum:
+#
+#   live ≤ GENERATION_CAP after every write that rotated first, and
+#   ≤ 2 × GENERATION_CAP when a rotation could not happen (another process held
+#   the trim lock, or the copy failed) — past that the write is REFUSED and
+#   counted, never made;
+#   `.1` ≤ GENERATION_CAP + LATE_ROUNDS × LATE_ENOUGH (the bounded late copy);
+#   `.1.tmp` exists only while `.1` has been deleted for the trim in progress.
+#
+#   So live + `.1` + `.1.tmp` ≤ 3 × 3 MiB + 320 KiB = 9.77 MB < BUDGET.
+#
+# What does not go through it is a process that writes the file directly: an
+# interpreter's own traceback on a crash, written to the stderr descriptor
+# collab handed the process at spawn. That is a few kilobytes, once; the
+# watcher remains as the net for it. ngrok, which writes continuously, no
+# longer writes the file at all — see `spawn_collected`.
+
+#: The longest one line may be, everywhere a line is read from somebody else's
+#: output. A record past it is cut and marked, not refused.
+LINE_MAX = 16 * 1024
+
+
+#: How long a writer waits for another process's trim lock before writing
+#: anyway under the 2 × cap refusal. A trim of a full generation measured
+#: 4.8 ms; this is a hundred of them.
+LOCK_WAIT = 0.5
+
+
+def _lock_fd(fd: int, *, wait: float) -> bool:
+    """Take the trim lock on `fd`, waiting up to `wait`. True when held."""
+    if fcntl is None:
+        return False
+    end = time.monotonic() + wait
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError as exc:
+            if exc.errno not in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
+                return False              # no flock on this filesystem
+            if time.monotonic() >= end:
+                return False
+            time.sleep(0.002)
+
+
+def _unlock_fd(fd: int) -> None:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    except (OSError, AttributeError):
+        pass
+
+
+class CappedFile:
+    """An append-only log file that rotates before it would pass its cap.
+
+    Holds one `O_APPEND` descriptor, re-opened if the path stops naming the
+    file it holds — a 2.1.2 `collab host` renames `hub.log` aside when it
+    starts, and a descriptor on the renamed file would go on filling it
+    uncapped. Not thread-safe: each one belongs to one writer thread.
+    """
+
+    def __init__(self, path: Path | str, cap: int = GENERATION_CAP) -> None:
+        self.path = Path(path)
+        self.cap = cap
+        self.refused = 0
+        self._fd: int | None = None
+        self._ino: tuple[int, int] | None = None
+        self._torn = True                 # check the last byte on first write
+
+    def _open(self) -> int:
+        try:
+            here = os.stat(self.path)
+            same = self._ino == (here.st_dev, here.st_ino)
+        except FileNotFoundError:
+            same = False
+        if self._fd is not None and same:
+            return self._fd
+        self.close()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        st = os.fstat(self._fd)
+        self._ino = (st.st_dev, st.st_ino)
+        self._torn = True
+        return self._fd
+
+    def close(self) -> None:
+        if self._fd is not None:
+            try:
+                os.close(self._fd)
+            except OSError:
+                pass
+        self._fd = None
+        self._ino = None
+
+    def write(self, data: bytes) -> bool:
+        """Append `data`, rotating first if it would pass the cap. False when
+        the write was refused rather than let the file pass its budget, or
+        failed. Raises nothing."""
+        if not data:
+            return True
+        if len(data) > self.cap:
+            cut = data.find(b"\n", len(data) - self.cap)
+            data = data[cut + 1:] if 0 <= cut < len(data) - 1 else data[-self.cap:]
+        try:
+            fd = self._open()
+            # THE CHECK AND THE WRITE UNDER ONE LOCK — the trim lock, held
+            # across both. Without it two writers (a hub restarted beside a
+            # dying one, two collectors on one `ngrok.log`) each saw room and
+            # both wrote: three writers of 16 KiB measured a live file past
+            # 2 × cap, and three of 3 MiB a total of 12.9 MB. Waited for
+            # briefly; a holder stuck past that is not waited on further, and
+            # the 2 × cap refusal below still bounds what this writer adds.
+            held = _lock_fd(fd, wait=LOCK_WAIT)
+            try:
+                size = os.fstat(fd).st_size
+                if self._torn:
+                    self._torn = False
+                    if size and _ends_mid_line(self.path):
+                        data = b"\n" + data
+                if size + len(data) > self.cap:
+                    trim(self.path, max(0, self.cap - len(data)), keep=self.cap,
+                         sacrifice=size + len(data) > 2 * self.cap, locked=held)
+                    size = os.fstat(fd).st_size
+                    if size + len(data) > 2 * self.cap:
+                        self.refused += 1
+                        return False
+                view = memoryview(data)
+                while view:
+                    done = os.write(fd, view)
+                    view = view[done:]
+                return True
+            finally:
+                if held:
+                    _unlock_fd(fd)
+        except OSError:
+            self._torn = True             # a short write may have left a fragment
+            return False
 
 
 # --- the line writer: nothing waits on the disk ---------------------------------
@@ -264,6 +423,7 @@ class LineWriter:
         self._thread: threading.Thread | None = None
         self._registered = False
         self._gave_up = False
+        self._files: dict[Path, CappedFile] = {}     # the writer thread's own
 
     def put(self, path: Path | str, line: str) -> bool:
         """Queue one line. False when it was dropped because the queue is full."""
@@ -342,23 +502,27 @@ class LineWriter:
                 upto = self._queued
             if batch:
                 try:
-                    lost = _write_lines(batch, self.cap)
+                    lost = _write_lines(batch, self.cap, self._files)
                 except Exception:                            # noqa: BLE001
                     # A writer thread that died would strand every later line
                     # and leave `flush` waiting out its deadline each time.
                     lost = {}
-                    for path, _line in batch:
-                        lost[path] = lost.get(path, 0) + 1
+                    for path, line in batch:
+                        new, carried = lost.get(path, (0, 0))
+                        stood_for = _gap_count(line)
+                        lost[path] = ((new, carried + stood_for) if stood_for
+                                      else (new + 1, carried))
                 if not isinstance(lost, dict):
                     lost = {}
                 if lost:
                     with self._ready:
                         # NOT WRITTEN IS DROPPED, and said like any other drop:
                         # a failed write used to discard the rest of its batch
-                        # with no count and no line.
-                        for path, count in lost.items():
-                            self._dropped[path] = self._dropped.get(path, 0) + count
-                            self.dropped_total += count
+                        # with no count and no line. A gap line that failed
+                        # carries its own count forward, and is not a new drop.
+                        for path, (new, carried) in lost.items():
+                            self._dropped[path] = self._dropped.get(path, 0) + new + carried
+                            self.dropped_total += new
             with self._ready:
                 # AFTER THE WRITE: anything earlier tells a waiting `flush`
                 # «done» while the lines are still in this thread's hands.
@@ -373,39 +537,54 @@ def _dropped_line(count: int) -> str:
                        "event": "dropped", "lines": count})
 
 
-def _write_lines(batch: list, cap: int) -> dict:
-    """One batch on to the disk: grouped by file, whole lines per write, then
-    each file trimmed. On the writer thread.
+def _gap_count(line: str) -> int:
+    """How many lines a gap line stands for, or 0 when it is not one."""
+    if not line.startswith('{"ts"') or '"event": "dropped"' not in line:
+        return 0
+    import json
 
-    Returns how many lines per file did NOT reach it, so the writer can count
-    them and say so. A write cut short — a full disk — leaves the file ending
-    mid-line; the next batch to that file starts with a newline first, or its
-    first line would be glued on to the fragment and both would be unreadable.
+    try:
+        row = json.loads(line)
+    except ValueError:
+        return 0
+    if set(row) == {"ts", "event", "lines"} and row["event"] == "dropped":
+        return int(row["lines"]) if isinstance(row["lines"], int) else 0
+    return 0
+
+
+def _write_lines(batch: list, cap: int, files: dict | None = None) -> dict:
+    """One batch on to the disk through each file's `CappedFile`, whole lines
+    per write. On the writer thread.
+
+    Returns, per file, `(lost, carried)`: how many NEW lines did not reach the
+    disk, and how many lines the gap lines that did not reach it stood for.
+    The two are kept apart because a failed gap line used to come back as one
+    lost line — five lost lines became `{"lines": 1}` — and to be added to
+    `dropped_total` a second time.
     """
     from .diagnostics import _chunks
 
+    files = {} if files is None else files
     by_file: dict[Path, list[str]] = {}
     for path, line in batch:
         by_file.setdefault(path, []).append(line)
-    lost: dict[Path, int] = {}
+    lost: dict[Path, tuple[int, int]] = {}
     for path, lines in by_file.items():
-        chunks = _chunks(lines)
-        sent = 0
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            torn = _ends_mid_line(path)
-            with open(path, "a", encoding="utf-8") as fh:
-                if torn:
-                    fh.write("\n")
-                    fh.flush()
-                for chunk in chunks:
-                    fh.write(chunk)
-                    fh.flush()
-                    sent += 1
-        except Exception:                                     # noqa: BLE001
-            lost[path] = sum(chunk.count("\n") for chunk in chunks[sent:])
-            continue
-        trim(path, cap)
+        handle = files.get(path)
+        if handle is None:
+            handle = files[path] = CappedFile(path, cap)
+        new = carried = 0
+        for chunk in _chunks(lines):
+            if handle.write(chunk.encode("utf-8")):
+                continue
+            for line in chunk.splitlines():
+                stood_for = _gap_count(line)
+                if stood_for:
+                    carried += stood_for
+                else:
+                    new += 1
+        if new or carried:
+            lost[path] = (new, carried)
     return lost
 
 
@@ -571,5 +750,285 @@ def watch(*paths: Path | str) -> Watcher | None:
 
 
 __all__ = ["BUDGET", "GENERATION_CAP", "CHECK_EVERY", "CHECK_FASTEST", "LINES_MAX",
-           "LineWriter", "WRITER", "Watcher", "append_line", "flush", "rotated",
-           "spare_for", "total", "trim", "watch"]
+           "LINE_MAX", "CappedFile", "LineWriter", "WRITER", "Watcher", "append_line",
+           "capped_handler", "collect", "flush", "release_collector",
+           "revive_collector", "rotated", "spare_for", "spawn_collected", "total",
+           "trim", "watch"]
+
+
+# --- collab's own `logging`, capped where it is written -----------------------
+
+def capped_handler(path: Path | str, cap: int = GENERATION_CAP):
+    """A `logging.Handler` that writes through a `CappedFile`.
+
+    The daemon's and the hub's `logging` reach it through the `QueueListener`
+    in `collab.client.daemon_files`, so it runs on the listener's thread and
+    never on the caller's. A record longer than `LINE_MAX` is cut and marked; a
+    record the cap refuses is counted, and the count is written as one line
+    before the next record that gets through.
+    """
+    import logging
+
+    class CappedHandler(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.file = CappedFile(path, cap)
+            self.dropped = 0
+
+        def emit(self, record: logging.LogRecord) -> None:
+            try:
+                text = self.format(record)
+                if len(text) > LINE_MAX:
+                    text = text[:LINE_MAX] + f" …[{len(text) - LINE_MAX} characters cut]"
+                if self.dropped:
+                    note = f"{self.dropped} log lines dropped here: the log could not take them\n"
+                    if self.file.write(note.encode()):
+                        self.dropped = 0
+                if not self.file.write((text + "\n").encode("utf-8", "replace")):
+                    self.dropped += 1
+            except Exception:                                 # noqa: BLE001
+                self.handleError(record)
+
+        def close(self) -> None:
+            self.file.close()
+            super().close()
+
+    return CappedHandler()
+
+
+# --- somebody else's output: a bounded collector --------------------------------
+#
+# NGROK WROTE ITS LOG ITSELF, through a descriptor collab handed it, so nothing
+# collab did could stop a burst from reaching the disk first. Now it writes into
+# a pipe, and a small collector process reads the pipe and writes the file
+# through `CappedFile`. A PROCESS, not a thread in the hub: ngrok runs in a
+# session of its own and outlives a hub that dies — a restarted hub reuses the
+# tunnel and keeps the URL every guest's link points at — and a pipe whose
+# reader died with the hub would kill ngrok with SIGPIPE on its next line.
+#
+# The collector reads under three limits, the project's rule for anything that
+# reads a peer it does not control (CONTRIBUTING, «measure CPU and memory»):
+#
+#   LINE_MAX            per line — a partial line is held to this and no more,
+#                       so a peer writing without newlines cannot grow memory;
+#   WINDOW_BYTES        per WINDOW seconds — past it lines are dropped and
+#                       counted, so a flood costs the reads and not the disk;
+#   SILENT_FLUSH        a deadline enforced while nothing arrives — a partial
+#                       line is written after this much silence instead of
+#                       waiting for a newline that may never come.
+
+#: The most the collector writes per window, in bytes and in lines; the rest
+#: is dropped and counted. Lines as well, because a flood of tiny lines is
+#: cheap in bytes and dear in work.
+WINDOW_BYTES = 256 * 1024
+WINDOW_LINES = 4096
+WINDOW = 1.0
+
+#: Seconds of silence after which a held partial line is written as it is.
+SILENT_FLUSH = 2.0
+
+#: The most read in one go.
+READ_CHUNK = 64 * 1024
+
+
+def collect(source_fd: int, path: Path | str, *, cap: int = GENERATION_CAP,
+            line_max: int = LINE_MAX, window_bytes: int = WINDOW_BYTES,
+            window_lines: int = WINDOW_LINES, window: float = WINDOW,
+            silent_flush: float = SILENT_FLUSH) -> dict:
+    """Copy lines from `source_fd` into a capped log until end of file.
+
+    ONE WRITE PER READ, not per line: what a read brings in is admitted line by
+    line against the window and written as one block. Written per line, a flood
+    of one-byte lines held the collector at a full core — a stat, an fstat and
+    a write for each — and its back-pressure slowed the writer to 0.25 MB/s.
+    The window counts lines as well as bytes for the same reason.
+
+    Returns what it did: bytes read, written, lines dropped, lines cut.
+    """
+    import select
+
+    out = CappedFile(path, cap)
+    held = b""
+    window_start, window_used, window_count = time.monotonic(), 0, 0
+    dropped = cut = read_total = written = 0
+    last_data = time.monotonic()
+    skipping = False             # inside an over-long line, until its newline
+    # (bytes, how many dropped lines it stands for): 0 for an ordinary line,
+    # the count for a «dropped here» note, so a note that fails to be written
+    # carries its count forward instead of becoming one lost line.
+    batch: list[tuple[bytes, int]] = []
+
+    def note(count: int) -> bytes:
+        return (f"collab: {count} lines dropped here "
+                f"(over {window_bytes} bytes or {window_lines} lines a second)\n").encode()
+
+    def admit(line: bytes) -> None:
+        nonlocal window_start, window_used, window_count, dropped
+        now = time.monotonic()
+        if now - window_start >= window:
+            if dropped:
+                batch.append((note(dropped), dropped))
+                dropped = 0
+            window_start, window_used, window_count = now, 0, 0
+        if window_used + len(line) > window_bytes or window_count >= window_lines:
+            dropped += 1
+            return
+        window_used += len(line)
+        window_count += 1
+        batch.append((line, 0))
+
+    def flush_batch() -> None:
+        nonlocal written, dropped
+        if not batch:
+            return
+        block = b"".join(data for data, _ in batch)
+        # A failed write loses the ordinary lines AND whatever the notes in it
+        # stood for. Counting the batch's length instead turned «5 dropped»
+        # plus one new line into 2, and a lone note of 5 into 1.
+        lost = sum(stood_for or 1 for data, stood_for in batch if data)
+        batch.clear()
+        if out.write(block):
+            written += len(block)
+        else:
+            dropped += lost
+
+    while True:
+        ready, _, _ = select.select([source_fd], [], [], silent_flush)
+        if not ready:
+            if held and time.monotonic() - last_data >= silent_flush:
+                admit(held + b"\n")
+                held = b""
+            if dropped and time.monotonic() - window_start >= window:
+                admit(b"")                # let a quiet window say its gap
+            flush_batch()
+            continue
+        try:
+            chunk = os.read(source_fd, READ_CHUNK)
+        except OSError:
+            break
+        if not chunk:
+            break
+        read_total += len(chunk)
+        last_data = time.monotonic()
+        held += chunk
+        while True:
+            newline = held.find(b"\n")
+            if skipping:
+                # The rest of an over-long line, already written cut: skipped
+                # to its end rather than written again as a line of its own.
+                if newline < 0:
+                    held = b""
+                    break
+                held, skipping = held[newline + 1:], False
+                continue
+            if newline < 0:
+                if len(held) > line_max:
+                    admit(held[:line_max] + b" [cut]\n")
+                    cut += 1
+                    held, skipping = b"", True
+                break
+            line, held = held[:newline + 1], held[newline + 1:]
+            if len(line) > line_max:
+                line = line[:line_max] + b" [cut]\n"
+                cut += 1
+            admit(line)
+        flush_batch()
+    if held:
+        admit(held[:line_max] + b"\n")
+    if dropped:
+        batch.append((note(dropped), dropped))
+        dropped = 0
+    flush_batch()
+    out.close()
+    return {"read": read_total, "written": written, "dropped": dropped, "cut": cut}
+
+
+def spawn_collected(argv: list[str], log_path: Path | str, **popen):
+    """Start `argv` with its stdout and stderr going through a collector.
+
+    The collector is `python -m collab.logpipe <log_path>` in a session of its
+    own, reading a pipe the child holds the only write end of; it ends when
+    the child — and anything the child left holding the pipe — has gone.
+    Returns the child's `Popen`, with the collector's as its `collector`
+    attribute: nothing stops the collector but end of file, but a caller that
+    needs the log complete — the reason a failed ngrok gave — waits on it, and
+    holding it is what reaps it rather than leaving a zombie until the next
+    spawn.
+    """
+    import subprocess
+    import sys
+
+    read_end, write_end = os.pipe()
+    env = dict(popen.get("env") or os.environ)
+    try:
+        collector = _collector(read_end, log_path, env)
+    except BaseException:
+        os.close(read_end)
+        os.close(write_end)
+        raise
+    try:
+        child = subprocess.Popen(argv, stdout=write_end, stderr=subprocess.STDOUT,
+                                 **popen)
+    except BaseException:
+        os.close(read_end)
+        raise
+    finally:
+        os.close(write_end)
+    # THE READ END IS KEPT, not closed. While this process holds it the pipe
+    # has a reader even if the collector dies — so the child's next line waits
+    # in the pipe's buffer instead of killing it with SIGPIPE — and a new
+    # collector can be started on the same pipe (`revive_collector`). Not
+    # inherited by anything else this process starts: `os.pipe` descriptors
+    # are non-inheritable.
+    child.collector = collector                   # type: ignore[attr-defined]
+    child.collector_fd = read_end                 # type: ignore[attr-defined]
+    child.collector_env = env                     # type: ignore[attr-defined]
+    child.log_path = str(log_path)                # type: ignore[attr-defined]
+    return child
+
+
+def _collector(read_end: int, log_path: Path | str, env: dict):
+    import subprocess
+    import sys
+
+    return subprocess.Popen(
+        [sys.executable, "-m", "collab.logpipe", str(log_path)],
+        stdin=read_end, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True, close_fds=True, env=env)
+
+
+def revive_collector(child) -> bool:
+    """Start a new collector for `child` if its collector has died. True when
+    one was started. Reaps the dead one; releases the pipe once the child has
+    gone. Never raises.
+
+    A collector killed from outside (an OOM kill, a stray signal) left ngrok
+    writing into a pipe nobody read, and SIGPIPE ended the tunnel — and, on a
+    free plan, its URL. The supervisor calls this on every check.
+    """
+    collector = getattr(child, "collector", None)
+    fd = getattr(child, "collector_fd", None)
+    if collector is None or fd is None:
+        return False
+    try:
+        if child.poll() is not None:
+            if collector.poll() is not None:
+                release_collector(child)
+            return False
+        if collector.poll() is None:
+            return False
+        child.collector = _collector(fd, child.log_path, child.collector_env)
+        return True
+    except Exception:                                         # noqa: BLE001
+        return False
+
+
+def release_collector(child) -> None:
+    """Close this process's read end of `child`'s pipe. Idempotent."""
+    fd = getattr(child, "collector_fd", None)
+    if fd is not None:
+        child.collector_fd = None
+        try:
+            os.close(fd)
+        except OSError:
+            pass

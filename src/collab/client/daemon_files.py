@@ -220,7 +220,25 @@ class _Listener(handlers.QueueListener):
             return
         self.enqueue_sentinel()
         self._thread.join(self.JOIN_WAIT)
+        if self._thread.is_alive():
+            # STUCK IN A WRITE, and holding its handler's lock while it is.
+            # `logging.shutdown` runs after this in `atexit` and acquires every
+            # handler's lock to flush it — so an exit on a stalled disk hung
+            # there, past the 5 s the stopper allows before SIGKILL. The
+            # handlers are taken off shutdown's list instead: the stuck write
+            # loses its tail, which a stalled disk has already lost.
+            self._forget_handlers()
         self._thread = None
+
+    def _forget_handlers(self) -> None:
+        mine = {id(h) for h in self.handlers}
+        # `logging._lock` on 3.13, `_acquireLock` before it: the module lock,
+        # not a handler's, so taking it here cannot meet the stuck writer.
+        lock = getattr(logging, "_lock", None)
+        with contextlib.suppress(Exception), (lock or contextlib.nullcontext()):
+            logging._handlerList[:] = [                      # type: ignore[attr-defined]
+                ref for ref in logging._handlerList          # type: ignore[attr-defined]
+                if id(ref()) not in mine]
 
 
 def setup_logging(level: int = logging.INFO) -> None:
@@ -290,6 +308,69 @@ def _write_logs_on_a_thread() -> None:
     _listener = _Listener(pipe, *existing, respect_handler_level=True)
     _listener.start()
     atexit.register(_listener.stop)
+
+
+def capture_logging_into(path: Path) -> bool:
+    """Write this process's `logging` into `path` through the write-time cap.
+
+    `setup_logging` runs before a process knows its session, so its handlers
+    write to stderr — which is the log file, handed over at spawn, and so
+    capped only eventually, by the watcher. Once the path is known, each
+    stream handler behind the queue is swapped for a `collab.logcap` capped
+    handler with the same level and format: from then on a burst cannot carry
+    the file past its budget, however fast it arrives. Stderr itself still
+    points at the file, for the interpreter's own traceback on a crash.
+    """
+    from .. import logcap
+
+    import sys
+    import threading
+
+    if _listener is None:
+        return False
+    swapped = []
+    for handler in _listener.handlers:
+        # ONLY the handler writing to a stderr that is not a terminal — the
+        # log file a detached process was handed. A daemon or hub run by hand
+        # in a terminal keeps logging to the terminal.
+        if (type(handler) is logging.StreamHandler
+                and getattr(handler, "stream", None) is sys.stderr
+                and not _isatty(sys.stderr)):
+            capped = logcap.capped_handler(path)
+            capped.setLevel(handler.level)
+            capped.setFormatter(handler.formatter)
+            swapped.append(capped)
+        else:
+            swapped.append(handler)
+    _listener.handlers = tuple(swapped)
+    # THE RAW WRITERS, routed through `logging` too, so they reach the capped
+    # handler instead of stderr: `warnings`, an exception that ends a thread,
+    # and an exception nobody could raise (`__del__`, a finaliser). What is
+    # left on raw stderr is the interpreter's own last traceback.
+    logging.captureWarnings(True)
+    log = logging.getLogger("collab.uncaught")
+
+    def thread_hook(args) -> None:
+        if args.exc_type is SystemExit:
+            return
+        log.error("uncaught in thread %s", getattr(args.thread, "name", "?"),
+                  exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+
+    def unraisable_hook(unraisable) -> None:
+        log.error("unraisable in %r: %s", unraisable.object, unraisable.err_msg or "",
+                  exc_info=(unraisable.exc_type, unraisable.exc_value,
+                            unraisable.exc_traceback))
+
+    threading.excepthook = thread_hook
+    sys.unraisablehook = unraisable_hook
+    return True
+
+
+def _isatty(stream) -> bool:
+    try:
+        return bool(stream.isatty())
+    except (AttributeError, ValueError, OSError):
+        return False
 
 
 def open_log(path: Path, cap: int = LOG_CAP, *, trim: bool = True):
