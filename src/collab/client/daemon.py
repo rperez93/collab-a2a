@@ -86,6 +86,8 @@ SKILL_SCAN = 300.0
 SKILLS_REFRESH = 600.0
 #: Read limit for peers' skill lists (R12).
 SKILLS_MAX_BYTES = 4 * 1024 * 1024
+# Match the existing read budget, but enforce it across a trickling exchange.
+SKILLS_FETCH_SECONDS = 10.0
 #: How long to leave a failed automatic compaction before probing the pane
 #: again. The heartbeat runs every three seconds and an agent sitting over its
 #: threshold sits there for a long time, so without this a pane in copy mode
@@ -2792,6 +2794,20 @@ class Daemon:
         self._schedule_refresh("skills", lambda: self._fetch_skills(client, signature))
 
     async def _fetch_skills(self, client: httpx.AsyncClient, signature=None) -> None:
+        generation = Daemon._skill_refresh_target(self)
+        try:
+            await asyncio.wait_for(Daemon._fetch_skills_once(self, client, signature), SKILLS_FETCH_SECONDS)
+        except asyncio.TimeoutError:
+            Daemon._skill_refresh_failed(self, generation)
+
+    def _skill_refresh_failed(self, generation) -> None:
+        from .. import routes
+        if generation != routes.generation(self.profile):
+            return
+        backoff = min(max(2 * getattr(self, "_skills_backoff", 1.5), 3.0), SKILLS_REFRESH)
+        self._skills_backoff, self._skills_retry_at = backoff, time.time() + backoff
+
+    async def _fetch_skills_once(self, client: httpx.AsyncClient, signature=None) -> None:
         from .. import routes
         generation = Daemon._skill_refresh_target(self)
         # Revalidate only what is on disk: an ETag kept after a failed write
@@ -2800,13 +2816,20 @@ class Daemon:
         try:
             async with client.stream(
                     "GET", f"{self.profile.url}{EXT_PREFIX}/participant-skills",
-                    headers=request_headers(self.profile.token, {"If-None-Match": etag} if etag else None),
+                    # identity: the read limit must bound bytes on the wire, and
+                    # a small gzip body could inflate far past it in memory.
+                    headers=request_headers(self.profile.token, {"Accept-Encoding": "identity",
+                                                                 **({"If-None-Match": etag} if etag else {})}),
                     timeout=10.0) as r:
                 if r.status_code == 304 and etag:
                     data = None
                 elif r.status_code == 404:
                     data = {"unsupported": True}  # a hub older than skill lists
                 elif r.status_code == 200:
+                    # A peer can ignore the requested identity encoding. Reject
+                    # it before HTTPX allocates an inflated chunk beyond our cap.
+                    if r.headers.get("content-encoding", "").strip().lower() not in ("", "identity"):
+                        raise ValueError("encoded participant skill lists are unsupported")
                     declared = r.headers.get("content-length", "")
                     if declared.isdigit() and int(declared) > SKILLS_MAX_BYTES:
                         raise ValueError("participant skill lists exceed the read limit")
@@ -2832,10 +2855,7 @@ class Daemon:
             self._skills_etag = (r.headers.get("etag") if r.status_code == 200
                                  else etag if r.status_code == 304 else None)
         except (httpx.HTTPError, ValueError, OSError):
-            if generation != routes.generation(self.profile):
-                return
-            backoff = min(max(2 * getattr(self, "_skills_backoff", 1.5), 3.0), SKILLS_REFRESH)
-            self._skills_backoff, self._skills_retry_at = backoff, time.time() + backoff
+            Daemon._skill_refresh_failed(self, generation)
             return
         self._skills_backoff, self._skills_retry_at = 0.0, 0.0
         self._skills_signature, self._skills_at = signature, time.time()
