@@ -78,3 +78,11 @@ notices arrive after five continuous idle minutes through the monitor or wake
 route; `collab config task_pickup_idle_delay 300` changes that delay and
 `collab config task_auto_pickup false` disables automatic notices. Keep activity
 accurate; silence alone does not mean idle.
+
+On joining a batch, the join output offers currently unclaimed work immediately.
+Inspect dependencies and current ownership, claim suitable work without waiting
+for the lead, and split large tasks into bounded deliverables. The offer is not a
+reservation or a claim of spare capacity. Terminal tasks you previously owned do
+not prevent later idle pickup; unfinished owned tasks still do. Background pickup
+continues to require explicit idle activity and the configured delay, or fresh
+verified native capacity while working. Quiet or missing activity is not idle.

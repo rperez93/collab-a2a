@@ -1347,6 +1347,9 @@ def cmd_join(args: argparse.Namespace) -> int:
             pass
 
     _print_snapshot(snapshot, profile.name)
+    from .task_pickup import join_offer
+    if offer := join_offer(snapshot):
+        print(offer)
     _monitor_hint(profile, status)
     _skill_list_notice()
     print(_rules_briefing())
@@ -2233,6 +2236,11 @@ def cmd_task(args: argparse.Namespace) -> int:
         if mine.get("task") == task["id"]:
             _publish_activity(profile, act.IDLE, quiet=True)
             print(dim("       and you are shown as idle again"))
+            from .runtime_settings import get
+            if get('task_auto_pickup'):
+                print(dim("       next: `collab task list --open`; inspect dependencies and"
+                          " current ownership, then claim suitable work within the accepted"
+                          " goal without waiting for the lead"))
     return 0
 
 
