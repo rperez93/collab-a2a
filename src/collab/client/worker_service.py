@@ -463,5 +463,5 @@ class Conversation:
                     "Your conversation worker's provider failed with an "
                     + ("authentication" if kind == "auth" else "model") + " error; it will not "
                     "recover by retrying. Check `collab worker status`, the provider CLI's login, "
-                    "or the configured model."))
+                    "or the configured model."), expected_generation=snapshot["generation"])
             store.health(error=detail[:300], retry_at=self.next_at, running=False, expected_generation=snapshot["generation"])

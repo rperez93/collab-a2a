@@ -317,9 +317,11 @@ class Store:
             stash.unlink(missing_ok=True)
             raise
 
-    def escalate_once(self, key: str, question: str) -> None:
-        """A decision for the main agent that is raised once per kind, not per retry."""
+    def escalate_once(self, key: str, question: str, *, expected_generation: int) -> None:
+        """Raise once per kind only for the configuration that launched the turn."""
         with self._db() as db:
+            if self._state(db)["generation"] != expected_generation:
+                return
             for row in self._records(db, "escalation"):
                 if row.get("once") == key:
                     return
