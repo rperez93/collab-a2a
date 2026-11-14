@@ -1,5 +1,8 @@
 # Bundle Update Log
 
+## 2026-11-14 (R3)
+* **Update (later than the pin)**: Recorded in [the wake page](collaboration/wake.md) that the automatic worker follows the coding agent's provider, that the main agent's messages are routed through an enabled worker, and `COLLAB_NO_WORKER`. The pin and verification stamps are unchanged.
+
 ## 2026-11-14
 * **Update (later than the pin)**: Recorded the shared skill list and consented skill requests (`collab skills peers|ask|requests|accept|decline|done`) in [the CLI surface](operating/cli-surface.md). The pin and verification stamps are unchanged.
 
