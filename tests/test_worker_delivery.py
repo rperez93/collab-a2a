@@ -168,3 +168,20 @@ def test_a_queued_file_send_reports_json(tmp_path, monkeypatch, capsys):
     assert cli.cmd_file(args) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["queued"] and out["outbox_id"] and out["name"] == "a.txt"
+
+
+def test_a_retry_of_a_delivery_already_collected_is_acknowledged_not_recreated(client, host_headers):
+    from pathlib import Path
+    params = {"room": "general", "delivery": "o_done"}
+    body = {"file": ("x.bin", b"payload", "application/octet-stream")}
+    first = client.post("/ext/collab/v1/files", headers=host_headers, files=body, params=params).json()
+    store = client.app.state.store
+    with store._lock:
+        store._db.execute("UPDATE files SET state='collected' WHERE id=?", (first["id"],))
+        store._db.commit()
+    blob = Path(store.path).parent / "files" / first["id"]
+    blob.unlink(missing_ok=True)
+    other = {"file": ("x.bin", b"different", "application/octet-stream")}
+    again = client.post("/ext/collab/v1/files", headers=host_headers, files=other, params=params)
+    assert again.status_code == 200 and again.json()["duplicate"]
+    assert not blob.exists(), "an ended delivery is never recreated"
