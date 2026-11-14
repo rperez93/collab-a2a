@@ -130,8 +130,12 @@ def test_enrolment_returns_what_the_hub_registers(fake):
     spki = base64.b64encode(REAL_SPKI).decode()
     fake.plan(create={"status": "Success", "spki": spki})
     record = hello.enrol("collab-alice")
-    assert record["cred_id"] == "collab-alice" and record["method"] == "hello"
-    assert record["alg"] == "RS256" and base64.b64decode(record["spki_der_b64"]) == REAL_SPKI
+    # Exactly the hub's `/enrol/finish` names, which rejects unknown fields;
+    # the key as unpadded base64url.
+    assert record == {"credential_id": "collab-alice", "method": "hello",
+                      "algorithm": -257, "public_key_spki": hello.b64url(REAL_SPKI)}
+    assert "=" not in record["public_key_spki"]
+    assert hello.unb64url(record["public_key_spki"], limit=4096) == REAL_SPKI
     assert fake.calls()[-1]["req"] == {"op": "create", "name": "collab-alice"}
 
 
@@ -242,9 +246,9 @@ def test_a_flood_is_cut_at_the_output_cap_cheaply(fake):
 def _request(**extra):
     base = {"request_id": "q_1", "requester_id": "p_bob", "requester_name": "bob",
             "subject": "remote prompt", "destination": "alice's agent",
-            "authority": "run one prompt", "digest_hex": "ab" * 32,
-            "review_text": "please run: make test", "cred_id": "collab-alice",
-            "challenge_b64": base64.b64encode(REAL_MESSAGE).decode()}
+            "authority": "run one prompt", "digest": "ab" * 32,
+            "review_text": "please run: make test", "credential_id": "collab-alice",
+            "challenge": hello.b64url(REAL_MESSAGE)}
     base.update(extra)
     return base
 
@@ -258,8 +262,9 @@ def test_approve_signs_the_challenge_and_only_approve_does(fake):
               sign={"status": "Success", "signature": sig},
               pubkey={"status": "Success", "spki": base64.b64encode(REAL_SPKI).decode()})
     result = hello.open_window(_request())
-    assert result == {"choice": "approve", "method": "hello", "cred_id": "collab-alice",
-                      "signature_b64": sig}
+    assert result == {"choice": "approve", "method": "hello",
+                      "credential_id": "collab-alice",
+                      "proof": {"type": "hello", "signature": hello.b64url(REAL_SIGNATURE)}}
     signed = [c["req"] for c in fake.calls() if c["req"]["op"] == "sign"]
     assert len(signed) == 1 and base64.b64decode(signed[0]["challenge"]) == REAL_MESSAGE
     for choice, expected in (("decline", "decline"), ("passkey", "passkey"),
@@ -354,8 +359,11 @@ def test_the_hub_assigned_id_is_its_own_first_line_and_the_name_is_marked(fake):
 def test_a_request_that_could_not_be_signed_never_reaches_a_human(fake):
     """The key name and the challenge are checked BEFORE the window: a human
     must not read and approve something that cannot then be signed."""
-    for bad in ({"cred_id": "x'; Remove-Item"}, {"challenge_b64": "not base64!"},
-                {"challenge_b64": ""}, {"cred_id": None}):
+    for bad in ({"credential_id": "x'; Remove-Item"}, {"challenge": "not base64!"},
+                {"challenge": ""}, {"credential_id": None}, {"challenge": None},
+                # The hub's own encoding only: the same bytes in standard,
+                # padded base64 are refused, not decoded to the same value.
+                {"challenge": base64.b64encode(REAL_MESSAGE).decode()}):
         assert hello.open_window(_request(**bad)) == {"choice": "unavailable",
                                                       "reason": "BadRequest"}
     assert fake.calls() == []
@@ -452,3 +460,71 @@ def test_without_killpg_the_fallback_still_ends_the_call(fake, monkeypatch):
                 os.kill(int(fake.child_file.read_text()), 9)
             except (ProcessLookupError, ValueError):
                 pass
+
+
+# --- the hub's encoding: canonical unpadded base64url, both ways -------------------
+
+#: Seven bytes chosen so the encoding has BOTH url-safe characters and a length
+#: (10) that standard base64 would pad to 12: `+-_/` is where the alphabets
+#: differ, and padding is where a lenient decoder accepts two spellings.
+VECTOR = bytes([0xFB, 0xEF, 0xFF, 0xFE, 0xFF, 0xBF, 0x3E])
+VECTOR_URL = "--___v-_Pg"
+
+
+def test_the_vector_uses_both_url_safe_characters_and_would_need_padding():
+    assert hello.b64url(VECTOR) == VECTOR_URL
+    assert "-" in VECTOR_URL and "_" in VECTOR_URL and len(VECTOR_URL) % 4
+    assert base64.b64encode(VECTOR).decode() == "++///v+/Pg=="
+    assert hello.unb64url(VECTOR_URL, limit=64) == VECTOR
+
+
+@pytest.mark.parametrize("bad", [
+    "--___v-_Pg==",          # padded
+    "++///v+/Pg",            # the standard alphabet
+    "++///v+/Pg==",          # standard and padded
+    "--___v-_Ph",            # non-zero pad bits: a second spelling of VECTOR
+    "--__ _v-_Pg",           # whitespace
+    "--___v-_P",             # a length no encoding produces
+    "",                      # nothing
+    None, 7, b"--___v-_Pg",  # not text
+])
+def test_anything_but_canonical_unpadded_base64url_is_refused(bad):
+    """The hub reads every binary field canonically (#161). This boundary used
+    `b64decode`, which takes `+`, `/` and `=`; a challenge or key spelled that
+    way here would not be the bytes the hub meant, or not bytes it accepts."""
+    with pytest.raises(ValueError):
+        hello.unb64url(bad, limit=64)
+
+
+def test_a_field_longer_than_its_limit_is_refused_before_decoding(monkeypatch):
+    """BEFORE: a dispatcher's oversized field must cost a length check, not a
+    decode of however many megabytes it sent."""
+    assert hello.unb64url(hello.b64url(bytes(64)), limit=64) == bytes(64)
+    decoded = []
+    real = base64.urlsafe_b64decode
+    monkeypatch.setattr(hello.base64, "urlsafe_b64decode",
+                        lambda v: decoded.append(len(v)) or real(v))
+    with pytest.raises(ValueError):
+        hello.unb64url(hello.b64url(bytes(65)), limit=64)
+    with pytest.raises(ValueError):
+        hello.unb64url("A" * 10_000_000, limit=4096)
+    assert decoded == []
+
+
+def test_the_window_takes_a_url_safe_challenge_and_answers_unpadded(fake, monkeypatch):
+    """End to end through `open_window`: a challenge with `-` and `_` and a
+    length standard base64 would pad reaches Hello as exactly its bytes, and
+    the approval's signature goes back in the hub's encoding."""
+    signature = bytes([0xFB, 0xFF]) + REAL_SIGNATURE[2:]
+    fake.plan(window={"status": "Success", "choice": "approve"},
+              sign={"status": "Success", "signature": base64.b64encode(signature).decode()},
+              pubkey={"status": "Success", "spki": base64.b64encode(REAL_SPKI).decode()})
+    verified = []
+    monkeypatch.setattr(hello, "verify",
+                        lambda spki, message, sig: verified.append(message) or True)
+    result = hello.open_window(_request(challenge=VECTOR_URL))
+    signed = [c["req"] for c in fake.calls() if c["req"]["op"] == "sign"]
+    assert base64.b64decode(signed[0]["challenge"]) == VECTOR == verified[0]
+    sent = result["proof"]["signature"]
+    assert "=" not in sent and "+" not in sent and "/" not in sent
+    assert hello.unb64url(sent, limit=4096) == signature
