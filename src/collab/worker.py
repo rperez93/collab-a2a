@@ -317,6 +317,15 @@ class Store:
             stash.unlink(missing_ok=True)
             raise
 
+    def escalate_once(self, key: str, question: str) -> None:
+        """A decision for the main agent that is raised once per kind, not per retry."""
+        with self._db() as db:
+            for row in self._records(db, "escalation"):
+                if row.get("once") == key:
+                    return
+            self._add(db, "escalation", {"reason": "blocker", "seq": 0, "question": question,
+                                         "once": key})
+
     def queue_comment(self, subject: str, subject_id: str, text: str) -> str:
         """A task or project comment from the main agent, delivered in order (R3)."""
         if subject not in ("task", "project"):

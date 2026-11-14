@@ -78,6 +78,17 @@ def skill_requests(events, escalations, me: str, me_id: str = "") -> list[dict]:
     return added
 
 
+def provider_backoff(kind: str, said: float, base: float) -> float:
+    """Seconds before the next model call, by why the provider failed."""
+    if kind == "rate_limit":
+        return max(said, 900.0)   # wait for the window, not every 30 s
+    if kind in ("auth", "model"):
+        return 3600.0             # escalated; retry rarely in case it was fixed
+    if kind == "network":
+        return max(said, base)
+    return max(said, base)
+
+
 class Conversation:
     def __init__(self, daemon):
         self.daemon = daemon
@@ -443,5 +454,14 @@ class Conversation:
             # Exception details can include a bearer URL or provider output;
             # status needs a class of failure, not private subprocess logs.
             detail = str(exc) if isinstance(exc, worker_runtime.WorkerRuntimeError) else type(exc).__name__
-            self.next_at = time.time() + setting("worker_retry_delay")
+            kind = getattr(exc, "kind", "")
+            self.next_at = time.time() + provider_backoff(kind, getattr(exc, "retry_after", 0.0),
+                                                          setting("worker_retry_delay"))
+            if kind in ("auth", "model"):
+                # Retrying cannot fix these; the main agent (and its human) can.
+                store.escalate_once(f"provider-{kind}", (
+                    "Your conversation worker's provider failed with an "
+                    + ("authentication" if kind == "auth" else "model") + " error; it will not "
+                    "recover by retrying. Check `collab worker status`, the provider CLI's login, "
+                    "or the configured model."))
             store.health(error=detail[:300], retry_at=self.next_at, running=False, expected_generation=snapshot["generation"])

@@ -365,3 +365,12 @@ def test_an_escalation_about_a_peer_in_the_same_turn_routes_its_deferral():
     assert unrouted_deferrals(result, selected, pending=[]) == []
     alone = {**result, "escalations": []}
     assert [e["seq"] for e in unrouted_deferrals(alone, selected, pending=[])] == [4]
+
+
+def test_provider_exits_are_classified_without_keeping_their_text():
+    from collab.worker_runtime import classify_exit
+    assert classify_exit(b"Error: 429 Too Many Requests. Please retry after 120 seconds") == ("rate_limit", 120.0)
+    assert classify_exit(b"Invalid API key. Please run /login")[0] == "auth"
+    assert classify_exit(b"model claude-x not found")[0] == "model"
+    assert classify_exit(b"connect ECONNREFUSED 127.0.0.1:443")[0] == "network"
+    assert classify_exit(b"segfault")[0] == "other"
