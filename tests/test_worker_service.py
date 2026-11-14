@@ -516,3 +516,22 @@ async def test_two_concurrent_flushes_post_each_record_once(conversation, tmp_pa
         generation = store.snapshot()["generation"]
         await asyncio.gather(conversation._flush(store, generation), conversation._flush(store, generation))
     assert len(sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_board_comments_ride_the_outbox_in_order_with_chat(conversation, tmp_path):
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    store.send("first", to="bob")
+    store.queue_comment("task", "T_1", "evidence: tests pass")
+    seen = []
+    async def transport(request):
+        seen.append((request.url.path.rsplit("/", 1)[-1], json.loads(request.content)))
+        return httpx.Response(200, json={})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        conversation.daemon._http = client
+        await conversation._flush(store, store.snapshot()["generation"])
+    assert [route for route, _ in seen] == ["messages", "comments"]
+    comment = seen[1][1]
+    assert comment["subject"] == "task" and comment["id"] == "T_1" and comment["collab_worker_delivery"]
+    assert not store.outbox()

@@ -30,3 +30,17 @@ def test_authenticated_http_retry_has_one_history_entry(client, host_headers):
     assert first.json()["seq"] == second.json()["seq"]
     history = client.get("/ext/collab/v1/history", headers=host_headers).json()["events"]
     assert len([e for e in history if e.get("text") == body["text"]]) == 1
+
+
+def test_a_retried_worker_comment_is_stored_once(client, host_headers):
+    """R3: comments delivered by a worker carry a key; a retry is not a second comment."""
+    task = client.post("/ext/collab/v1/tasks", headers=host_headers,
+                       json={"action": "propose", "title": "T"}).json()
+    task_id = (task.get("task") or task)["id"]
+    body = {"subject": "task", "id": task_id, "text": "evidence", "collab_worker_delivery": "o_1"}
+    first = client.post("/ext/collab/v1/comments", headers=host_headers, json=body)
+    second = client.post("/ext/collab/v1/comments", headers=host_headers, json=body)
+    assert first.status_code == second.status_code == 200
+    comments = client.get("/ext/collab/v1/comments", headers=host_headers,
+                          params={"subject": "task", "id": task_id}).json()["comments"]
+    assert [c["text"] for c in comments] == ["evidence"]
