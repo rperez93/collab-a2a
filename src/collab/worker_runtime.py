@@ -54,12 +54,15 @@ class WorkerRuntimeError(RuntimeError):
 
 #: Provider stderr is read for its CLASS only: never stored, never shown.
 EXIT_CLASSES = (
-    ("rate_limit", re.compile(r"rate.?limit|429|too many requests|usage limit|quota|overloaded", re.I)),
-    ("auth", re.compile(r"\b401\b|\b403\b|unauthori[sz]ed|not logged in|log ?in|authenticat|api key|credential", re.I)),
-    ("model", re.compile(r"model[^\n]{0,40}(not found|not available|unknown|invalid|does not exist)|unknown model", re.I)),
-    ("network", re.compile(r"ECONN|ETIMEDOUT|ENOTFOUND|network|connection (refused|reset)|getaddrinfo|timed? ?out|\b5\d\d\b", re.I)),
+    ("rate_limit", re.compile(r"rate.?limit|\b429\b|too many requests|usage limit|quota exceeded|overloaded", re.I)),
+    ("auth", re.compile(r"\b(401|403)\b|unauthori[sz]ed|not logged in|please (run )?/?log ?in|authenticat|invalid api key|credential", re.I)),
+    ("model", re.compile(r"model\b[^\n]{0,40}\b(not found|not available|unknown|invalid|does not exist)|unknown model", re.I)),
+    ("network", re.compile(r"ECONN\w*|ETIMEDOUT|ENOTFOUND|getaddrinfo|connection (refused|reset)"
+                           r"|\b(HTTP|status)\s*5\d\d\b|\b5\d\d (internal|bad gateway|service unavailable)", re.I)),
 )
-RETRY_AFTER = re.compile(r"(?:retry|try again)[^\n]{0,20}?(\d{1,5})\s*(s|sec|seconds|m|min|minutes)\b", re.I)
+RETRY_AFTER = re.compile(r"(?:retry|try again)[^\n]{0,20}?\b(\d{1,5})\s*(s|sec|secs|seconds|m|min|mins|minutes|h|hr|hrs|hours)\b", re.I)
+#: A provider's stated wait is peer-influenced text: never trust more than this.
+MAX_PROVIDER_WAIT = 3600.0
 
 
 def classify_exit(stderr_tail: bytes) -> tuple[str, float]:
@@ -68,8 +71,9 @@ def classify_exit(stderr_tail: bytes) -> tuple[str, float]:
     kind = next((name for name, pattern in EXIT_CLASSES if pattern.search(text)), "other")
     wait = 0.0
     if (m := RETRY_AFTER.search(text)) is not None:
-        wait = float(m.group(1)) * (60 if m.group(2).lower().startswith("m") else 1)
-    return kind, min(wait, 86400.0)
+        unit = m.group(2).lower()
+        wait = float(m.group(1)) * (3600 if unit.startswith("h") else 60 if unit.startswith("m") else 1)
+    return kind, min(wait, MAX_PROVIDER_WAIT)
 
 
 def _object(properties: dict) -> dict:

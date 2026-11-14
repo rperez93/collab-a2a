@@ -420,8 +420,13 @@ class Conversation:
             known.update(a["source"]["sender"] for a in answers if "source" in a)
             valid_seqs = {0, *(e["seq"] for e in selected),
                           *(a["source"]["seq"] for a in answers if "source" in a)}
-            if any(e["seq"] not in valid_seqs for e in result["escalations"]):
-                raise worker_runtime.WorkerRuntimeError("Worker referred to a message outside this turn")
+            # A wrong seq used to throw the whole paid turn away and back off;
+            # the question is still worth routing, so keep it (anchored to the
+            # only message in the turn, or unanchored).
+            only = {e["seq"] for e in selected}
+            for escalation in result["escalations"]:
+                if escalation["seq"] not in valid_seqs:
+                    escalation["seq"] = next(iter(only)) if len(only) == 1 else 0
             for reply in result["replies"]:
                 if reply["to"] and reply["to"] not in known:
                     raise ValueError("worker proposed an unknown recipient")
