@@ -2683,9 +2683,15 @@ def dashboard_rows(snapshot: dict[str, Any], skills: dict[str, Any] | None, *,
             stats = {}
         quotas = {name: {"used_pct": w.get("used_pct"), "resets_at": w.get("resets_at")}
                   for name, w in (stats.get("quotas") or {}).items() if isinstance(w, dict)}
-        from .stats import STATS_STALE_AFTER, _stamp_of, reported_age
-        stamp = _stamp_of(stats)
-        stale = bool(stats) and (stamp is None or time.time() - stamp > STATS_STALE_AFTER)
+        from .config import stats_stale_after
+        from .stats import _stamp_of, reported_age
+        # The QUOTA's own observation time, not the report's: a six-hour-old
+        # window re-reported five seconds ago is six hours old.
+        quota_stamp = _stamp_of({"reported_at": stats.get("quota_observed_at")}) or _stamp_of(stats)
+        stale = bool(stats.get("quotas") or stats.get("quota_used_pct") is not None) and (
+            quota_stamp is None or time.time() - quota_stamp > stats_stale_after())
+        quota_age = reported_age({"reported_at": quota_stamp}) if quota_stamp is not None else "age unknown"
+        model_stamp = _stamp_of({"reported_at": stats.get("model_observed_at")})
         worker = stats.get("worker") if isinstance(stats.get("worker"), dict) else {}
         budget = worker.get("budget_remaining")
         count = person.get("skills_count")
@@ -2706,7 +2712,8 @@ def dashboard_rows(snapshot: dict[str, Any], skills: dict[str, Any] | None, *,
                      "connected": live and bool(person.get("connected")),
                      "quota": stats.get("quota_used_pct") if not quotas else None,
                      "quotas": quotas, "quota_summary": quota_summary(stats, with_resets=True),
-                     "quota_stale": stale, "reported": reported_age(stats) if stats else "",
+                     "quota_stale": stale, "reported": quota_age,
+                     "model_age": reported_age({"reported_at": model_stamp}) if model_stamp else "age unknown",
                      "main_model": str(stats.get("model") or "unknown"),
                      "worker_model": str(worker.get("model") or "unknown"),
                      "model_observed_at": stats.get("model_observed_at"),
@@ -2744,17 +2751,20 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
                          indent=2, ensure_ascii=True))
         return 0
     note = f"roster {int(age)}s old" + ("" if live else ", not live: quota unknown")
+    if skills and skills.get("fetched_at"):
+        note += f", skill lists {int(time.time() - float(skills['fetched_at']))}s old"
     heading(f"session dashboard  {dim(f'({note})')}")
     for row in rows:
         mark = c("●", "32") if row["connected"] else dim("○")
         you = dim(" (you)") if row["you"] else ""
         quota = said(row["quota_summary"]) if row["quota_summary"] else dim("quota unknown")
         if row["quota_summary"] and row["quota_stale"]:
-            quota += dim(f" ({said(row['reported'])}, old)")
+            quota += dim(f" ({said(row['reported'])})")  # reported_age already says "old"
         budget = ("" if row["worker_budget"] is None
                   else f"  worker {int(row['worker_budget'])} turns left")
         print(f"  {mark} {c(said(row['name']), '1')}{you}  {quota}{budget}")
-        print(dim(f"      models: main {said(row['main_model'])} · worker {said(row['worker_model'])}"))
+        print(dim(f"      models: main {said(row['main_model'])} ({said(row['model_age'])})"
+                  f" · worker {said(row['worker_model'])}"))
         if row["skills"]:
             names = ", ".join(said(s.get("name", "")) for s in row["skills"][:12] if isinstance(s, dict))
             more = f" +{len(row['skills']) - 12}" if len(row["skills"]) > 12 else ""

@@ -177,3 +177,110 @@ async def test_a_roster_read_cues_the_skill_list_refresh(tmp_path):
             lambda r: httpx.Response(200, json=roster))) as client:
         await Daemon._fetch_snapshot(fake, client)
     assert cued == [client]
+
+
+def test_quota_age_is_the_windows_own_and_old_is_said_once(capsys, tmp_path, monkeypatch):
+    import json, time
+    from types import SimpleNamespace
+    from collab import cli
+    from collab.client.daemon_files import DaemonPaths
+    now = time.time()
+    snap = {"you": "alice", "fetched_at": now, "participants": [
+        {"name": "alice", "connected": True, "skills_count": 0,
+         "stats": {"reported_at": now - 5, "quota_observed_at": now - 6 * 3600,
+                   "model": "m", "model_observed_at": now - 120,
+                   "quotas": {"five_hour": {"used_pct": 10}}}}]}
+    rows = dashboard_rows(snap, None)
+    assert rows[0]["quota_stale"], "re-reported 5 s ago, observed 6 h ago: stale"
+    paths = DaemonPaths(tmp_path)
+    paths.root.mkdir(parents=True, exist_ok=True)
+    paths.snapshot.write_text(json.dumps(snap))
+    monkeypatch.setattr(cli, "_require_profile", lambda a: SimpleNamespace(dir=tmp_path))
+    monkeypatch.setattr(cli, "read_status", lambda p: {})
+    monkeypatch.setattr(cli, "daemon_state", lambda status, running=None: "live")
+    monkeypatch.setattr(cli, "is_running", lambda p: 1)
+    assert cli.cmd_dashboard(SimpleNamespace(json=False)) == 0
+    out = capsys.readouterr().out
+    assert out.count("— old") == 1 and "old, old" not in out
+    assert "6h ago — old" in out and "main m (2m ago)" in out
+
+
+def test_a_stale_roster_file_is_not_live(capsys, tmp_path, monkeypatch):
+    import json, time
+    from types import SimpleNamespace
+    from collab import cli
+    from collab.client.daemon_files import DaemonPaths
+    snap = {"you": "alice", "fetched_at": time.time() - 3600, "participants": [
+        {"name": "bob", "connected": True, "stats": {"quotas": {"five_hour": {"used_pct": 10}}}}]}
+    paths = DaemonPaths(tmp_path)
+    paths.root.mkdir(parents=True, exist_ok=True)
+    paths.snapshot.write_text(json.dumps(snap))
+    monkeypatch.setattr(cli, "_require_profile", lambda a: SimpleNamespace(dir=tmp_path))
+    monkeypatch.setattr(cli, "read_status", lambda p: {})
+    monkeypatch.setattr(cli, "daemon_state", lambda status, running=None: "live")
+    monkeypatch.setattr(cli, "is_running", lambda p: 1)
+    assert cli.cmd_dashboard(SimpleNamespace(json=True)) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["stale"] and not data["participants"][0]["connected"]
+
+
+def test_shared_but_not_yet_listed_is_unknown():
+    snap = {"participants": [{"id": "p9", "name": "zoe", "skills_count": 3, "stats": {}}]}
+    assert dashboard_rows(snap, {"participants": []})[0]["skills_state"] == "unknown"
+
+
+def test_the_periodic_refresh_and_the_backoff_gate():
+    import time
+    from types import SimpleNamespace
+    from collab.client import daemon as d
+    calls = []
+    fake = SimpleNamespace(snapshot={"participants": [{"id": "p1", "skills_count": 2}]},
+                           _schedule_refresh=lambda name, op: calls.append(name),
+                           _skills_signature=(("p1", 2),), _skills_at=time.time() - d.SKILLS_REFRESH - 1)
+    d.Daemon._maybe_refresh_skills(fake, client=None)
+    assert calls == ["skills"], "unchanged counts still refresh after SKILLS_REFRESH"
+    fake._skills_retry_at = time.time() + 30
+    fake._skills_at = 0
+    d.Daemon._maybe_refresh_skills(fake, client=None)
+    assert calls == ["skills"], "no fetch inside the backoff window"
+
+
+@pytest.mark.asyncio
+async def test_backoff_grows_the_cap_holds_and_a_failed_write_keeps_no_etag(tmp_path, monkeypatch):
+    import httpx
+    from types import SimpleNamespace
+    from collab.client import daemon as d
+    from collab.client.daemon_files import DaemonPaths
+    paths = DaemonPaths(tmp_path)
+    paths.root.mkdir(parents=True, exist_ok=True)
+    fake = SimpleNamespace(profile=SimpleNamespace(url="http://hub", token="t"), paths=paths)
+    monkeypatch.setattr(d, "SKILLS_MAX_BYTES", 64)
+    big = lambda r: httpx.Response(200, content=b'{"participants": [' + b'1,' * 100 + b'1]}',
+                                   headers={"etag": 'W/"x"'})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(big)) as client:
+        await d.Daemon._fetch_skills(fake, client, ("s",))
+        first = fake._skills_backoff
+        await d.Daemon._fetch_skills(fake, client, ("s",))
+        assert fake._skills_backoff > first, "each failure backs off further"
+    assert not paths.skills.exists() and getattr(fake, "_skills_etag", None) is None
+    monkeypatch.setattr(d, "SKILLS_MAX_BYTES", 4 * 1024 * 1024)
+    ok = lambda r: httpx.Response(200, json={"participants": []}, headers={"etag": 'W/"y"'})
+    def boom(*a, **k):
+        raise OSError("disk full")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(ok)) as client:
+        monkeypatch.setattr(type(paths.skills), "exists", lambda self: False)
+        original = d.json.dumps
+        monkeypatch.setattr(d.json, "dumps", boom)
+        await d.Daemon._fetch_skills(fake, client, ("s",))
+        monkeypatch.setattr(d.json, "dumps", original)
+    assert getattr(fake, "_skills_etag", None) is None, "an ETag is kept only once its cache is written"
+
+
+def test_the_hub_validates_and_names_participants_by_id(client, host_headers):
+    client.post("/ext/collab/v1/stats", headers=host_headers,
+                json={"skills": [{"name": "review", "description": "r"}]})
+    first = client.get("/ext/collab/v1/participant-skills", headers=host_headers)
+    assert first.json()["participants"][0]["id"]
+    tag = first.headers["etag"]
+    again = client.get("/ext/collab/v1/participant-skills", headers={**host_headers, "If-None-Match": tag})
+    assert again.status_code == 304

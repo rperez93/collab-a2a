@@ -2689,7 +2689,9 @@ class Daemon:
         self._schedule_refresh("skills", lambda: self._fetch_skills(client, signature))
 
     async def _fetch_skills(self, client: httpx.AsyncClient, signature=None) -> None:
-        etag = getattr(self, "_skills_etag", None)
+        # Revalidate only what is on disk: an ETag kept after a failed write
+        # turned every later answer into a 304 and the cache never appeared.
+        etag = getattr(self, "_skills_etag", None) if self.paths.skills.exists() else None
         try:
             async with client.stream(
                     "GET", f"{self.profile.url}{EXT_PREFIX}/participant-skills",
@@ -2700,17 +2702,20 @@ class Daemon:
                 elif r.status_code == 404:
                     data = {"unsupported": True}  # a hub older than skill lists
                 elif r.status_code == 200:
+                    declared = r.headers.get("content-length", "")
+                    if declared.isdigit() and int(declared) > SKILLS_MAX_BYTES:
+                        raise ValueError("participant skill lists exceed the read limit")
                     raw = bytearray()
                     async for chunk in r.aiter_bytes():
-                        raw.extend(chunk)
-                        if len(raw) > SKILLS_MAX_BYTES:
+                        if len(raw) + len(chunk) > SKILLS_MAX_BYTES:  # checked before growing
                             raise ValueError("participant skill lists exceed the read limit")
+                        raw.extend(chunk)
                     body = json.loads(bytes(raw))
                     people = body.get("participants") if isinstance(body, dict) else None
                     if not isinstance(people, list):
                         raise ValueError("malformed participant skill lists")
                     data = {"participants": people, "untrusted": True}
-                    self._skills_etag = r.headers.get("etag")
+                    new_etag = r.headers.get("etag")
                 else:
                     raise ValueError(f"hub answered {r.status_code}")
             if data is not None:
@@ -2718,6 +2723,8 @@ class Daemon:
                 tmp = self.paths.root / "skills.tmp"
                 tmp.write_text(json.dumps(data))
                 tmp.replace(self.paths.skills)
+                if "participants" in data:
+                    self._skills_etag = new_etag  # only once the cache it validates exists
         except (httpx.HTTPError, ValueError, OSError):
             backoff = min(max(2 * getattr(self, "_skills_backoff", 1.5), 3.0), SKILLS_REFRESH)
             self._skills_backoff, self._skills_retry_at = backoff, time.time() + backoff
