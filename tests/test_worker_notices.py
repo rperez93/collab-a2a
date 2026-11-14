@@ -240,7 +240,90 @@ def test_a_long_wait_on_the_human_is_mentioned_again(tmp_path):
 def test_the_roster_shows_a_peer_waiting_on_its_human():
     from collab.client import participant_metrics
     person = {"name": "bob", "stats": {"worker": {"enabled": True, "running": False, "turns": 3,
-                                                  "awaiting_human": 1, "awaiting_since": time.time() - 12 * 60}}}
+                                                  "awaiting_human": 1, "awaiting_age": 12 * 60,
+                                                  # a skewed peer clock must not matter
+                                                  "awaiting_since": time.time() + 3600}}}
     rendered = participant_metrics.metric_lines(person, ["worker"], detailed=False)
     text = " ".join(str(x) for x in (rendered if isinstance(rendered, (list, tuple)) else [rendered]))
     assert "waiting on their human (1) · 12m" in text
+
+
+
+def test_b1_main_runs_the_banner(monkeypatch):
+    from collab import cli
+    seen = []
+    monkeypatch.setattr(cli, "_decisions_banner", lambda args: seen.append(args.command))
+    monkeypatch.setattr(cli, "cmd_who", lambda args: 0, raising=False)
+    try:
+        cli.main(["who"])
+    except SystemExit:
+        pass
+    assert seen == ["who"]
+
+
+def test_b3_metrics_publish_the_awaiting_age_on_one_clock(tmp_path):
+    from collab import worker
+    store = worker.Store(tmp_path)
+    store.configure({"agent": "claude", "scope": "Coordinate"})
+    decision(store)
+    store.await_human(store.pending()[0]["id"], "deciding", to="bob")
+    figures = worker.metrics(tmp_path)
+    assert figures["awaiting_since"] and 0 <= figures["awaiting_age"] < 5
+
+
+def test_c1_the_banner_never_waits_on_a_writer(tmp_path):
+    import sqlite3
+    from collab import worker
+    store = worker.Store(tmp_path)
+    store.configure({"agent": "claude", "scope": "Coordinate"})
+    decision(store)
+    writer = sqlite3.connect(tmp_path / "worker.db", timeout=0)
+    writer.execute("BEGIN EXCLUSIVE")
+    try:
+        started = time.monotonic()
+        count = worker.pending_count_readonly(tmp_path)
+        assert time.monotonic() - started < 0.1 and count == 0, "skipped, not waited"
+    finally:
+        writer.rollback()
+        writer.close()
+    assert worker.pending_count_readonly(tmp_path) == 1
+
+
+def test_c6_reply_to_a_decision_awaiting_the_human_needs_a_mode(tmp_path, monkeypatch, capsys):
+    import argparse
+    from types import SimpleNamespace
+    from collab import cli, worker
+    store = worker.Store(tmp_path)
+    store.configure({"agent": "claude", "scope": "Coordinate"})
+    decision(store)
+    decision_id = store.pending()[0]["id"]
+    store.await_human(decision_id, "deciding", to="bob")
+    monkeypatch.setattr(cli, "_require_profile", lambda a: SimpleNamespace(dir=tmp_path, session_id="s"))
+    monkeypatch.setattr(cli, "_decision_source", lambda *a: ("", ""))
+    monkeypatch.setattr(cli.onboard, "ensure_daemon", lambda *a, **k: None)
+    def reply(**kw):
+        ns = argparse.Namespace(worker_action="reply", decision_id=decision_id,
+                                text="Tell him no -- between us he broke prod.", awaiting_human=False,
+                                verbatim=False, instruct=False)
+        vars(ns).update(kw)
+        return cli.cmd_worker(ns)
+    assert reply() == 2 and "--verbatim" in capsys.readouterr().err
+    assert store.pending()[0]["id"] == decision_id, "nothing sent"
+    assert reply(verbatim=True) == 0
+    assert "sent to @bob verbatim" in capsys.readouterr().out
+
+
+def test_verbatim_without_a_known_asker_is_refused(tmp_path, monkeypatch, capsys):
+    import argparse
+    from types import SimpleNamespace
+    from collab import cli, worker
+    store = worker.Store(tmp_path)
+    store.configure({"agent": "claude", "scope": "Coordinate"})
+    decision(store)
+    decision_id = store.pending()[0]["id"]
+    monkeypatch.setattr(cli, "_require_profile", lambda a: SimpleNamespace(dir=tmp_path, session_id="s"))
+    monkeypatch.setattr(cli, "_decision_source", lambda *a: ("", ""))
+    args = argparse.Namespace(worker_action="reply", decision_id=decision_id, text="yes",
+                              awaiting_human=False, verbatim=True, instruct=False)
+    assert cli.cmd_worker(args) == 2 and "cannot be sent verbatim" in capsys.readouterr().err
+    assert store.pending(), "the decision stays open"
