@@ -41,6 +41,7 @@ class HubConfig:
     title: str = ""
     public_url: str = ""
     tunnel: str = "none"
+    tunnel_mode: str = ""
     #: The tunnel agent we started, if we started one. It runs in its own
     #: process group so it outlives the hub, and nothing else records it — a
     #: leaked agent leaves a public URL pointing at a dead port and, on a free
