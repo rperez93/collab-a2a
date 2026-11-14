@@ -339,7 +339,10 @@ def test_relaying_the_main_answer_and_quoting_other_dms_are_not_repaired():
     selected = [{"seq": 2, "sender": "carol", "to": "alice", "room": "", "text": "private to alice"}]
     answer = "Hold tight, I'll get back to you after the deploy."
     relayed = {"replies": [{"text": answer, "to": "bob", "room": ""}], "escalations": []}
-    assert unrouted_deferrals(relayed, selected, pending=[], answers=[answer]) == []
+    assert unrouted_deferrals(relayed, selected, pending=[], answered={"bob"}) == []
+    paraphrased = {"replies": [{"text": "Hold tight — the deploy answer is coming.", "to": "bob", "room": ""}],
+                   "escalations": []}
+    assert unrouted_deferrals(paraphrased, selected, pending=[], answered={"bob"}) == []
     # bob's DM thread has no message this turn; carol's private DM must not be quoted
     stray = {"replies": [{"text": "Stand by, I'll check and confirm.", "to": "bob", "room": ""}],
              "escalations": []}
@@ -351,3 +354,14 @@ def test_the_deferral_pattern_has_fewer_false_positives():
     assert DEFERRAL.search("Stand by.") and DEFERRAL.search("Will update you shortly")
     assert not DEFERRAL.search("Let me check: the tests pass now")
     assert not DEFERRAL.search("I'll check the logs")
+
+
+
+def test_an_escalation_about_a_peer_in_the_same_turn_routes_its_deferral():
+    from collab.worker_runtime import unrouted_deferrals
+    selected = [{"seq": 4, "sender": "bob", "to": "", "room": "general", "text": "Which port?"}]
+    result = {"replies": [{"text": "I'll check and confirm.", "to": "bob", "room": ""}],
+              "escalations": [{"reason": "decision", "seq": 4, "question": "Port?"}]}
+    assert unrouted_deferrals(result, selected, pending=[]) == []
+    alone = {**result, "escalations": []}
+    assert [e["seq"] for e in unrouted_deferrals(alone, selected, pending=[])] == [4]

@@ -12,6 +12,7 @@ import contextlib
 import logging
 import json
 import time
+from pathlib import Path
 
 from .. import activity, worker, worker_runtime
 from ..runtime_settings import get as setting
@@ -118,10 +119,13 @@ class Conversation:
         cfg = state["config"]
         generation = state["generation"]
         if worker.no_worker():
-            # A daemon told to have no worker runs none, whatever worker.db
-            # says: the variable is inherited through spawn from the shell
-            # that started the scratch session.
-            cfg = None
+            # A daemon told to have no worker runs no model, whatever worker.db
+            # says (the variable is inherited through spawn). Anything already
+            # queued is still delivered: stranding it would lose messages.
+            if (self.daemon._http is not None and (self.delivery is None or self.delivery.done())
+                    and any(r.get("retry_at", 0) <= time.time() for r in store.outbox())):
+                self.delivery = asyncio.create_task(self._flush_outbox_only(store, generation))
+            return
         if not cfg or not cfg.get("enabled") or generation != self.generation:
             await self.stop()
             self.generation = generation
@@ -173,17 +177,22 @@ class Conversation:
         if not current["error"] or current["error"].startswith("Worker replies are awaiting delivery"):
             self._delivery_health(store, generation)
 
+    async def _flush_outbox_only(self, store, generation) -> None:
+        async with self.flushing:
+            await self._flush_locked(store, generation, require_enabled=False)
+
     async def _flush(self, store, generation) -> None:
         async with self.flushing:
             await self._flush_locked(store, generation)
 
-    async def _flush_locked(self, store, generation) -> None:
+    async def _flush_locked(self, store, generation, *, require_enabled: bool = True) -> None:
         attempts = 0
         for message in store.outbox():
             if message.get("retry_at", 0) > time.time():
                 continue
             current = store.snapshot()
-            if current["generation"] != generation or not (current["config"] or {}).get("enabled"):
+            if require_enabled and (current["generation"] != generation
+                                    or not (current["config"] or {}).get("enabled")):
                 return
             attempts += 1
             try:
@@ -192,6 +201,17 @@ class Conversation:
                 # response field was used. Close the stream after its headers;
                 # a total deadline also bounds slow trickles, not only silence.
                 timeout = setting("worker_delivery_timeout")
+                if message.get("kind") == "file":
+                    status = await self._upload(message, timeout=setting("worker_delivery_timeout") * 8)
+                    if 400 <= status < 500 and status not in (401, 408, 425, 429):
+                        store.reject(message["id"], reason=f"hub answered {status}")
+                    elif status >= 400:
+                        raise RuntimeError(f"upload answered {status}")
+                    else:
+                        store.acknowledge(message["id"])
+                    if attempts >= setting("worker_delivery_batch"):
+                        break
+                    continue
                 if message.get("kind") == "comment":
                     route, payload = "comments", {
                         "subject": message["subject"], "id": message["subject_id"],
@@ -225,6 +245,20 @@ class Conversation:
                             error=type(exc).__name__)
             if attempts >= setting("worker_delivery_batch"):
                 break
+
+    async def _upload(self, message, *, timeout) -> int:
+        """Upload a queued file's private copy; the HTTP status decides its fate."""
+        import hashlib
+        stash = Path(message["stash"])
+        data = stash.read_bytes()
+        if hashlib.sha256(data).hexdigest() != message.get("sha256"):
+            return 422  # the private copy changed: never send different bytes
+        params = {k: message[k] for k in ("to", "room") if message.get(k)}
+        response = await self.daemon._http.post(
+            f"{self.daemon.profile.url}{EXT_PREFIX}/files",
+            headers=request_headers(self.daemon.profile.token), params=params,
+            files={"file": (message["name"], data, "application/octet-stream")}, timeout=timeout)
+        return response.status_code
 
     def _source(self, record):
         """A compact summary cannot be trusted to remember a reply address."""
@@ -387,7 +421,8 @@ class Conversation:
                 if reply["room"] and reply["room"] not in rooms:
                     raise ValueError("worker proposed an unknown room")
             escalations = result["escalations"] + worker_runtime.unrouted_deferrals(
-                result, selected, store.pending(), answers=[a.get("text", "") for a in answers])
+                result, selected, store.pending(),
+                answered={a["source"]["sender"] for a in answers if a.get("source", {}).get("sender")})
             committed = store.commit_turn(
                 expected_cursor=snapshot["cursor"], cursor=cursor,
                 summary=result["summary"], replies=result["replies"],

@@ -90,6 +90,15 @@ def _config(config: dict[str, Any], *, allow_empty_model: bool = False) -> dict[
     return result
 
 
+def _drop_stash(row) -> None:
+    """Delete a queued file's private copy once its record is gone."""
+    if row is None:
+        return
+    stash = json.loads(row[0]).get("stash")
+    if stash:
+        Path(stash).unlink(missing_ok=True)
+
+
 class Store:
     def __init__(self, root: Path | str):
         self.path = Path(root) / "worker.db"
@@ -278,6 +287,36 @@ class Store:
                 data["body"] = body
             return self._add(db, "outbox", data)
 
+    def queue_file(self, path: Path, *, to: str = "", room: str = "") -> str:
+        """A file the main agent shares, delivered by the worker in order (R3).
+
+        The bytes are copied now, so what is delivered is what was sent even if
+        the file changes or disappears before the listener gets to it.
+        """
+        import hashlib
+        import shutil
+        source = Path(path)
+        if not source.is_file():
+            raise ValueError(f"no such file: {source}")
+        if not (to.strip() or room.strip()):
+            raise ValueError("a queued file needs a recipient or a room")
+        stash_dir = self.path.parent / "outbox-files"
+        stash_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        stash = stash_dir / f"{uuid.uuid4().hex}-{source.name[:100]}"
+        shutil.copyfile(source, stash)
+        stash.chmod(0o600)
+        digest = hashlib.sha256(stash.read_bytes()).hexdigest()
+        try:
+            with self._db() as db:
+                if not (self._state(db)["config"] or {}).get("enabled"):
+                    raise ValueError("start the worker before queueing a file")
+                return self._add(db, "outbox", {"kind": "file", "stash": str(stash), "name": source.name,
+                                                "to": to, "room": room, "sha256": digest,
+                                                "text": f"file {source.name}"})
+        except BaseException:
+            stash.unlink(missing_ok=True)
+            raise
+
     def queue_comment(self, subject: str, subject_id: str, text: str) -> str:
         """A task or project comment from the main agent, delivered in order (R3)."""
         if subject not in ("task", "project"):
@@ -304,6 +343,7 @@ class Store:
                 return
             data = json.loads(row[0])
             db.execute("DELETE FROM records WHERE id=?", (record_id,))
+            _drop_stash(row)
             target = (f"{data['subject']} {data['subject_id']}" if data.get("kind") == "comment"
                       else "@" + data["to"] if data.get("to") else "#" + (data.get("room") or "general"))
             self._add(db, "escalation", {"reason": "blocker", "seq": 0, "question": (
@@ -311,7 +351,12 @@ class Store:
                 f"{data['text'][:300]!r}. Resend it to a valid address or drop it.")})
 
     def enabled(self) -> bool:
-        if not self.path.exists():
+        """Whether the worker is this participant's voice right now.
+
+        Under COLLAB_NO_WORKER no listener runs it, so queueing would strand
+        messages: the CLI posts directly instead.
+        """
+        if not self.path.exists() or no_worker():
             return False
         return bool((self.configuration() or {}).get("enabled"))
 
@@ -394,7 +439,9 @@ class Store:
 
     def acknowledge(self, record_id: str) -> None:
         with self._db() as db:
+            row = db.execute("SELECT data FROM records WHERE id=? AND kind='outbox'", (record_id,)).fetchone()
             db.execute("DELETE FROM records WHERE id=? AND kind='outbox'", (record_id,))
+        _drop_stash(row)
 
     def defer(self, record_id: str, *, retry_at: float, error: str) -> bool:
         """Defer one reply without holding up unrelated peers' conversations."""

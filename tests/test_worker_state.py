@@ -7,6 +7,13 @@ import pytest
 from collab import cli, worker
 
 
+
+@pytest.fixture(autouse=True)
+def workers_allowed(monkeypatch):
+    """Routing through an enabled worker is what these test; conftest's
+    COLLAB_NO_WORKER (no paid calls in tests) would bypass it."""
+    monkeypatch.delenv("COLLAB_NO_WORKER", raising=False)
+
 def configured(tmp_path):
     store = worker.Store(tmp_path)
     store.configure({"agent": "codex", "scope": "Coordinate test ownership"})
@@ -413,3 +420,37 @@ def test_task_comment_while_worker_enabled_is_queued(tmp_path, monkeypatch, caps
     assert cli._queue_comment(profile, 'task', 'T_1', 'evidence') == 0
     assert store.outbox()[0]['kind'] == 'comment'
     assert 'queued for delivery by your worker' in capsys.readouterr().out
+
+
+def test_file_send_while_worker_enabled_is_queued_as_a_private_copy(tmp_path, monkeypatch):
+    import argparse, contextlib
+    from collab.config import SessionProfile
+    from collab.client import onboard
+    profile = SessionProfile(session_id='test', url='http://hub.invalid', name='alice',
+                             host_name='bob', token='t', home=str(tmp_path), room='general')
+    monkeypatch.setattr(cli, '_require_own_profile', lambda a: profile)
+    monkeypatch.setattr(cli, '_require_profile', lambda a: profile)
+    monkeypatch.setattr(onboard, 'ensure_daemon', lambda p, **kw: None)
+    client = SimpleNamespace(upload_file=lambda *a, **k: (_ for _ in ()).throw(AssertionError('posted directly')))
+    monkeypatch.setattr(cli, '_client', lambda p: contextlib.nullcontext(client))
+    store = worker.Store(profile.dir)
+    store.configure({'agent': 'claude', 'scope': 'Coordinate'})
+    path = tmp_path / 'notes.txt'
+    path.write_text('v1')
+    args = cli.build_parser().parse_args(['file', 'send', str(path), '--to', 'bob'])
+    assert cli.cmd_file(args) == 0
+    path.write_text('v2, changed after sending')
+    record = store.outbox()[0]
+    assert record['kind'] == 'file' and record['to'] == 'bob'
+    from pathlib import Path
+    assert Path(record['stash']).read_text() == 'v1'
+    store.acknowledge(record['id'])
+    assert not Path(record['stash']).exists()
+
+
+def test_under_collab_no_worker_the_cli_posts_directly(tmp_path, monkeypatch):
+    store = worker.Store(tmp_path)
+    store.configure({'agent': 'claude', 'scope': 'Coordinate'})
+    assert store.enabled()
+    monkeypatch.setenv('COLLAB_NO_WORKER', '1')
+    assert not store.enabled(), 'no listener will run it, so nothing may be queued'
