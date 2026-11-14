@@ -47,6 +47,34 @@ _MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}\Z")
 class WorkerRuntimeError(RuntimeError):
     """A turn failed without consuming inbox messages or sending proposals."""
 
+    def __init__(self, message: str, *, kind: str = "", retry_after: float = 0.0):
+        super().__init__(message)
+        self.kind, self.retry_after = kind, retry_after
+
+
+#: Provider stderr is read for its CLASS only: never stored, never shown.
+EXIT_CLASSES = (
+    ("rate_limit", re.compile(r"rate.?limit|\b429\b|too many requests|usage limit|quota exceeded|overloaded", re.I)),
+    ("auth", re.compile(r"\b(401|403)\b|unauthori[sz]ed|not logged in|please (run )?/?log ?in|authenticat|invalid api key|credential", re.I)),
+    ("model", re.compile(r"model\b[^\n]{0,40}\b(not found|not available|unknown|invalid|does not exist)|unknown model", re.I)),
+    ("network", re.compile(r"ECONN\w*|ETIMEDOUT|ENOTFOUND|getaddrinfo|connection (refused|reset)"
+                           r"|\b(HTTP|status)\s*5\d\d\b|\b5\d\d (internal|bad gateway|service unavailable)", re.I)),
+)
+RETRY_AFTER = re.compile(r"(?:retry|try again)[^\n]{0,20}?\b(\d{1,5})\s*(s|sec|secs|seconds|m|min|mins|minutes|h|hr|hrs|hours)\b", re.I)
+#: A provider's stated wait is peer-influenced text: never trust more than this.
+MAX_PROVIDER_WAIT = 3600.0
+
+
+def classify_exit(stderr_tail: bytes) -> tuple[str, float]:
+    """(class, seconds to wait if the provider said) from the last bytes of stderr."""
+    text = stderr_tail.decode("utf-8", "replace")
+    kind = next((name for name, pattern in EXIT_CLASSES if pattern.search(text)), "other")
+    wait = 0.0
+    if (m := RETRY_AFTER.search(text)) is not None:
+        unit = m.group(2).lower()
+        wait = float(m.group(1)) * (3600 if unit.startswith("h") else 60 if unit.startswith("m") else 1)
+    return kind, min(wait, MAX_PROVIDER_WAIT)
+
 
 def _object(properties: dict) -> dict:
     return {"type": "object", "properties": properties,
@@ -382,15 +410,18 @@ async def _exchange(args: list[str], data: bytes, scratch: Path, env: dict[str, 
     async def read(stream: asyncio.StreamReader, keep: bool) -> bytes:
         nonlocal consumed
         chunks = []
+        tail = b""
         while True:
             chunk = await stream.read(8192)
             if not chunk:
-                return b"".join(chunks)
+                return b"".join(chunks) if keep else tail
             consumed += len(chunk)
             if consumed > MAX_OUTPUT_BYTES:
                 raise WorkerRuntimeError("Worker exceeded the output byte limit")
             if keep:
                 chunks.append(chunk)
+            else:
+                tail = (tail + chunk)[-4096:]  # classification only; never stored
 
     async def write() -> None:
         try:
@@ -421,8 +452,11 @@ async def _exchange(args: list[str], data: bytes, scratch: Path, env: dict[str, 
         if proc.returncode:
             # Never copy provider stderr into main-thread notices: it can
             # contain the prompt, credential-bearing URLs, or hostile text.
+            # Only its class is kept.
+            kind, wait = classify_exit(values[1])
             raise WorkerRuntimeError(
-                f"Worker provider exited with status {proc.returncode}; check model, authentication and CLI version")
+                f"Worker provider exited with status {proc.returncode} ({kind.replace('_', ' ')})",
+                kind=kind, retry_after=wait)
         return values[0]
     except asyncio.TimeoutError as exc:
         raise WorkerRuntimeError("Worker timed out") from exc

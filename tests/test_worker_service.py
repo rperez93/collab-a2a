@@ -586,6 +586,31 @@ async def test_under_collab_no_worker_queued_messages_are_still_delivered(conver
 
 
 @pytest.mark.asyncio
+async def test_a_rate_limited_provider_waits_and_an_auth_failure_escalates_once(conversation, tmp_path, monkeypatch):
+    from collab import worker_runtime
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    failures = [("rate_limit", 0.0), ("auth", 0.0), ("auth", 0.0)]
+    async def run(*args, **kwargs):
+        kind, wait = failures.pop(0)
+        raise worker_runtime.WorkerRuntimeError(f"Worker provider exited with status 1 ({kind})",
+                                                kind=kind, retry_after=wait)
+    monkeypatch.setattr("collab.worker_runtime.run_turn", run)
+    incoming(conversation, 1, "Question")
+    import time as _time
+    start = _time.time()
+    await conversation.turn()
+    assert conversation.next_at - start >= 900, "rate limit waits for the window"
+    assert "(rate_limit)" in store.status()["error"]
+    for _ in range(2):
+        conversation.next_at = 0
+        await conversation.turn()
+    assert [p["once"].split("@")[0] for p in store.pending()] == ["provider-auth"], "escalated once, not per retry"
+
+
+
+
+@pytest.mark.asyncio
 async def test_an_escalation_with_a_wrong_seq_is_kept_not_thrown_away(conversation, tmp_path, monkeypatch):
     """The whole paid turn used to be discarded and backed off for one bad reference."""
     configure(conversation, tmp_path)

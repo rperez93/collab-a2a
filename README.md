@@ -2379,9 +2379,20 @@ records, and no amount of scrubbing entitles anybody to publish it unseen. With
 diagnostics off it still writes the header and tells you how to capture a log.
 
 Beside it, `daemon.log` and `hub.log` are the two processes' own output at more
-length. Those have always been kept and are not a record of anything in
-particular; a process rolls one aside when it opens it and finds it past two
-megabytes, keeping one previous generation.
+length, `ngrok.log` is the tunnel agent's, and `worker.log` has one JSON line per
+conversation-worker attempt — an opaque random `attempt` id, how far it got
+(`reserved`, `launched`,
+`committed`), its outcome (`output`, `no-op`, `invalid`, `failed`, `cancelled`,
+or `skipped-local` for a counted turn that called no model), what triggered it
+as counts by kind, the model, tokens and cost, reply and escalation counts, the
+class of any failure and how long it took — never what anybody said, who said
+it, or a provider's own error text. Every one of them is capped at 10 MB with its
+rotated generation, while the process writing it runs: past 3 MiB the tail is
+copied to `<name>.1` and the file is truncated in place, so a process holding it
+open goes on writing into the live one. The watcher looks once a second and
+faster as a log's growth rate climbs, which holds the budget against a runaway
+writer of up to about 3.7 MB/s from a standing start. `collab logs` prints all three of
+collab's own.
 
 ## Settings
 
@@ -2655,6 +2666,7 @@ retain the same internal layout:
     status.json           what the status line reads
     agent_stats.json      usage your agent reported, waiting to be shared
     daemon.pid daemon.log the listener; the pid file carries the boot it was written on
+    worker.db worker.log  the conversation worker's state, and one line per model turn
     hub.json              host only: port, invite and host token (0600)
     hub.db                host only: the session's event log
     hub.log ngrok.log     host only

@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .. import lockfile
+from .. import lockfile, logcap
 from ..config import SessionProfile
 from . import exclusive
 
@@ -65,11 +65,11 @@ class DaemonPaths:
         return self.root / "skills.json"
 
 
-#: How large `daemon.log` or `hub.log` may be before the next process to open
-#: one rolls it aside. Two megabytes is some tens of thousands of lines: far
-#: more than anybody reads, and small enough that two of them per session is
-#: not a thing to notice on a disk.
-LOG_CAP = 2_000_000
+#: How large `daemon.log` or `hub.log` may be before it is rolled aside — at
+#: open, here, and while the process runs, by `collab.logcap.Watcher`. It was
+#: 2 MB enforced at open only, so a daemon that stayed up for a week wrote as
+#: much as it liked. One generation of the 10 MB budget; see collab.logcap.
+LOG_CAP = logcap.GENERATION_CAP
 
 #: The loggers that are not what these files are for. httpx logs one INFO line
 #: per request, and this daemon makes one about every three seconds for as long
@@ -90,14 +90,22 @@ _listener: handlers.QueueListener | None = None
 
 
 class _Bounded(queue.Queue):
-    """A log queue that drops its oldest record rather than blocking anybody.
+    """A log queue that drops rather than blocking anybody, and says so.
 
     The two things a log queue must never do are grow without limit and make
     the caller wait, and the stdlib's `QueueHandler` on a bounded queue does the
     second: `put_nowait` raises `Full`, `handleError` runs, and on a default
     build that prints to stderr from inside whatever was logging. So the
-    overflow is decided here — the oldest record goes, because in a burst the
-    newest lines are the ones describing what is happening now.
+    overflow is decided here.
+
+    THE NEWEST RECORD IS DROPPED, AND COUNTED, and one line saying how many
+    takes its place in the log once there is room — the same rule as
+    `collab.logcap.LineWriter`. It used to drop the OLDEST, silently: in a
+    burst the file then jumped from one moment to a later one with nothing
+    marking the gap, and a log read as a sequence reads that as nothing having
+    happened in between. The listener's sentinel is the exception: it is always
+    admitted, making room by dropping the oldest, because a sentinel that never
+    arrives leaves `stop` waiting on a join from `atexit`.
 
     `LOG_QUEUE_MAX` records of a few hundred bytes is well under a megabyte,
     which is the budget: this runs in a daemon that is expected to sit there
@@ -124,11 +132,68 @@ class _Bounded(queue.Queue):
         how the standard library intends a subclass to change this behaviour.
         """
         with self.mutex:
-            while self.maxsize > 0 and self._qsize() >= self.maxsize:
-                self._get()
-            self._put(item)
+            if item is _SENTINEL:
+                # The last thing in: the gap goes before it, and whatever is
+                # evicted to make room for the two is counted INTO that gap —
+                # an eviction here used to be a silent loss.
+                need = 2 if self.dropped else 1
+                while self.maxsize > 0 and self._qsize() > self.maxsize - need:
+                    queue.Queue._get(self)
+                    self.dropped += 1
+                    self.dropped_total += 1
+                    need = 2
+                if self.dropped:
+                    self._admit(_gap(self.dropped))
+                    self.dropped = 0
+                self._admit(item)
+                return
+            room = self.maxsize - self._qsize() if self.maxsize > 0 else 2
+            if room <= 0 or (self.dropped and room < 2):
+                self.dropped += 1
+                self.dropped_total += 1
+                return
+            if self.dropped:
+                self._admit(_gap(self.dropped))
+                self.dropped = 0
+            self._admit(item)
+
+    #: Records dropped since the last gap line, and over the queue's life.
+    dropped = 0
+    dropped_total = 0
+
+    def _admit(self, item: Any) -> None:
+        self._put(item)
+        self.unfinished_tasks += 1
+        self.not_empty.notify()
+
+    def _get(self) -> Any:
+        """Take the next record — and, if that empties a queue that has been
+        dropping, put the gap line in behind it.
+
+        Without this the gap was said only by the NEXT record to arrive, so
+        drops followed by silence — a burst, then a quiet daemon, or a burst
+        and then an exit — were never said at all. The queue emptying is the
+        moment room returns; the listener is the one taking from it, and it
+        will take the gap on its next pass.
+        """
+        item = queue.Queue._get(self)
+        if self.dropped and not self._qsize():
+            self._put(_gap(self.dropped))
             self.unfinished_tasks += 1
-            self.not_empty.notify()
+            self.dropped = 0
+        return item
+
+
+#: `QueueListener`'s sentinel, which `_Bounded` must never drop.
+_SENTINEL = handlers.QueueListener._sentinel
+
+
+def _gap(count: int) -> logging.LogRecord:
+    """The line that stands where `count` dropped records would have been."""
+    return logging.makeLogRecord({
+        "name": "collab.log", "levelno": logging.WARNING, "levelname": "WARNING",
+        "msg": "%d log lines dropped here: the writer fell behind",
+        "args": (count,)})
 
 
 class _Listener(handlers.QueueListener):
@@ -227,28 +292,32 @@ def _write_logs_on_a_thread() -> None:
     atexit.register(_listener.stop)
 
 
-def open_log(path: Path, cap: int = LOG_CAP):
+def open_log(path: Path, cap: int = LOG_CAP, *, trim: bool = True):
     """Open a detached process's log for appending, rolling it aside if it is large.
 
-    ROLLED AT OPEN, which is to say when a process is spawned, and never while
-    one is running. A rotation underneath a live daemon would be renaming a
-    file it holds an open descriptor on: it would go on writing to the renamed
-    file, invisibly, and the fresh one would stay empty until the next restart.
-    Doing it here means the file a running process is writing to is the file it
-    was handed, for as long as it runs, which is the only arrangement that does
-    not need the daemon to know about rotation at all.
+    ALWAYS `"a"`, which is `O_APPEND`, and the running cap depends on it: the
+    file is trimmed in place while processes hold it (see collab.logcap), and
+    only an appending descriptor writes at the new end after a truncate rather
+    than at its old offset behind a hole of zeros.
 
-    One generation is kept. The previous file is what somebody wants when a
-    daemon has just been restarted by the thing they are investigating; two
-    generations back is history nobody has ever asked this project for.
+    Rolled by copy and truncate, not by rename. A rename here used to be safe
+    only because nothing else held the file; a hub restarted by the daemon and
+    a hub started by `collab host` share `hub.log`, and renaming it under the
+    one still running sent that process's writes into `hub.log.1`, invisibly.
+
+    One generation is kept, holding the TAIL of what was rolled: the previous
+    file is what somebody wants when a daemon has just been restarted by the
+    thing they are investigating, and the end of it is the part that explains
+    the restart.
+
+    `trim=False` is for a caller that must not wait on a copy — the daemon
+    restarting a hub from inside its event loop — and whose file a
+    `collab.logcap.Watcher` thread already keeps under its cap.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        if path.stat().st_size > cap:
-            path.replace(path.with_suffix(path.suffix + ".1"))
-    except OSError:
-        pass                # unreadable or unrenameable: append to it anyway
-    return path.open("a")
+    if trim:
+        logcap.trim(path, cap)  # never raises: a log that cannot be rolled is
+    return path.open("a")       # still appended to
 
 
 def is_running(profile: SessionProfile) -> int | None:

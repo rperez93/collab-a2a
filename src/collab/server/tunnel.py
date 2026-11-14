@@ -162,6 +162,12 @@ def _url_from_log(path: str | None, offset: int) -> str | None:
         return None
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
+            # SHORTER THAN WHERE WE STARTED is a file the hub's log cap trimmed
+            # in place (collab.logcap) while this agent was starting. Reading
+            # from the old offset would read nothing for the whole start-up
+            # wait and report a tunnel that came up as one that did not.
+            if os.fstat(fh.fileno()).st_size < offset:
+                offset = 0
             fh.seek(offset)
             body = fh.read()
     except OSError:
