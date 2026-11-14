@@ -213,7 +213,8 @@ def provider_backoff(kind: str, said: float, base: float) -> float:
         return max(said, 900.0)
     if kind in ("auth", "model"):
         return 3600.0
-    return max(said, base)
+    # Provider waits only constrain actual rate-limit failures.
+    return base
 
 
 class Conversation:
@@ -684,13 +685,12 @@ class Conversation:
             known.update(a["source"]["sender"] for a in answers if "source" in a)
             valid_seqs = {0, *(e["seq"] for e in selected),
                           *(a["source"]["seq"] for a in answers if "source" in a)}
-            # A wrong seq used to throw the whole paid turn away and back off;
-            # the question is still worth routing, so keep it unanchored.
-            only = {e["seq"] for e in selected}
+            # A wrong seq used to throw the whole paid turn away and back off.
+            # Keep the question, but unanchored: guessing an anchor could show
+            # the human one peer's text and route the answer to another.
             for escalation in result["escalations"]:
                 if escalation["seq"] not in valid_seqs:
-                    # One message in the turn can only be the one it meant.
-                    escalation["seq"] = next(iter(only)) if len(only) == 1 else 0
+                    escalation["seq"] = 0
             for reply in result["replies"]:
                 if reply["to"] and reply["to"] not in known:
                     raise ValueError("worker proposed an unknown recipient")
@@ -779,6 +779,8 @@ class Conversation:
                 logged["phase"] = "reserved"
             self._log_turn(logged, outcome, error=error_class)
             kind = getattr(exc, "kind", "")
+            if kind and kind != "other":
+                detail = f"{detail} ({kind.replace('_', ' ')})"
             self.next_at = time.time() + provider_backoff(kind, getattr(exc, "retry_after", 0.0),
                                                           setting("worker_retry_delay"))
             if kind in ("auth", "model"):

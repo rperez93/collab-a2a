@@ -441,3 +441,24 @@ def test_the_answered_exemption_does_not_cover_a_newer_follow_up():
         {"to": "bob", "room": "general", "text": "I'll get back to you on that."}]}
     assert unrouted_deferrals(result, selected, pending=[], answered={"bob": 12}) == []
     assert [a["seq"] for a in unrouted_deferrals(result, selected, pending=[], answered={"bob": 5})] == [12]
+
+
+
+
+def test_ordinary_words_containing_log_in_are_not_auth_failures():
+    from collab.worker_runtime import classify_exit
+    for text in (b"rebuilding catalog index", b"closing the dialog in 3 s", b"login.py:12 SyntaxError"):
+        assert classify_exit(text)[0] != "auth", text
+    assert classify_exit(b"Not logged in. Please run /login")[0] == "auth"
+
+
+
+def test_answering_the_failure_decision_lets_the_next_failure_escalate(tmp_path):
+    from collab import worker
+    store = worker.Store(tmp_path)
+    store.configure({"agent": "claude", "scope": "Coordinate"})
+    g = store.snapshot()["generation"]
+    store.escalate_once("provider-auth", "fix login", expected_generation=g)
+    store.answer(store.pending()[0]["id"], "logged in again")
+    store.escalate_once("provider-auth", "fix login", expected_generation=g)
+    assert len(store.pending()) == 1

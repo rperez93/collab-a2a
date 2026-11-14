@@ -622,7 +622,7 @@ async def test_an_escalation_with_a_wrong_seq_is_kept_not_thrown_away(conversati
     incoming(conversation, 1, "Question")
     await conversation.turn()
     store = worker.Store(conversation.root)
-    assert [(p["seq"], p["question"]) for p in store.pending()] == [(1, "Which branch?")], "the only message in the turn"
+    assert [(p["seq"], p["question"]) for p in store.pending()] == [(0, "Which branch?")], "an out-of-turn reference stays unanchored"
     assert not store.status()["error"]
 
 
