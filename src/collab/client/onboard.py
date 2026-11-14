@@ -62,7 +62,10 @@ def spawn_daemon(profile: SessionProfile, *, follow: bool = True) -> int:
     log = open_log(paths.log)
     # Pin the repo explicitly: the daemon outlives this shell and must not
     # re-derive .collab/ from whatever cwd it happens to inherit.
+    from ..config import current_kind
     env = {**os.environ, "PYTHONUNBUFFERED": "1", "COLLAB_HOME": profile.home}
+    if kind := current_kind():
+        env["COLLAB_AGENT_KIND"] = kind  # the daemon resolves the same kind layer as the CLI
     # NAMED FROM HERE, because this is the last process that can see the
     # answer. The daemon is about to be detached into its own session and
     # reparented, so its own ancestry will not contain the agent a moment

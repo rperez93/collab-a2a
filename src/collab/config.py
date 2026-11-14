@@ -586,27 +586,40 @@ def load_agent_config() -> dict[str, Any]:
     return _load_file(path, _AGENT_CACHE) if path is not None else {}
 
 
-def set_by_this_agent(key: str) -> bool:
-    """Whether this agent (its own file, or its kind's) chose the key at all.
+#: Layers resolve() reports. "legacy" is an identity key found only in the
+#: machine file: shown, never applied.
+LAYERS = ("agent", "kind", "machine", "legacy", "default")
 
-    Telemetry treats such a choice, even an empty one, as explicit; a value
-    inherited from the shared machine file is not this agent's choice.
+
+def resolve(key: str) -> tuple[Any, str]:
+    """The one answer to «what is this setting, and from which layer».
+
+    load_config, set_by_this_agent and setting_source all derive from this, so
+    they cannot disagree. A key present with an empty value at a layer is that
+    layer's explicit choice (e.g. telemetry disabled), never «absent».
+    Returns (value in force, layer); the value is None for legacy and default.
     """
-    return agent_scoped(key) and (key in load_agent_config() or key in load_kind_config())
+    return _resolve(key, load_agent_config(), load_kind_config(), load_machine_config())
+
+
+def _resolve(key: str, agent: dict, kind: dict, machine: dict) -> tuple[Any, str]:
+    if agent_scoped(key):
+        for layer, values in (("agent", agent), ("kind", kind)):
+            if key in values:
+                return values[key], layer
+    if key in machine:
+        return (None, "legacy") if key in IDENTITY_KEYS else (machine[key], "machine")
+    return None, "default"
+
+
+def set_by_this_agent(key: str) -> bool:
+    """Whether this agent (its own file, or its kind's) chose the key at all."""
+    return resolve(key)[1] in ("agent", "kind")
 
 
 def setting_source(key: str) -> str:
-    """Where a setting's value comes from: agent, kind, machine, legacy or default.
-
-    "legacy" is an identity key found only in the machine file: shown, not used.
-    """
-    if agent_scoped(key) and key in load_agent_config():
-        return "agent"
-    if agent_scoped(key) and key in load_kind_config():
-        return "kind"
-    if key in load_machine_config():
-        return "legacy" if key in IDENTITY_KEYS else "machine"
-    return "default"
+    """Where a setting's value comes from: agent, kind, machine, legacy or default."""
+    return resolve(key)[1]
 
 
 class ConfigView(dict):
@@ -628,12 +641,12 @@ def load_config() -> dict[str, Any]:
     save_config, and editing the cached dict made every such write a no-op.
     """
     import copy
-    machine = load_machine_config()
-    kind = load_kind_config()
-    agent = load_agent_config()
-    merged = {k: v for k, v in machine.items() if k not in IDENTITY_KEYS}
-    merged.update({k: v for k, v in kind.items() if agent_scoped(k)})  # machine → kind → agent
-    merged.update({k: v for k, v in agent.items() if agent_scoped(k)})
+    files = load_agent_config(), load_kind_config(), load_machine_config()  # each read once
+    merged = {}
+    for key in {k for f in files for k in f}:  # machine → kind → agent, decided by _resolve alone
+        value, layer = _resolve(key, *files)
+        if layer in ("agent", "kind", "machine"):
+            merged[key] = value
     view = ConfigView(copy.deepcopy(merged))
     view.baseline = copy.deepcopy(merged)
     return view
