@@ -144,9 +144,15 @@ class ApprovalClient:
     def review(self, request_id: str) -> dict:
         return self._call("GET", f"/requests/{_path(request_id)}/review")
 
-    def challenge(self, request_id: str, credential_id: str) -> dict:
-        return self._call("POST", f"/requests/{_path(request_id)}/challenge",
-                          {"credential_id": credential_id})
+    def challenge(self, request_id: str, credential_id: str, *,
+                  origin: str | None = None) -> dict:
+        """A challenge for this credential; `origin` (the passkey page's
+        `http://localhost:<port>`) when a passkey signs it — the hub binds the
+        challenge to it. `rp_id` is always `localhost` and never sent."""
+        body = {"credential_id": credential_id}
+        if origin is not None:
+            body["origin"] = origin
+        return self._call("POST", f"/requests/{_path(request_id)}/challenge", body)
 
     def approve(self, request_id: str, *, challenge_id: str, credential_id: str,
                 proof: dict) -> dict:
@@ -333,6 +339,8 @@ class Reviewed:
     digest: str
     canonical: bytes
     review: dict
+    #: The request's expiry as the hub stated it (`/skills/prepare`).
+    expires_at: int | None = None
 
 
 def verify_review(answer: dict, *, prepared: dict, source: StrongRequest, me_id: str,
@@ -376,8 +384,9 @@ def verify_review(answer: dict, *, prepared: dict, source: StrongRequest, me_id:
             or payload.get("skill_request_id") != source.id
             or payload.get("skill") != source.skill or payload.get("args") != source.args):
         raise Mismatch("the review is not of this request's skill and arguments")
+    expires = prepared.get("expires_at")
     return Reviewed(request_id=answer["request_id"], digest=digest, canonical=canonical,
-                    review=parsed)
+                    review=parsed, expires_at=expires if type(expires) is int else None)
 
 
 def window_request(reviewed: Reviewed, *, requester_name: str, credential_id: str) -> dict:
@@ -392,7 +401,17 @@ def window_request(reviewed: Reviewed, *, requester_name: str, credential_id: st
         "destination": review["destination"], "authority": review["authority"],
         "digest": reviewed.digest, "credential_id": credential_id,
         "review_text": json.dumps(review, indent=2, ensure_ascii=False, sort_keys=True),
+        # The exact bytes the hub hashed, already verified against the digest:
+        # the passkey page shows and binds these (agreed with its owner); the
+        # Hello leg ignores both.
+        "canonical_review": _b64url(reviewed.canonical),
+        "expires_at": reviewed.expires_at,
     }
+
+
+def _b64url(raw: bytes) -> str:
+    from ..consent_hello import b64url
+    return b64url(raw)
 
 
 # --- the dispatcher: consent.window.open ------------------------------------------
@@ -431,8 +450,28 @@ def open_window(request: dict, fetch_challenge: Callable[[], dict], *,
     if method == "passkey":
         if PASSKEY is None:
             return {"choice": "unavailable", "reason": PASSKEY_SEAM}
-        return PASSKEY(request, fetch_challenge)
+        return _from_passkey(PASSKEY(request, fetch_challenge))
     return {"choice": "unavailable", "reason": "UnknownMethod"}
+
+
+def _from_passkey(outcome: Any) -> dict:
+    """The passkey page's answer in the Hello leg's shapes. It never posts
+    `/approve` itself: «proof-ready» hands back the untouched proof, and this
+    client posts it — one approve-then-accept path for both legs."""
+    if not isinstance(outcome, dict):
+        return {"choice": "unavailable", "reason": "BadPasskeyAnswer"}
+    if outcome.get("status") == "proof-ready" or outcome.get("choice") == "approve":
+        proof = outcome.get("proof")
+        if (not isinstance(proof, dict) or not isinstance(outcome.get("challenge_id"), str)
+                or not isinstance(outcome.get("credential_id"), str)):
+            return {"choice": "unavailable", "reason": "BadPasskeyAnswer"}
+        return {"choice": "approve", "method": "passkey",
+                "challenge_id": outcome["challenge_id"],
+                "credential_id": outcome["credential_id"], "proof": proof}
+    choice = outcome.get("choice") or outcome.get("status")
+    if choice in ("decline", "expired"):
+        return {"choice": choice}
+    return {"choice": "unavailable", "reason": str(outcome.get("reason") or choice or "unknown")}
 
 
 def hello_key_name(session_id: str, participant_id: str) -> str:

@@ -674,3 +674,69 @@ def test_the_target_refuses_a_consistent_review_of_other_arguments():
     with pytest.raises(strong.Mismatch, match="skill and arguments"):
         strong.verify_review(answer, prepared=prepared, source=source, me_id="p_bob",
                              session_id="s_test")
+
+
+# --- the window contract agreed with the passkey page ------------------------------------
+
+
+def test_the_window_request_carries_the_verified_canonical_review_and_expiry(world, monkeypatch):
+    """Both legs receive the hub's canonical bytes (already checked against
+    the digest) and the request's expiry; the Hello leg ignores them."""
+    import hashlib
+
+    _available(monkeypatch)
+    _ask(world)
+    [match] = _requests(world)
+    assert _accept(world, match) == 0
+    [window] = world.hello.windows
+    canonical = consent_hello.unb64url(window["canonical_review"], limit=64 * 1024)
+    assert hashlib.sha256(canonical).hexdigest() == window["digest"]
+    assert json.loads(canonical) == json.loads(window["review_text"])
+    assert type(window["expires_at"]) is int and window["expires_at"] > time.time()
+
+
+def test_the_fetcher_forwards_a_passkey_origin_into_the_challenge(world, monkeypatch):
+    """`fetch_challenge(origin=...)` from the passkey leg reaches the hub's
+    `/challenge` body; the Hello leg calls it with nothing and sends none."""
+    sent = []
+    real = strong.ApprovalClient._call
+
+    def record(self, method, path, body=None):
+        if path.endswith("/challenge"):
+            sent.append(dict(body))
+        return real(self, method, path, body)
+
+    monkeypatch.setattr(strong.ApprovalClient, "_call", record)
+    _available(monkeypatch)
+    _ask(world)
+    [match] = _requests(world)
+
+    def passkey_leg(request, fetch_challenge):
+        with pytest.raises(strong.ApprovalRefused):    # a Hello key: the hub refuses an origin
+            fetch_challenge(origin="http://localhost:43210")
+        return {"status": "unavailable", "reason": "test"}
+
+    monkeypatch.setattr(strong, "PASSKEY", passkey_leg)
+    keys = strong.ApprovalClient.keys
+    monkeypatch.setattr(strong.ApprovalClient, "keys",
+                        lambda self: [k | {"method": "passkey"} for k in keys(self)])
+    assert _accept(world, match) == 1
+    assert sent == [{"credential_id": world.key, "origin": "http://localhost:43210"}]
+
+
+@pytest.mark.parametrize("answer, expected", [
+    ({"status": "proof-ready", "challenge_id": "c_1", "credential_id": "k",
+      "proof": {"type": "webauthn.get", "client_data_json": "x"}},
+     {"choice": "approve", "method": "passkey", "challenge_id": "c_1", "credential_id": "k",
+      "proof": {"type": "webauthn.get", "client_data_json": "x"}}),
+    ({"status": "proof-ready", "challenge_id": "c_1", "credential_id": "k"},
+     {"choice": "unavailable", "reason": "BadPasskeyAnswer"}),
+    ({"choice": "decline"}, {"choice": "decline"}),
+    ({"status": "expired"}, {"choice": "expired"}),
+    ("garbage", {"choice": "unavailable", "reason": "BadPasskeyAnswer"}),
+])
+def test_the_passkey_pages_answer_is_taken_in_the_hello_shapes(answer, expected, monkeypatch):
+    """«proof-ready» hands back the untouched proof; this client posts
+    /approve itself — the page never does."""
+    monkeypatch.setattr(strong, "PASSKEY", lambda request, fetch: answer)
+    assert strong.open_window({}, lambda **kw: {}, method="passkey") == expected
