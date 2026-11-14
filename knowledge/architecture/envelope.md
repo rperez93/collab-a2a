@@ -176,3 +176,14 @@ covered in [what is done to input from somebody else](/operating/hostile-input.m
   participant.
 
 [^protocol-src]: collab.protocol — the collab extension v1 wire format
+
+## Identity-bound replies and historical authorization
+
+Later than the pin. The separate ID-targeted message extension can validate an explicit recipient
+ID and stamp its current label; HubClient selects this path for replies whose
+original principal is already known. A2A continues to discard client-supplied
+recipient IDs. Files, task claims and project creator permissions now persist
+IDs beside display labels. Name-only private history and unresolved legacy
+authorization are withheld rather than assigned to today's label holder. Old
+targeted worker deliveries without routing provenance remain queued with an
+error and require explicit resending. The pin and verification stamp are unchanged.

@@ -1,8 +1,9 @@
 """HTTP client for a collab hub.
 
-Sending goes over standard A2A ``SendMessage`` rather than a private endpoint,
-so the path our CLI exercises is the same one any conformant A2A client would
-use.  Everything multi-party (join, roster, rooms, tasks) uses the extension.
+New named messages go over standard A2A ``SendMessage``. Replies and queued
+sends already bound to a participant ID use a separate guarded extension:
+an older hub must refuse instead of resolving a recycled display name.
+Everything multi-party (join, roster, rooms, tasks) uses the extension.
 """
 
 from __future__ import annotations
@@ -118,6 +119,24 @@ class HubClient:
 
     def participants(self) -> dict[str, Any]:
         return self._request("GET", f"{EXT_PREFIX}/participants")
+
+    def resolve_recipient(self, name: str) -> str:
+        """Freeze a queue target before names can change during delivery.
+
+        A missing/offline roster is not permission to enqueue a private name.
+        Reuse the bounded reader: this response also comes from an untrusted
+        hub, so neither one enormous roster nor a trickle can consume forever.
+        """
+        data = self._bounded_request("GET", f"{EXT_PREFIX}/participants",
+                                     maximum=512 * 1024, label="recipient lookup")
+        rows = data.get("participants") if isinstance(data, dict) else None
+        if not isinstance(rows, list) or len(rows) > 4096:
+            raise HubError("cannot establish the intended recipient identity; nothing queued")
+        found = [row.get("id") for row in rows if isinstance(row, dict) and row.get("name") == name]
+        if (len(found) != 1 or not isinstance(found[0], str) or not found[0]
+                or len(found[0]) > 128 or "\0" in found[0]):
+            raise HubError("cannot establish the intended recipient identity; nothing queued")
+        return found[0]
 
     def history(self, room: str | None = None, limit: int = 50) -> list[Envelope]:
         params: dict[str, Any] = {"limit": limit}
@@ -346,6 +365,15 @@ class HubClient:
     # --- sending, over real A2A ------------------------------------------------
 
     def send(self, env: Envelope) -> dict[str, Any]:
+        if env.to_id:
+            # A2A deliberately discards client target IDs. Sensitive replies
+            # instead use the explicit ID-targeted extension: the hub checks
+            # the principal and normalizes its current display label.
+            return self._request("POST", f"{EXT_PREFIX}/messages/by-id", json={
+                "kind": env.kind, "text": env.text, "to": env.to,
+                "to_id": env.to_id, "body": env.body or {},
+                "thread": env.thread, "stats": env.stats or {},
+            })
         payload = {
             "jsonrpc": "2.0",
             "id": new_id("rpc"),
@@ -380,10 +408,13 @@ class HubClient:
     # --- files ------------------------------------------------------------
 
     def upload_file(self, path: Path, *, to: str | None = None,
-                    room: str | None = None, delivery: str | None = None) -> dict[str, Any]:
+                    room: str | None = None, delivery: str | None = None,
+                    to_id: str | None = None) -> dict[str, Any]:
         import httpx
 
         params: dict[str, Any] = {}
+        if to_id:
+            params["to_id"] = to_id
         if delivery:
             params["delivery"] = delivery  # a retried delivery is stored once
         if to:
@@ -394,7 +425,7 @@ class HubClient:
             files = {"file": (path.name, fh, "application/octet-stream")}
             try:
                 r = self._client.post(
-                    f"{self.base_url}{EXT_PREFIX}/files",
+                    f"{self.base_url}{EXT_PREFIX}/files" + ("/by-id" if to_id else ""),
                     headers=self._headers(), files=files, params=params,
                     timeout=120.0,  # a 10MB upload over a tunnel needs room
                 )

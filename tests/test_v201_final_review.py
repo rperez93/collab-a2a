@@ -19,7 +19,7 @@ async def test_exact_handoffs_work_with_the_supported_python_310_asyncio_api(tmp
         daemon = SimpleNamespace(profile=SimpleNamespace(dir=tmp_path, url='http://synthetic', token='test'), _http=client)
         store = worker.Store(tmp_path)
         store.configure({'agent': 'codex', 'scope': 'Coordinate only'})
-        store.send('Exact authorized handoff', to='bob')
+        store.send('Exact authorized handoff', to='bob', to_id='p_bob')
         await Conversation(daemon)._flush(store, store.snapshot()['generation'])
     assert len(sent) == 1
     assert not store.outbox()

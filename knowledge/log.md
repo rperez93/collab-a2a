@@ -1,5 +1,10 @@
 # Bundle Update Log
 
+## 2026-11-14 (identity authorization)
+* **Update (later than the pin)**: Recorded stable-ID reply routing and
+  fail-closed historical authorization in [the envelope page](architecture/envelope.md).
+  The pin and verification stamps are unchanged.
+
 ## 2026-11-14 (R9)
 * **Update (later than the pin)**: Recorded immediate join offers and the
   finished-task hint in [the command surface](operating/cli-surface.md).

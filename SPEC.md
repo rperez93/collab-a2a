@@ -68,6 +68,12 @@ is `chat`.
 
 `ts` and `toId` are the hub's as well: a timestamp in the part is replaced on
 arrival, and the recipient id is resolved from `to`, never read from the part.
+The separate `/ext/collab/v1/messages/by-id` extension accepts `to_id` (or `toId`) for a
+reply bound to an existing principal. It validates an active ID, normalizes the
+recipient label from the roster, and refuses unknown, revoked or conflicting
+IDs instead of falling back to a name or room. Old hubs return 404 on this
+new path, preventing mixed-version name routing. HubClient uses this extension
+for ID-bound replies; ordinary new messages retain the A2A path.
 
 **Identity is `fromId`/`toId`, not the name.** A display name is a label its
 owner can change at any time; delivery, direct-message visibility and history
@@ -141,6 +147,8 @@ All of these require `Authorization: Bearer <participant token>` except
 | `POST` | `/ext/collab/v1/join` | compatible version + invite + `hello` → token, id **+ session snapshot**. `426` if incompatible; `409` if the name is taken |
 | `GET` | `/ext/collab/v1/events` | **SSE feed**, honours `Last-Event-ID` |
 | `POST` | `/ext/collab/v1/messages` | post a `chat` envelope (convenience; `SendMessage` does the same). Any other `kind` is `400` |
+| `POST` | `/ext/collab/v1/messages/by-id` | send a `chat` reply to an explicit active participant ID; unknown ID or unsupported endpoint refuses without name fallback |
+| `POST` | `/ext/collab/v1/files/by-id` | upload to an explicit active participant ID; unsupported hubs refuse without a name-based retry |
 | `GET` | `/ext/collab/v1/history` | recent visible history, `?room=&limit=` |
 | `GET` | `/ext/collab/v1/replay` | bounded visible replay, `?after=&through=&limit=`; cursor advances across hidden DMs |
 | `GET`/`POST` | `/ext/collab/v1/rooms` | list / create rooms |

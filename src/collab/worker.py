@@ -66,6 +66,35 @@ def _text(value: Any, label: str, *, empty: bool = False) -> str:
     return value
 
 
+def _decision_target(record: dict[str, Any], to: str, room: str) -> dict[str, Any]:
+    """A later occupant of the asker's display name cannot receive human text.
+
+    Old decisions have no reliable identity to recover from a name. Refuse
+    their sensitive delivery while retaining the decision for explicit review.
+    Only a known original broadcast authorizes a reply to its original room.
+    """
+    source = record.get("decision_source") or {}
+    if room:
+        if source.get("broadcast") is not True or source.get("room") != room:
+            raise ValueError("the decision has no verified public room target")
+        return {"to": "", "room": room, "decision_delivery": True,
+                "decision_public": True, "routing_version": 1,
+                "source_seq": record.get("seq", 0)}
+    ident = source.get("sender_id")
+    if not isinstance(ident, str) or not ident or len(ident) > 80 or "\0" in ident:
+        raise ValueError("the decision has no verified peer identity; keep it pending")
+    return {"to": to or source.get("sender", ""), "to_id": ident,
+            "room": room, "decision_delivery": True, "routing_version": 1,
+            "source_seq": record.get("seq", 0)}
+
+
+def _bound_recipient(to: str, to_id: str) -> str:
+    ident = _text(to_id, "recipient identity", empty=True)
+    if len(ident) > 80 or "\0" in ident or (to and not ident):
+        raise ValueError("a targeted queue item needs its original participant ID")
+    return ident
+
+
 def _config(config: dict[str, Any], *, allow_empty_model: bool = False) -> dict[str, Any]:
     agent = config.get("agent")
     if agent not in SUPPORTED_AGENTS:
@@ -281,7 +310,7 @@ class Store:
         with self._db() as db:
             return self._add(db, "context", {"text": text})
 
-    def send(self, text: str, *, to: str, room: str = "", thread: str = "",
+    def send(self, text: str, *, to: str, to_id: str = "", room: str = "", thread: str = "",
              body: dict[str, Any] | None = None) -> str:
         """Queue the main agent's exact message without asking a model to repeat it.
 
@@ -294,6 +323,7 @@ class Store:
         # An empty recipient is a room message: the main agent's own `send`
         # is routed here while its worker is enabled.
         to = _text(to, "recipient", empty=True)
+        to_id = _bound_recipient(to, to_id)
         room = _text(room, "room", empty=True)
         thread = _text(thread, "thread", empty=True)
         if len(text) > 8000:
@@ -306,7 +336,7 @@ class Store:
         with self._db() as db:
             if not (self._state(db)["config"] or {}).get("enabled"):
                 raise ValueError("start the worker before queueing a message")
-            data = {"text": text, "to": to, "room": room}
+            data = {"text": text, "to": to, "to_id": to_id, "room": room, "routing_version": 1}
             if thread:
                 data["thread"] = thread
             if body:
@@ -315,7 +345,7 @@ class Store:
                 data["body"] = body
             return self._add(db, "outbox", data)
 
-    def queue_file(self, path: Path, *, to: str = "", room: str = "") -> str:
+    def queue_file(self, path: Path, *, to: str = "", to_id: str = "", room: str = "") -> str:
         """A file the main agent shares, delivered by the worker in order (R3).
 
         The bytes are copied now, so what is delivered is what was sent even if
@@ -323,6 +353,7 @@ class Store:
         """
         import hashlib
         import shutil
+        to_id = _bound_recipient(to, to_id)
         source = Path(path)
         if not source.is_file():
             raise ValueError(f"no such file: {source}")
@@ -339,7 +370,7 @@ class Store:
                 if not (self._state(db)["config"] or {}).get("enabled"):
                     raise ValueError("start the worker before queueing a file")
                 return self._add(db, "outbox", {"kind": "file", "stash": str(stash), "name": source.name,
-                                                "to": to, "room": room, "sha256": digest,
+                                                "to": to, "to_id": to_id, "room": room, "sha256": digest, "routing_version": 1,
                                                 "text": f"file {source.name}"})
         except BaseException:
             stash.unlink(missing_ok=True)
@@ -419,13 +450,14 @@ class Store:
                 verbatim = bool(prompt.get("awaiting_human"))
             if verbatim and not (prompt.get("notify_to") or prompt.get("notify_room")):
                 prompt["notify_to"], prompt["notify_room"] = notify_to, notify_room
-            if verbatim and (prompt.get("notify_to") or prompt.get("notify_room")):
+            if verbatim:
+                target = _decision_target(prompt, prompt.get("notify_to", ""),
+                                          prompt.get("notify_room", ""))
                 # The human's final answer goes to the waiting peer VERBATIM and
                 # at once: through a model turn it was paraphrased, and after the
                 # hourly cap it waited up to an hour. The worker learns it as context.
                 db.execute("DELETE FROM records WHERE id=?", (escalation_id,))
-                self._add(db, "outbox", {"text": text, "to": prompt.get("notify_to", ""),
-                                         "room": prompt.get("notify_room", "")})
+                self._add(db, "outbox", {"text": text, **target})
                 self._add(db, "context", {"text": _text(
                     f"Answered for the main agent to {prompt.get('notify_to') or prompt.get('notify_room')}"
                     f" (already queued, do not repeat): {text[:2000]}", "context")})
@@ -450,17 +482,19 @@ class Store:
             data = json.loads(row[0])
             if data.get("awaiting_human"):
                 return ""  # already with the human; the peer was told the first time
+            target = _decision_target(data, to, room) if (to or room) else None
             data.update(awaiting_human=True, awaiting_since=time.time(), notify_to=to, notify_room=room)
             db.execute("UPDATE records SET data=? WHERE id=?", (json.dumps(data), escalation_id))
             if not (to or room) or not (self._state(db)["config"] or {}).get("enabled"):
                 return ""
-            return self._add(db, "outbox", {"text": note, "to": to, "room": room})
+            return self._add(db, "outbox", {"text": note, **target})
 
     def commit_turn(self, *, expected_cursor: int, cursor: int, summary: str,
                     replies: list[dict[str, Any]], escalations: list[dict[str, Any]],
                     context_ids: list[str] = (), answer_ids: list[str] = (),
                     expected_generation: int | None = None,
-                    expected_turn: int | None = None) -> bool:
+                    expected_turn: int | None = None,
+                    decision_sources: dict[int, dict[str, Any]] | None = None) -> bool:
         # Match the provider schema: 4,000 characters may require 24KB when
         # JSON escapes control characters. Main input has a separate byte cap.
         if not isinstance(summary, str) or len(summary) > 4000:
@@ -471,7 +505,17 @@ class Store:
             raise ValueError("a worker turn may produce at most 32 replies and decisions")
         outgoing = [{"text": _text(r.get("text"), "reply"),
                      "to": _text(r.get("to", ""), "recipient", empty=True),
-                     "room": _text(r.get("room", ""), "room", empty=True)} for r in replies]
+                     "room": _text(r.get("room", ""), "room", empty=True),
+                     "routing_version": 1} for r in replies]
+        for supplied, stored in zip(replies, outgoing):
+            if supplied.get("decision_delivery"):
+                ident = _text(supplied.get("to_id"), "decision recipient identity")
+                if len(ident) > 80 or "\0" in ident:
+                    raise ValueError("invalid decision recipient identity")
+                source_seq = supplied.get("source_seq", 0)
+                if type(source_seq) is not int or source_seq < 0:
+                    raise ValueError("invalid decision source sequence")
+                stored.update(to_id=ident, decision_delivery=True, source_seq=source_seq)
         decisions = []
         for e in escalations:
             if e.get("reason") not in ("blocker", "decision", "conflict", "scope"):
@@ -480,6 +524,19 @@ class Store:
             if not isinstance(seq, int) or seq < 0 or seq > cursor:
                 raise ValueError("invalid worker escalation sequence")
             decisions.append({"reason": e["reason"], "question": _text(e.get("question"), "question"), "seq": seq})
+            source = (decision_sources or {}).get(seq)
+            if source is not None:
+                # These fields come from the daemon's exact originating inbox
+                # event, never the model's proposed name or a later roster.
+                def bounded(value, limit):
+                    return value if isinstance(value, str) and len(value) <= limit and "\0" not in value else ""
+                sender_id = bounded(source.get("sender_id"), 80)
+                sender = bounded(source.get("sender"), 200)
+                room = bounded(source.get("room"), 200)
+                decisions[-1]["decision_source"] = {
+                    "sender_id": sender_id, "sender": sender, "room": room,
+                    "broadcast": bool(room) and source.get("broadcast") is True,
+                }
         with self._db() as db:
             state = self._state(db)
             if (state["cursor"] != expected_cursor or not (state["config"] or {}).get("enabled")
@@ -516,6 +573,29 @@ class Store:
     def outbox(self) -> list[dict[str, Any]]:
         with self._db() as db:
             return self._records(db, "outbox")
+
+    def quarantine_target(self, record_id: str, *, current_id: str = "") -> None:
+        """An old name-only item needs explicit identity reconfirmation, once.
+
+        Keep both text and any stashed bytes intact. The durable decision
+        references the original delivery ID; it never approves or remaps it.
+        """
+        with self._db() as db:
+            row = db.execute("SELECT data FROM records WHERE id=? AND kind='outbox'", (record_id,)).fetchone()
+            if row is None:
+                return
+            record = json.loads(row[0])
+            was_quarantined = record.get("identity_quarantined") is True
+            label = str(record.get("to") or "")[:200]
+            observed = current_id if isinstance(current_id, str) and len(current_id) <= 80 and "\0" not in current_id else ""
+            record.update(error="Legacy recipient is unverified; explicitly resend to the intended current recipient",
+                          identity_quarantined=True)
+            db.execute("UPDATE records SET data=? WHERE id=? AND kind='outbox'", (json.dumps(record), record_id))
+            if not was_quarantined:
+                self._add(db, "escalation", {"reason": "decision", "seq": 0,
+                    "question": f"Queued delivery {record_id} targets label {label!r}, but has no verified original recipient identity. Current observed identity: {observed or 'unknown'} (a current observation, not historical proof). Confirm the intended current participant and explicitly resend; the original remains unsent.",
+                    "quarantined_delivery": record_id, "target_label": label,
+                    "observed_current_id": observed, "observed_at": time.time()})
 
     def acknowledge(self, record_id: str) -> None:
         with self._db() as db:

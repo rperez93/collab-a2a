@@ -498,21 +498,21 @@ async def test_a_send_the_hub_refuses_for_good_is_dropped_and_escalated(conversa
     """A rejected address used to retry forever and fill MAX_PENDING."""
     configure(conversation, tmp_path)
     store = worker.Store(conversation.root)
-    store.send("for nobody", to="ghost")
+    store.send("for nobody", to="ghost", to_id="p_ghost")
     async def transport(request):
-        return httpx.Response(404, json={"detail": "no such participant"})
+        return httpx.Response(400, json={"detail": "invalid participant"})
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
         conversation.daemon._http = client
         await conversation._flush(store, store.snapshot()["generation"])
     assert not store.outbox()
-    assert "@ghost could not be delivered (hub answered 404)" in store.pending()[0]["question"]
+    assert "@ghost could not be delivered (hub answered 400)" in store.pending()[0]["question"]
 
 
 @pytest.mark.asyncio
 async def test_two_concurrent_flushes_post_each_record_once(conversation, tmp_path):
     configure(conversation, tmp_path)
     store = worker.Store(conversation.root)
-    store.send("once", to="bob")
+    store.send("once", to="bob", to_id="p_b")
     sent = []
     async def transport(request):
         sent.append(json.loads(request.content))
@@ -529,7 +529,7 @@ async def test_two_concurrent_flushes_post_each_record_once(conversation, tmp_pa
 async def test_board_comments_ride_the_outbox_in_order_with_chat(conversation, tmp_path):
     configure(conversation, tmp_path)
     store = worker.Store(conversation.root)
-    store.send("first", to="bob")
+    store.send("first", to="bob", to_id="p_b")
     store.queue_comment("task", "T_1", "evidence: tests pass")
     seen = []
     async def transport(request):
@@ -538,7 +538,7 @@ async def test_board_comments_ride_the_outbox_in_order_with_chat(conversation, t
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
         conversation.daemon._http = client
         await conversation._flush(store, store.snapshot()["generation"])
-    assert [route for route, _ in seen] == ["messages", "comments"]
+    assert [route for route, _ in seen] == ["by-id", "comments"]
     comment = seen[1][1]
     assert comment["subject"] == "task" and comment["id"] == "T_1" and comment["collab_worker_delivery"]
     assert not store.outbox()
@@ -551,7 +551,7 @@ async def test_a_queued_file_is_uploaded_and_its_copy_removed(conversation, tmp_
     store = worker.Store(conversation.root)
     source = tmp_path / "r.txt"
     source.write_text("data")
-    store.queue_file(source, to="bob")
+    store.queue_file(source, to="bob", to_id="p_b")
     stash = store.outbox()[0]["stash"]
     seen = []
     async def transport(request):
@@ -560,7 +560,7 @@ async def test_a_queued_file_is_uploaded_and_its_copy_removed(conversation, tmp_
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
         conversation.daemon._http = client
         await conversation._flush(store, store.snapshot()["generation"])
-    assert seen == [("files", "bob")] and not store.outbox()
+    assert seen == [("by-id", "bob")] and not store.outbox()
     from pathlib import Path
     assert not Path(stash).exists()
 
@@ -569,7 +569,7 @@ async def test_a_queued_file_is_uploaded_and_its_copy_removed(conversation, tmp_
 async def test_under_collab_no_worker_queued_messages_are_still_delivered(conversation, tmp_path, monkeypatch):
     configure(conversation, tmp_path)
     store = worker.Store(conversation.root)
-    store.send("ship it", to="bob")
+    store.send("ship it", to="bob", to_id="p_b")
     monkeypatch.setenv("COLLAB_NO_WORKER", "1")
     calls = []
     monkeypatch.setattr("collab.worker_runtime.run_turn", lambda *a, **k: calls.append(a))
@@ -597,7 +597,7 @@ async def test_daemon_upload_sends_the_delivery_key_refuses_changed_bytes_and_ha
             sent.append(kw["params"])
             return SimpleNamespace(status_code=200)
     conversation.daemon._http = Http()
-    message = {"id": "o_9", "stash": str(stash), "name": "s.bin", "to": "bob",
+    message = {"id": "o_9", "stash": str(stash), "name": "s.bin", "to": "bob", "to_id": "p_b",
                "sha256": hashlib.sha256(b"abc").hexdigest()}
     assert await conversation._upload(message, timeout=5) == 200
     assert sent[0]["delivery"] == "o_9"
@@ -618,7 +618,7 @@ async def test_no_worker_daemon_holds_a_queue_that_worker_off_holds(conversation
     """M21: under COLLAB_NO_WORKER, a disabled worker's outbox is not flushed."""
     configure(conversation, tmp_path)
     store = worker.Store(conversation.root)
-    store.send("held", to="bob")
+    store.send("held", to="bob", to_id="p_b")
     cfg = store.configuration()
     store.configure({**cfg, "enabled": False})
     monkeypatch.setenv("COLLAB_NO_WORKER", "1")

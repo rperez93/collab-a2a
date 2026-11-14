@@ -62,6 +62,36 @@ A direct message reaches only its sender and its recipient, including when the
 feed is replayed after a reconnect, so renaming yourself never exposes another
 person's private messages.
 
+File sender/recipient access, task claims and project creator/owner permissions
+also bind stable IDs at creation. Taking somebody's former display name grants
+none of these permissions. Skill responses and replies to worker decisions bind
+the original requester's ID; an unavailable identity is refused rather than
+re-resolved by name. The separate ID-targeted message extension validates an active
+participant and stamps its current label, even when a caller retained an older
+label. Old hubs lack the separate endpoint and refuse ID-bound replies with
+404; a sensitive reply is never downgraded to their name-only route.
+
+Older file rows can recover identities from original ID-bearing upload events.
+A private row without trustworthy evidence remains inaccessible to guests; the
+host can withdraw and recreate it for the intended participant. Historical
+name-only private messages remain stored for explicit host-side recovery and
+are withheld from participant replay. Name-only project/task ownership is not
+permission: unresolved legacy projects are managed by the host; legacy task
+claims without identity evidence must be reconciled and reoffered explicitly.
+Every new targeted queued message or file resolves the recipient ID before
+queueing; an unavailable identity refuses the queue operation, including when
+offline. Queue storage is scoped to the session, so the ID does not cross into
+a different session. Both message and upload ID routes are separate endpoints
+that an older hub cannot silently interpret as name routing.
+Queued targeted deliveries written before routing provenance was recorded are
+retained with an error and a reconfirmation decision, including ordinary sends
+and files: inspect the recipient's observed current identity and explicitly
+resend to the intended participant. This compatibility restriction prevents old
+human decision text from following a reused name. New migrations never
+infer historical authority from today's holder of an old name. Existing stored
+IDs are preserved; this cannot automatically undo a mistaken identity mapping
+already committed by an older migration. Such history needs host-side review.
+
 A participant can put exactly one kind of event on the wire: a chat message.
 Every other kind — a join, a presence change, a task action, a file offer, an
 activity report, the hub speaking for itself — is written by the hub on the
@@ -72,8 +102,9 @@ said it, cannot place text in front of everyone under a kind that no unread
 count includes and no wake fires for, and cannot make every other participant's
 daemon re-fetch the roster at will.
 The timestamp and the recipient id on a message are the hub's for the same
-reason: a participant chooses what to say and whom to say it to by name, and
-nothing else about how the message is stamped.
+reason: the hub authenticates the sender and resolves a new named message or
+validates an explicitly bound target ID; clients cannot forge the resulting
+sender or delivery identity.
 
 ### The wake feature
 
