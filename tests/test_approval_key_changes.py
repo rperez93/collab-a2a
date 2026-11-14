@@ -241,3 +241,27 @@ def test_rotation_of_frozen_key_respects_active_cap(hub, signer, candidate, monk
     monkeypatch.setattr("collab.server.approval_keys.MAX_ACTIVE_KEYS", 1)
     with pytest.raises(Rejected, match="active_credential_capacity"):
         begin(changes, ec.generate_private_key(ec.SECP256R1()), kind="rotate", replaced=old, identity=b"replacement")
+
+
+def test_a_challenge_issued_for_one_key_cannot_be_approved_with_another(hub, signer):
+    """Review of #161, G2: with two mature HELLO keys, a challenge bound to key A
+    is refused when the approval names key B — even though B's signature over
+    the same challenge bytes is valid. Both keys use one method, so nothing but
+    the challenge-to-credential binding can refuse it."""
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    enrol(hub, signer)
+    second = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    changes = KeyChanges(hub.api)
+    c = changes.begin("test-bob", kind="add", credential_id="collab.test.key2", method="hello",
+                      algorithm=-257, public_key_spki=spki(second), replaced_credential_id=None)
+    req = changes.prove("test-bob", c["change_id"], challenge_id=c["challenge_id"], proof=proof(second, c))
+    changes.apply("test-bob", req["change_id"], receipt=authorize(hub, signer, req)["receipt"])
+    hub.now[0] += KEY_COOLDOWN
+    operation = request(hub)
+    for_a = hub.api.challenge("test-bob", operation["request_id"], credential_id="collab.test.key")
+    with pytest.raises(Rejected):
+        hub.api.approve("test-bob", operation["request_id"], challenge_id=for_a["challenge_id"],
+                        credential_id="collab.test.key2", proof=proof(second, for_a))
+    # Control: the same challenge approved with the key it was issued for succeeds.
+    hub.api.approve("test-bob", operation["request_id"], challenge_id=for_a["challenge_id"],
+                    credential_id="collab.test.key", proof=proof(signer, for_a))
