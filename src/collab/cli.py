@@ -1402,7 +1402,10 @@ def cmd_send(args: argparse.Namespace) -> int:
         except ValueError as exc:
             fail(str(exc))
             return 1
-        onboard.ensure_daemon(profile)
+        try:
+            onboard.ensure_daemon(profile, wait=False)
+        except (OSError, RuntimeError, HubError):
+            pass  # queued durably; the listener delivers it when it is back
         target = f"@{args.to}" if args.to else f"#{args.room or profile.room}"
         ok(f"queued for {target} through your worker: {record_id}")
         print(dim("  your worker is enabled, so it delivers what you send; `collab worker status` shows delivery"))
@@ -6067,6 +6070,24 @@ def cmd_worker(args: argparse.Namespace) -> int:
             ok("collaboration worker enabled; the listener owns its lifecycle")
             print("  `collab worker status` reports provider errors and pending decisions")
         elif args.worker_action == "off":
+            # Queued main-agent sends are delivered before the worker stops:
+            # left behind, a later start posted them stale and out of order.
+            queued = store.outbox()
+            if queued:
+                try:
+                    with _client(profile) as client:
+                        for record in queued:
+                            client.send(Envelope(kind=KIND_CHAT, text=record["text"], sender=profile.name,
+                                                 to=record.get("to") or None,
+                                                 room=None if record.get("to") else (record.get("room") or None),
+                                                 thread=record.get("thread") or None,
+                                                 body={**(record.get("body") or {}),
+                                                       "collab_worker_delivery": record["id"]}))
+                            store.acknowledge(record["id"])
+                except HubError as exc:
+                    fail(f"{len(store.outbox())} queued message(s) could not be delivered ({exc}); "
+                         "the worker stays on until they are")
+                    return 1
             store.off()
             ok("collaboration worker disabled; pending decisions and replies are preserved")
         elif args.worker_action == "reply":
@@ -6299,6 +6320,17 @@ def _send_body(profile: SessionProfile, text: str,
     message rides in a chat's body — the same door learnings use. Nothing
     hub-side reads it; the exchange is between daemons.
     """
+    from .worker import Store
+    store = Store(profile.dir)
+    if store.enabled():
+        # R3: proposals and votes are messages too; the worker's outbox is
+        # this participant's one voice while it is on.
+        try:
+            store.send(text, to="", room=profile.room or "general", body=body)
+        except ValueError as exc:
+            fail(str(exc))
+            return False
+        return True
     env = Envelope(kind=KIND_CHAT, text=text, sender=profile.name,
                    room=profile.room, body=body,
                    stats=_current_stats(profile))

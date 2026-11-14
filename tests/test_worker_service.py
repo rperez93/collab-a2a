@@ -484,3 +484,35 @@ async def test_a_daemon_with_collab_no_worker_never_runs_an_automatic_worker(con
     conversation.daemon._http = object()
     await conversation.tick()
     assert conversation.task is None and calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_send_the_hub_refuses_for_good_is_dropped_and_escalated(conversation, tmp_path):
+    """A rejected address used to retry forever and fill MAX_PENDING."""
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    store.send("for nobody", to="ghost")
+    async def transport(request):
+        return httpx.Response(404, json={"detail": "no such participant"})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        conversation.daemon._http = client
+        await conversation._flush(store, store.snapshot()["generation"])
+    assert not store.outbox()
+    assert "@ghost could not be delivered (hub answered 404)" in store.pending()[0]["question"]
+
+
+@pytest.mark.asyncio
+async def test_two_concurrent_flushes_post_each_record_once(conversation, tmp_path):
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    store.send("once", to="bob")
+    sent = []
+    async def transport(request):
+        sent.append(json.loads(request.content))
+        await asyncio.sleep(0.05)
+        return httpx.Response(200, json={"seq": 1})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        conversation.daemon._http = client
+        generation = store.snapshot()["generation"]
+        await asyncio.gather(conversation._flush(store, generation), conversation._flush(store, generation))
+    assert len(sent) == 1

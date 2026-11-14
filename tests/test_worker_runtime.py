@@ -332,3 +332,22 @@ def test_deferral_repair_covers_curly_apostrophes_and_each_peer_separately():
               "escalations": [{"reason": "decision", "seq": 3, "question": "Merge?"}]}
     added = unrouted_deferrals(result, selected, pending=[])
     assert [e["seq"] for e in added] == [4], "ana's escalation must not hide bo's promise"
+
+
+def test_relaying_the_main_answer_and_quoting_other_dms_are_not_repaired():
+    from collab.worker_runtime import unrouted_deferrals
+    selected = [{"seq": 2, "sender": "carol", "to": "alice", "room": "", "text": "private to alice"}]
+    answer = "Hold tight, I'll get back to you after the deploy."
+    relayed = {"replies": [{"text": answer, "to": "bob", "room": ""}], "escalations": []}
+    assert unrouted_deferrals(relayed, selected, pending=[], answers=[answer]) == []
+    # bob's DM thread has no message this turn; carol's private DM must not be quoted
+    stray = {"replies": [{"text": "Stand by, I'll check and confirm.", "to": "bob", "room": ""}],
+             "escalations": []}
+    assert unrouted_deferrals(stray, selected, pending=[]) == []
+
+
+def test_the_deferral_pattern_has_fewer_false_positives():
+    from collab.worker_runtime import DEFERRAL
+    assert DEFERRAL.search("Stand by.") and DEFERRAL.search("Will update you shortly")
+    assert not DEFERRAL.search("Let me check: the tests pass now")
+    assert not DEFERRAL.search("I'll check the logs")

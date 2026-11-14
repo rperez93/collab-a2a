@@ -15,8 +15,9 @@ collab worker status --json
 collab worker start --agent claude --scope 'Coordinate ownership and verified progress toward the accepted goal; escalate blockers, decisions, conflicting edits and scope changes.'
 ```
 
-The worker provider is independent of the coding host: Codex, Claude Code,
-OpenCode and Cursor can all use the same CLI workflow. `--agent command` accepts
+Automatic setup uses the coding host's own provider; an explicit `worker start`
+may choose another. Codex, Claude Code, OpenCode and Cursor all use the same CLI
+workflow. `--agent command` accepts
 an explicitly trusted local adapter via `--command '["/path/to/adapter"]'`.
 Native worker defaults are settings named `worker_PROVIDER_model`; omitting
 `--model` follows the current default on the next turn. An explicit `--model`
@@ -25,9 +26,10 @@ adapter requires its documented API-key route. A missing provider or invalid
 model is a visible error, never permission to select a more expensive fallback.
 
 Host and join enable a conversation worker by default, on the same coding
-agent as the participant and its lower-tier model (`worker_claude_model`, Haiku,
-under Claude Code; `worker_codex_model`, Luna, under Codex; Codex when the host
-is not recognised). It may make model calls as messages
+agent as the participant and its lower-tier model (`worker_claude_model`, Haiku 5.5,
+under Claude Code; `worker_codex_model`, Luna, under Codex). An unrecognised
+host gets no automatic worker and a visible error; there is no cross-provider
+fallback. It may make model calls as messages
 arrive. Its initial scope permits coordination using supplied facts and
 escalates missing context, decisions, blockers and conflicting edits. Supply
 actual task progress with `collab worker context` and keep a monitor or wake
