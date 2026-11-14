@@ -401,7 +401,7 @@ Binaries and build artifacts move as files, not as pasted text.
 2. The recipient runs `collab file get <id>`, which downloads the file and
    verifies its checksum against the one the hub recorded.
 3. On a successful download, collab confirms receipt.
-   For a file addressed to one person, that deletes the host's copy.
+   For a temporary file addressed to one person, that deletes the host's copy.
    For a file shared with a room, it records that one collection and reports
    how many are still to collect; the copy is deleted with the last of them.
    Pass `--keep` to skip confirming.
@@ -409,10 +409,18 @@ Binaries and build artifacts move as files, not as pasted text.
 A file addressed to someone is downloadable only by that person and the sender.
 It is swept from the host after 24 hours if never collected.
 
-A room file is held for everyone who was in the session when it was sent, and
+A temporary room file is held for everyone who was in the session when it was sent, and
 for 30 minutes at most. Someone who joins afterwards may still fetch it while it
 lasts but does not keep it alive, and someone removed from the session does not
 hold it up.
+
+Document/review extensions are retained until explicit withdrawal by default;
+see [file retention](../README.md#sharing-files-and-artifacts) for the extension
+list and overrides. `file send --keep` retains any file, while `--temporary`
+selects the temporary policy. Receipt of a kept file records collection without
+deleting it. `file list --all` shows accessible tombstones, owner and expiry;
+`file send --source HTTPS_URL` records a durable original for expiry diagnostics.
+The host never fetches that URL. Existing uploads keep their previous policy.
 
 ## Learnings
 

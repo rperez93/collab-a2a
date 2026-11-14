@@ -170,7 +170,7 @@ All of these require `Authorization: Bearer <participant token>` except
 | `GET`/`POST` | `/ext/collab/v1/batch` | a batch of work, and the hub's count of it |
 | `POST` | `/ext/collab/v1/files` | upload (multipart, ≤10 MB) |
 | `GET` | `/ext/collab/v1/files/{id}/content` | download |
-| `POST` | `/ext/collab/v1/files/{id}/ack` | confirm receipt → **deletes the file** |
+| `POST` | `/ext/collab/v1/files/{id}/ack` | confirm receipt → deletes temporary files when collection completes; retained documents stay |
 | `DELETE` | `/ext/collab/v1/files/{id}` | withdraw (sender or host) |
 | `POST` | `/ext/collab/v1/revoke` | remove a participant (**host only**) |
 | `GET` | `/ext/collab/v1/health` | liveness; no auth |
@@ -386,10 +386,23 @@ Artifacts and binaries move as files, not as pasted text.
 2. The recipient downloads from `/files/{id}/content`; the server's checksum is
    echoed in `X-Collab-Sha256`.
 3. The recipient verifies the checksum and calls `/files/{id}/ack`, which
-   **deletes the host's copy** and tells the sender it landed.
+   records collection and tells the sender it landed. Temporary direct files
+   are deleted on receipt; temporary room files wait for the awaited audience.
+   Retained files stay until explicit withdrawal.
 
 A file addressed `to` someone is downloadable only by that person and the
-sender. Un-acked files are swept after 24 hours.
+sender. Temporary un-acked direct files are swept after 24 hours; temporary
+room files after 30 minutes. Upload query `keep` overrides retention; absent
+that query, document/review extensions listed in README are retained. Responses
+include `kept`, `owner`, `expires_at` (null for retained), and optional `source`
+(HTTPS, at most 2048 bytes, no embedded credentials). `include_gone=true` on the
+list endpoint includes authorized tombstones. Expired downloads return 410 with
+the owner and recorded source, after checking access. No source URL is fetched.
+Kept receipts include `deleted=false, kept=true`; old binary behavior remains.
+Migration adds `kept=0, source=''` to old records without resurrecting content.
+New file ACLs and withdrawal ownership bind stable sender/recipient IDs. Legacy
+IDs are backfilled only from name claims predating upload; ambiguous private
+records remain inaccessible instead of transferring to a later name claimant.
 
 
 ## 10. Self-reported usage
