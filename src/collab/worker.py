@@ -182,7 +182,7 @@ class Store:
         with self._db() as db:
             return self._add(db, "context", {"text": text})
 
-    def send(self, text: str, *, to: str, room: str = "") -> str:
+    def send(self, text: str, *, to: str, room: str = "", recipient_id: str = "") -> str:
         """Queue the main agent's exact message without asking a model to repeat it.
 
         Context supplies facts and can legitimately produce no reply. Treating
@@ -197,10 +197,16 @@ class Store:
             raise ValueError("message exceeds 8000 characters")
         if len(to) > 200 or len(room) > 200 or any("\0" in value for value in (text, to, room)):
             raise ValueError("invalid message routing or NUL in message")
+        if recipient_id:
+            from .remote_requests import _identifier
+            _identifier(recipient_id, "expected recipient")
         with self._db() as db:
             if not (self._state(db)["config"] or {}).get("enabled"):
                 raise ValueError("start the worker before queueing a message")
-            return self._add(db, "outbox", {"text": text, "to": to, "room": room})
+            record = {"text": text, "to": to, "room": room}
+            if recipient_id:
+                record["recipient_id"] = recipient_id
+            return self._add(db, "outbox", record)
 
     def pending(self) -> list[dict[str, Any]]:
         with self._db() as db:

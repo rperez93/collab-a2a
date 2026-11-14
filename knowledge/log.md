@@ -4,6 +4,7 @@
 * **Update (later than the pin)**: Recorded the shared skill list and consented skill requests (`collab skills peers|ask|requests|accept|decline|done`) in [the CLI surface](operating/cli-surface.md). The pin and verification stamps are unchanged.
 
 ## 2026-11-13
+* **Update (later than the pin)**: Recorded receiver-local remote prompt/goal consent, stable-recipient sends, goal offers at join, and exclusion from automatic wake/worker inputs. Historical verification stamps remain unchanged.
 * **Update (later than the pin)**: Added elapsed time and a rate-based ETA to [batches](collaboration/batches.md), measured from a new `tasks.completed_at` recorded in [the task board](collaboration/task-board.md). The pin and verification stamps are unchanged.
 
 ## 2026-09-20

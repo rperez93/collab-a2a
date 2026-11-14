@@ -281,3 +281,15 @@ agent that is not running has nothing to be woken.
 
 [^wake-src]: collab.wake — the recipes, the settling, and the framing
 [^agents-run]: collab wake agents, run against a live session
+
+## Remote consent (later than the pin)
+
+Remote prompts and goals use a separate receiver-local consent queue.
+`collab remote offer` sends through the worker with a stable recipient check;
+`collab remote goal` configures a host goal offered on each join. Neither
+receipt nor joining accepts an offer. The human reviews, binds a local target,
+then accepts the exact hash or declines. Ordinary worker and wake inputs
+exclude offer-protocol messages, including legacy queued wake batches.
+Approved delivery uses frozen local argv and cwd once; uncertain delivery is
+not retried. See [receiver consent](../../docs/remote-requests.md) for commands,
+trust boundary, expiry and prompt retention. Historical pins remain unchanged.

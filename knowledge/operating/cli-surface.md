@@ -263,3 +263,12 @@ Later than the pin – 2.1.2 adds default-on proactive batch pickup.
 (default five minutes); `task_auto_pickup` and `task_pickup_repeat` control
 enablement and repeated notices. Agents inspect dependencies and claim work;
 the daemon never reserves it. See the current settings guide for delivery gates.
+
+## Remote consent (later than the pin)
+
+`collab remote` provides offer, pending, show, bind, accept, decline and goal
+operations. The host's connection goal is an offer; each receiving human must
+accept locally. Noninteractive `--human-approved` attests an actual human
+approval of `--sha256`, never permission inferred from remote text. See the
+[remote request guide](../../docs/remote-requests.md). The historical parser
+pin above is unchanged.
