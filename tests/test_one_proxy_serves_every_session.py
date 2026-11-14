@@ -468,3 +468,8 @@ def test_the_proxy_stops_an_orphan_at_start_and_clears_its_own_on_exit(registry,
         for p in (orphan, proc):
             if p.poll() is None:
                 p.kill()
+        # A failed assertion SIGKILLs the proxy, which orphans its fake ngrok
+        # (own session, `sleep 300`) — seen once while writing this test. End
+        # it by its recorded stamp, the way the next proxy would.
+        from collab import proxy_main
+        proxy_main._stop_orphaned_ngrok(proxy.ProxyState.load())
