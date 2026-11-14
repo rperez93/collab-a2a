@@ -327,6 +327,13 @@ class Store:
         missing pieces are added and backfilled rather than the session being
         written off.
         """
+        columns = self._columns("task_prs")
+        for field in ("reviewed_sha", "tested_sha", "head_sha", "reviewed_by", "tested_by", "head_observed_by"):
+            if field not in columns:
+                self._db.execute(f"ALTER TABLE task_prs ADD COLUMN {field} TEXT")
+        for field in ("reviewed_at", "tested_at", "head_observed_at"):
+            if field not in columns:
+                self._db.execute(f"ALTER TABLE task_prs ADD COLUMN {field} REAL")
         now = time.time()
 
         # Identity used to be the display name. Give everyone an id, and record
@@ -1145,7 +1152,11 @@ class Store:
         sql += " ORDER BY created_at"
         with self._lock:
             rows = self._db.execute(sql).fetchall()
-        return [dict(r) for r in rows]
+            prs = self._db.execute("SELECT * FROM task_prs ORDER BY added_at").fetchall()
+        by_task = {}
+        for pr in prs:
+            by_task.setdefault(pr["task_id"], []).append(dict(pr))
+        return [dict(r, prs=by_task.get(r["id"], [])) for r in rows]
 
     # --- projects, comments and the pull requests a task produced ----------------
     #
@@ -1389,7 +1400,7 @@ class Store:
         return [dict(r) for r in rows]
 
     def add_task_pr(self, task_id: str, *, url: str, number: int | None,
-                    added_by: str) -> dict[str, Any]:
+                    added_by: str, evidence: dict[str, str] | None = None) -> dict[str, Any]:
         """Record a pull request against a task. Idempotent on the URL.
 
         A task has as many pull requests as the work took — a fix and its
@@ -1408,6 +1419,11 @@ class Store:
         the number from the URL and yields None when it cannot. A second
         mention of a pull request must not be able to forget its number.
         """
+        from collab.pr_review import FIELDS, commit_sha
+        evidence = evidence or {}
+        if any(field not in FIELDS for field in evidence):
+            raise ValueError("unknown PR evidence field")
+        evidence = {field: commit_sha(value) for field, value in evidence.items()}
         now = time.time()
         with self._lock:
             known = self._db.execute(
@@ -1422,6 +1438,11 @@ class Store:
                 " number=COALESCE(excluded.number, task_prs.number)",
                 (task_id, url, number, added_by, now),
             )
+            for field, value in evidence.items():
+                prefix = {"reviewed_sha": "reviewed", "tested_sha": "tested", "head_sha": "head_observed"}[field]
+                self._db.execute(
+                    f"UPDATE task_prs SET {field}=?, {prefix}_by=?, {prefix}_at=? WHERE task_id=? AND url=?",
+                    (value, added_by, now, task_id, url))
             self._db.commit()
             row = self._db.execute(
                 "SELECT * FROM task_prs WHERE task_id=? AND url=?",

@@ -222,6 +222,27 @@ A finished task cannot be reclaimed; propose a new one instead.
 List tasks with `collab task list`, and add `--open` for only the unfinished
 ones.
 
+Record the exact commits covered by review and tests, then observe the PR head:
+
+```bash
+collab task pr --id T_9a1c --url https://github.com/owner/repo/pull/12 --reviewed-sha <full-sha> --tested-sha <full-sha> --check-head
+```
+
+`--check-head` uses the local authenticated `gh` CLI against github.com, with a
+10-second and 4-KiB limit (POSIX/WSL). For another forge, record an independently
+observed full commit with `--head-sha`. Omitted evidence preserves previous values;
+relinking a URL never silently approves a new commit. Full SHA-1 or SHA-256 hashes
+are required. Old hosts refuse evidence recording before any write.
+
+Task list/show and snapshot task records warn when the observed head differs from
+the reviewed or tested commit. The transcript carries that warning too. Unknown
+stays unknown; observations include their reporter and time. There is no background
+forge polling: run `task pr --check-head` again before relying on the evidence.
+These are participants' evidence statements, not forge approvals. They never merge
+a PR. At merge time use the forge's atomic expected-head guard, for example
+`gh api --method PUT repos/OWNER/REPO/pulls/NUMBER/merge -f sha=<reviewed-and-tested-sha>`;
+a prior observation alone cannot prevent the head changing before the merge.
+
 `move` is deliberately separate from `update`. `update` means «I am working on
 this», so it moves the task to *working*; filing work under a project is
 bookkeeping, and doing it with `update` marked submitted work as under way by

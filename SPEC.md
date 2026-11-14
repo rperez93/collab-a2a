@@ -596,3 +596,15 @@ notices arrive after five continuous idle minutes through the monitor or wake
 route; `collab config task_pickup_idle_delay 300` changes that delay and
 `collab config task_auto_pickup false` disables automatic notices. Keep activity
 accurate; silence alone does not mean idle.
+
+## Task PR commit evidence
+
+Authenticated `GET /ext/collab/v1/task-pr-capabilities` returns `commit_evidence: 1`.
+`POST /ext/collab/v1/task-prs` accepts optional `reviewed_sha`, `tested_sha`, and
+`head_sha` on add. Each is a full 40/64-digit hexadecimal hash; invalid values
+return 400 before writing. Omitted fields preserve existing values. The host
+records the authenticated reporter and host timestamp per supplied field.
+Task list/snapshot records include `prs`; PR events include the resulting commit
+evidence. This metadata reports observations and does not enforce forge merges.
+Clients preflight the capability before sending evidence to prevent old hosts
+from silently discarding it.

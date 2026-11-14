@@ -1052,6 +1052,11 @@ def create_app(
         ))
         return {"comment": record}
 
+    @app.get(f"{EXT_PREFIX}/task-pr-capabilities", tags=["collab"])
+    async def task_pr_capabilities(request: Request) -> dict[str, Any]:
+        _require(request)
+        return {"commit_evidence": 1}
+
     @app.get(f"{EXT_PREFIX}/task-prs", tags=["collab"])
     async def list_task_prs(request: Request, id: str) -> dict[str, Any]:
         _require(request)
@@ -1087,6 +1092,11 @@ def create_app(
             ))
             return {"prs": store.task_prs(task_id)}
 
+        from collab.pr_review import FIELDS, commit_sha
+        try:
+            evidence = {field: commit_sha(body[field]) for field in FIELDS if field in body}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         number = body.get("number")
         # THE NUMBER IS DERIVED WHEN IT IS NOT GIVEN, because everybody pastes
         # the URL and nobody types the number, and «#12» is what the line says.
@@ -1101,7 +1111,7 @@ def create_app(
         try:
             record = await asyncio.to_thread(
                 store.add_task_pr, task_id, url=url, number=number,
-                added_by=user.name)
+                added_by=user.name, evidence=evidence)
         except UnknownProject as gone:
             raise HTTPException(status_code=404,
                                 detail=f"no such task {str(gone)!r}") from gone
@@ -1109,7 +1119,7 @@ def create_app(
             kind=KIND_TASK, sender=user.name, sender_id=user.id,
             room=_task_room(store, task_id), text=url,
             body={"action": "pr", "id": task_id, "url": url,
-                  "number": record["number"]},
+                  "number": record["number"], "evidence": {field: record[field] for field in FIELDS}},
         ))
         return {"pr": record, "prs": store.task_prs(task_id)}
 

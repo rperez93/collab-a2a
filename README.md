@@ -1062,6 +1062,7 @@ review.
 collab task comment --id T_9a1c "rebased onto main"
 collab task pr --id T_9a1c --url https://github.com/owner/repo/pull/12
 collab task pr --id T_9a1c --url https://github.com/owner/repo/pull/13
+collab task pr --id T_9a1c --url https://github.com/owner/repo/pull/12 --reviewed-sha <full-sha> --tested-sha <full-sha> --check-head
 collab task move --id T_9a1c --project ''    # out of its project
 ```
 

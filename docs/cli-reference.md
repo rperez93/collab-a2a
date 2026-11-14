@@ -290,8 +290,10 @@ options:
 
 ```text
 usage: collab task [-h] [--id ID] [--detail DETAIL] [--project ID] [--url URL]
-                   [--number NUMBER] [--files [PATH ...]] [--room ROOM]
-                   [--open] [--json] [--session SESSION]
+                   [--reviewed-sha REVIEWED_SHA] [--tested-sha TESTED_SHA]
+                   [--head-sha HEAD_SHA] [--check-head] [--number NUMBER]
+                   [--files [PATH ...]] [--room ROOM] [--open] [--json]
+                   [--session SESSION]
                    {propose,claim,update,complete,fail,cancel,list,show,comment,pr,pr-remove,move}
                    [title]
 
@@ -308,6 +310,13 @@ options:
                         one it is in. `move` changes nothing else: not the
                         state, not the owner, not the batch
   --url URL             with pr/pr-remove: the pull request's url
+  --reviewed-sha REVIEWED_SHA
+                        with pr: full commit SHA covered by review
+  --tested-sha TESTED_SHA
+                        with pr: full commit SHA covered by tests
+  --head-sha HEAD_SHA   with pr: explicitly observed full PR head SHA
+  --check-head          with pr: observe GitHub head via gh (10 seconds, 4
+                        KiB)
   --number NUMBER       with pr: its number, if the url does not end in one
   --files [PATH ...]    with claim: the files you are about to touch
   --room ROOM
