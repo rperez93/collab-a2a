@@ -512,6 +512,8 @@ class Conversation:
             event = events[0]
             return {**record, "source": {"seq": seq, "sender": event.sender,
                     "sender_id": getattr(event, "sender_id", "") or "",
+                    # A message carrying a room AND an addressee is private, not a broadcast.
+                    "broadcast": not (event.to or getattr(event, "to_id", None)),
                     "room": event.room if isinstance(event.room, str) and len(event.room) <= 200 else "",
                     "routing_unavailable": bool(event.room and (not isinstance(event.room, str) or len(event.room) > 200)),
                     "text": _excerpt(event.text or "", 2000),
@@ -712,8 +714,12 @@ class Conversation:
             for row in pending_now:
                 source = (self._source(row).get("source") or {})
                 asker_ids[row["id"]] = source.get("sender_id") or who(row["sender"])
-            asker_rooms = {row["id"]: (self._source(row).get("source") or {}).get("room") or ""
-                           for row in pending_now}
+            # Only a true room broadcast makes its room public to the asker's
+            # question; a private or unknown source keeps the guard.
+            asker_rooms = {}
+            for row in pending_now:
+                source = self._source(row).get("source") or {}
+                asker_rooms[row["id"]] = (source.get("room") or "") if source.get("broadcast") else ""
             open_questions = [(row["question"][:60], asker_ids[row["id"]], asker_rooms[row["id"]])
                               for row in pending_now if len(row.get("question", "")) >= 20]
             kept = []

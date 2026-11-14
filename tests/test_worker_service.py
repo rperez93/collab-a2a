@@ -766,3 +766,28 @@ async def test_no_worker_daemon_holds_a_queue_that_worker_off_holds(conversation
     conversation.daemon._http = object()
     await conversation.tick()
     assert conversation.delivery is None
+
+@pytest.mark.asyncio
+async def test_a_private_question_carrying_a_room_does_not_open_that_room(conversation, tmp_path, monkeypatch):
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    conversation.daemon.inbox.record(Envelope(seq=1, kind="chat", sender="bob", sender_id="p_b",
+                                              to="alice", room="general",
+                                              text="May we drop the legacy API in 3.0?"))
+    snap = store.snapshot()
+    store.commit_turn(expected_cursor=snap["cursor"], cursor=1, summary="", replies=[],
+                      escalations=[{"reason": "decision", "seq": 1,
+                                    "question": "Bob asks: may we drop the legacy API in 3.0?"}])
+    incoming(conversation, 2, "anything new?")
+    async def run(*args, **kwargs):
+        return {"summary": "", "escalations": [], "replies": [
+            {"text": "All: Bob asks: may we drop the legacy API in 3.0? Still open.", "to": "", "room": "general"}]}
+    monkeypatch.setattr("collab.worker_runtime.run_turn", run)
+    sent = []
+    async def transport(request):
+        sent.append(json.loads(request.content)["text"])
+        return httpx.Response(200, json={"seq": 3})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        conversation.daemon._http = client
+        await conversation.turn()
+    assert sent == [], "a DM that carried room=general stays private"
