@@ -51,7 +51,7 @@ import signal
 import subprocess
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
 #: Where Windows keeps PowerShell 5.1 when WSL's PATH does not carry it.
 _WINDOWS_POWERSHELL = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
@@ -443,37 +443,68 @@ def available() -> bool:
         return False
 
 
-def enrol(name: str, challenge: str) -> dict:
-    """Create a gesture-bound key named `name` and PROVE POSSESSION of it by
-    signing the hub's enrolment `challenge` (unpadded base64url, from
-    `/enrol/start`) — two Hello gestures — and return exactly what
-    `/enrol/finish` takes, `challenge_id` aside.
+#: Every challenge the hub issues is SHA-256 of its canonical envelope: 32
+#: bytes, no more and no fewer (`approval_crypto._challenge`, #161 at c9a1a09).
+CHALLENGE_BYTES = 32
 
-    WHY THE SECOND GESTURE (R22b decision e_867b714f…): `create` and the public
-    key alone prove nothing about who holds the private half of the key that
-    is sent; a signature over the hub's fresh challenge does. Raises
-    `AlreadyEnrolled` rather than replacing a key and `Refused` on a cancel —
-    of either gesture. A key whose proof was cancelled stays in Hello under
-    its name; `prove` completes its enrolment without creating another.
+#: The least time left on a challenge for the Hello prompt to be worth raising:
+#: below it the human would be asked for a gesture the hub then refuses (410).
+SIGN_FLOOR = 5.0
+
+
+def enrol(name: str, challenge: str) -> dict:
+    """First-key enrolment: create a gesture-bound key named `name` and PROVE
+    POSSESSION of it by signing the hub's enrolment `challenge` (from
+    `/enrol/begin`) — two Hello gestures. Returns exactly the body
+    `/enrol/finish` takes, `challenge_id` aside: {credential_id, algorithm,
+    public_key_spki, proof}. NOT `method`: that route rejects unknown fields,
+    and the method was fixed at `/enrol/begin`.
+
+    WHY THE SECOND GESTURE (decision e_867b714f…): `create` and the public key
+    alone prove nothing about who holds the private half of the key sent; a
+    signature over the hub's fresh challenge does. Raises `AlreadyEnrolled`
+    rather than replacing a key and `Refused` on a cancel of either gesture.
+    A key whose proof was cancelled stays in Hello under its name; `prove`
+    completes a fresh `/enrol/begin` with it, without creating another.
     """
-    raw = _enrol_challenge(challenge)
-    answer = _checked(_run({"op": "create", "name": _name(name)}, HUMAN))
-    spki = _ps_b64(answer.get("spki"), "spki")
+    raw = _challenge32(challenge)
+    spki = _create(name)
     return _proven(name, spki, raw)
 
 
+def new_key(name: str) -> dict:
+    """A new key for the signed key-change protocol (`/key-changes/begin`,
+    kinds add, rotate, recover): one gesture, and exactly that route's key
+    fields — {credential_id, method, algorithm, public_key_spki}; the caller
+    adds `kind` and `replaced_credential_id`. Possession is proved afterwards,
+    over the challenge `begin` returns, with `prove(name, challenge)["proof"]`
+    for `/key-changes/{id}/prove`. Split from `enrol` because that challenge
+    exists only once the hub has the key."""
+    spki = _create(name)
+    return {"credential_id": name, "method": "hello", "algorithm": -257,
+            "public_key_spki": b64url(spki)}
+
+
 def prove(name: str, challenge: str) -> dict:
-    """`enrol`'s record for a key that ALREADY exists under `name` — one
-    gesture, over the hub's enrolment challenge. For an enrolment whose proof
-    was cancelled, or a key the hub has not registered yet."""
-    raw = _enrol_challenge(challenge)
+    """Possession of the key that ALREADY exists under `name`, over a hub
+    challenge (an enrolment's, or a key change's `key-possession` one) — one
+    gesture. Returns `enrol`'s body; a key change forwards only its `proof`."""
+    raw = _challenge32(challenge)
     return _proven(name, public_key(name), raw)
 
 
-def _enrol_challenge(challenge: Any) -> bytes:
-    """Checked before any prompt: a challenge that cannot be signed must not
-    cost the human a gesture first."""
-    return unb64url(challenge, limit=4096)
+def _create(name: str) -> bytes:
+    answer = _checked(_run({"op": "create", "name": _name(name)}, HUMAN))
+    return _ps_b64(answer.get("spki"), "spki")
+
+
+def _challenge32(challenge: Any) -> bytes:
+    """A hub challenge, checked before any prompt: one that cannot be signed —
+    or that the hub would refuse signed — must not cost the human a gesture."""
+    raw = unb64url(challenge, limit=CHALLENGE_BYTES)
+    if len(raw) != CHALLENGE_BYTES:
+        raise ValueError("a hub challenge is 32 bytes")
+    return raw
 
 
 def _proven(name: str, spki: bytes, challenge: bytes) -> dict:
@@ -483,9 +514,7 @@ def _proven(name: str, spki: bytes, challenge: bytes) -> dict:
     # check that counts (see `open_window`).
     if not verify(spki, challenge, signature):
         raise HelloError("SignatureMismatch")
-    # The hub's names (`POST /enrol/finish`, #161), and nothing else: it
-    # rejects unknown fields. `algorithm` is COSE -257, RS256, as Hello signs.
-    return {"credential_id": name, "method": "hello", "algorithm": -257,
+    return {"credential_id": name, "algorithm": -257,
             "public_key_spki": b64url(spki),
             "proof": {"type": "hello", "signature": b64url(signature)}}
 
@@ -496,14 +525,16 @@ def public_key(name: str) -> bytes:
     return _ps_b64(answer.get("spki"), "spki")
 
 
-def sign(name: str, challenge: bytes) -> bytes:
+def sign(name: str, challenge: bytes, *, deadline: float = HUMAN) -> bytes:
     """Sign `challenge` with the key `name` — the human is prompted, every
-    time. RSA PKCS#1 v1.5 over SHA-256 of `challenge`. `Refused` on a cancel."""
+    time. RSA PKCS#1 v1.5 over SHA-256 of `challenge` (Hello hashes it; the hub
+    verifies SHA256-with-RSA over the same bytes). `Refused` on a cancel;
+    `deadline` bounds the wait for the gesture."""
     if not isinstance(challenge, (bytes, bytearray)) or not 1 <= len(challenge) <= 4096:
         raise ValueError("a challenge is 1–4096 bytes")
     answer = _checked(_run({"op": "sign", "name": _name(name),
                             "challenge": base64.b64encode(bytes(challenge)).decode("ascii")},
-                           HUMAN))
+                           min(HUMAN, deadline)))
     return _ps_b64(answer.get("signature"), "signature")
 
 
@@ -558,12 +589,15 @@ def _line(value: Any, limit: int) -> str:
     return (text[:limit] + "…") if len(text) > limit else (text or "?")
 
 
-def _digest_hex(value: Any) -> str:
-    """The hub's digest — base64url of exactly 32 bytes — as hex."""
-    raw = unb64url(value, limit=32)
-    if len(raw) != 32:
-        raise ValueError("a digest is 32 bytes")
-    return raw.hex()
+_DIGEST = re.compile(r"[0-9a-f]{64}", re.ASCII)
+
+
+def _digest(value: Any) -> str:
+    """The hub's review digest: LOWERCASE SHA-256 HEX, 64 characters (v1:
+    «`digest` and key fingerprints are lowercase SHA-256 hex»)."""
+    if not isinstance(value, str) or _DIGEST.fullmatch(value) is None:
+        raise ValueError("a digest is 64 lowercase hex characters")
+    return value
 
 
 def fields(request: dict) -> dict:
@@ -575,12 +609,11 @@ def fields(request: dict) -> dict:
     self-chosen; the third line is subject, destination, authority and the
     digest's first 16 hex.
 
-    THE DIGEST ARRIVES AS THE HUB SENDS IT, unpadded base64url of the raw
-    32-byte SHA-256; the 16 hex digits are computed here, for the eye only,
-    and never sent anywhere.
+    THE DIGEST ARRIVES AS THE HUB SENDS IT, 64 lowercase hex; its first 16
+    are shown, for the eye only, and nothing of it is sent anywhere.
     """
     try:
-        digest = _digest_hex(request.get("digest"))[:16]
+        digest = _digest(request.get("digest"))[:16]
     except ValueError:
         digest = "invalid"
     return {
@@ -594,34 +627,51 @@ def fields(request: dict) -> dict:
     }
 
 
-def open_window(request: dict) -> dict:
+def open_window(request: dict, fetch_challenge: Callable[[], dict]) -> dict:
     """Show collab's approval window for `request`, and act on the choice.
 
-    `request` is the dispatcher's (`consent.window.open`): request_id,
-    requester_id, requester_name, subject, destination, authority, digest,
-    review_text, and the hub's `challenge` (unpadded base64url) and
-    `credential_id`. Returns one of:
+    THE BOUNDARY, as the dispatcher that adopts a strong-approval request
+    (#161) uses it:
 
-        {"choice": "approve", "method": "hello", "credential_id",
-         "proof": {"type": "hello", "signature"}}   — as `/approve` takes it
-        {"choice": "decline"}
-        {"choice": "passkey"}           — the dispatcher opens the passkey page
-        {"choice": "expired"}           — nobody chose within WINDOW_DEADLINE
+    1. it reads `GET /requests/{id}/review` and calls this with `request`:
+       request_id, requester_id, requester_name, subject, destination,
+       authority, `digest` (64 lowercase hex, as the review returns it),
+       review_text (the decoded `canonical_review`) and `credential_id`;
+    2. the human decides in the window; only on Approve is `fetch_challenge`
+       called — the dispatcher's `POST /requests/{id}/challenge` — and its
+       answer is the hub's response object as returned;
+    3. the challenge is checked (32 bytes, base64url, for this credential and
+       the REVIEWED digest), signed with one Hello gesture inside its expiry,
+       and checked locally against the key's public half;
+    4. the dispatcher posts {challenge_id, credential_id, proof} from the
+       result to `/approve` and passes the receipt to the adopting execution
+       path; a decline is `POST /decline` with `{}`; anything else posts
+       nothing and falls back to nothing weaker.
+
+    WHY THE CHALLENGE COMES AFTER THE DECISION: a hub challenge expires 120 s
+    after issuance, and a human reading a review may take longer — fetched
+    before the window, an approval given at minute three was a 410.
+
+    Returns one of:
+
+        {"choice": "approve", "method": "hello", "challenge_id",
+         "credential_id", "proof": {"type": "hello", "signature"}}
+        {"choice": "decline"}            — and {"reason": "Refused"} for a
+                                           cancelled gesture
+        {"choice": "passkey"}            — the dispatcher opens the passkey page
+        {"choice": "expired"}            — nobody chose within WINDOW_DEADLINE,
+                                           or the challenge ran out
         {"choice": "unavailable", "reason"}
 
-    Approve is the human's click AND the Hello gesture: the signature is made
-    only after both, a cancelled gesture is a decline, and the HUB verifies the
-    signature against the key enrolled for this participant before anything
-    acts on it. The window shows the review as untrusted text; the Hello dialog
-    that follows shows none. Nothing of the review is logged.
+    The window shows the review as untrusted text; the Hello dialog that
+    follows shows none. Nothing of the review is logged.
     """
     # VALIDATED BEFORE THE WINDOW: a request that could not be signed must not
     # ask a human to read and approve it first.
     cred = request.get("credential_id")
     try:
         _name(cred)
-        challenge = unb64url(request.get("challenge"), limit=4096)
-        _digest_hex(request.get("digest"))
+        digest = _digest(request.get("digest"))
     except (ValueError, TypeError):
         return {"choice": "unavailable", "reason": "BadRequest"}
     review = _visible(request.get("review_text"), lines=True)
@@ -646,7 +696,20 @@ def open_window(request: dict) -> dict:
     if choice != "approve":
         return {"choice": "decline"}
     try:
-        signature = sign(cred, challenge)
+        issued = fetch_challenge()
+    except Exception:                                         # noqa: BLE001
+        # The hub refused or could not be reached: nothing was signed, and
+        # nothing is approved or declined on the human's behalf.
+        return {"choice": "unavailable", "reason": "ChallengeFailed"}
+    try:
+        challenge, challenge_id, expires_at = _issued(issued, cred, digest)
+    except (ValueError, TypeError, KeyError):
+        return {"choice": "unavailable", "reason": "BadChallenge"}
+    left = expires_at - time.time()
+    if left < SIGN_FLOOR:
+        return {"choice": "expired"}
+    try:
+        signature = sign(cred, challenge, deadline=left)
     except Refused:
         return {"choice": "decline", "reason": "Refused"}
     except NotEnrolled:
@@ -666,8 +729,28 @@ def open_window(request: dict) -> dict:
             return {"choice": "unavailable", "reason": "SignatureMismatch"}
     except HelloError as exc:
         return {"choice": "unavailable", "reason": exc.status}
-    return {"choice": "approve", "method": "hello", "credential_id": cred,
+    return {"choice": "approve", "method": "hello", "challenge_id": challenge_id,
+            "credential_id": cred,
             "proof": {"type": "hello", "signature": b64url(signature)}}
+
+
+def _issued(issued: Any, cred: str, digest: str) -> tuple[bytes, str, float]:
+    """The hub's `/challenge` answer, checked against what the human reviewed:
+    the same credential and the SAME DIGEST — a challenge for any other
+    operation is never signed under this review."""
+    if not isinstance(issued, dict):
+        raise ValueError("not a challenge")
+    if issued.get("credential_id") != cred or issued.get("digest") != digest:
+        raise ValueError("a challenge for something else")
+    if issued.get("method", "hello") != "hello":
+        raise ValueError("not a Hello challenge")
+    challenge_id = issued["challenge_id"]
+    expires_at = issued["expires_at"]
+    if not isinstance(challenge_id, str) or not challenge_id:
+        raise ValueError("no challenge id")
+    if type(expires_at) is not int:
+        raise ValueError("expiry is an integer Unix second")
+    return _challenge32(issued["challenge"]), challenge_id, float(expires_at)
 
 
 def build_window_only(request: dict) -> dict:
@@ -680,7 +763,8 @@ def build_window_only(request: dict) -> dict:
 
 __all__ = ["AlreadyEnrolled", "HelloError", "NotEnrolled", "Refused", "Unavailable",
            "available", "b64url", "build_window_only", "enrol", "fields",
-           "open_window", "prove", "public_key", "sign", "unb64url", "verify"]
+           "new_key", "open_window", "prove", "public_key", "sign", "unb64url",
+           "verify"]
 
 
 def _self_check(name: str = "collab-selftest") -> None:      # pragma: no cover

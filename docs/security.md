@@ -340,7 +340,9 @@ merges, nothing in collab calls the adapter. When it does:
   obeyed. Its buttons are **Approve with Windows Hello**, **Decline** and **Use
   a passkey instead**; Enter and Esc decline. Approve is followed by the Hello
   prompt; a cancelled prompt is a decline, and a window nobody answers within
-  ten minutes lets the request expire.
+  ten minutes lets the request expire. The hub's challenge is asked for only
+  after Approve — it lives 120 s, which reading a review can outlast — and is
+  signed only if it is for the review you read: the same digest and key.
 - **Enrolling asks for two gestures.** The first creates the key; the second
   signs the hub's enrolment challenge with it, so the hub registers a key whose
   holder has proved possession, not merely a public key somebody sent. A

