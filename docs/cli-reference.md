@@ -57,9 +57,9 @@ Generated from the command parser. Existing commands remain available; `collab c
 ```text
 usage: collab host [-h] [--name NAME] [--port PORT] [--bind BIND]
                    [--focus FOCUS] [--home FOLDER] [--title TITLE]
-                   [--domain DOMAIN] [--no-tunnel] [--no-daemon] [--keep]
-                   [--no-update-check] [--update] [--fresh]
-                   [--resume [SESSION_ID]]
+                   [--domain DOMAIN] [--no-tunnel] [--tunnel {own,proxy,auto}]
+                   [--no-daemon] [--keep] [--no-update-check] [--update]
+                   [--fresh] [--resume [SESSION_ID]]
 
 options:
   -h, --help            show this help message and exit
@@ -73,6 +73,9 @@ options:
   --domain DOMAIN       a reserved ngrok domain, so the URL survives a tunnel
                         restart
   --no-tunnel           skip ngrok even if installed
+  --tunnel {own,proxy,auto}
+                        use a per-session tunnel, shared proxy, or the proxy
+                        setting
   --no-daemon           do not start listening
   --keep                leave it running when this agent quits
   --no-update-check     do not check for a newer collab first

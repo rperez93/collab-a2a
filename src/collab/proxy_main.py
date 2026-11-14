@@ -153,8 +153,10 @@ async def _supervise(server, supervisor, routes: proxy.Routes,
             url, _changed = await asyncio.to_thread(supervisor.ensure)
             pid_before = state.ngrok_pid
             _record_ngrok(state, supervisor)
-            if url != state.public_url or state.ngrok_pid != pid_before:
+            if (url != state.public_url or state.ngrok_pid != pid_before
+                    or state.error != supervisor.last_error):
                 state.public_url = url
+                state.error = supervisor.last_error
                 state.save()
                 logger.warning("public address is now %s", url or "(none)")
         if proxy.live_sessions(routes):
@@ -171,6 +173,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--no-tunnel", action="store_true")
     parser.add_argument("--domain", default="")
+    parser.add_argument("--primary", default="")
     parser.add_argument("--idle-exit", type=float, default=proxy.IDLE_EXIT_SECONDS)
     args = parser.parse_args(argv)
 
@@ -194,6 +197,8 @@ def main(argv: list[str] | None = None) -> int:
     port = args.port or free_port()
     routes = proxy.Routes()
     state = proxy.ProxyState.load()
+    if not state.primary:
+        state.primary = args.primary
     state.pid, state.port, state.started_at = os.getpid(), port, time.time()
     state.stamp = exclusive.stamp_for(os.getpid()).encode()
 
@@ -213,6 +218,7 @@ def main(argv: list[str] | None = None) -> int:
         if supervisor.last_error:
             logger.warning("tunnel did not start: %s", supervisor.last_error)
     state.public_url = supervisor.public_url if supervisor else ""
+    state.error = supervisor.last_error if supervisor else ""
     _record_ngrok(state, supervisor)
     state.save()
 

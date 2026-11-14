@@ -579,6 +579,10 @@ def tunnel_report(cfg: Any, *, installed: bool) -> list[str]:
 
     error = getattr(cfg, "tunnel_error", "") or ""
     log = cfg.dir / "ngrok.log"
+    if getattr(cfg, 'tunnel', '') == 'proxy':
+        from . import proxy
+        log = (proxy.state_path().parent / 'proxy.log' if error.startswith('shared proxy')
+               else proxy.state_dir() / 'proxy-ngrok.log')
     if not installed:
         return [warn_text("no public tunnel"), NO_NGROK_HELP.format(port=cfg.port)]
     if has_ngrok_code(error):
@@ -696,6 +700,9 @@ def cmd_host(args: argparse.Namespace) -> int:
                     "brought back with `collab host --resume`")
             print(f"       {dim(note)}")
 
+    if getattr(args, 'tunnel', None):
+        cfg.tunnel_mode = args.tunnel
+        cfg.save()
     env = {**os.environ, "COLLAB_HOME": cfg.home}
     if args.no_tunnel:
         env["COLLAB_NO_TUNNEL"] = "1"
@@ -740,7 +747,8 @@ def cmd_host(args: argparse.Namespace) -> int:
         return 1
 
     if cfg.public_url:
-        ok(f"ngrok tunnel up  {dim(ngrok_version() or '')}")
+        ok('shared proxy tunnel up' if cfg.tunnel == 'proxy' else
+           f"ngrok tunnel up  {dim(ngrok_version() or '')}")
     elif args.no_tunnel:
         warn("tunnel disabled (--no-tunnel)")
     else:
@@ -7335,6 +7343,8 @@ def build_parser() -> argparse.ArgumentParser:
     h.add_argument("--domain", default="",
                    help="a reserved ngrok domain, so the URL survives a tunnel restart")
     h.add_argument("--no-tunnel", action="store_true", help="skip ngrok even if installed")
+    h.add_argument("--tunnel", choices=('own', 'proxy', 'auto'),
+                   help="use a per-session tunnel, shared proxy, or the proxy setting")
     h.add_argument("--no-daemon", action="store_true", help="do not start listening")
     h.add_argument("--keep", action="store_true",
                    help="leave it running when this agent quits")
