@@ -21,6 +21,7 @@ from ..protocol import (DEFAULT_ROOM, Envelope, KIND_CHAT, KIND_HELLO,
                         MessageRefused, RecipientChanged, message_refusal,
                         KIND_PRESENCE, bounded_meta, public_stats)
 from .store import Store
+from .auth import RateLimiter
 
 QUEUE_MAXSIZE = 1000
 logger = logging.getLogger(__name__)
@@ -52,6 +53,9 @@ class Hub:
         #: poll must not scan the history (lead gate on #192).
         self._last_spoke: dict[str, float] | None = None
         self.slow_subscriber_disconnects = 0
+        self._remote_senders = RateLimiter(limit=16, window=60)
+        self._remote_receivers = RateLimiter(limit=32, window=60)
+        self._remote_goals = RateLimiter(limit=16, window=60)
 
     @property
     def host_name(self) -> str:
@@ -85,7 +89,7 @@ class Hub:
 
     # --- publishing -----------------------------------------------------------
 
-    async def publish(self, env: Envelope) -> Envelope:
+    async def publish(self, env: Envelope, *, connection_goal: bool = False) -> Envelope:
         """Persist, then push to every participant entitled to see it."""
         # REFUSED HERE, where the two routes meet — the REST convenience path
         # and A2A `SendMessage` — so that neither can carry what the other
@@ -102,6 +106,11 @@ class Hub:
             recipient = self.store.participant_by_id(env.to_id) if env.to_id else None
             if recipient is None or not supports_remote_consent(recipient.meta):
                 raise MessageRefused('recipient has not advertised supported remote consent')
+            from ..protocol import RemoteRateLimited
+            sender_budget = self._remote_goals if connection_goal else self._remote_senders
+            if (not env.sender_id or not sender_budget.allow(env.sender_id)
+                    or not self._remote_receivers.allow(recipient.id)):
+                raise RemoteRateLimited('remote offer rate exceeded; retry after 60 seconds')
         # After every refusal: a message the hub refused is not the sender speaking.
         if env.kind in ("chat", "task") and env.sender_id and self._last_spoke is not None:
             self._last_spoke[env.sender_id] = time.time()

@@ -66,6 +66,7 @@ from ..protocol import (
 from .auth import BearerBackend, RateLimiter, new_secret
 from .card import build_agent_card
 from ..remote_requests import event_visible_to_receiver
+from ..protocol import RemoteRateLimited
 from .events import event_stream
 from .executor import CollabAgentExecutor, OneShotRequestHandler
 from .hub import Hub
@@ -469,6 +470,7 @@ def create_app(
         ))
         offered_goal = None
         goal_issuer_id = None
+        goal_refusal = None
         template = await asyncio.to_thread(store.remote_goal)
         if template and supports_remote_consent(hello):
             from ..remote_requests import make_offer, wire_text, RECEIVER_TARGET
@@ -478,13 +480,18 @@ def create_app(
                 offered_goal = make_offer(session_id=session_id, sender_id=issuer.id,
                                           recipient_id=person.id, target=RECEIVER_TARGET,
                                           kind="goal", text=template['text'], ttl=3600)
-                await hub.publish(Envelope(kind=KIND_CHAT, sender=issuer.name, sender_id=issuer.id,
-                                           to=person.name, to_id=person.id,
-                                           text=wire_text(offered_goal)))
+                try:
+                    await hub.publish(Envelope(kind=KIND_CHAT, sender=issuer.name, sender_id=issuer.id,
+                                               to=person.name, to_id=person.id,
+                                               text=wire_text(offered_goal)), connection_goal=True)
+                except RemoteRateLimited:
+                    offered_goal, goal_issuer_id = None, None
+                    goal_refusal = 'connection goal withheld: remote offer rate exceeded'
         return {
             "remote_goal": offered_goal,
             # Server-validated host identity, separate from untrusted offer content.
             "remote_goal_sender_id": goal_issuer_id,
+            "remote_goal_refusal": goal_refusal,
             "token": token,
             "name": person.name,
             "id": person.id,
@@ -542,6 +549,8 @@ def create_app(
             env = await hub.publish(env)
         except RecipientChanged as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except RemoteRateLimited as exc:
+            raise HTTPException(status_code=429, detail=str(exc), headers={'Retry-After': '60'}) from exc
         except MessageRefused as exc:
             # Size refusals remain 413; a strong-approval policy refusal is
             # 409 and cannot trigger a weak-consent fallback.
