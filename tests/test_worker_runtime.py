@@ -367,3 +367,13 @@ def test_an_escalation_about_a_peer_in_the_same_turn_routes_its_deferral():
     assert unrouted_deferrals(result, selected, pending=[]) == []
     alone = {**result, "escalations": []}
     assert [e["seq"] for e in unrouted_deferrals(alone, selected, pending=[])] == [4]
+
+
+def test_an_unanchored_escalation_or_a_waiting_peer_counts_as_routed():
+    from collab.worker_runtime import unrouted_deferrals
+    selected = [{"seq": 5, "sender": "bob", "to": "alice", "room": "", "text": "any update?"}]
+    defer = {"text": "Hold tight, I'll get back to you.", "to": "bob", "room": ""}
+    assert unrouted_deferrals({"replies": [defer], "escalations": [{"seq": 0, "reason": "decision", "question": "q"}]},
+                              selected, pending=[]) == []
+    assert unrouted_deferrals({"replies": [defer], "escalations": []}, selected,
+                              pending=[{"seq": 2, "sender": "bob", "awaiting_human": True}]) == []
