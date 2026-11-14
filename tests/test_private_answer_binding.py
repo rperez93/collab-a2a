@@ -68,3 +68,43 @@ async def test_a_public_question_may_be_answered_in_its_room_or_by_dm(tmp_path, 
     store, sent, quarantined = await _answer_turn(
         tmp_path, monkeypatch, broadcast=True, reply={"text": "Yes, after the gate.", "to": "bob", "room": room})
     assert [m.get("text") for m in sent] == ["Yes, after the gate."] and quarantined == 0
+
+
+@pytest.mark.asyncio
+async def test_an_answer_for_bob_and_a_reply_to_carol_in_one_turn_are_both_delivered(tmp_path, monkeypatch):
+    """jarvis's acceptance: an unrelated reply never holds anyone's answer."""
+    monkeypatch.delenv("COLLAB_NO_WORKER", raising=False)
+    inbox = Inbox(tmp_path)
+    inbox.record(Envelope(seq=1, kind="chat", sender="bob", sender_id="p_b", to="alice", text="May I merge #148?"))
+    store = worker.Store(tmp_path)
+    store.configure({"agent": "claude", "scope": "Coordinate"})
+    assert store.commit_turn(expected_cursor=0, cursor=1, summary="", replies=[],
+                             escalations=[{"seq": 1, "reason": "decision", "question": "May bob merge #148?"}],
+                             decision_sources={1: {"sender_id": "p_b", "sender": "bob", "room": "",
+                                                   "broadcast": False}})
+    store.answer(store.pending()[0]["id"], "Tell bob yes, after the merge gate passes.", verbatim=False)
+    inbox.record(Envelope(seq=2, kind="chat", sender="carol", sender_id="p_c", to="alice", text="Any news on R17?"))
+    async def run(*args, **kwargs):
+        return {"summary": "", "escalations": [], "replies": [
+            {"text": "Yes, after the gate.", "to": "bob", "room": ""},
+            {"text": "R17 numbers are posted in general.", "to": "carol", "room": ""}]}
+    monkeypatch.setattr("collab.worker_runtime.run_turn", run)
+    sent = []
+    async def transport(request):
+        sent.append(json.loads(request.content).get("text"))
+        return httpx.Response(200, json={"seq": 9})
+    try:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+            daemon = SimpleNamespace(profile=SimpleNamespace(dir=tmp_path, name="alice", participant_id="p_a",
+                                                             url="http://hub", token="t"),
+                                     inbox=inbox, _http=client,
+                                     snapshot={"participants": [{"name": "alice", "id": "p_a"},
+                                                                {"name": "bob", "id": "p_b"},
+                                                                {"name": "carol", "id": "p_c"}]})
+            await Conversation(daemon).turn()
+    finally:
+        inbox.close()
+    with store._db() as db:
+        held = db.execute("SELECT COUNT(*) FROM records WHERE kind='quarantine'").fetchone()[0]
+    assert sorted(sent) == ["R17 numbers are posted in general.", "Yes, after the gate."] and held == 0
+    assert not store.snapshot()["answers"]
