@@ -100,7 +100,8 @@ def pending_count_readonly(root) -> int:
     if not path.exists():
         return 0
     try:
-        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=0.2)
+        # timeout=0: never wait on a writer; a busy database just skips the banner.
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=0)
         try:
             rows = db.execute("SELECT data FROM records WHERE kind='escalation'").fetchall()
         finally:
@@ -267,6 +268,13 @@ class Store:
                                 "to": r.get("to", r.get("subject_id", "")), "room": r.get("room", ""),
                                 "error": r.get("error", ""), "retry_at": r.get("retry_at", 0)}
                                for r in outbox]}
+
+    def count_dropped(self, n: int) -> None:
+        """Replies withheld for repeating another peer's open question (shown in status)."""
+        with self._db() as db:
+            state = self._state(db)
+            state["dropped_replies"] = int(state.get("dropped_replies", 0)) + n
+            self._save(db, state)
 
     def context(self, text: str) -> str:
         text = _text(text, "context")
@@ -740,8 +748,11 @@ def metrics(root):
         "agent": cfg.get("agent", ""), "model": model or state.get("reported_stats", {}).get("model", ""), "turns": state["turn"],
         "attempts": state.get("attempts_total", 0), "pending": len(state["pending"]),
         "awaiting_human": sum(1 for p in state["pending"] if p.get("awaiting_human")),
-        "awaiting_since": min((p["awaiting_since"] for p in state["pending"]
-                               if p.get("awaiting_human") and p.get("awaiting_since")), default=None),
+        "awaiting_since": (since := min((p["awaiting_since"] for p in state["pending"]
+                                         if p.get("awaiting_human") and p.get("awaiting_since")), default=None)),
+        # Measured here, on one clock: peers show this age, never their now minus our stamp.
+        "awaiting_age": None if since is None else max(0.0, time.time() - since),
+        "dropped_replies": state.get("dropped_replies", 0),
         **_budget_figures(store),
         "errors": int(bool(state["error"])), "source": state.get("reported_stats", {}).get("source") or "collab-worker",
         "observed_at": max(state.get("last_progress", 0), state.get("usage", {}).get("observed_at", 0),

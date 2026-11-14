@@ -110,10 +110,12 @@ def metric_lines(person: dict[str, Any], fields: list[str] | tuple[str, ...],
                 line = f"worker {state} · {_count(worker.get('turns'))} turns"
                 waiting = worker.get("awaiting_human")
                 if isinstance(waiting, (int, float)) and not isinstance(waiting, bool) and waiting > 0:
-                    since = worker.get("awaiting_since")
+                    # The worker measures the age on its own clock; subtracting
+                    # its stamp from ours would add the two machines' skew.
+                    seconds = worker.get("awaiting_age")
                     age = ""
-                    if isinstance(since, (int, float)) and not isinstance(since, bool):
-                        minutes = max(0, int((time.time() - since) // 60))
+                    if isinstance(seconds, (int, float)) and not isinstance(seconds, bool):
+                        minutes = max(0, int(seconds // 60))
                         age = f" · {minutes}m" if minutes < 120 else f" · {minutes // 60}h"
                     line += f" · waiting on their human ({int(waiting)}){age}"
             else:
