@@ -1,3 +1,4 @@
+from remote_consent_helpers import receipt
 import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
@@ -21,7 +22,7 @@ def offered(tmp_path):
 def approve(inbox, offer, **changes):
     options = dict(reviewed_digest=digest(offer), session_id='s_room', recipient_id='p_receiver',
                    target='coding-session', command=['local-adapter', '--session', 'coding-session'],
-                   human_approved=True, now=101)
+                   approval=receipt(inbox, offer, 'coding-session', ['local-adapter', '--session', 'coding-session']), now=101)
     options.update(changes)
     inbox.accept(offer['id'], **options)
 
@@ -38,8 +39,8 @@ def test_receipt_and_remote_approval_field_never_authorize(offered):
     assert claim(inbox) is None
     with pytest.raises(ValueError, match='fields'):
         validate({**offer, 'human_approved': True})
-    with pytest.raises(ValueError, match='human approval'):
-        approve(inbox, offer, human_approved=False)
+    with pytest.raises(ValueError, match='receipt'):
+        approve(inbox, offer, approval=False)
     assert claim(inbox) is None
 
 
@@ -255,3 +256,14 @@ def test_approval_requires_registered_local_command(offered):
     with pytest.raises(ValueError, match='not bound'):
         approve(inbox, offer, command=['peer-suggested-adapter'])
     assert claim(inbox) is None
+
+
+def test_legacy_flag_approval_is_invalidated_on_upgrade(offered):
+    inbox, offer, _ = offered
+    # Simulate the old schema/approval state without touching the receipt API.
+    with sqlite3.connect(inbox.path) as db:
+        db.execute('ALTER TABLE offers DROP COLUMN approval_version')
+        db.execute("UPDATE offers SET state='accepted', binding=? WHERE id=?",
+                   (binding_digest('coding-session', ['local-adapter', '--session', 'coding-session']), offer['id']))
+    assert claim(inbox) is None
+    assert inbox.list(now=102)[0]['state'] == 'failed'
