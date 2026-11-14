@@ -63,6 +63,17 @@ waits on the disk; code reading the file back in the same process calls
 `collab.logcap.flush()` first. Like `daemon.log`, `hub.log` and
 `ngrok.log`, it is capped at 10 MB including its rotated `worker.log.1`.
 
+The cap is a maximum, not an eventual figure: every write collab makes to a log
+rotates first if it would carry the live file past 3 MiB, and refuses — and
+counts — a write that could not be made without passing the budget. The live
+file, `.1` and a rotation's `.1.tmp` together stay under 9.8 MB. ngrok's output
+reaches `ngrok.log` through a collector process (`python -m collab.logpipe`)
+that writes under the same cap, holds at most 16 KiB of a line, writes at most
+256 KB a second, and ends when ngrok does. The one writer left outside the cap is
+a process's own stderr — an interpreter traceback on a crash — and a watcher
+thread in the daemon and the hub, looking once a second, trims it if it ever
+matters; for that path alone the overshoot is what arrives within one second.
+
 ## Existing sessions and explicit homes
 
 `COLLAB_HOME` and `collab host --home` / `collab join --home` continue to select an

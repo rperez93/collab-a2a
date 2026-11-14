@@ -165,8 +165,10 @@ share, a disk waking up. So a new log call must reach `logging` (which
 `daemon_files.setup_logging` has already put behind a `QueueHandler`),
 `diagnostics.log`, or `logcap.append_line` for a line-per-event file such as
 `worker.log`, and never `open(...).write(...)` on a path in a hot loop. The
-size cap is the writer's business too: `logcap` trims on its writer and watcher
-threads, never on the caller's.
+size cap is the writer's business too, and it is applied at WRITE time:
+`logcap.CappedFile` rotates before a write would pass the cap, on the writer
+thread, never the caller's. A process collab starts whose output goes to a log
+— ngrok — is given a pipe to `logcap.spawn_collected`'s collector, never the file.
 
 All three queues are **bounded** rather than growing or blocking:
 `diagnostics.BUFFER_MAX`, `daemon_files.LOG_QUEUE_MAX` and `logcap.LINES_MAX`.

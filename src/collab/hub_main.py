@@ -17,7 +17,7 @@ from pathlib import Path
 import uvicorn
 
 from . import __version__, diagnostics, logcap, owner as ownership, peers
-from .client.daemon_files import DaemonPaths, setup_logging
+from .client.daemon_files import DaemonPaths, capture_logging_into, setup_logging
 from .config import follow_agent_enabled
 from .server.app import create_app
 from .server.session import HubConfig, update_fields
@@ -187,6 +187,9 @@ def main() -> int:
     # and `hub.log` was capped only when the next hub was spawned. The same
     # directory `collab host` and the daemon's restart open `hub.log` in.
     logcap.watch(DaemonPaths(cfg.dir).root / "hub.log", cfg.dir / "ngrok.log")
+    # Capped at write time as well; see daemon_main. ngrok's own output never
+    # reaches `ngrok.log` but through a capped collector (server/tunnel.py).
+    capture_logging_into(DaemonPaths(cfg.dir).root / "hub.log")
     # The SAME directory the daemon writes into, and one file per day shared
     # between them — a fault is nearly always a conversation between the two
     # processes, and two files would have to be interleaved by hand before
@@ -242,7 +245,12 @@ def main() -> int:
     registry = RegistryHeartbeat(cfg)
     registry.start()
     try:
-        uvicorn.run(app, host=cfg.bind, port=cfg.port, log_level="warning", access_log=False)
+        # `log_config=None`: uvicorn's default config gives its loggers their
+        # own stderr handlers, which write the log file directly and around
+        # the write-time cap. Without one they propagate to the root logger,
+        # which is behind the queue and the capped handler.
+        uvicorn.run(app, host=cfg.bind, port=cfg.port, log_level="warning",
+                    access_log=False, log_config=None)
     except BaseException as exc:            # noqa: BLE001
         # Re-raised immediately: this changes nothing about how the hub dies,
         # it only leaves a line saying that it died rather than was stopped.

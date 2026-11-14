@@ -676,9 +676,9 @@ def test_a_stalled_disk_does_not_stall_the_caller(tmp_path, monkeypatch):
     gate = threading.Event()
     real = logcap._write_lines
 
-    def stuck(batch, cap):
+    def stuck(batch, cap, *rest):
         gate.wait(10)
-        real(batch, cap)
+        return real(batch, cap, *rest)
 
     monkeypatch.setattr(logcap, "_write_lines", stuck)
     path = tmp_path / "worker.log"
@@ -709,7 +709,7 @@ def test_a_gap_is_said_where_it_happened_when_room_returns(tmp_path, monkeypatch
     gate = threading.Event()
     real = logcap._write_lines
     monkeypatch.setattr(logcap, "_write_lines",
-                        lambda batch, cap: (gate.wait(10), real(batch, cap)))
+                        lambda batch, cap, *rest: (gate.wait(10), real(batch, cap, *rest))[1])
     path = tmp_path / "worker.log"
     writer = logcap.LineWriter(limit=3)
     writer.put(path, _line(0))
@@ -750,7 +750,7 @@ def test_a_full_queue_is_well_under_a_megabyte(tmp_path, monkeypatch):
     import tracemalloc
 
     gate = threading.Event()
-    monkeypatch.setattr(logcap, "_write_lines", lambda batch, cap: gate.wait(10))
+    monkeypatch.setattr(logcap, "_write_lines", lambda batch, cap, *rest: gate.wait(10))
     path = tmp_path / "worker.log"
     writer = logcap.LineWriter()
     writer.put(path, _line())
@@ -845,7 +845,7 @@ def test_one_stalled_flush_is_the_whole_exit_deadline(tmp_path, monkeypatch):
     import threading
 
     gate = threading.Event()
-    monkeypatch.setattr(logcap, "_write_lines", lambda batch, cap: gate.wait(10))
+    monkeypatch.setattr(logcap, "_write_lines", lambda batch, cap, *rest: gate.wait(10))
     writer = logcap.LineWriter()
     writer.put(tmp_path / "worker.log", _line())
     began = time.monotonic()
@@ -909,3 +909,294 @@ async def test_every_ledger_line_names_its_attempt_with_an_opaque_id(
     ids = [r["attempt"] for r in rows]
     assert all(_re.fullmatch(r"[0-9a-f]{12}", i) for i in ids)
     assert len(set(ids)) == len(ids), "every attempt its own id"
+
+
+# --- the write-time cap: never over, whatever the burst ----------------------------
+#
+# A watcher is eventual. Validation wrote 192 records of 64 KiB in 16 ms and
+# the log stood at 12.58 MB before the next pass. These tests sample the total
+# — live, `.1` and `.1.tmp` — after EVERY write, and require it never to pass
+# the budget, not merely to come back under it.
+
+def _sampling(monkeypatch):
+    """Record `logcap.total` after every `CappedFile.write`."""
+    peaks: list[int] = []
+    real = logcap.CappedFile.write
+
+    def write(self, data):
+        ok = real(self, data)
+        peaks.append(logcap.total(self.path))
+        return ok
+
+    monkeypatch.setattr(logcap.CappedFile, "write", write)
+    return peaks
+
+
+def test_a_burst_of_big_records_never_carries_a_log_past_its_budget(tmp_path,
+                                                                   monkeypatch):
+    """The validation burst — 192 × 64 KiB as fast as it can be logged —
+    through the daemon's own `logging` path: QueueHandler, listener thread,
+    capped handler. The total is sampled after every write."""
+    import logging
+    from logging import handlers
+
+    from collab.client import daemon_files
+
+    peaks = _sampling(monkeypatch)
+    path = tmp_path / "daemon.log"
+    pipe = daemon_files._Bounded(1000)
+    capped = logcap.capped_handler(path)
+    capped.setFormatter(logging.Formatter("%(message)s"))
+    listener = daemon_files._Listener(pipe, capped)
+    log = logging.getLogger("collab.test.burst")
+    log.propagate = False
+    log.addHandler(handlers.QueueHandler(pipe))
+    listener.start()
+    try:
+        record = "x" * (64 * 1024 - 1)
+        for _ in range(192):
+            log.warning(record)
+    finally:
+        listener.stop()
+        log.handlers.clear()
+        capped.close()
+    assert len(peaks) >= 192 - 1
+    assert max(peaks) <= logcap.BUDGET, f"peak {max(peaks) / 1e6:.2f} MB"
+
+
+def test_the_burst_through_the_worker_writer_never_passes_the_budget(tmp_path,
+                                                                     monkeypatch):
+    """The same burst as worker-ledger lines through `LineWriter`."""
+    peaks = _sampling(monkeypatch)
+    path = tmp_path / "worker.log"
+    writer = logcap.LineWriter()
+    for _ in range(192):
+        writer.put(path, "y" * (64 * 1024 - 1))
+    assert writer.flush(10)
+    assert peaks and max(peaks) <= logcap.BUDGET, f"peak {max(peaks) / 1e6:.2f} MB"
+
+
+def test_a_sustained_ten_megabytes_a_second_never_passes_the_budget(tmp_path,
+                                                                    monkeypatch):
+    """Ten megabytes a second for three seconds, 10 KB a write, every write
+    sampled. A generation is 3 MiB, so this rotates ten times over."""
+    peaks = _sampling(monkeypatch)
+    path = tmp_path / "hub.log"
+    out = logcap.CappedFile(path)
+    block = (("z" * 99 + "\n") * 100).encode()           # 10 KB
+    end = time.monotonic() + 3
+    while time.monotonic() < end:
+        began = time.monotonic()
+        for _ in range(10):
+            out.write(block)
+        time.sleep(max(0, 0.01 - (time.monotonic() - began)))
+    out.close()
+    assert len(peaks) > 2000
+    assert max(peaks) <= logcap.BUDGET, f"peak {max(peaks) / 1e6:.2f} MB"
+    assert logcap.rotated(path).exists()
+
+
+def test_an_ngrok_style_flood_goes_through_the_collector_and_stays_capped(tmp_path):
+    """A child writing its stdout as fast as it can, as ngrok would in a
+    fault, through `spawn_collected`: it never writes the file itself, the
+    total sampled every 2 ms never passes the budget, and the collector ends
+    when the child does."""
+    path = tmp_path / "ngrok.log"
+    child = logcap.spawn_collected(
+        [sys.executable, "-c",
+         "import sys\n"
+         "line = 'lvl=info msg=flood ' + 'n' * 80 + '\\n'\n"
+         "for _ in range(250_000):\n"            # ~25 MB
+         "    sys.stdout.write(line)\n"
+         "sys.stdout.flush()\n"],
+        path, stdin=subprocess.DEVNULL, start_new_session=True,
+        env={**os.environ, "PYTHONPATH": _src()})
+    peak = 0
+    while child.poll() is None:
+        peak = max(peak, logcap.total(path))
+        time.sleep(0.002)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        peak = max(peak, logcap.total(path))
+        text = path.read_text(errors="replace") if path.exists() else ""
+        if "dropped here" in text:
+            break
+        time.sleep(0.02)
+    assert peak <= logcap.BUDGET, f"peak {peak / 1e6:.2f} MB"
+    assert "dropped here" in path.read_text(errors="replace"), "the flood was said"
+
+
+def _src() -> str:
+    import collab
+
+    return os.path.dirname(os.path.dirname(collab.__file__))
+
+
+@pytest.mark.skipif(not os.path.isfile("/proc/self/status"),
+                    reason="post-exec peak memory is read from /proc")
+def test_the_collector_is_cheap_under_a_flood():
+    """The collector runs for as long as a tunnel does. Measured against a
+    child writing ~25 MB as fast as it can: its CPU for the whole flood from
+    `wait4`, and its peak resident size from `/proc/<pid>/status` VmHWM —
+    NOT `ru_maxrss`, which a forked child inherits from its parent's high
+    water (105 MiB here, the test runner's) and keeps across exec."""
+    import tempfile
+
+    def hwm(pid: int) -> int:
+        try:
+            with open(f"/proc/{pid}/status") as fh:
+                for line in fh:
+                    if line.startswith("VmHWM:"):
+                        return int(line.split()[1])
+        except OSError:
+            pass
+        return 0
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "ngrok.log")
+        env = {**os.environ, "PYTHONPATH": _src()}
+        collector = subprocess.Popen([sys.executable, "-m", "collab.logpipe", path],
+                                     stdin=subprocess.PIPE, env=env)
+        flood = subprocess.Popen(
+            [sys.executable, "-c",
+             "import sys\nline='lvl=info msg=flood ' + 'n'*80 + '\\n'\n"
+             "for _ in range(250_000): sys.stdout.write(line)\n"],
+            stdout=collector.stdin)
+        collector.stdin.close()
+        peak_kib = 0
+        while flood.poll() is None:
+            peak_kib = max(peak_kib, hwm(collector.pid))
+            time.sleep(0.01)
+        peak_kib = max(peak_kib, hwm(collector.pid))
+        _, status, usage = os.wait4(collector.pid, 0)
+        collector.returncode = os.waitstatus_to_exitcode(status)
+        assert logcap.total(path) <= logcap.BUDGET
+    cpu = usage.ru_utime + usage.ru_stime
+    rss_mib = peak_kib / 1024
+    assert cpu < 3.0, f"{cpu:.2f} s of CPU for a 25 MB flood"
+    assert 0 < rss_mib < 40, f"{rss_mib:.1f} MiB resident"
+
+
+def test_a_stalled_handler_cannot_hang_the_exit(tmp_path):
+    """The final check's probe: a handler stuck in `emit` holds its lock, and
+    `logging.shutdown` in `atexit` waited on it for ever — past the 5 s the
+    stopper allows before SIGKILL. The stuck handler is taken off shutdown's
+    list once the listener's join times out."""
+    probe = (
+        "import logging, threading, time\n"
+        "class Stuck(logging.Handler):\n"
+        "    def emit(self, record):\n"
+        "        threading.Event().wait(60)\n"
+        "logging.getLogger().addHandler(Stuck())\n"
+        "from collab.client import daemon_files\n"
+        "daemon_files.setup_logging()\n"
+        "logging.warning('this write never returns')\n"
+        "time.sleep(0.2)\n")
+    began = time.monotonic()
+    done = subprocess.run([sys.executable, "-c", probe], timeout=20,
+                          env={**os.environ, "PYTHONPATH": _src()})
+    took = time.monotonic() - began
+    assert done.returncode == 0
+    assert took < 5, f"exit took {took:.1f} s"
+
+
+def test_a_failed_gap_line_keeps_its_count_and_is_not_counted_twice(tmp_path,
+                                                                    monkeypatch):
+    """A gap line that could not be written came back as ONE lost line — five
+    lost lines became `{"lines": 1}` — and was added to `dropped_total` again."""
+    path = tmp_path / "worker.log"
+    writer = logcap.LineWriter()
+    failing = {"on": True}
+    real = logcap.CappedFile.write
+    monkeypatch.setattr(logcap.CappedFile, "write",
+                        lambda self, data: False if failing["on"] else real(self, data))
+    for n in range(5):
+        writer.put(path, _line(n))
+    writer.flush(2)                       # five lost: a gap of five pending
+    writer.put(path, _line(5))
+    writer.flush(2)                       # the gap line itself fails, and one more
+    assert writer.dropped_total == 6, "new lines only, the gap line not again"
+    failing["on"] = False
+    writer.put(path, _line(6))
+    assert writer.flush(2)
+    rows = [json.loads(x) for x in path.read_text().splitlines()]
+    gaps = [r for r in rows if r.get("event") == "dropped"]
+    assert sum(g["lines"] for g in gaps) == 6, gaps
+
+
+def test_the_log_queue_says_a_gap_once_it_drains_without_being_stopped(tmp_path):
+    """Mutant G11: the gap after silence must be written when the queue
+    drains, not only when the listener is stopped and the sentinel says it."""
+    import logging as stdlib
+
+    from collab.client import daemon_files
+
+    path = tmp_path / "daemon.log"
+    handler = stdlib.FileHandler(path)
+    pipe = daemon_files._Bounded(3)
+    for n in range(6):
+        pipe.put_nowait(stdlib.makeLogRecord({"msg": f"line {n}"}))
+    listener = daemon_files._Listener(pipe, handler)
+    listener.start()
+    try:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            handler.flush()
+            if "dropped" in path.read_text():
+                break
+            time.sleep(0.02)
+        assert "3 log lines dropped" in path.read_text(), "said before any stop"
+    finally:
+        listener.stop()
+        handler.close()
+
+
+def test_the_watcher_sacrifices_history_only_past_the_whole_budget(tmp_path,
+                                                                    monkeypatch):
+    """Mutant G12: `sacrifice` must be passed exactly when the log's total is
+    past the budget — truncate without a copy only then."""
+    calls = []
+    monkeypatch.setattr(logcap, "trim",
+                        lambda path, cap, sacrifice=False, **k: calls.append(sacrifice) or True)
+    small = tmp_path / "a.log"
+    small.write_bytes(b"x" * 200)
+    watcher = logcap.Watcher([small], cap=100, budget=1000)
+    watcher.check()
+    big = tmp_path / "b.log"
+    big.write_bytes(b"x" * 2000)
+    logcap.Watcher([big], cap=100, budget=1000).check()
+    assert calls == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_a_skill_consent_decision_counts_in_the_attempts_escalations(
+        conversation, tmp_path, monkeypatch):
+    """Mutant G4: the ledger's `escalation_count` is what the turn committed,
+    and a skill request routed to the human is one of those, whatever the
+    model proposed."""
+    from collab.protocol import Envelope
+
+    service = conversation
+    _configure(service, tmp_path)
+    service.daemon.inbox.record(Envelope(
+        seq=1, kind="chat", sender="bob", sender_id="p_b", to="alice", text="run it",
+        body={"skill_request": {"id": "R_1", "skill": "deploy"}}))
+
+    async def provider(*args, **kwargs):
+        return {"summary": "s", "replies": [], "escalations": []}
+
+    monkeypatch.setattr("collab.worker_runtime.run_turn", provider)
+    await service.turn()
+    row = json.loads(_worker_log(tmp_path).splitlines()[-1])
+    assert row["escalation_count"] == 1 and row["outcome"] == "output"
+
+
+def test_a_failure_reason_is_found_after_ngrok_log_was_trimmed(tmp_path):
+    """`failure_from_log` read from an offset past the end of a log the cap had
+    truncated, and reported «no reason» for a refusal that was right there."""
+    from collab.server.tunnel import failure_from_log
+
+    path = tmp_path / "ngrok.log"
+    path.write_text('lvl=eror msg="failed to start tunnel" err="ERR_NGROK_334 '
+                    'The endpoint is already online."\n')
+    assert "334" in failure_from_log(str(path), offset=50_000)
