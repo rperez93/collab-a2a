@@ -431,3 +431,19 @@ def test_spawned_daemons_carry_the_agent_kind(monkeypatch, tmp_path):
     except Exception:
         pass  # whatever follows the spawn is not under test
     assert seen.get("COLLAB_AGENT_KIND") == "codex"
+
+
+def test_the_agent_settings_path_is_reused_inside_two_seconds_and_re_resolved_after(tmp_path, monkeypatch):
+    """M12: a home selected mid-process is followed, within the 2 s cache window."""
+    for key in ("COLLAB_AGENT_CONFIG", "COLLAB_HOME", "COLLAB_STATE_DIR", *config.AGENT_SESSION_KEYS):
+        monkeypatch.delenv(key, raising=False)
+    homes = [tmp_path / "a", tmp_path / "b"]
+    current = {"home": homes[0], "now": 100.0}
+    monkeypatch.setattr(config, "collab_home", lambda: current["home"])
+    monkeypatch.setattr(config.time, "monotonic", lambda: current["now"])
+    config._AGENT_PATH.clear()
+    assert config.agent_config_path() == homes[0] / config.AGENT_SETTINGS
+    current.update(home=homes[1], now=101.5)
+    assert config.agent_config_path() == homes[0] / config.AGENT_SETTINGS, "reused inside the window"
+    current["now"] = 102.6
+    assert config.agent_config_path() == homes[1] / config.AGENT_SETTINGS, "re-resolved after it"
