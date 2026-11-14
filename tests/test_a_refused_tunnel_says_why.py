@@ -163,6 +163,32 @@ def test_the_setting_is_in_the_registry_beside_rules():
 
 import contextlib
 import io
+import time
+from pathlib import Path
+
+
+def _hubs_of(home) -> list[int]:
+    """Hub processes whose COLLAB_HOME is exactly this test's own home.
+
+    By environment, never by name alone: these are processes this test's own
+    `collab host` spawned, and nothing else on the machine shares that home.
+    """
+    found = []
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return found
+    want = f"COLLAB_HOME={home}".encode()
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            if b"collab.hub_main" not in (entry / "cmdline").read_bytes():
+                continue
+            if want in (entry / "environ").read_bytes().split(b"\0"):
+                found.append(int(entry.name))
+        except OSError:
+            continue
+    return found
 
 
 @pytest.fixture
@@ -174,7 +200,22 @@ def hosting(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
     monkeypatch.setattr(config, "repo_root", lambda cwd=None: tmp_path)
     config._CACHE.clear()
-    return tmp_path
+    yield tmp_path
+    # EVERY HUB THIS TEST STARTED, WHATEVER HAPPENED. `_host` stops what
+    # `hosted_sessions` lists, but a failed assertion, a test that hosts
+    # without `_host`, or a mutant that lets a refused host through all left
+    # hubs running: five were found three hours later, idle, holding ports.
+    import signal
+
+    for pid in _hubs_of(tmp_path / ".collab"):
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + 5
+    while _hubs_of(tmp_path / ".collab") and time.monotonic() < deadline:
+        time.sleep(0.05)
+    for pid in _hubs_of(tmp_path / ".collab"):
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGKILL)
 
 
 def _fake_ngrok_on_path(root, monkeypatch, body: str) -> None:
@@ -387,3 +428,28 @@ def test_a_port_or_query_is_stripped_from_a_pasted_domain(given, stored):
 def test_a_bare_ip_address_is_not_a_reservable_domain():
     with pytest.raises(ValueError):
         config.set_ngrok_domain("1.2.3.4")
+
+
+def test_a_hub_left_running_by_a_test_is_stopped_by_the_fixture(tmp_path, monkeypatch):
+    """The teardown itself: a hub started under the fixture's home and never
+    stopped by the test must be gone once the fixture is finalised."""
+    import subprocess
+    import sys
+
+    gen = hosting.__wrapped__(tmp_path, monkeypatch) if hasattr(hosting, "__wrapped__") else None
+    home = tmp_path / ".collab"
+    stray = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)", "collab.hub_main"],
+        env={**os.environ, "COLLAB_HOME": str(home)})
+    try:
+        assert stray.pid in _hubs_of(home)
+        if gen is not None:
+            next(gen)
+            with contextlib.suppress(StopIteration):
+                next(gen)
+        else:
+            pytest.skip("fixture function not reachable for a direct call")
+        assert stray.wait(timeout=10) is not None
+    finally:
+        if stray.poll() is None:
+            stray.kill()
