@@ -563,3 +563,36 @@ def test_no_408_before_the_body_has_actually_stalled(inproc, monkeypatch):
     s.sendall(b"x")
     s.settimeout(5)
     assert b" 200 " in s.recv(200)
+
+
+def test_main_wires_the_door_the_log_filter_and_the_low_limit_warning(registry, tmp_path,
+                                                                      monkeypatch, caplog):
+    """Three pieces of start-up wiring whose parts are tested on their own:
+    the door must be the computed one, the accept-loop filter must sit on the
+    loggers that flood, and the floor warning must be said — and recorded for
+    `collab host` to repeat."""
+    import logging
+
+    import uvicorn
+
+    from collab import proxy_main
+
+    monkeypatch.setenv("COLLAB_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setattr(proxy_main, "descriptor_budget", lambda: (448, 1024))
+    seen = {}
+    real_config = uvicorn.Config
+
+    def config(*args, **kwargs):
+        seen.update(kwargs)
+        return real_config(*args, **kwargs)
+
+    monkeypatch.setattr(uvicorn, "Config", config)
+    with caplog.at_level(logging.WARNING, logger="collab.proxy"):
+        assert proxy_main.main(["--no-tunnel", "--port", str(_free_port()),
+                                "--idle-exit", "1"]) == 0
+
+    assert seen["limit_concurrency"] == 448
+    assert any(isinstance(f, proxy_main._OnceEvery)
+               for f in logging.getLogger("asyncio").filters)
+    assert "only 1024 file descriptors" in caplog.text
+    assert proxy.ProxyState.load().descriptors == 1024
