@@ -136,6 +136,35 @@ def test_slow_body_times_out_and_releases_admission(session, host_headers, monke
     asyncio.run(exercise())
 
 
+def test_cancelled_body_closes_stream_without_mutation_and_releases_slot(session, host_headers, monkeypatch):
+    from collab.server.app import create_app
+    monkeypatch.setattr(routes, "MAX_INFLIGHT", 1)
+    app = create_app(store=session["store"], session_id="s_test", host_name="alice", public_url="http://test")
+
+    async def exercise():
+        entered, closed = asyncio.Event(), asyncio.Event()
+        async def chunks():
+            try:
+                yield b'{"method":"'
+                entered.set()
+                await asyncio.Event().wait()
+                yield b'hello"}'
+            finally:
+                closed.set()
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            task = asyncio.create_task(client.post(P + "/enrol/begin", headers={**host_headers, "Content-Type": "application/json"}, content=chunks()))
+            await asyncio.wait_for(entered.wait(), 2)
+            assert (await client.get(P + "/capabilities", headers=host_headers)).status_code == 503
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert closed.is_set()
+            assert (await client.get(P + "/capabilities", headers=host_headers)).status_code == 200
+    asyncio.run(exercise())
+    with session["store"]._lock:
+        assert session["store"]._db.execute("SELECT COUNT(*) FROM approval_challenges").fetchone()[0] == 0
+
+
 def test_http_key_change_requires_two_proofs_then_report_freezes(client, session, host_headers, signer):
     now = [1000]
     session["app"].state.approvals.clock = lambda: now[0]

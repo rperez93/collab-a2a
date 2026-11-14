@@ -9,6 +9,7 @@ import asyncio
 import json
 import math
 
+from anyio import fail_after
 from fastapi import APIRouter, Request
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import ClientDisconnect
@@ -81,7 +82,9 @@ async def _body(request, required, optional):
             raise Rejected("body_too_large", 413)
     raw = bytearray()
     try:
-        async with asyncio.timeout(BODY_SECONDS):
+        # AnyIO's deadline also supports the project's Python 3.10 floor.
+        # Keep collection in this task so external cancellation propagates.
+        with fail_after(BODY_SECONDS):
             async for chunk in request.stream():
                 if len(raw) + len(chunk) > MAX_BODY:
                     raise Rejected("body_too_large", 413)
