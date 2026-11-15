@@ -764,6 +764,29 @@ def _release_own_tunnel_for_the_proxy(previous: Any, mode: str, primary: bool,
 
 
 @_preserve_cwd()
+def _spawn_hub(cfg, env: dict[str, str], command: list[str] | None = None) -> int:
+    """Start the hub detached, and record its pid and start stamp at once.
+
+    The hub writes its own pid when it is up, but `collab host` may stop
+    waiting first (a loaded machine, a slow tunnel), and until then hub.json
+    said 0: `collab kill` signalled nothing and the hub ran on for hours
+    (T_cf1f2c12b363). Only these two keys are written (update_fields), so the
+    hub's own later save is not overwritten, and it writes the same pid.
+    """
+    from .client.exclusive import stamp_for
+    from .server.session import update_fields
+    log = DaemonPaths(cfg.dir).root / "hub.log"
+    with open_log(log) as fh:
+        child = subprocess.Popen(
+            command or [sys.executable, "-m", "collab.hub_main", cfg.session_id],
+            stdout=fh, stderr=fh, stdin=subprocess.DEVNULL,
+            start_new_session=True, env=env,
+        )
+    fresh = stamp_for(child.pid)
+    update_fields(cfg.dir, pid=child.pid, pid_stamp=fresh.encode() if fresh.started else "")
+    return child.pid
+
+
 def cmd_host(args: argparse.Namespace) -> int:
     from .server.session import (HubConfig, create_session,
                                  hosted_sessions, join_line,
@@ -887,13 +910,7 @@ def cmd_host(args: argparse.Namespace) -> int:
     env = (owner.without_owner(env) if owner.kept(cfg.dir)
            else owner.spawn_env(env))
 
-    log = DaemonPaths(cfg.dir).root / "hub.log"
-    with open_log(log) as fh:
-        subprocess.Popen(
-            [sys.executable, "-m", "collab.hub_main", cfg.session_id],
-            stdout=fh, stderr=fh, stdin=subprocess.DEVNULL,
-            start_new_session=True, env=env,
-        )
+    _spawn_hub(cfg, env)
 
     ok(f"session {c(cfg.session_id, '36')} starting as {c(name, '1')}")
     _name_source_note()
