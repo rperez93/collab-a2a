@@ -566,6 +566,43 @@ async def test_a_queued_file_is_uploaded_and_its_copy_removed(conversation, tmp_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("keep,source", [(False, "https://example.org/original"), (True, ""), (None, "")])
+async def test_a_queued_file_carries_its_senders_retention_choice_to_the_hub(conversation, tmp_path, keep, source):
+    """#135: the hub decides retention by file name unless the sender chose.
+    With the worker on, `collab file send` queues the file; a choice not
+    queued with it — `--temporary` on a document, `--keep`, a `--source` —
+    was dropped silently, and the hub kept what was meant to go, or the
+    reverse. No choice stays no choice, so the hub's default still applies."""
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    path = tmp_path / "review.md"
+    path.write_text("draft")
+    store.queue_file(path, to="bob", to_id="p_b", keep=keep, source=source)
+    seen = []
+    async def transport(request):
+        seen.append(dict(request.url.params))
+        return httpx.Response(200, json={"id": "f_1"})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        conversation.daemon._http = client
+        await conversation._flush(store, store.snapshot()["generation"])
+    assert len(seen) == 1 and not store.outbox()
+    assert seen[0].get("keep") == {False: "false", True: "true", None: None}[keep]
+    assert seen[0].get("source") == (source or None)
+
+
+def test_a_queued_file_with_an_unsafe_source_is_refused_before_it_is_queued(tmp_path):
+    """A `--source` the hub would refuse must fail at the send, not later in
+    the worker, where the file would wait and then fail out of sight."""
+    store = worker.Store(tmp_path)
+    store.configure({"agent": "claude", "scope": "Coordinate", "enabled": True})
+    path = tmp_path / "review.md"
+    path.write_text("draft")
+    with pytest.raises(ValueError, match="HTTPS"):
+        store.queue_file(path, to="bob", to_id="p_b", source="http://example.org/x")
+    assert store.outbox() == []
+
+
+@pytest.mark.asyncio
 async def test_under_collab_no_worker_queued_messages_are_still_delivered(conversation, tmp_path, monkeypatch):
     configure(conversation, tmp_path)
     store = worker.Store(conversation.root)

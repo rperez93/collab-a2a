@@ -122,7 +122,8 @@ def test_worker_off_sends_its_queue_with_the_delivery_key_and_checks_bytes(tmp_p
     store.configure({"agent": "claude", "scope": "Coordinate"})
     monkeypatch.setattr(store.__class__, "outbox", lambda self: [{
         "id": "o_1", "kind": "file", "stash": str(stash), "name": "stash.bin",
-        "sha256": hashlib.sha256(b"abc").hexdigest(), "to": "bob", "to_id": "p_original", "routing_version": 1}])
+        "sha256": hashlib.sha256(b"abc").hexdigest(), "to": "bob", "to_id": "p_original", "routing_version": 1,
+        "keep": False, "source": "https://example.org/original"}])
     calls = []
     class Hub:
         def __enter__(self): return self
@@ -138,6 +139,8 @@ def test_worker_off_sends_its_queue_with_the_delivery_key_and_checks_bytes(tmp_p
         pass  # what follows the flush is not under test
     assert calls and calls[0]["delivery"] == "o_1"
     assert calls[0]["to_id"] == "p_original", "manual drain preserves queue-time principal"
+    # #135: the sender's retention choice, queued with the copy, is not lost here.
+    assert calls[0]["keep"] is False and calls[0]["source"] == "https://example.org/original"
     stash.write_bytes(b"changed")
     calls.clear()
     try:
