@@ -118,6 +118,10 @@ def armed_pane(command: Sequence[str]) -> tuple[Pane | None, str]:
         return None, ("this wake queues into a Codex thread, which has no"
                       " prompt to type a slash command at — arm the tmux"
                       " recipe instead if you want this")
+    if to == "listen":
+        return None, ("this wake prints to your monitor's listen stream, which"
+                      " has no prompt to type a slash command at — arm the tmux"
+                      " recipe instead if you want this")
     if to != "tmux":
         return None, f"this wake delivers by {to or 'an unnamed route'}, not into a pane"
     target = _flag(argv, "--target")

@@ -135,7 +135,7 @@ def test_a_codex_thread_is_refused_and_says_it_is_a_thread(tmp_path):
     assert pane is None and "thread" in why
 
 
-@pytest.mark.parametrize("agent", ["claude", "gemini", "codex-exec", "aider"])
+@pytest.mark.parametrize("agent", ["claude-exec", "gemini", "codex-exec", "aider"])
 def test_a_headless_recipe_is_refused_because_a_fresh_run_holds_nothing(agent, tmp_path):
     """These start a new process per turn. There is no context to compact, and
     the refusal has to say so rather than merely failing to find a pane."""
@@ -143,6 +143,15 @@ def test_a_headless_recipe_is_refused_because_a_fresh_run_holds_nothing(agent, t
         command=wake.recipe(agent).command(cwd=str(tmp_path))))
     pane, why = compaction.armed_pane(wake.read_config(tmp_path).command)
     assert pane is None and "fresh run" in why
+
+
+def test_the_listen_recipe_is_refused_with_its_own_reason(tmp_path):
+    """`--agent claude` prints to the monitor's stream: there is no prompt to
+    type `/compact` at, and the refusal says that, not «fresh run»."""
+    wake.write_config(tmp_path, wake.WakeConfig(
+        command=wake.recipe("claude").command(collab="/usr/bin/collab")))
+    pane, why = compaction.armed_pane(wake.read_config(tmp_path).command)
+    assert pane is None and "listen stream" in why and "fresh run" not in why
 
 
 def test_no_wake_at_all_says_how_to_arm_one(tmp_path):
