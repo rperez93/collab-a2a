@@ -327,8 +327,13 @@ FREE_TEXT_KEYS = frozenset({"focus"})
 #: `git_remote` carrying a token and `relhome` naming the account; an
 #: allowlist cannot. These are what clients send (`client.context.gather`) and
 #: what the roster reads; the agent-kind fields say which tool a peer runs.
+#: `remote_consent_version` is a bare integer the receiver sends to say it
+#: holds remote offers for its human (R7). Left out, the allowlist stripped it
+#: before `supports_remote_consent` read it, so every receiver looked legacy
+#: and no connection goal was ever offered (found replaying #118 onto #178).
 HELLO_KEYS = frozenset({"focus", "repo", "branch", "dirty", "version",
-                        "kind", "agent", "agent_kind"})
+                        "kind", "agent", "agent_kind",
+                        "remote_consent_version"})
 
 _USERINFO = re.compile(r"://[^/\s@]*@")
 _HOME_RELATIVE = re.compile(r"(?:^|[/\\])(?:home|Users)[/\\][^/\\]+[/\\]")
