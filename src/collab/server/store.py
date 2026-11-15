@@ -1186,6 +1186,22 @@ class Store:
             row = self._db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
         return dict(row)
 
+    def last_spoke(self, participant_id: str) -> float:
+        """When this participant last did something real: a message or a task
+        change it sent. 0 when never. Read from the events kept anyway, so it
+        survives a hub restart."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT ts FROM events WHERE sender_id=? AND kind IN ('chat','task')"
+                " ORDER BY seq DESC LIMIT 1", (participant_id,)).fetchone()
+        if not row:
+            return 0.0
+        from datetime import datetime
+        try:
+            return datetime.fromisoformat(str(row["ts"]).replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return 0.0
+
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         with self._lock:
             row = self._db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
