@@ -111,8 +111,10 @@ def validate_files(files: Any) -> list[dict[str, Any]]:
         clean.append({'path': path, 'content': content, 'sha256': digest, 'size_bytes': len(raw)})
     # A file and a directory of the same name (casefolded: `a` beside `A/b`)
     # cannot both be written: one would replace or block the other.
-    folded = {f['path'].casefold() for f in clean}
-    for path in folded:
+    # SKILL.md is always there, so it counts as a file too: SKILL.md/lib.md
+    # (or skill.MD/lib.md) would need it to be a directory.
+    folded = {f['path'].casefold() for f in clean} | {'skill.md'}
+    for path in folded - {'skill.md'}:
         parts = path.split('/')
         for i in range(1, len(parts)):
             if '/'.join(parts[:i]) in folded:
