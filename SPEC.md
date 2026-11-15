@@ -26,6 +26,26 @@ A2A does not cover, and this extension fills exactly those:
 
 ## 2. The envelope
 
+### Transport base URL
+
+A session is reached directly at its hub, or through the machine proxy at
+`https://<domain>/s/<session-id>`. Append A2A and extension paths to that full
+base, keeping the session prefix. The proxy strips the prefix and forwards to
+the live host's loopback URL from the machine's registry, and only for a
+session whose own record says it attached to the proxy. An unknown, stopped or
+local-only session is a 404; a caller cannot choose an arbitrary upstream. SSE
+and file bodies are streamed, with the envelope and per-session
+authentication unchanged.
+
+A bare-domain URL reaches the recorded primary: the session that served the
+domain with its own tunnel before the proxy (it claims the root on its first
+attach), or one named with `collab host --primary`. A session born on the proxy
+never becomes the primary by itself. When the primary stops, the bare domain is
+a 404 rather than another session. An invite link is `<base>#<invite>` in
+either form; sessions sharing a domain share no invites or tokens.
+
+### Envelope fields
+
 Every collab payload travels inside a standard A2A `Message` as a structured
 (JSON) `Part`. A stock A2A client sees valid A2A; a collab-aware client sees:
 

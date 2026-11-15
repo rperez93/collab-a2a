@@ -40,6 +40,29 @@ invalidates a link you already shared.
 The session, its history, and every issued token survive a tunnel restart; only
 the public address changes.
 
+## A proxy link returns 404
+
+Keep `/s/<session-id>` in the link `collab url` prints. Without it the link is
+a bare-domain link, which reaches only the primary — the session that served
+the domain before the proxy, or one named with `--primary` — and is a 404
+whenever that session is stopped, even while others run. A routed link is a
+404 when its session is unknown, stopped, kept local (`--no-tunnel`), or not
+attached to the proxy; check that the intended hub is running. Never try
+another session's invite instead.
+
+`ERR_NGROK_334` on a proxy means the domain is held by another ngrok process,
+often a session still on its own tunnel; see
+[moving a session onto the proxy](proxy-hosting.md#moving-a-session-onto-the-proxy)
+rather than starting more hubs or killing processes by name. The hub stays
+reachable on this machine meanwhile.
+
+The logs are in the machine peer registry (`COLLAB_PEERS_DIR` moves it):
+`proxy-ngrok.log` for the shared tunnel, `proxy/proxy.log` for the proxy
+itself. A hub on its own tunnel writes `ngrok.log` in its session directory.
+Stopping one hub leaves the proxy serving the others; the proxy exits 60 s after
+the last live host record goes, and a running hub restarts it on its next
+tunnel check if it dies.
+
 ## Someone I did not invite has the link
 
 The invite is the only credential for joining, so a link that has been forwarded,
