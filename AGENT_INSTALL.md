@@ -551,7 +551,9 @@ If you are the host and the update touched the server, the hub needs a restart
 too. Agree the interruption with the session's participants first. From the
 host's own participant home, stop the hub with `.venv/bin/collab kill`, then
 bring the saved session back with `.venv/bin/collab host --resume <session-id>`.
-Resume alone does not stop a running hub — it would start a second one. Resume
+For a session on its own tunnel or kept local, resume does not stop a running
+hub and would start a second one; a proxy session's resume stops its old hub
+and listener first. `collab kill` then `--resume` is right either way. Resume
 also mints a new invite, so share the newly printed link even on a reserved
 domain; participants already in the session keep their tokens. On a free tunnel
 the address itself may change too.
