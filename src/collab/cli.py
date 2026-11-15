@@ -2237,7 +2237,12 @@ def _publish_activity(profile: SessionProfile, state: str, *, what: str = "",
     """
     from . import activity as act
 
-    payload = {"state": state, "what": what, "files": files or [], "task": task}
+    # Paths as peers may see them: relative to the repository, `~/…`, or a
+    # bare name — never an absolute path naming the account (T_5b4dac18307e).
+    from .privacy import shareable_path
+    root = repo_for_home(profile.home) if getattr(profile, "home", "") else None
+    files = [p for p in (shareable_path(f, root) for f in (files or [])) if p]
+    payload = {"state": state, "what": what, "files": files, "task": task}
     stored = act.sanitise(payload, previous=act.read_local(profile))
     act.write_local(profile, stored)
     try:
@@ -3232,7 +3237,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
             "participants": [
                 {k: p.get(k) for k in
                  ("name", "id", "is_host", "connected", "machine", "machine_id",
-                  "user", "focus", "repo", "branch", "stats")}
+                  "focus", "repo", "branch", "stats")}
                 for p in people
             ],
         }, indent=2))
@@ -3620,7 +3625,7 @@ def cmd_discover(args: argparse.Namespace) -> int:
                           for p in found], indent=2))
         return 0
 
-    ident = peers.identity()
+    ident = peers.local_identity()       # shown here, on this machine, only
     heading(f"collab on {ident['machine']} ({ident['user']})")
     if not found:
         print(dim("  nothing running here"))

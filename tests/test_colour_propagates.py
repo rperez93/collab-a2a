@@ -108,12 +108,12 @@ def test_setting_a_colour_does_not_wipe_the_rest_of_the_identity(
     erase everything else, and a colour must not bring that back."""
     client.post("/ext/collab/v1/stats",
                 headers={"Collab-Protocol-Major": "2", "Collab-Version": "2.0.0", "Authorization": f"Bearer {bob}"},
-                json={"stats": {"spend_usd": 1.5}, "machine": "webapp-box"})
+                json={"stats": {"spend_usd": 1.5}, "machine_id": "m_0123456789abcdef"})
     set_colour(client, bob, "#00cccc")
 
     seen = person(roster(client, session["host_token"]), "bob")
     assert seen.get("color") == "#00cccc"
-    assert seen.get("machine") == "webapp-box", f"the colour wiped the machine: {seen}"
+    assert seen.get("machine") == "machine-012345", f"the colour wiped the machine: {seen}"
     assert seen.get("stats", {}).get("spend_usd") == 1.5
 
 

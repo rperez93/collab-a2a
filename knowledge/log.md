@@ -1,5 +1,8 @@
 # Bundle Update Log
 
+## 2026-11-14 (no host identity)
+* **Update (later than the pin)**: Peers no longer receive the hostname, the OS account or the working directory: `machine` is a label derived from the hashed `machine_id`, `user`, `cwd` and `remote` are neither sent nor stored by the hub (recorded in `docs/security.md` and SPEC.md, not re-verified against the pinned pages). The pin and verification stamps are unchanged.
+
 ## 2026-11-14 (R22b client)
 * **Update (later than the pin)**: Recorded in [the command surface](operating/cli-surface.md) the client half of strong approval — `collab consent enrol|keys`, `collab skills ask --strong`, and that a strong request is accepted only through the hub's review and a Hello gesture, never `--human-approved` or a chat reply. The pin and verification stamps are unchanged.
 

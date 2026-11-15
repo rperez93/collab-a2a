@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .. import __version__
+from ..privacy import machine_label
 from ..batch import DONE_STATE, WITHDRAWN_STATE, pace, percent, tally
 from ..protocol import (DEFAULT_ROOM, Envelope, KIND_CHAT, KIND_HELLO,
                         MessageRefused, message_refusal,
@@ -183,7 +184,12 @@ class Hub:
         with self.store.edit_meta(participant_id) as meta:
             if meta is None:
                 return False
-            for key in ('machine', 'machine_id', 'user', 'color'):
+            # NEVER the hostname or the account (T_5b4dac18307e): an older
+            # client still sends both; what it stored before is dropped here.
+            for stale in ('machine', 'user'):
+                if meta.pop(stale, None) is not None:
+                    changed = True
+            for key in ('machine_id', 'color'):
                 if key not in body:
                     continue
                 value = str(body[key] or '')
@@ -343,9 +349,12 @@ class Hub:
                                             merged["reported_at"]))
             if merged:
                 meta["stats"] = merged
-            for key in ("machine", "machine_id", "user"):
-                if stats.get(key):
-                    meta[key] = stats[key]
+            # Only the hashed id: the hostname and the account an older client
+            # sends beside its figures are neither stored nor relayed.
+            if stats.get("machine_id"):
+                meta["machine_id"] = stats["machine_id"]
+            meta.pop("machine", None)
+            meta.pop("user", None)
 
 
     # --- batches --------------------------------------------------------------
@@ -419,9 +428,10 @@ class Hub:
                 "focus": p.meta.get("focus", ""),
                 "repo": p.meta.get("repo", ""),
                 "branch": p.meta.get("branch", ""),
-                "machine": p.meta.get("machine", ""),
+                # A label derived from the hashed id, never a hostname, and
+                # no account name at all (T_5b4dac18307e).
+                "machine": machine_label(str(p.meta.get("machine_id", ""))),
                 "machine_id": p.meta.get("machine_id", ""),
-                "user": p.meta.get("user", ""),
                 # THE ROSTER FLATTENS meta, so anything not named here is
                 # dropped on the way out. The colour was stored by the hub and
                 # thrown away by this loop, which meant `collab color` worked

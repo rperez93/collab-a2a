@@ -787,6 +787,13 @@ def sanitise(reported: dict[str, Any]) -> dict[str, Any]:
             continue
         if extras >= MAX_EXTRA_FIELDS or not isinstance(key, str):
             continue
+        # A status line hands its tool's JSON over whole, and Claude Code's
+        # carries `cwd`, `workspace.current_dir` and `transcript_path`: an
+        # unknown field naming the machine, the account or a path is not a
+        # usage figure, and is never put on the roster (T_5b4dac18307e).
+        from .protocol import PRIVATE_KEYS, looks_like_a_local_path
+        if key.lower() in PRIVATE_KEYS or looks_like_a_local_path(value):
+            continue
         if isinstance(value, bool) or isinstance(value, (int, float)):
             out[key[:MAX_STRING]] = value
             extras += 1

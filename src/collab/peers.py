@@ -111,12 +111,20 @@ def machine_id() -> str:
 
 
 def identity() -> dict[str, str]:
-    """What we tell the hub about where this agent is running."""
-    return {
-        "machine": machine_name(),
-        "machine_id": machine_id(),
-        "user": current_user(),
-    }
+    """What we tell the hub about where this agent is running — and therefore
+    what every participant sees: a label, never the hostname or the account
+    name (T_5b4dac18307e, see `collab.privacy`). The raw two are kept for the
+    PRIVATE machine registry only (`local_identity`)."""
+    from .privacy import machine_label
+
+    ident = machine_id()
+    return {"machine": machine_label(ident), "machine_id": ident}
+
+
+def local_identity() -> dict[str, str]:
+    """The raw hostname and account, for records that never leave this
+    machine: the registry this user's own agents read to find a local hub."""
+    return {"machine": machine_name(), "machine_id": machine_id(), "user": current_user()}
 
 
 @dataclass
@@ -223,7 +231,7 @@ def announce(*, session_id: str, name: str, role: str, url: str, repo: str,
         session_id=session_id, name=name, role=role, url=url, repo=repo,
         home=home, pid=pid or os.getpid(), updated_at=time.time(),
         participant_id=participant_id, invite=invite, host_name=host_name,
-        local_url=local_url, **identity(),
+        local_url=local_url, **local_identity(),
     )
     path = _record_path(session_id, peer.pid)
     tmp = path.with_suffix(".tmp")

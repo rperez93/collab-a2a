@@ -380,6 +380,16 @@ not yet), and a strong request goes through it:
   denies approvals rather than forging one, and the hub treats a key that has
   gone as an alarm, never as a reason to fall back silently.
 
+## What other participants learn about your machine
+
+Peers see a machine as a label such as `machine-3f2a91`, derived from a hash,
+never its hostname or your OS account name, and never your working directory.
+The join handshake carries the repository's name, branch and your focus — not
+the directory you joined from or the git remote, which can hold a token.
+Activity file paths go out relative to the repository, as `~/…`, or as a bare
+name. The hub refuses the hostname, the account, `cwd`, `remote` and any
+absolute path from older clients too, so none of them is stored or relayed.
+
 ## Version 2 boundaries
 
 Both peers validate the compatibility advertisement before admission; a guest

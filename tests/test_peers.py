@@ -96,11 +96,15 @@ def test_co_location_is_recognised_by_fingerprint():
 
 
 def test_the_fingerprint_does_not_leak_the_machine_name():
-    """It travels to participants on other machines, so it is hashed."""
-    ident = peers.identity()
+    """It travels to participants on other machines, so it is hashed — and
+    what travels beside it is a label, never the hostname or the account
+    (T_5b4dac18307e). The raw two stay in the private local registry."""
+    ident, local = peers.identity(), peers.local_identity()
     assert ident["machine_id"].startswith("m_")
-    assert ident["machine"] not in ident["machine_id"]
-    assert ident["user"] not in ident["machine_id"]
+    assert set(ident) == {"machine", "machine_id"}
+    assert ident["machine"].startswith("machine-")
+    for raw in (local["machine"], local["user"]):
+        assert raw not in ident["machine_id"] and raw not in ident["machine"]
 
 
 # --- the bugs that made a running session look absent ------------------------
@@ -151,7 +155,7 @@ def _peer(**kw) -> peers.Peer:
     fields = dict(session_id="s_1", name="alice", role="host",
                   url="http://127.0.0.1:5000", repo="/repo/api",
                   home="/repo/api/.collab", pid=os.getpid(),
-                  updated_at=time.time(), invite="INV", **peers.identity())
+                  updated_at=time.time(), invite="INV", **peers.local_identity())
     fields.update(kw)
     return peers.Peer(**fields)
 

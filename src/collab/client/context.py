@@ -26,14 +26,14 @@ def _git(*args: str, cwd: Path | None = None) -> str | None:
 def gather(focus: str = "", cwd: Path | None = None) -> dict[str, Any]:
     cwd = cwd or Path.cwd()
     repo_root = _git("rev-parse", "--show-toplevel", cwd=cwd)
-    remote = _git("remote", "get-url", "origin", cwd=cwd)
-    hello: dict[str, Any] = {"focus": focus.strip(), "cwd": str(cwd)}
+    # NO `cwd` AND NO `remote` (T_5b4dac18307e). The working directory is a
+    # full path that names the account; the remote URL can carry a token. The
+    # repository's NAME and branch say what the arrival line needs to say.
+    hello: dict[str, Any] = {"focus": focus.strip()}
 
     if repo_root:
         hello["repo"] = Path(repo_root).name
         hello["branch"] = _git("rev-parse", "--abbrev-ref", "HEAD", cwd=cwd) or ""
         dirty = _git("status", "--porcelain", cwd=cwd)
         hello["dirty"] = bool(dirty)
-        if remote:
-            hello["remote"] = remote
     return {k: v for k, v in hello.items() if v not in ("", None)}
