@@ -128,11 +128,12 @@ What 2.3.0 adds since 2.2.0.
   per-sender and per-session bound (#209).
 - **Process resources in the telemetry**: bounded per-role figures for the
   daemon, worker and collector (#193).
-- **Worker events in batches**: adjacent events are collected in a short
-  window, and urgent ones still go at once (#149). The worker's budget and
+- **Worker events in batches**: the worker batches adjacent conversation
+  events in a short, fixed window; urgent events bypass the batching delay
+  (#149). The worker's budget and
   terminal outcomes can be audited (#200).
-- **tmux**: collab finds the caller's own pane, and shows pending decisions
-  there (#115).
+- **tmux viewer**: collab locates the caller's own pane, and participant cards
+  show pending worker decisions (#115).
 - **Shared proxy**: operation and coordinated host upgrades are documented,
   and released clients are verified through routed and previous-owner root
   links (#194, #199).
