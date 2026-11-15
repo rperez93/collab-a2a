@@ -814,10 +814,14 @@ class Store:
                 data = json.loads(row[0])
                 if retention_note and data.get("kind") == "file":
                     target = "@" + data["to"] if data.get("to") else "#" + (data.get("room") or "general")
+                    # NEUTRAL: the note is the hub's own reason (a kept-bytes cap)
+                    # or an unconfirmed warning (an older hub, a source mismatch),
+                    # so nothing is claimed beyond it: not that it was dropped,
+                    # deleted, or must be sent again (friday's review of #214).
                     self._add(db, "escalation", {"reason": "blocker", "seq": 0, "question": (
-                        f"Your file {str(data.get('name'))[:200]!r} reached {target}, but the hub did not "
-                        f"keep it: {str(retention_note)[:300]}. It will be deleted on receipt or "
-                        f"expiry; withdraw a kept file and send it again if it must stay.")})
+                        f"Your file {str(data.get('name'))[:200]!r} reached {target}, but its "
+                        f"retention is not as asked: {str(retention_note)[:300]}. Keep your original "
+                        f"until `collab file list` shows the host kept it as you need.")})
         _drop_stash(row)
 
     def defer(self, record_id: str, *, retry_at: float, error: str) -> bool:

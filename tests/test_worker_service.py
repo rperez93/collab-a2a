@@ -916,3 +916,19 @@ async def test_remote_offer_is_excluded_from_worker_model_input(conversation, tm
     assert len(calls) == 1
     assert 'UNAPPROVED_SENTINEL' not in json.dumps(calls[0])
     assert calls[0]['events'][0]['text'] == 'Ordinary coordination'
+
+
+def test_the_retention_blocker_claims_nothing_beyond_the_note(tmp_path):
+    """friday's review of #214: the note may be an unconfirmed warning (an
+    older hub, a source mismatch), so the blocker must not say the file was
+    dropped, will be deleted, or must be sent again."""
+    store = worker.Store(tmp_path)
+    store.configure({"agent": "claude", "scope": "Coordinate", "enabled": True})
+    path = tmp_path / "evidence.zip"
+    path.write_text("data")
+    record_id = store.queue_file(path, to="bob", to_id="p_b", keep=True)
+    store.acknowledge(record_id, retention_note="Upload accepted, but retention/source is unconfirmed.")
+    told = [p["question"] for p in store.pending() if "evidence.zip" in p["question"]]
+    assert len(told) == 1 and "unconfirmed" in told[0]
+    for claim in ("did not keep", "deleted", "send it again"):
+        assert claim not in told[0], claim
