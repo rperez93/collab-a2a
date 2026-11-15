@@ -371,3 +371,24 @@ def test_a_passkey_receiver_is_shown_this_remote_operation_on_the_passkey_page(r
     assert remote.inbox.list()[0]["state"] == "declined"
     db = remote.world.store._db
     assert db.execute("SELECT COUNT(*) FROM approval_requests WHERE state='consumed'").fetchone()[0] == 0
+
+
+def test_an_expired_window_is_said_as_expired_and_the_request_stays_pending(remote, capsys):
+    """Live Hello test: every outcome that was not approve or decline read 'the
+    remote operation was not approved'. Nobody choosing in time is now said as
+    such, and the request stays pending to be accepted again."""
+    remote.world.hello.choice = 'expired'
+    assert accept(remote) == 1
+    said = capsys.readouterr().err
+    assert 'expired' in said and 'still pending' in said and 'not approved' not in said
+    assert remote.inbox.list()[0]['state'] == 'pending'
+
+
+def test_a_window_that_could_not_be_shown_is_said_with_its_scrubbed_reason(remote, monkeypatch, capsys):
+    monkeypatch.setattr(remote.world.hello, 'open_window',
+                        lambda request, fetch: {'choice': 'unavailable', 'reason': 'NoHello\x1b[31m'})
+    assert accept(remote) == 1
+    said = capsys.readouterr().err
+    assert 'unavailable' in said and 'NoHello' in said and 'still pending' in said
+    assert '\x1b[31m' not in said, 'the reason is scrubbed before it is shown'
+    assert remote.inbox.list()[0]['state'] == 'pending'
