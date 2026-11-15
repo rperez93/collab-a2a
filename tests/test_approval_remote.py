@@ -238,3 +238,26 @@ def test_with_remote_delivery_off_the_hub_prepares_and_consumes_nothing(hub, sig
         adapter.consume('test-bob', request['request_id'], receipt=approved['receipt'])
     set_remote_delivery(True)
     assert adapter.consume('test-bob', request['request_id'], receipt=approved['receipt'])['state'] == 'consumed'
+
+
+def test_a_reviews_receiver_binding_lasts_past_expiry_until_the_next_approval_request(hub, signer):
+    """What the hub keeps of a receiver's private configuration, and for how
+    long (stated in the PR for the storage decision). The canonical review
+    holds the bound argv and cwd. It expires within REQUEST_SECONDS (600 s) or
+    the offer's own expiry, but is deleted LAZILY: it is still in the
+    database after expiry, until the next enrolment, approval request or
+    challenge in the session prunes it."""
+    from collab.server.approval_store import REQUEST_SECONDS
+    adapter, env, offer, request, approved = ready(hub, signer)
+    def stored():
+        return [bytes(r[0]) for r in hub.store._db.execute(
+            "SELECT canonical FROM approval_requests WHERE id=?", (request['request_id'],))]
+    assert b'/private/work' in stored()[0] and b'/usr/bin/collab' in stored()[0]
+    hub.now[0] = request['expires_at'] + REQUEST_SECONDS  # long past its expiry
+    assert len(stored()) == 1, 'kept until something prunes'
+    later = make_offer(session_id='s_test', sender_id=hub.people['alice'].id,
+                       recipient_id=hub.people['bob'].id, target='thread-123', kind='prompt',
+                       text='a later offer', now=hub.now[0])
+    env2, _ = source(hub, later)
+    adapter.prepare('test-bob', source_seq=env2.seq, binding=binding())
+    assert stored() == [], 'the next approval request prunes it'
