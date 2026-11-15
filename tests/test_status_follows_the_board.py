@@ -75,3 +75,37 @@ def test_a_status_its_owner_has_talked_past_is_shown_as_stale(monkeypatch):
     assert "last said working on x" in activity.describe(busy)
     quiet = activity.as_seen(said, owner_id="p_b", open_tasks={}, last_spoke=now - 3500)
     assert "stale" not in quiet, "talking within the window does not make it stale"
+
+
+def test_a_pr_attached_by_someone_else_or_over_quiet_leaves_the_status_alone(client, session, host_headers):
+    """Lead gate on #192: only the owner's own attach moves their status, and
+    only over their own task's status or idle, never over quiet."""
+    bob = _join(client, session)
+    task = _task(client, host_headers, "propose", title="the fix").json()["task"]
+    _task(client, _headers(bob), "claim", id=task["id"])
+    client.post("/ext/collab/v1/activity", headers=_headers(bob),
+                json={"state": "quiet", "what": "stepped away"})
+    client.post("/ext/collab/v1/task-prs", headers=host_headers,       # not bob
+                json={"id": task["id"], "url": "https://github.com/o/r/pull/7"})
+    assert _status(client, host_headers, "bob")["state"] == "quiet"
+    client.post("/ext/collab/v1/task-prs", headers=_headers(bob),      # bob, but quiet
+                json={"id": task["id"], "url": "https://github.com/o/r/pull/8"})
+    assert _status(client, host_headers, "bob")["state"] == "quiet"
+
+
+def test_a_roster_poll_never_rescans_the_history(client, session, host_headers, monkeypatch):
+    """Lead gate on #192: the last-activity times are read once, then kept
+    current by publish; a poll costs no query over the events."""
+    from collab.server import store as store_module
+    calls = []
+    real = store_module.Store.last_spoke_all
+    monkeypatch.setattr(store_module.Store, "last_spoke_all",
+                        lambda self: calls.append(1) or real(self))
+    bob = _join(client, session)
+    for _ in range(5):
+        client.get("/ext/collab/v1/snapshot", headers=host_headers)
+    client.post("/ext/collab/v1/activity", headers=_headers(bob), json={"state": "working", "what": "x"})
+    client.post("/ext/collab/v1/messages", headers=_headers(bob), json={"text": "hello"})
+    for _ in range(5):
+        client.get("/ext/collab/v1/snapshot", headers=host_headers)
+    assert len(calls) <= 1

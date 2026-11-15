@@ -1139,7 +1139,7 @@ def create_app(
                   "number": record["number"]},
         ))
         if task := await asyncio.to_thread(store.get_task, task_id):
-            await asyncio.to_thread(hub.follow_pr, task, record["number"])
+            await asyncio.to_thread(hub.follow_pr, task, record["number"], user.id)
         return {"pr": record, "prs": store.task_prs(task_id)}
 
     # --- extension: batches of work -----------------------------------------------
