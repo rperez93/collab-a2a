@@ -70,15 +70,15 @@ reviewed, approved, declined, delivered or left uncertain. A sender that needs
 to know must ask in an ordinary message, and the receiver's answer is only its
 own word.
 
-**Remote delivery is on by default; the hub's host can turn it off:**
-`collab config remote_delivery off`, on the machine that hosts the session.
-Off, the hub advertises no remote delivery and refuses to prepare or consume a
-remote review, and `collab remote accept` refuses («this hub has not enabled
-strong remote delivery»); offers are still received, held and listed. The
-setting is an availability switch, not consent: on, each delivery still needs
-the receiver's own Hello or passkey gesture on the reviewed operation, which
-nothing bypasses. Automated tests do not perform that native human ceremony on
-an installed adapter; it remains a release check. See the
+**Remote delivery is off until the hub's host turns it on:**
+`collab config remote_delivery on`, on the machine that hosts the session.
+Off — the default — the hub advertises no remote delivery and refuses to
+prepare or consume a remote review, and `collab remote accept` refuses («this
+hub has not enabled strong remote delivery»). Offers are still received, held
+and listed. The setting is an availability switch, not consent: each delivery
+still needs the receiver's own gesture on the reviewed operation. It stays off
+by default because its release gate is a native human ceremony on the
+installed adapter, which automated tests do not perform. See the
 [strong-approval contract](remote-strong-adoption.md).
 
 Old accepted flag/hash/terminal-receipt grants are invalidated when the queue
@@ -166,8 +166,7 @@ changing the host's template.
 ## Release validation gate
 
 The strong hub and receiver paths are implemented and tested with isolated HTTP
-hubs and synthetic signing keys. The host's `remote_delivery` setting is on by
-default; actual native human ceremonies, passkey adoption and the shared
-installed-version validation remain release checks that automated tests do not
-perform. Automated tests do not prove human presence or
+hubs and synthetic signing keys. The host's `remote_delivery` setting stays off
+by default until actual native human ceremonies, passkey adoption and the
+shared installed-version validation are complete. Automated tests do not prove human presence or
 end-to-end readiness of a deployed session.

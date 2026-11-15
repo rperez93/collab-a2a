@@ -14,10 +14,9 @@ and delivery binding before opening the window. The inbox records a durable
 attempt before hub consumption; old terminal grants are invalidated. Matching
 consumption authorizes one dispatch, with binding and expiry rechecked just
 before launch. Connection goals retain their persisted private source sequence.
-Remote delivery is the hub host's `remote_delivery` setting: on by default, the
-host's off switch, enforced at prepare and consume. Real native human/passkey
-and shared installed-version validation remain release checks; synthetic tests
-are not those gates.
+Remote delivery is the hub host's `remote_delivery` setting, off by default and
+enforced at prepare and consume, pending real native human/passkey and shared
+installed-version validation; synthetic tests are not those release gates.
 
 Validation: 360 focused remote, HTTP approval, worker and documentation tests
 passed in44.86s. After raising the remote capability/header to2 to refuse legacy
@@ -148,5 +147,5 @@ a stub addressed coding adapter, separately from actual native human validation:
   retain current-main behavior.
 
 Then run the lead's serialized landing suite and actual same-version hub/client
-human ceremonies on the concrete operation and installed adapter; the per-offer
-strong gesture, not the `remote_delivery` setting, is what authorises delivery. This document is not evidence of those gates.
+human ceremonies. Keep `remote_delivery` off by default until the concrete
+operation and installed adapter are verified. This document is not evidence of those gates.
