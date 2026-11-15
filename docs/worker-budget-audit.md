@@ -1,5 +1,10 @@
 # Worker call-budget audit
 
+Account usage — token counts, costs and quota readings — is described here
+only in relative terms. The absolute figures belong to the participants'
+accounts and are not published. The parser tests carry their own synthetic
+figures.
+
 The measured four-participant session exhausted the 60-attempt rolling-hour
 budget. Keep 60 attempts per 3,600 seconds as the provisional default while
 measuring the pacing changes in PR #100 on the integrated build. This is a
@@ -19,14 +24,14 @@ were read. No peer private state or provider transcript directory was scanned.
 | Codex guest configured budget | 60 attempts / 3,600 seconds from `collab config` | One participant in a four-participant session |
 | Reservations before the cap | 60; first 22:42:51.262, last 23:36:27.152 UTC | 53 min 35.890 s between first and last reservation, not a measured hourly demand rate |
 | Lifetime committed turns at cap | 132 | Includes local cursor advances; **not** 132 provider calls |
-| Observed worker usage at cap | 2,292,352 input, 11,793 output, 167,040 cached tokens | Observed lifetime counters; no validated exact-model USD price or account quota scope |
+| Observed worker usage at cap | Lifetime token counters read; input dominated output by roughly two hundred to one, and under a tenth of input was cached | Lifetime counters of one account, not published; no validated exact-model price or account quota scope |
 | Confirmed budget error | Observed at 23:40:39.802 UTC; reported retry 23:42:51.262 | Actual onset was not recorded; do not call the entire gap a measured stall |
 | Natural recovery | At 23:43:22.333: 62 lifetime attempts, 58 in the rolling window, budget error cleared | No listener restart, settings change, or cap reset |
-| Usage at recovery sample | 2,366,096 input, 12,236 output, 178,560 cached tokens | Difference: 73,744 input, 443 output, 11,520 cached; no USD estimate |
+| Usage at recovery sample | The counters had grown by about 3% of their value at the cap over two further attempts | A difference of two samples, not a per-call cost; no price estimate |
 | Other guest report | Configured 60/hour; measured attempts, outcomes, tokens, cost and stall unknown | Shared in-session; not independently inspected |
 | Claude guest report | 73 lifetime attempts over approximately 1.15 h; 58 in last hour; observed retry delays 2–46 s | Peer-reported from its own state; not an exact capture interval |
-| Claude guest usage | 483,147 input (378,031 cached), 75,064 output; estimated $0.092 over its worker lifetime | Peer estimate, not independently verified prices/billing; action/no-action counts unknown |
-| Host report in R15 task | 135 “turns” in roughly 1.5 h, estimated $2.85, seven-day quota 1% | Peer-reported; turns are not a verified provider-call denominator; cost coverage and shared-account scope unverified |
+| Claude guest usage | Reported by the peer from its own state, most of its input cached, with its own cost estimate | Peer's own account figures, not published here; prices and billing unverified; action/no-action counts unknown |
+| Host report in R15 task | 135 “turns” in roughly 1.5 h, with a cost estimate and a small fraction of a seven-day quota | Peer-reported; account figures not published; turns are not a verified provider-call denominator; cost coverage and shared-account scope unverified |
 
 The Claude guest also reported 145 committed turns. Its proposed subtraction
 (145 minus 73) is not a verified model-free commit count: failed reservations
@@ -56,8 +61,8 @@ restart or budget change. Its next limit response scheduled 00:29:26.268;
 a later sample recorded 114 lifetime reservations, 60 within the rolling hour,
 235 committed turns and retry at 00:31:59.639.
 
-The later usage counters were 4,267,960 input, 22,101 output and 449,280 cached
-tokens, observed at 00:29:33.485 UTC. These remain lifetime observations, not a
+The lifetime usage counters, read at 00:29:33.485 UTC, had nearly doubled since
+the sample at the cap. These remain lifetime observations, not a
 new matched measurement window or a useful-call ratio. PR #100 pacing and the
 R14 outcome ledger were not installed in this listener. Repeated scheduled-cap
 notifications continued to wake the main agent even with no pending decisions.
@@ -140,7 +145,7 @@ session into a role/size scaling curve.
    demonstrated throughput benefit or known dollar cost. Ask for a concrete
    spending/latency preference after presenting measured alternatives.
 
-Do not automatically raise the cap from “quota 1%”: worker vs coding-agent
+Do not automatically raise the cap because a quota reads as nearly unused: worker vs coding-agent
 account sharing, quota freshness, cost coverage and other consumers must be
 known. Unknown headroom is not permission to spend more. The human retains the
 final choice of the numeric cap; this PR changes no runtime default.
@@ -156,7 +161,7 @@ additional provider call was launched for this measurement.
 ## Continued baseline before R3/R14 deployment
 
 At 2026-11-14T01:31:57.688222+00:00, arma still used the verified machine configuration of
-60 attempts per 3,600 seconds and Codex `gpt-5.6-luna`. The capture reported
+60 attempts per 3,600 seconds and a Codex model. The capture reported
 174 lifetime reservations, 374 committed turns and
 60 reservations in the rolling window, spanning
 3451.099 seconds. Remaining reservations were
@@ -164,8 +169,8 @@ At 2026-11-14T01:31:57.688222+00:00, arma still used the verified machine config
 true, with 3.678 seconds until its scheduled retry.
 No cap reset or increase was performed.
 
-The observed lifetime counters were 6,478,117 input,
-34,458 output and 771,840 cached tokens. These do not
+The lifetime token counters had grown about half again since the previous
+sample, a little over an hour earlier. These do not
 measure this rolling window or establish useful-call efficiency. Outcome
 counts and cost remain unknown until the R14 ledger is deployed. R3/R7 are
 being tested together in an isolated checkout; that is not a live worker
@@ -254,9 +259,9 @@ attempt IDs or dropped markers were observed in this file set. Declared
 comparison context was guest, four participants. The running daemon's source
 commit was not established, so its build is explicitly unknown.
 
-Reported usage subtotals were 1,323,711 input tokens, 8,547 output tokens and
-57,600 cached tokens across 31 records; the other 39 records supplied no token
-usage. No record supplied cost. These are observed subtotals, not verified
+Usage subtotals were reported by all 31 provider-launch records and by none of
+the 39 local skips, with input far exceeding output and a small cached share.
+No record supplied cost. These are observed subtotals, not verified
 interval totals or billing figures. There were 21 reported replies and nine
 escalations; neither proves useful delivery or its latency. Coverage remains
 `not_verified` even without a visible gap marker. This replaces the earlier
