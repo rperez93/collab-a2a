@@ -489,9 +489,12 @@ class Store:
             self._save(db, state)
             target = (f"{data['subject']} {data['subject_id']}" if data.get("kind") == "comment"
                       else "@" + data["to"] if data.get("to") else "#" + (data.get("room") or "general"))
+            if data.get("recipient_id"):
+                detail = "Remote offer withheld; review its recipient and consent capability before retrying."
+            else:
+                detail = f"{data['text'][:300]!r}. Resend it to a valid address or drop it."
             self._add(db, "escalation", {"reason": "blocker", "seq": 0, "question": (
-                f"Your message to {target} could not be delivered ({reason}): "
-                f"{data['text'][:300]!r}. Resend it to a valid address or drop it.")})
+                f"Your message to {target} could not be delivered ({reason}): " + detail)})
 
     def enabled(self) -> bool:
         """Whether the worker is this participant's voice right now.

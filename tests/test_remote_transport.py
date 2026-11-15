@@ -1,3 +1,5 @@
+import pytest
+
 from test_chat_is_the_only_kind_a_client_sends import _join, _rpc
 
 
@@ -80,7 +82,11 @@ def test_rejoining_legacy_client_clears_prior_capability(client, session):
     _, first = _join(client, session, 'returning')
     with session['store'].edit_meta(first['id']) as meta:
         meta['remote_consent_version'] = 1
-    _, second = _join(client, session, 'returning')
+    response = client.post('/ext/collab/v1/join', json={
+        'protocol_major': 2, 'version': '2.0.0', 'invite': session['invite'],
+        'name': 'returning', 'hello': {}, 'resume_token': first['token']})
+    assert response.status_code == 200, response.text
+    second = response.json()
     assert second['id'] == first['id']
     assert session['store'].participant_by_id(first['id']).meta['remote_consent_version'] == 0
     person = next(p for p in second['snapshot']['participants'] if p['id'] == first['id'])
@@ -217,3 +223,54 @@ def test_worker_throttle_is_visible_and_waits_at_least_a_minute(tmp_path):
     queued = store.outbox()[0]
     assert queued['retry_at'] >= before + 60
     assert '429' in queued['error']
+
+
+def test_remote_offer_never_enters_main_sent_or_rejection_context(tmp_path):
+    from collab.worker import Store
+    store = Store(tmp_path)
+    store.configure({'agent': 'command', 'command': ['unused-test-adapter'], 'scope': 'test'})
+    record = store.send('UNAPPROVED_REMOTE_SENTINEL', to='peer', recipient_id='p_peer')
+    assert store.outbox()[0]['to_id'] == 'p_peer'
+    assert 'UNAPPROVED_REMOTE_SENTINEL' not in str(store.snapshot().get('main_sent'))
+    store.reject(record, reason='hub answered 409')
+    assert 'UNAPPROVED_REMOTE_SENTINEL' not in str(store.pending())
+    assert 'Remote offer withheld' in store.pending()[0]['question']
+
+
+def test_remote_and_stable_recipient_ids_cannot_disagree(tmp_path):
+    from collab.worker import Store
+    store = Store(tmp_path)
+    store.configure({'agent': 'command', 'command': ['unused-test-adapter'], 'scope': 'test'})
+    with pytest.raises(ValueError, match='conflicting recipient'):
+        store.send('private', to='peer', to_id='p_other', recipient_id='p_peer')
+    assert store.outbox() == []
+
+
+@pytest.mark.parametrize('refuse', [False, True])
+def test_worker_off_preserves_remote_guard_and_failed_queue(tmp_path, monkeypatch, refuse):
+    import argparse
+    from types import SimpleNamespace
+    from collab import cli
+    from collab.worker import Store
+    from collab.client.hub_client import HubError
+    store = Store(tmp_path)
+    store.configure({'agent': 'command', 'command': ['unused-test-adapter'], 'scope': 'test'})
+    identity = store.send('private offer', to='peer', recipient_id='p_peer')
+    calls = []
+    class Client:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def _request(self, method, path, **kwargs):
+            calls.append((path, kwargs['json']))
+            if refuse:
+                raise HubError('old hub refuses guarded route')
+        def send(self, *args, **kwargs):
+            raise AssertionError('remote offer must never use ordinary send')
+    monkeypatch.setattr(cli, '_client', lambda profile: Client())
+    monkeypatch.setattr(cli, '_require_own_profile', lambda args: SimpleNamespace(dir=tmp_path, name='sender'))
+    assert cli.cmd_worker(argparse.Namespace(worker_action='off')) == 0
+    assert len(calls) == 1 and calls[0][0].endswith('/remote-messages')
+    payload = calls[0][1]
+    assert payload['to_id'] == payload['body']['collab_expected_recipient_id'] == 'p_peer'
+    assert payload['body']['collab_worker_delivery'] == identity
+    assert bool(store.outbox()) is refuse
