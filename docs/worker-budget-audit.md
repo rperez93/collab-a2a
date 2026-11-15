@@ -184,8 +184,11 @@ only when reported; a missing value is unknown. `event=dropped` marks lost lines
 names their number `lines`; the earlier draft named it `count`. The reader
 accepts either, counts equal dual fields once, and marks conflicting or invalid
 fields as an unknown loss count.
-The implementation and deployment of R14 still need verification against this
-contract before a paired before/after audit can be accepted.
+The current published writer at `main` `80f7a49` matches this record contract:
+`client.worker_service.turn_record` writes terminal records and
+`logcap._dropped_line` writes `lines`. A regression feeds those actual writer
+outputs into this reader. This establishes schema compatibility, not complete
+log retention or a paired before/after audit.
 
 Use explicit files from **your own selected worker**, oldest first. Nothing is
 auto-discovered, and the tool never opens another participant's state:
@@ -235,3 +238,31 @@ took 0.222 seconds wall, 0.208 seconds CPU and 18,304 KiB peak-RSS growth on thi
 machine. A regression checks that workload under 8 seconds wall, 6 seconds CPU
 and 96 MiB RSS growth. These are parser measurements, not worker efficiency,
 real call counts, or postdeployment evidence.
+
+## Current-main and own-worker checkpoint
+
+PR108 was rebased onto `main` `80f7a49`. The unchanged audit tests passed
+47 checks in 1.26 seconds before adding the real-writer contract regression.
+This update does not change worker budgets, defaults, pacing or providers.
+
+A read-only snapshot of this participant's selected guest worker covered
+2026-11-14 23:17:45.613 UTC through 2026-11-15 00:17:45.613 UTC. The sole
+available log was 54,397 bytes, with 185 lines scanned. Within the requested
+hour it contained 70 terminal records: 31 provider-launch records (16 `output`,
+15 `no-op`) and 39 `skipped-local` records. No malformed records, conflicting
+attempt IDs or dropped markers were observed in this file set. Declared
+comparison context was guest, four participants. The running daemon's source
+commit was not established, so its build is explicitly unknown.
+
+Reported usage subtotals were 1,323,711 input tokens, 8,547 output tokens and
+57,600 cached tokens across 31 records; the other 39 records supplied no token
+usage. No record supplied cost. These are observed subtotals, not verified
+interval totals or billing figures. There were 21 reported replies and nine
+escalations; neither proves useful delivery or its latency. Coverage remains
+`not_verified` even without a visible gap marker. This replaces the earlier
+absence-of-ledger observation, not the need for paired measurements.
+
+The sample alone does not justify raising or lowering the 60-per-hour cap.
+Verified running-build provenance, host/guest and session-size comparisons,
+paired intervals, and actual budget-stall evidence remain outstanding. The
+script leaves the recommended cap, cost total and delivery latency unknown.

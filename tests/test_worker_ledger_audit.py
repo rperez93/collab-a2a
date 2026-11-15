@@ -44,6 +44,29 @@ def test_rotation_dedup_and_explicit_outcomes(tmp_path):
     assert result['recommended_cap'] is None
 
 
+def test_published_worker_writer_and_gap_marker_are_read_without_reconstruction(tmp_path):
+    from collab.client.worker_service import turn_record
+    from collab.logcap import _dropped_line
+    import time
+
+    lines = [turn_record(phase='committed', outcome='output', attempt='000000000001',
+                        agent='codex', model='small', reply_count=2,
+                        usage=[{'tokens_in': 17, 'tokens_out': 3}], seconds=.25),
+             turn_record(phase='committed', outcome='skipped-local', attempt='000000000002',
+                         agent='codex'), _dropped_line(5)]
+    path = tmp_path / 'worker.log'
+    path.write_text('\n'.join(lines) + '\n')
+    result = audit.summarize([path], since=0, until=time.time()+1)
+    assert result['terminal_records_observed'] == 2
+    assert result['provider_launch_records_observed'] == 1
+    assert result['measurements']['tokens_in']['known_sum'] == 17
+    assert result['measurements']['tokens_out']['known_sum'] == 3
+    assert result['measurements']['tokens_in']['total'] is None
+    assert result['diagnostics']['reported_dropped_lines'] == 5
+    assert result['coverage'] == 'incomplete'
+    assert result['recommended_cap'] is None
+
+
 def test_conflicting_id_is_excluded_instead_of_counted_twice(tmp_path):
     p=write(tmp_path/'worker.log',[record(),record(outcome='failed')])
     out=audit.summarize([p],since=START,until=END)
