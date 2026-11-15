@@ -8211,8 +8211,14 @@ def cmd_skills_install_shared(args: argparse.Namespace) -> int:
             raise ValueError("a conversation worker cannot install skills")
         profile = _require_profile(args)
         target = sk.skills_target(args.agent)
+        if not re.fullmatch(r"sk_[0-9a-f]{20}", str(args.target)):
+            raise ValueError("skills install-shared needs a publication ID like sk_… from `collab skills shared`")
         with _client(profile) as client:
             record = client.shared_skill(args.target).get("skill") or {}
+        if record.get("id") != args.target:
+            # The hub's record names the file below and the install: it must be
+            # the publication that was asked for, never a path the hub chose.
+            raise ValueError("the hub returned a different publication than the one asked for; not installing it")
         content = record.get("content")
         digest = hashlib.sha256(content.encode()).hexdigest() if isinstance(content, str) else ""
         if not digest or digest != record.get("sha256"):
@@ -8237,7 +8243,7 @@ def cmd_skills_install_shared(args: argparse.Namespace) -> int:
                 raise ValueError("--human-approved needs --sha256 with the hash your human reviewed; "
                                  "the text now has a different one, so it was not installed")
         elif not terminal:
-            review = profile.dir / "skill-reviews" / f"{said(str(record.get('id', 'skill')))}-{digest[:12]}.md"
+            review = profile.dir / "skill-reviews" / f"{args.target}-{digest[:12]}.md"  # validated id only
             review.parent.mkdir(parents=True, exist_ok=True)
             review.write_text(content, encoding="utf-8")
             print(f"  full text for your human to read: {review}")
