@@ -23,9 +23,16 @@ SAMPLE_SECONDS = 0.1
 PUBLISH_WAIT_SECONDS = 0.25
 
 
+#: The largest figure a sample may carry. A peer's number is finite and still
+#: absurd: 10**300 passes `isfinite`, and the dashboard printed its ~300 digits.
+#: No byte count, rate or load on a real machine comes near 2**63.
+MAX_FIGURE = 2 ** 63
+
+
 def _number(value):
     try:
-        return value if type(value) in (int, float) and value >= 0 and math.isfinite(value) else None
+        return value if (type(value) in (int, float) and 0 <= value <= MAX_FIGURE
+                         and math.isfinite(value)) else None
     except OverflowError:
         return None
 

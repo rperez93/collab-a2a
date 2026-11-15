@@ -417,8 +417,10 @@ do not overload the machine:
 ```
 
 It requires runtime `COLLAB_NO_WORKER` support (PR #100), verified by a
-configuration-only probe; unsupported builds refuse to start. It waits at most 900 seconds for the shared lock (`--lock-timeout` overrides),
-lowers CPU/IO priority, and uses a temporary config with automatic workers off.
+configuration-only probe; unsupported builds refuse to start. It lowers CPU/IO
+priority and uses a temporary config with automatic workers off. It takes no
+lock of its own: one full run per machine at a time is enforced by the suite's
+own lock (`tests/suite_lock.py`), which any run of 1,000 tests or more takes.
 A test that replaces `COLLAB_CONFIG` must preserve `worker_auto_start=false`
 unless it explicitly tests worker startup. Focused tests can still use pytest
 directly. See [resource awareness](docs/resources.md) for limits and diagnostics.

@@ -1021,6 +1021,14 @@ class Daemon:
                     and (time.time() - self._stats_sent_at) >= STATS_REASSERT)
         if not changed and not reassert:
             return
+        # THE LAST WORD ON CONSENT, WITH NOTHING AWAITED AFTER IT. Sharing was
+        # checked before the resource sample, but the sample and the skill scan
+        # both await, and `share_stats` turned off meanwhile must win: posting
+        # the figures read before would publish what the user just withdrew.
+        # Skipped here, the next cycle takes the stats-off path above, which
+        # still sends the skill list on its own consent.
+        if not share_stats_enabled():
+            return
         try:
             r = await client.post(
                 f"{self.profile.url}{EXT_PREFIX}/stats",
