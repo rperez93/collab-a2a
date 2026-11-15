@@ -209,8 +209,18 @@ def main() -> int:
         from .config import proxy_mode
         from .proxy_host import SharedProxy, use_proxy
         if use_proxy(cfg.tunnel_mode, proxy_mode()):
+            # THE FIRST ATTACH CLAIMS THE BARE DOMAIN, if nobody holds it. A
+            # link handed out before the proxy is the domain's ROOT with the
+            # invite in the fragment — it names no session (2.1.2's links carry
+            # no `/s/<id>`), so the only way it still reaches its session is for
+            # that session to be the primary. With the proxy now the default,
+            # the session that owned the domain is the one moving onto it, and
+            # it must not need `--primary` for its guests' links to keep
+            # working. Never taken from a recorded holder (`claim_primary` is
+            # first-come and sticky), and asked once: a session that attached
+            # before and is not primary stays so.
             supervisor = SharedProxy(cfg.session_id, domain=cfg.domain,
-                                     primary=cfg.proxy_primary)
+                                     primary=cfg.proxy_primary or not cfg.proxy_seen)
         else:
             supervisor = TunnelSupervisor(
                 cfg.port,
@@ -219,9 +229,14 @@ def main() -> int:
             )
         supervisor.start()
 
+    if getattr(supervisor, 'shared', False):
+        # Remembered either way: the automatic claim is a first-attach rule,
+        # and a primary we won is recorded so a revived hub asks for it again.
+        cfg.proxy_primary = bool(supervisor.primary)
+        cfg.proxy_seen = True
     if supervisor is not None and supervisor.public_url:
         cfg.public_url = supervisor.public_url
-        cfg.tunnel = "proxy" if isinstance(supervisor, SharedProxy) else "ngrok"
+        cfg.tunnel = "proxy" if getattr(supervisor, 'shared', False) else "ngrok"
         # Only what we started: a tunnel we merely reused belongs to whoever
         # launched it, and stopping it would be taking something that is not
         # ours.
