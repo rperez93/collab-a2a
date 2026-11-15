@@ -236,6 +236,40 @@ def split_front_matter(content: str) -> tuple[list[str], str]:
     return [], content
 
 
+def install_lock():
+    """fcntl, which shared installs lock with; refused plainly where it is absent.
+
+    Called before the human is asked, so nobody reviews and approves a skill
+    that this platform then cannot install.
+    """
+    try:
+        import fcntl
+    except ImportError:  # shortcut: no install lock without fcntl; add msvcrt.locking for native Windows
+        raise ValueError("installing a peer's shared skill is not supported on this platform yet "
+                         "(it needs a file lock collab only has on Linux and macOS)") from None
+    return fcntl
+
+
+def front_description(content: str) -> str:
+    """The description from the skill text's OWN front matter: the only one an
+    install may use, since it is covered by the SHA-256 the human approved. The
+    publication's separate description field is not (a republish can change it
+    alone), so it never reaches the installed text."""
+    import json as _json
+    head, _ = split_front_matter(content)
+    for line in head:
+        m = FRONT_KEY.match(line)
+        if m and m.group(1) == "description":
+            value = line.split(":", 1)[1].strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                try:
+                    value = _json.loads(value) if value[0] == '"' else value[1:-1]
+                except ValueError:
+                    value = value[1:-1]
+            return str(value)
+    return ""
+
+
 def dropped_keys(content: str) -> list[str]:
     """Front-matter keys the install will NOT keep (only name and description are)."""
     head, _ = split_front_matter(content)
@@ -304,7 +338,7 @@ def install_shared(record: dict, *, target: Target, session_id: str, force: bool
     import tempfile
     import time as _time
     from .skill_sharing import validate_publication
-    import fcntl
+    fcntl = install_lock()
     clean = validate_publication({k: record.get(k) for k in ("name", "description", "content", "sha256")})
     target.path.mkdir(parents=True, exist_ok=True)
     # Check and swap under one lock: concurrent installs raced, and a second
@@ -325,7 +359,7 @@ def _install_locked(record, clean, *, target: Target, session_id: str, force: bo
     import tempfile
     import time as _time
     dest = check_installable(record, target=target, force=force)
-    text = installed_text(clean["content"], dest.name, clean["description"])
+    text = installed_text(clean["content"], dest.name, front_description(clean["content"]))
     fresh = Path(tempfile.mkdtemp(prefix=".collab-install-", dir=target.path))
     try:
         (fresh / "SKILL.md").write_text(text, encoding="utf-8")
