@@ -305,6 +305,11 @@ list.
   R22b, v2.2.0.)
 - `collab file list --all` shows every file, including those that ended, with
   why — collected, expired or withdrawn; without it the list counts them.
+- `collab task pr` records the full commit a review and a test run covered
+  (`--reviewed-sha`, `--tested-sha`) and an observed head (`--head-sha`, or
+  `--check-head` through `gh api`); task list/show, snapshots and the
+  transcript warn when the head differs. Evidence, not approval: merge with the
+  forge's expected-head `sha`. (Later than the pin, #137.)
 - The shared-machine proxy (`python -m collab.proxy_main`) is started by
   `collab host` when the `proxy` machine setting is `on`/`auto` or the host
   passes `--tunnel proxy`; the setting defaults to `auto` from 2.2.0, and a
