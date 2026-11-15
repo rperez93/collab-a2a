@@ -98,6 +98,31 @@ def _forget_own_name():
     tui._OWN_NAME.clear()
 
 
+@pytest.fixture(autouse=True)
+def _restore_logging():
+    """Logging is process-wide, so a test that runs a process's `main`
+    in-process must not leave its wiring behind.
+
+    `setup_logging` attaches a `diagnostics.Handler` to the `collab` logger and
+    moves the root handlers behind a queue. Left in place, every later warning
+    was recorded twice, and `test_diagnostics` failed whenever a file that
+    calls a `main` (the shared proxy's, for one) ran before it.
+    """
+    import logging
+
+    from collab.client import daemon_files
+    root, ours = logging.getLogger(), logging.getLogger("collab")
+    saved = (list(root.handlers), root.level, list(ours.handlers), ours.level)
+    listener = daemon_files._listener
+    yield
+    root.handlers[:], root.level, ours.handlers[:], ours.level = saved
+    left = daemon_files._listener
+    if left is not listener:
+        if callable(getattr(left, "stop", None)):  # some tests plant a stand-in
+            left.stop()
+        daemon_files._listener = listener
+
+
 @pytest.fixture()
 def profile(tmp_path, monkeypatch):
     """A saved session profile in a home of its own.
