@@ -1,5 +1,8 @@
 # Bundle Update Log
 
+## 2026-11-15 (passkey approval enabled)
+* **Update (later than the pin)**: Recorded in [the command surface](operating/cli-surface.md) that, after 2.2.0, `collab consent enrol` off Windows enrols a passkey through the local browser page and the hub advertises `passkey` as well as `hello`; Windows and WSL always use Hello. The pin and verification stamps are unchanged.
+
 ## 2026-11-14 (no host identity)
 * **Update (later than the pin)**: Peers no longer receive the hostname, the OS account or the working directory: `machine` is a label taken from `machine_id`, a random identity generated once per machine and account (not a hash), `user`, `cwd` and `remote` are neither sent nor stored by the hub in new writes, while rows stored earlier stay at rest and are cleaned on output (recorded in `docs/security.md` and SPEC.md, not re-verified against the pinned pages). The pin and verification stamps are unchanged.
 

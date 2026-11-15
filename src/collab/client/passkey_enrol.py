@@ -350,3 +350,46 @@ class EnrolService:
                 "Enrolment was not confirmed. Refresh status; do not repeat an uncertain finish.", 502)
         finally:
             flow.busy = False
+
+
+#: How long `collab consent enrol` waits for the human to finish in the browser:
+#: the page's own window, so the terminal never outlives the capability it
+#: opened (a stale page refuses anyway).
+ENROL_WAIT_SECONDS = passkey.WINDOW_SECONDS
+
+
+def enrol_with_passkey(profile, *, opener=None, transport=None, poll=0.25) -> dict:
+    """Run one human-started passkey enrolment to its end, synchronously.
+
+    The terminal command is the front door (a human typed it, at a terminal);
+    the browser ceremony with user verification is the lock. This opens the
+    local enrolment page, then waits for the page's own outcome rather than
+    inventing one: «enrolled» (the hub confirmed the key), «exists» (a key is
+    already enrolled; adding one is the signed key-change flow), or a timeout
+    or failure, reported as «unavailable». Nothing is retried and no weaker
+    fallback is attempted. Returns {"status": ..., "credential": {...}|None}.
+    """
+    async def run():
+        approval = ApprovalTransport(profile, transport=transport)
+        page = passkey.PasskeyPage(opener=opener)
+        try:
+            service = EnrolService(page, approval)
+            await service.human_start()
+            deadline = time.monotonic() + ENROL_WAIT_SECONDS
+            while time.monotonic() < deadline:
+                flow = service.flow
+                if flow is None:
+                    return {"status": "unavailable", "credential": None}
+                if flow.phase == "enrolled":
+                    return {"status": "enrolled", "credential": flow.confirmed}
+                if flow.phase == "exists":
+                    return {"status": "exists", "credential": None}
+                await asyncio.sleep(poll)
+            return {"status": "expired", "credential": None}
+        finally:
+            # Revoke the browser capability before the bounded shutdown.
+            if getattr(page, "_enrol_service", None) is not None:
+                page._enrol_service.invalidate()
+            await page.stop()
+            await approval.close()
+    return asyncio.run(run())

@@ -1,9 +1,10 @@
 # Strong approval API v1 — contract proposal
 
-Status: **Windows Hello approval is live from 2.2.0; passkey is not yet.**
-Capability discovery returns `available:true` with `methods:["hello"]`.
-Passkey review exists, but nothing in this build lets a person enrol a passkey,
-so it is not advertised. A hub older than 2.2.0 returns `available:false` with
+Status: **Windows Hello approval is live from 2.2.0; passkey approval after 2.2.0.**
+Capability discovery returns `available:true` with `methods:["hello","passkey"]`
+(2.2.0 itself advertised `["hello"]` only). Off Windows, `collab consent enrol`
+enrols a passkey through the local enrolment page; on Windows and WSL the client
+always uses Hello. A hub older than 2.2.0 returns `available:false` with
 `reason:"operation_integration_pending"`, or 404; a client treats both as
 unavailable. Never fall back to terminal approval when strong approval was
 requested.
