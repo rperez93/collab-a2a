@@ -166,3 +166,53 @@ def test_receiver_selected_goal_still_requires_valid_local_target(hub, target):
     bad['target'] = bad['destination']['session_id'] = target
     with pytest.raises(Rejected, match='invalid_remote_binding'):
         adapter.prepare('test-bob', source_seq=env.seq, binding=bad)
+
+
+def _forged_source(hub, **body):
+    """An envelope alice really sent to bob, carrying an offer whose BODY
+    names other participants than the transport does."""
+    offer = make_offer(**{'session_id': 's_test', 'sender_id': hub.people['alice'].id,
+        'recipient_id': hub.people['bob'].id, 'target': 'thread-123', 'kind': 'prompt',
+        'text': 'exact untrusted prompt', 'now': hub.now[0], **body})
+    return source(hub, offer)[0]
+
+
+def test_an_offer_body_naming_another_sender_than_the_event_is_refused(hub):
+    """R1 of the #118 review. alice sends an offer whose body claims carol
+    wrote it. The review would show bob «carol asks», and carol never did:
+    the requester the human sees must be the one the hub authenticated."""
+    env = _forged_source(hub, sender_id=hub.people['carol'].id)
+    with pytest.raises(Rejected, match='invalid_remote_source'):
+        RemoteApprovals(hub.api).prepare('test-bob', source_seq=env.seq, binding=binding())
+
+
+def test_an_offer_body_naming_another_recipient_than_its_owner_is_refused(hub):
+    """R14 of the #118 review. An offer delivered to bob but addressed in its
+    body to carol is not bob's to approve: approving it would spend carol's
+    authority, as bob, on a request carol never received."""
+    env = _forged_source(hub, recipient_id=hub.people['carol'].id)
+    with pytest.raises(Rejected, match='invalid_remote_source'):
+        RemoteApprovals(hub.api).prepare('test-bob', source_seq=env.seq, binding=binding())
+
+
+def test_consumption_refuses_a_receipt_whose_request_is_not_the_bound_review(hub, signer):
+    """R3 of the #118 review. The binding row says which reviewed digest this
+    source and destination were approved under; a receipt for a request
+    whose digest differs from it has approved some other operation."""
+    adapter, env, offer, request, approved = ready(hub, signer)
+    with hub.store._lock, hub.store._db:
+        hub.store._db.execute('UPDATE approval_remote_bindings SET binding_hash=? WHERE request_id=?',
+                              ('0' * 64, request['request_id']))
+    with pytest.raises(Rejected, match='remote_receipt_binding'):
+        adapter.consume('test-bob', request['request_id'], receipt=approved['receipt'])
+    assert hub.store._db.execute('SELECT state FROM approval_remote_bindings WHERE request_id=?',
+                                 (request['request_id'],)).fetchone()[0] == 'prepared'
+
+
+def test_an_expired_offer_cannot_be_prepared_for_review(hub):
+    """R11 of the #118 review. The sender bounded how long its offer may be
+    acted on; the hub must not open a fresh review of it after that."""
+    env, offer = source(hub)
+    hub.now[0] = offer['expires_at']
+    with pytest.raises(Rejected, match='remote_offer_expired'):
+        RemoteApprovals(hub.api).prepare('test-bob', source_seq=env.seq, binding=binding())

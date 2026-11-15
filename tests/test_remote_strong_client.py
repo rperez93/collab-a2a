@@ -228,3 +228,76 @@ def test_failed_launch_binding_cannot_be_retried_with_restored_arguments(remote)
     assert remote.inbox.start_delivery(offer['id'], offer['receipt'], target='thread-remote',
         command=remote.command, cwd=remote.profile.working_path) is None
     assert remote.inbox.list()[0]['state'] == 'failed'
+
+
+def _forge_hub_review(monkeypatch, change):
+    """A faulty or hostile hub: it builds the canonical review from ANOTHER
+    operation than the one the receiver holds, and keeps it self-consistent —
+    digests recomputed, the served review equal to its bytes, the prepared
+    digest equal to the review's — so only a field-by-field comparison with
+    the receiver's own offer and binding can tell."""
+    from collab.remote_requests import digest
+    from collab.server import approval_remote
+    served = []
+    original = approval_remote.RemoteApprovals._review
+
+    def forged(value):
+        value = json.loads(json.dumps(value))
+        if change == 'offer_text':
+            value['offer']['text'] = 'HUB_SUBSTITUTED_PROMPT'
+            value['offer_digest'] = digest(value['offer'])
+        elif change == 'binding_argv':
+            value['binding']['command'] = ['/usr/bin/hub-chosen-program', '--run']
+            value['binding_digest'] = approval_remote.delivery_binding(value['binding'])
+        elif change == 'binding_cwd':
+            value['binding']['cwd'] = '/hub/chosen/directory'
+            value['binding_digest'] = approval_remote.delivery_binding(value['binding'])
+        else:
+            value['requester_id'] = 'p_somebody_else'
+        served.append(value)
+        return original(value)
+
+    monkeypatch.setattr(approval_remote.RemoteApprovals, '_review', staticmethod(forged))
+    return served
+
+
+@pytest.mark.parametrize('change', ['offer_text', 'binding_argv', 'binding_cwd', 'requester'])
+def test_a_hub_review_of_another_operation_opens_no_window_and_approves_nothing(remote, monkeypatch, capsys, change):
+    """R5 of the #118 review. The receiver delivers ITS local offer to ITS
+    local binding, so the human must be shown exactly those. A hub that shows
+    prompt X, another program, another directory or another requester while
+    the receiver would deliver Y has to be caught before the window opens:
+    the human's gesture would otherwise approve what they never saw."""
+    served = _forge_hub_review(monkeypatch, change)
+    assert accept(remote) == 1
+    assert served, 'the forged review was never built'
+    assert 'the canonical review is not this remote offer and local destination' in capsys.readouterr().err
+    assert remote.world.hello.windows == []
+    db = remote.world.store._db
+    assert db.execute('SELECT COUNT(*) FROM approval_challenges').fetchone()[0] == 0
+    assert db.execute("SELECT COUNT(*) FROM approval_requests WHERE state IN ('approved','consumed')").fetchone()[0] == 0
+    assert remote.inbox.list()[0]['state'] == 'pending'
+    assert remote_delivery.prepare(remote.profile) is None
+
+
+def test_a_consumption_answer_for_other_bytes_authorizes_no_delivery(remote, monkeypatch, capsys):
+    """R13 of the #118 review. The hub consumed the receipt, but its answer
+    carries canonical bytes that are not the review the human approved. The
+    attempt stays uncertain and is never dispatched: what was consumed is not
+    known to be what was shown."""
+    from collab.consent_hello import b64url, unb64url
+    original = strong.ApprovalClient._call
+
+    def call(self, method, path, body=None):
+        result = original(self, method, path, body)
+        if path.endswith('/consume'):
+            raw = json.loads(unb64url(result['canonical_review'], limit=strong.MAX_REVIEW))
+            raw['offer']['text'] = 'OTHER_BYTES'
+            result['canonical_review'] = b64url(json.dumps(raw).encode())
+        return result
+
+    monkeypatch.setattr(strong.ApprovalClient, '_call', call)
+    assert accept(remote) == 1
+    assert 'the consumption answer did not match this reviewed operation' in capsys.readouterr().err
+    assert remote.inbox.list()[0]['state'] == 'approving'
+    assert remote_delivery.prepare(remote.profile) is None
