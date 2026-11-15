@@ -105,9 +105,16 @@ by their recorded identity when finished. Do not kill processes by name.
 
 ## Integration status
 
-The resource collector, numeric stats schema and worker PID registration are
-implemented. Proxy identity integration and R5/R12 human-facing renderers must
-be verified on the combined build before claiming end-to-end availability.
+The resource collector, numeric stats schema, worker PID registration and CLI
+dashboard rendering are implemented. The dashboard uses the resource sample's
+own freshness and displays unknown for missing, stale or offline data. A Linux
+integration test samples its own process through procfs, publishes through the
+daemon to an isolated HTTP hub, and renders the returned roster in the dashboard.
+The rebased build passed 246 focused tests; the three dashboard tests, including
+that real sampling pipeline, passed separately. This is isolated integration
+evidence, not a shared-session deployment or full-suite result.
+Proxy identity integration and the remaining R5/R12 TUI/detail renderers must
+be verified on the combined build before claiming complete availability.
 Until the host understands this nested schema, an older hub can drop it and the
 viewer must display unknown. The active shared hub has not been upgraded by
 this worktree.
