@@ -401,6 +401,9 @@ class Store:
         # shared event, never from today's mutable name map. Missing/conflicting
         # evidence stays NULL and private authorization fails closed. Do not
         # retry this migration at each open after names have changed again.
+        if "handoff_to" not in self._columns("tasks"):
+            # A task offered to a participant, who accepts it with `claim`.
+            self._db.execute("ALTER TABLE tasks ADD COLUMN handoff_to TEXT")
         file_columns = self._columns("files")
         missing_file_ids = [key for key in ("sender_id", "recipient_id") if key not in file_columns]
         for key in missing_file_ids:
@@ -1058,6 +1061,12 @@ class Store:
         return [r["name"] for r in rows]
 
     # --- shared task board ----------------------------------------------------
+
+    def offer_task(self, task_id: str, participant_id: str | None) -> None:
+        """Offer a task to a participant (None withdraws any offer)."""
+        with self._lock:
+            self._db.execute("UPDATE tasks SET handoff_to=? WHERE id=?", (participant_id, task_id))
+            self._db.commit()
 
     def upsert_task(self, task_id: str, *, title: str, state: str, owner: str | None,
                     room: str | None, created_by: str, detail: str | None = None,

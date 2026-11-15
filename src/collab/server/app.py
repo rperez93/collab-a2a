@@ -80,6 +80,11 @@ TASK_STATES = {
     "complete": "TASK_STATE_COMPLETED",
     "fail": "TASK_STATE_FAILED",
     "cancel": "TASK_STATE_CANCELED",
+    # OWNERSHIP ONLY. `release` hands the task back to the board (nobody's,
+    # submitted); `handoff` offers it to one participant, who accepts with
+    # `claim`. Neither is progress, so `handoff` keeps the state.
+    "release": "TASK_STATE_SUBMITTED",
+    "handoff": "",
     # MOVING A TASK BETWEEN PROJECTS IS NOT PROGRESS ON IT. `update` means «I
     # am working on this and here is more detail» and therefore moves the state
     # to WORKING, which is right for what it is for and quite wrong for
@@ -650,6 +655,8 @@ def create_app(
 
         task_id = clip(str(body.get("id") or ""), MAX_NAME)
         joins_a_batch = False
+        offered_to = previous_id = target_id = None
+        accepting = by_host = False
         if action == "propose":
             # PROPOSE CREATES. IT NEVER OVERWRITES. A client may name the id,
             # and naming one that already existed fell through to the UPDATE
@@ -715,7 +722,26 @@ def create_app(
                     detail=(f"{task_id} is {short_state(existing['state'])}"
                             " — propose a new task rather than reopening it"),
                 )
-            if action == "claim":
+            offered_to = existing.get("handoff_to")
+            previous_id = existing.get("owner_id")
+            if action in ("release", "handoff"):
+                mine = bool(previous_id) and previous_id == user.id
+                # The host may free a claim only from someone who is gone;
+                # it is announced to the room and kept in the task's history.
+                by_host = (not mine and action == "release" and user.is_host and bool(previous_id)
+                           and not hub.is_connected(owner or ""))
+                if not (mine or by_host):
+                    raise HTTPException(
+                        status_code=403,
+                        detail=(f"only {owner or 'its owner'} can {action} {task_id}"
+                                + (" (the host may release it once they are offline)" if action == "release" else "")))
+            if action == "handoff":
+                target = str(body.get("to") or "")
+                target_id = store.resolve_name(target) if target else None
+                if not target_id or target_id == user.id:
+                    raise HTTPException(status_code=400, detail=f"no other participant called {target!r} to hand {task_id} to")
+            accepting = action == "claim" and bool(offered_to) and offered_to == user.id
+            if action == "claim" and not accepting:
                 # After the finished check, because both can be true at once
                 # and only one of them is worth acting on: «ask alice before
                 # taking it over» sends an agent to negotiate over work that is
@@ -727,6 +753,8 @@ def create_app(
                                " — ask them before taking it over",
                     )
                 owner = user.name
+            if accepting or action == "release":
+                owner = user.name if accepting else None
 
         # THE PROJECT IS CHECKED BY THE STORE, INSIDE THE WRITE'S LOCK, and
         # not here. Checking here and then awaiting leaves a window in which a
@@ -758,10 +786,12 @@ def create_app(
                 detail=(_content(str(body["detail"]), "detail")
                         if "detail" in body else None),
                 join_open_batch=joins_a_batch,
-                claim_owner=user.name if action == "claim" else None,
-                owner_id=(user.id if action == "claim" else existing.get("owner_id")
-                          if action != "propose" else None),
-                claim_owner_id=user.id if action == "claim" else None,
+                # An accepted hand-off is not a race for an unowned task: the
+                # owner offered it to exactly this participant.
+                claim_owner=user.name if action == "claim" and not accepting else None,
+                owner_id=(user.id if action == "claim" else None if action == "release"
+                          else existing.get("owner_id") if action != "propose" else None),
+                claim_owner_id=user.id if action == "claim" and not accepting else None,
                 expected_updated_at=existing["updated_at"] if action != "propose" else None,
                 project=(project or None) if action == "propose" else project,
             )
@@ -780,14 +810,32 @@ def create_app(
                 detail=f"{str(retired)} is archived — `collab project unarchive"
                        f" --id {str(retired)}` first, or file the task elsewhere",
             ) from retired
+        if action == "handoff":
+            await asyncio.to_thread(store.offer_task, task_id, target_id)
+        elif action in ("release", "claim", "complete", "cancel") and offered_to:
+            await asyncio.to_thread(store.offer_task, task_id, None)  # the offer is settled
+        change = {}
+        if action in ("release", "handoff") or accepting:
+            change = {"previous_owner_id": previous_id or "",
+                      "handoff_to_id": target_id if action == "handoff" else "",
+                      "by_host": bool(action == "release" and by_host)}
         await hub.publish(Envelope(
             kind=KIND_TASK, sender=user.name, sender_id=user.id,
             room=body.get("room") or DEFAULT_ROOM,
             text=title,
-            body={"action": action, "id": task_id, "title": title,
+            body={"action": "accept" if accepting else action, "id": task_id, "title": title,
                   "state": record["state"], "owner": record["owner"],
-                  "project": record["project"]},
+                  "project": record["project"], **change},
         ))
+        # T_b079: the people an ownership change concerns hear it directly,
+        # once, so nobody has to poll the board or the lead.
+        for who in {previous_id, target_id if action == "handoff" else None} - {None, "", user.id}:
+            await hub.publish(Envelope(
+                kind=KIND_TASK, sender=user.name, sender_id=user.id, to_id=who,
+                to=store.participant_by_id(who).name if store.participant_by_id(who) else None,
+                text=f"{task_id} {'was offered to you' if who == target_id else 'is no longer yours'}: {title}",
+                body={"action": "ownership", "id": task_id, "change": "accept" if accepting else action, **change},
+            ))
         return {"task": record}
 
     # --- extension: projects ------------------------------------------------------

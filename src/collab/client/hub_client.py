@@ -251,8 +251,8 @@ class HubClient:
 
     def task_action(self, action: str, *, task_id: str | None = None, title: str = "",
                     detail: str | None = None, room: str | None = None,
-                    project: str | None = None) -> dict[str, Any]:
-        """One action on one task.
+                    project: str | None = None, to: str | None = None) -> dict[str, Any]:
+        """One action on one task (`to`: with handoff, who it is offered to).
 
         `project` is three-valued and the middle value is the useful one:
         `None` leaves the task where it is, a project id moves it into that
@@ -273,6 +273,8 @@ class HubClient:
             payload["room"] = room
         if project is not None:
             payload["project"] = project
+        if to:
+            payload["to"] = to
         return self._request("POST", f"{EXT_PREFIX}/tasks", json=payload)["task"]
 
     # --- projects --------------------------------------------------------------
