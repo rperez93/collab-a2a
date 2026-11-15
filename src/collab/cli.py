@@ -4044,7 +4044,11 @@ def cmd_file(args: argparse.Namespace) -> int:
                     print(dim("  `collab worker status` shows it until it is delivered"))
                     return 0
                 record = client.upload_file(path, to=args.to, room=args.room, keep=keep, source=source)
-                if warning := retention_warning(record, keep, source):
+                if isinstance(record, dict) and isinstance(record.get('retention_note'), str):
+                    # The hub said why it did not keep the file (its kept-bytes
+                    # cap): its reason, not a guess that it may be too old.
+                    print('Warning: ' + scrub(record['retention_note'])[:300], file=sys.stderr)
+                elif warning := retention_warning(record, keep, source):
                     print('Warning: host did not confirm requested retention/source. ' + warning,
                           file=sys.stderr)
                 if args.json:

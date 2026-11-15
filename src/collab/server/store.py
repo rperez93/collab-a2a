@@ -1750,25 +1750,44 @@ class Store:
         computed at ack time because the question is «who was there when it was
         sent», and the roster keeps changing after that.
         """
+        from ..file_retention import MAX_KEPT_OWNER_BYTES, MAX_KEPT_SESSION_BYTES
         now = time.time()
+        note = ""
         with self._lock:
+            # The kept-bytes check and the insert share one write transaction,
+            # as the shared-skill budget does: two uploads, from this process or
+            # another on the same hub DB, cannot both see the last free room.
+            self._db.execute("BEGIN IMMEDIATE")
             try:
+                if kept:
+                    owner_bytes, session_bytes = self._db.execute(
+                        "SELECT COALESCE(SUM(CASE WHEN sender_id=? THEN size ELSE 0 END),0),"
+                        " COALESCE(SUM(size),0) FROM files WHERE state='available' AND kept=1",
+                        (sender_id,)).fetchone()
+                    if sender_id and owner_bytes + size > MAX_KEPT_OWNER_BYTES:
+                        kept, note = False, (f"stored as temporary: your kept files would exceed "
+                                             f"{MAX_KEPT_OWNER_BYTES // 2**20} MiB; withdraw one to keep more")
+                    elif session_bytes + size > MAX_KEPT_SESSION_BYTES:
+                        kept, note = False, (f"stored as temporary: kept files in this session would exceed "
+                                             f"{MAX_KEPT_SESSION_BYTES // 2**20} MiB")
                 self._db.execute(
                     "INSERT INTO files (id,name,size,sha256,sender,recipient,room,created_at,kept,source,sender_id,recipient_id)"
                     " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                     (file_id, name, size, sha256, sender, recipient, room, now, int(kept), source, sender_id, recipient_id),
                 )
-            except sqlite3.IntegrityError:
-                self._db.rollback()  # a concurrent retry of the same delivery won
+                self._db.executemany(
+                    "INSERT OR IGNORE INTO file_collections (file_id, participant_id)"
+                    " VALUES (?,?)",
+                    [(file_id, pid) for pid in audience],
+                )
+                self._db.commit()
+            except BaseException:
+                # IntegrityError included: a concurrent retry of the same
+                # delivery won, and the caller handles that.
+                self._db.rollback()
                 raise
-            self._db.executemany(
-                "INSERT OR IGNORE INTO file_collections (file_id, participant_id)"
-                " VALUES (?,?)",
-                [(file_id, pid) for pid in audience],
-            )
-            self._db.commit()
             row = self._db.execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
-        return dict(row)
+        return {**dict(row), **({"retention_note": note} if note else {})}
 
     def record_collection(self, file_id: str, participant_id: str) -> bool:
         """Note that ``participant_id`` has the file. True the first time only.
