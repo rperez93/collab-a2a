@@ -110,7 +110,7 @@ def test_local_goal_queue_refusal_does_not_abort_onboarding(tmp_path, monkeypatc
         def __init__(self, *args): pass
         def __enter__(self): return self
         def __exit__(self, *args): pass
-        def join(self, *args): return result
+        def join(self, *args, **kwargs): return result
     monkeypatch.setattr(onboard, 'HubClient', Client)
     monkeypatch.setattr(onboard.ctx, 'gather', lambda *a, **kw: {})
     monkeypatch.setattr(remote_requests, 'MAX_SENDER_RECORDS', 0)
