@@ -308,3 +308,26 @@ async def test_stats_sharing_revoked_during_the_skill_scan_publishes_no_figures(
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
         await daemon_mod.Daemon._report_stats(fake, client)
     assert not any('stats' in body for body in posted)
+
+
+def test_a_peer_keeps_only_a_few_requests_open_and_the_rest_wait(monkeypatch):
+    """One sender cannot flood the human: past MAX_OPEN_PER_PEER pending
+    requests, the rest are throttled. Throttled can be declined, not accepted,
+    and moves up once an earlier one is answered. Other peers are unaffected."""
+    hub = Hub([])
+    ids = []
+    for _ in range(cli.MAX_OPEN_PER_PEER + 1):
+        run(monkeypatch, hub, 'ask', 'review', to='bob', name='alice')
+        ids.append(hub.sent[-1].body['skill_request']['id'])
+    run(monkeypatch, hub, 'ask', 'review', to='bob', name='carol')
+    carol = hub.sent[-1].body['skill_request']['id']
+    states = {r['id']: r['state'] for r in cli._skill_requests(hub, SimpleNamespace(name='bob', participant_id='p_bob'))}
+    assert [states[i] for i in ids] == ['pending'] * cli.MAX_OPEN_PER_PEER + ['throttled']
+    assert states[carol] == 'pending', "another peer's request is not throttled"
+    assert run(monkeypatch, hub, 'accept', ids[-1], name='bob') == 1, 'throttled cannot be accepted'
+    assert run(monkeypatch, hub, 'decline', ids[0], name='bob') == 0
+    states = {r['id']: r['state'] for r in cli._skill_requests(hub, SimpleNamespace(name='bob', participant_id='p_bob'))}
+    assert states[ids[-1]] == 'pending', 'it moves up once an earlier one is answered'
+    run(monkeypatch, hub, 'ask', 'review', to='bob', name='alice')
+    assert run(monkeypatch, hub, 'decline', hub.sent[-1].body['skill_request']['id'], name='bob') == 0, \
+        'a throttled request can still be declined'
