@@ -369,12 +369,27 @@ def enrol_with_passkey(profile, *, opener=None, transport=None, poll=0.25) -> di
     or failure, reported as «unavailable». Nothing is retried and no weaker
     fallback is attempted. Returns {"status": ..., "credential": {...}|None}.
     """
+    # NEVER ON WINDOWS OR WSL. A passkey enrolled there can never approve
+    # there (the approval leg refuses: native Hello only), and replacing it
+    # needs a signed key change that requires that unusable key — the
+    # participant would be locked out of strong approval in the session (gate
+    # review of #185). Hello reports itself unavailable after any helper
+    # failure or timeout, so that is no reason to fall back.
+    from .approval import _native_hello_platform
+    if _native_hello_platform():
+        return {"status": "native-hello-required", "credential": None}
+
     async def run():
         approval = ApprovalTransport(profile, transport=transport)
         page = passkey.PasskeyPage(opener=opener)
         try:
             service = EnrolService(page, approval)
-            await service.human_start()
+            try:
+                await service.human_start()
+            except (RuntimeError, asyncio.TimeoutError, OSError):
+                # No browser (a headless or SSH box: webbrowser returns False),
+                # or one that never answered: nothing was asked of the hub.
+                return {"status": "page-unopened", "credential": None}
             deadline = time.monotonic() + ENROL_WAIT_SECONDS
             while time.monotonic() < deadline:
                 flow = service.flow
@@ -385,6 +400,11 @@ def enrol_with_passkey(profile, *, opener=None, transport=None, poll=0.25) -> di
                 if flow.phase == "exists":
                     return {"status": "exists", "credential": None}
                 await asyncio.sleep(poll)
+            # A lost finish answer leaves the key's fate unknown: the hub may
+            # have committed it. Say so, rather than «not enrolled».
+            flow = service.flow
+            if flow is not None and flow.phase in ("uncertain", "begin-uncertain"):
+                return {"status": "uncertain", "credential": None}
             return {"status": "expired", "credential": None}
         finally:
             # Revoke the browser capability before the bounded shutdown.

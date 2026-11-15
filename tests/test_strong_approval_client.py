@@ -820,3 +820,71 @@ def test_only_an_explicit_weak_request_is_read_the_ordinary_way(strength, asked)
                                                   "args": "", "required_strength": strength}})
     assert strong.is_strong_ask(env) is asked
     assert strong.is_strong_ask(SimpleNamespace(body={"skill_request": {"id": "sr_123456789abc"}})) is False
+
+
+# --- passkey enrolment from the terminal (gate review of #185) -----------------------
+
+def _passkey_world(live_server, monkeypatch, *, native=False, outcome=None, methods=None):
+    from collab.client import passkey_enrol
+    bob = live_server["store"].add_participant("bob", "bob-token")
+    hello = FakeHello()
+    hello.available = lambda: False
+    monkeypatch.setattr(strong, "_hello", lambda: hello)
+    monkeypatch.setattr(strong, "_native_hello_platform", lambda: native)
+    calls = []
+    monkeypatch.setattr(passkey_enrol, "enrol_with_passkey",
+                        lambda profile, **kw: calls.append(profile) or outcome)
+    if methods is not None:
+        monkeypatch.setattr(strong.ApprovalClient, "capabilities",
+                            lambda self: {"api_version": 1, "available": True, "methods": methods,
+                                          "supported_methods": methods})
+    hub = HubClient(live_server["base"], "bob-token")
+    w = SimpleNamespace(profile=SimpleNamespace(name="bob", participant_id=bob.id, session_id="s_test"),
+                        bob_hub=hub, base=live_server["base"])
+    return w, calls
+
+
+@pytest.mark.parametrize("marker", ["WSL_DISTRO_NAME", "WSL_INTEROP"])
+def test_windows_and_wsl_with_hello_unavailable_never_reach_passkey_enrolment(
+        live_server, monkeypatch, capsys, marker):
+    """A Hello hiccup on Windows/WSL must not route to a passkey that can never
+    approve there — it would lock the participant out of strong approval."""
+    from collab.client import passkey_enrol
+    monkeypatch.setenv(marker, "Ubuntu" if marker == "WSL_DISTRO_NAME" else "/run/WSL/1_interop")
+    bob = live_server["store"].add_participant("bob", "bob-token")
+    hello = FakeHello()
+    hello.available = lambda: False
+    monkeypatch.setattr(strong, "_hello", lambda: hello)
+    calls = []
+    monkeypatch.setattr(passkey_enrol, "enrol_with_passkey", lambda profile, **kw: calls.append(1))
+    with HubClient(live_server["base"], "bob-token") as hub:
+        w = SimpleNamespace(profile=SimpleNamespace(name="bob", participant_id=bob.id, session_id="s_test"),
+                            bob_hub=hub, base=live_server["base"])
+        assert _consent(w, monkeypatch) == 1
+    assert not calls and "Windows Hello only" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("status, code, words", [
+    ("enrolled", 0, "passkey enrolled"),
+    ("expired", 1, "was not enrolled"),
+    ("uncertain", 1, "may or may not be"),
+    ("exists", 1, "signed key change"),
+    ("page-unopened", 1, "could not be opened"),
+])
+def test_the_terminal_reports_exactly_what_the_page_ended_with(
+        live_server, monkeypatch, capsys, status, code, words):
+    """Only the hub-confirmed «enrolled» is a success; every other outcome is a
+    refusal saying which — never «enrolled» on a timeout."""
+    w, calls = _passkey_world(live_server, monkeypatch,
+                              outcome={"status": status,
+                                       "credential": {"credential_id": "abc"} if status == "enrolled" else None})
+    assert _consent(w, monkeypatch) == code and len(calls) == 1
+    captured = capsys.readouterr()
+    assert words in (captured.out if code == 0 else captured.err)
+
+
+def test_a_hub_without_passkeys_is_told_so_before_any_page(live_server, monkeypatch, capsys):
+    w, calls = _passkey_world(live_server, monkeypatch, outcome={"status": "enrolled", "credential": {}},
+                              methods=["hello"])
+    assert _consent(w, monkeypatch) == 1 and not calls
+    assert "does not support passkeys" in capsys.readouterr().err

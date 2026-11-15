@@ -8050,6 +8050,13 @@ def cmd_consent(args: argparse.Namespace) -> int:
                 fail("this session has no participant id for you yet; reconnect, then retry")
                 return 1
             hello = strong._hello()
+            if not hello.available() and strong._native_hello_platform():
+                # Windows/WSL never fall back to a passkey: one enrolled here
+                # could never approve here (gate review of #185).
+                fail("Windows Hello is not available here — check that Hello (a PIN or "
+                     "biometric) is set up and, under WSL, that Windows interop is on; on "
+                     "Windows and WSL strong approval uses Windows Hello only")
+                return 1
             if not hello.available():
                 # NOT WINDOWS: a passkey, through the local enrolment page. The
                 # human started this at a terminal; the browser's own user
@@ -8071,13 +8078,31 @@ def cmd_consent(args: argparse.Namespace) -> int:
                     print("Nothing was enrolled.")
                     return 1
                 from .client import passkey_enrol
-                outcome = passkey_enrol.enrol_with_passkey(profile)
-                if outcome["status"] == "exists":
+                import webbrowser
+
+                def opener(url: str) -> bool:
+                    # The address is on the human's own terminal (the token is
+                    # in the fragment); a browser that did not come to the
+                    # front leaves them something to open.
+                    print(dim(f"  Opening {url} — waiting up to "
+                              f"{int(passkey_enrol.ENROL_WAIT_SECONDS // 60)} minutes."))
+                    return webbrowser.open_new(url)
+                outcome = passkey_enrol.enrol_with_passkey(profile, opener=opener)
+                status = outcome["status"]
+                if status == "exists":
                     fail("you already have a key in this session; adding or replacing "
                          "one is a signed key change")
                     return 1
-                if outcome["status"] != "enrolled":
-                    fail(f"the passkey was not enrolled ({said(outcome['status'])}); "
+                if status == "page-unopened":
+                    fail("the enrolment page could not be opened (no browser here?); "
+                         "nothing was enrolled")
+                    return 1
+                if status == "uncertain":
+                    fail("the hub's answer was lost, so the key may or may not be "
+                         "enrolled; check `collab consent keys`")
+                    return 1
+                if status != "enrolled":
+                    fail(f"the passkey was not enrolled ({said(status)}); "
                          "check `collab consent keys`")
                     return 1
                 credential = outcome.get("credential") or {}
