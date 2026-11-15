@@ -299,6 +299,32 @@ def clip(value: Any, limit: int) -> str:
     return str(value).strip()[:limit]
 
 
+#: Keys that name the machine, the account or a place on disk. Never stored
+#: from a participant, never relayed (T_5b4dac18307e): an older client still
+#: sends `machine`, `user` and `cwd`, and the hub is where that ends. The hub
+#: shows a machine as the label it derives from `machine_id` instead.
+PRIVATE_KEYS = frozenset({
+    "machine", "user", "username", "login", "hostname", "cwd", "home",
+    "working_path", "workspace", "project_dir", "current_dir", "transcript_path",
+    "remote",
+})
+
+
+#: Hello fields that are the participant's own words, not facts about the
+#: machine: a focus may begin with «/» («/review the auth PR») and is kept.
+FREE_TEXT_KEYS = frozenset({"focus"})
+
+
+def looks_like_a_local_path(value: Any) -> bool:
+    """An absolute path on some machine: it names a home, an account or a
+    layout, and an unknown field carrying one is dropped, not relayed."""
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    return (text.startswith(("/", "~")) or text.startswith("\\\\")
+            or (len(text) > 2 and text[1] == ":" and text[2] in "\\/"))
+
+
 def bounded_meta(raw: Any) -> dict[str, Any]:
     """A joiner's self-declared identity, capped so it cannot be a weapon.
 
@@ -317,11 +343,12 @@ def bounded_meta(raw: Any) -> dict[str, Any]:
     for key, value in raw.items():
         if len(out) >= MAX_META_KEYS:
             break
-        if not isinstance(key, str):
+        if not isinstance(key, str) or key.lower() in PRIVATE_KEYS:
             continue
         if isinstance(value, bool) or isinstance(value, (int, float)):
             out[key[:MAX_META_VALUE]] = value
-        elif isinstance(value, str):
+        elif isinstance(value, str) and (key in FREE_TEXT_KEYS
+                                         or not looks_like_a_local_path(value)):
             out[key[:MAX_META_VALUE]] = value[:MAX_META_VALUE]
         # A dict or a list is dropped on purpose: stats and activity reach the
         # roster through their own sanitised endpoints, never through hello.

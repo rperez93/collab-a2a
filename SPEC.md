@@ -95,7 +95,7 @@ arrives. Names are unique among live participants, so this is never ambiguous.
 | kind | `body` |
 |---|---|
 | `chat` | *(usually empty; the message is in `text`)* — `{learning: true}` marks a fact worth keeping past the session, see below |
-| `hello` | `{repo, branch, dirty, remote, cwd, focus}` — merged into the sender's profile, so the roster shows it |
+| `hello` | `{repo, branch, dirty, focus}` — merged into the sender's profile, so the roster shows it. Never the working directory, the git remote, the hostname or the account: the hub drops `cwd`, `remote`, `machine`, `user` and any absolute path an older client sends |
 | `presence` | `{event, was?}` |
 | `task` | `{action, id, title, state, owner}` — `state` is a real A2A `TaskState` |
 | `file` | `{action: "shared"\|"received", id, name, size, sha256, url}` |
@@ -240,7 +240,7 @@ collaborating a single step:
   "snapshot": {
     "title": "auth refactor",
     "participants": [{"id","name","is_host","connected","focus","repo","branch",
-                      "machine","machine_id","user","stats"}],
+                      "machine","machine_id","stats"}],   // machine: a label, e.g. "machine-9c1f2a"
     "tasks":  [ ... open tasks ... ],
     "recent": [ ... last N envelopes ... ],
     "rooms":  ["general"], "seq": 12, "you": "bob", "you_id": "p_9f31…" } }
@@ -394,11 +394,16 @@ Usage travels two ways, both optional:
   separate heartbeat.
 
 ```jsonc
-{ "machine": "dev-box", "machine_id": "m_9c1f…", "user": "perez",
+{ "machine": "machine-9c1f2a", "machine_id": "m_9c1f…",
   "stats": { "model": "Opus 5", "cost_usd": 1.24,
              "quota_five_hour": 42.0, "quota_seven_day": 11.8,
              "context_pct": 18.4 } }
 ```
+
+What travels is a label derived from the hashed `machine_id` — never the
+hostname, never the OS account. The hub stores only `machine_id` and shows the
+label; a raw `machine` or `user`, or a figure that names a local path (`cwd`,
+`transcript_path`, any absolute path), is dropped on the way in.
 
 ### The canonical shape
 

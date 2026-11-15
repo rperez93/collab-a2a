@@ -6,6 +6,8 @@ the next task, so the figures have to reach everyone, not just the host.
 
 from __future__ import annotations
 
+import json
+
 import time
 
 import pytest
@@ -47,12 +49,12 @@ def test_stats_posted_to_the_hub_reach_everyone(client, session, host_headers):
     """Sent to the host, but the whole session can read them."""
     bob = _join(client, session, "bob")
     client.post("/ext/collab/v1/stats", headers=_headers(bob), json={
-        "machine": "bobs-laptop",
+        "machine_id": "m_0123456789abcdef",
         "stats": {"model": "Opus 5", "cost_usd": 1.24, "quota_five_hour": 42.0},
     })
 
     seen = _person(client, host_headers, "bob")
-    assert seen["machine"] == "bobs-laptop"
+    assert seen["machine"] == "machine-012345"
     assert seen["stats"]["quota_five_hour"] == 42.0
 
     # And a third party sees them too, not just the host.
@@ -152,11 +154,20 @@ def test_a_partial_report_to_the_endpoint_merges(client, session, host_headers):
     assert stats["quota_five_hour"] == 73.0, "the quota included"
 
 
-def test_the_endpoint_still_records_the_machine(client, session, host_headers):
+def test_the_endpoint_records_the_machine_as_a_label_never_its_hostname(
+        client, session, host_headers):
+    """The hashed id is recorded and the roster shows the label derived from
+    it. A raw hostname or account name — still sent by older clients — is
+    neither stored nor relayed (T_5b4dac18307e)."""
     bob = _join(client, session, "bob")
     client.post("/ext/collab/v1/stats", headers=_headers(bob),
-                json={"machine": "bobs-laptop", "stats": {"model": "x"}})
-    assert _person(client, host_headers, "bob")["machine"] == "bobs-laptop"
+                json={"machine": "bobs-laptop", "user": "bob.smith",
+                      "machine_id": "m_0123456789abcdef", "stats": {"model": "x"}})
+    seen = _person(client, host_headers, "bob")
+    assert seen["machine"] == "machine-012345"
+    assert "bobs-laptop" not in json.dumps(seen) and "bob.smith" not in json.dumps(seen)
+    stored = next(p for p in session["store"].participants() if p.name == "bob").meta
+    assert "machine" not in stored and "user" not in stored
 
 
 def test_the_endpoint_normalises_like_every_other_path(client, session, host_headers):
@@ -293,12 +304,12 @@ def test_an_identity_update_is_not_a_usage_report(client, session, host_headers)
     client.post("/ext/collab/v1/stats", headers=h,
                 json={"color": "#008080", "stats": {}})
     client.post("/ext/collab/v1/stats", headers=h,
-                json={"machine": "bobs-laptop", "stats": {}})
+                json={"machine_id": "m_0123456789abcdef", "stats": {}})
 
     seen = _person(client, host_headers, "bob")
     assert seen["stats"]["quota_five_hour"] == 40.0, "an identity update wiped the quota"
     assert float(seen["stats"]["reported_at"]) == first, "and moved the stamp"
-    assert seen["machine"] == "bobs-laptop" and seen.get("color") == "#008080"
+    assert seen["machine"] == "machine-012345" and seen.get("color") == "#008080"
 
 
 @pytest.mark.parametrize("junk", ["lots", ["five_hour"], None, 42])
