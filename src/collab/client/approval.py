@@ -232,10 +232,19 @@ def strong_request(env: Any, me_id: str) -> StrongRequest | None:
 
 def is_strong_ask(env: Any) -> bool:
     """Whether a skill request ASKED for strong approval at all — well-formed
-    or not. A request that asked must never be answered the legacy way."""
+    or not. A request that asked must never be answered the legacy way.
+
+    An explicit «weak» is an ordinary request, as the hub's own policy reads it
+    (only «strong» registers a strong source). Treating it as strong-asked
+    dropped it as malformed, so a later request reusing its id was listed in
+    its place — the first-wins rule turned around (arma's core test
+    test_strong_acceptance_cannot_mark_different_legacy_request_accepted[weak]).
+    Any OTHER value still counts as asked: malformed is dropped, never
+    downgraded."""
     body = env.body if isinstance(getattr(env, "body", None), dict) else {}
     ask = body.get("skill_request")
-    return isinstance(ask, dict) and "required_strength" in ask
+    return (isinstance(ask, dict) and "required_strength" in ask
+            and ask["required_strength"] != "weak")
 
 
 def strong_acceptance(env: Any, *, requester_id: str, target_id: str,
@@ -485,6 +494,25 @@ def hello_key_name(session_id: str, participant_id: str) -> str:
         return _name(f"collab-{session_id}-{participant_id}")
     except ValueError:
         raise ValueError("this session or participant id cannot name a Hello key") from None
+
+
+def fresh_hello_key_name(session_id: str, participant_id: str, on_record) -> str:
+    """The first Hello key name for this pair that the hub has NEVER recorded.
+
+    After a hub-machine reset of the host's keys, the old key is still on the
+    hub's record as retired, and the hub refuses its name and its public key
+    with a 409 — so re-proving the key Hello already holds under the base name
+    would only be refused. A fresh name makes Hello create a fresh key (arma's
+    review of #172). The base name stays first, so an ordinary first enrolment,
+    or one resumed after a cancelled proof, is unchanged.
+    """
+    base = hello_key_name(session_id, participant_id)
+    taken = {k for k in on_record if isinstance(k, str)}
+    for generation in range(1, 65):
+        name = base if generation == 1 else hello_key_name(session_id, f"{participant_id}-{generation}")
+        if name not in taken:
+            return name
+    raise ValueError("every Hello key name for this participant is already on record")
 
 
 def usable_key(keys: list[dict], *, now: float | None = None) -> tuple[dict | None, str]:

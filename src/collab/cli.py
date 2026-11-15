@@ -7889,7 +7889,11 @@ def cmd_consent(args: argparse.Namespace) -> int:
             if "hello" not in (caps.get("supported_methods") or []):
                 fail("this session's hub does not support Windows Hello keys")
                 return 1
-            name = strong.hello_key_name(profile.session_id, me)
+            # Never a name the hub already holds, retired ones included: those
+            # are refused with a 409, and a fresh name makes Hello create a
+            # fresh key rather than re-prove one a reset retired.
+            name = strong.fresh_hello_key_name(
+                profile.session_id, me, [k.get("credential_id") for k in api.keys()])
             print(f"  Enrol a Windows Hello key for strong approvals as {said(profile.name)} "
                   f"({said(me)}) in {said(profile.session_id)}.")
             print(dim("  Two Hello prompts follow: one creates the key, one proves you hold it."))
@@ -7917,6 +7921,9 @@ def cmd_consent(args: argparse.Namespace) -> int:
                                           "adding or replacing one is a signed key change",
             "enrollment_in_progress": "an enrolment is already in progress; it expires "
                                       "within two minutes",
+            "credential_retired": "that key was retired on this hub; it cannot come back. "
+                                  "Run `collab consent enrol` again to create a fresh one",
+            "credential_already_registered": "that key is already enrolled on this hub",
             "not_supported": "this session's hub has no strong approval",
         }
         fail(reasons.get(exc.code, f"the hub refused: {said(exc.code)}"))
