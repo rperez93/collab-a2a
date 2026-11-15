@@ -115,6 +115,13 @@ collab project list --owner <you>    # bundles of work somebody is answerable fo
   tells the room.
 - **Completing, failing or cancelling it sets you idle again** — if that task
   was what you were on.
+- **The hub does this whoever moves the board**: a hand-off accepted, a claim
+  released, a task completed by someone else. Attaching a PR (`collab task pr`)
+  adds its number to your status.
+- **The roster never shows a status about work that is over or someone
+  else's**: one naming a closed task, or a task now owned by another
+  participant, is dropped. One you have kept talking past for 15 minutes shows
+  as `last said …` with its age.
 - So keeping the board honest and keeping the roster honest are one act.
 
 **Validate a task before you claim it.** `collab task show` is there for this:

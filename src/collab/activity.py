@@ -271,10 +271,38 @@ def ago(activity: Any, *, now: float | None = None) -> str:
 STALE_AFTER = 900.0
 
 
+def as_seen(activity: Any, *, owner_id: str, open_tasks: dict[str, dict],
+            last_spoke: float) -> dict[str, Any]:
+    """A status as the roster shows it, checked against the board and the
+    owner's own traffic (T_fec283bc8922):
+
+    * one naming a task that is no longer open, or no longer this owner's, is
+      dropped: it describes work that is over or someone else's;
+    * one its owner has kept talking past for more than STALE_AFTER is marked
+      `stale`: they are evidently busy, just not on what it says.
+    """
+    if not isinstance(activity, dict) or not activity.get("state"):
+        return {}
+    task = activity.get("task")
+    if task:
+        live = open_tasks.get(task)
+        if live is None or (live.get("owner_id") or "") != owner_id:
+            return {}
+    try:
+        said = float(activity.get("updated_at") or 0)
+    except (TypeError, ValueError):
+        said = 0.0
+    if said and last_spoke - said > STALE_AFTER:
+        return {**activity, "stale": True}
+    return activity
+
+
 def is_stale(activity: Any, *, now: float | None = None) -> bool:
     """Has this gone unrenewed long enough to be history rather than news?"""
     if not isinstance(activity, dict) or not activity.get("state"):
         return False
+    if activity.get("stale"):
+        return True  # the hub saw its owner busy since (as_seen)
     try:
         stamped = float(activity.get("updated_at") or 0)
     except (TypeError, ValueError):

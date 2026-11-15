@@ -828,6 +828,9 @@ def create_app(
                   "state": record["state"], "owner": record["owner"],
                   "project": record["project"], **change},
         ))
+        # T_fec283bc8922: the roster follows the board, whoever moved it.
+        await asyncio.to_thread(hub.follow_task, record, "accept" if accepting else action,
+                                previous_id or "")
         # T_b079: the people an ownership change concerns hear it directly,
         # once, so nobody has to poll the board or the lead.
         # A repeated offer to the same participant is not news to them.
@@ -1135,6 +1138,8 @@ def create_app(
             body={"action": "pr", "id": task_id, "url": url,
                   "number": record["number"]},
         ))
+        if task := await asyncio.to_thread(store.get_task, task_id):
+            await asyncio.to_thread(hub.follow_pr, task, record["number"])
         return {"pr": record, "prs": store.task_prs(task_id)}
 
     # --- extension: batches of work -----------------------------------------------

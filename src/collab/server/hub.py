@@ -247,6 +247,40 @@ class Hub:
 
         return clean
 
+    def follow_task(self, record: dict[str, Any], action: str, previous_id: str = "") -> None:
+        """The board and the roster move together, whoever moved the board
+        (T_fec283bc8922): a claim (or an accepted hand-off) shows the new owner
+        on it; finishing, releasing or handing it off returns whoever was shown
+        on it to idle. A status that names some other task is left alone."""
+        from ..activity import IDLE, WORKING
+        task_id, owner = record.get("id", ""), record.get("owner_id") or ""
+        if action in ("claim", "accept") and owner:
+            self.set_activity(owner, {"state": WORKING, "what": record.get("title", ""), "task": task_id})
+        if action in ("complete", "fail", "cancel"):
+            self._idle_if_on(owner, task_id)
+        elif previous_id and previous_id != owner:  # released, handed off, or taken over
+            self._idle_if_on(previous_id, task_id)
+
+    def _idle_if_on(self, participant_id: str, task_id: str) -> None:
+        from ..activity import IDLE
+        person = self.store.participant_by_id(participant_id) if participant_id else None
+        if person and (person.meta.get("activity") or {}).get("task") == task_id:
+            self.set_activity(participant_id, {"state": IDLE})
+
+    def follow_pr(self, record: dict[str, Any], number: int | None) -> None:
+        """A PR attached to a task: its owner is shown on it, with the number,
+        unless they have said they are working on something else."""
+        from ..activity import WORKING
+        owner = record.get("owner_id") or ""
+        person = self.store.participant_by_id(owner) if owner else None
+        if person is None:
+            return
+        current = person.meta.get("activity") or {}
+        if current.get("task") == record.get("id") or current.get("state") != WORKING:
+            title = record.get("title", "")
+            self.set_activity(owner, {"state": WORKING, "task": record.get("id", ""),
+                                      "what": f"{title} (PR #{number})" if number else title})
+
     def merge_stats(self, participant_id: str, stats: dict[str, Any]) -> None:
         """Fold what an agent says about itself into what everyone sees.
 
@@ -436,7 +470,10 @@ class Hub:
 
         ``viewer`` is a participant id.
         """
+        from ..activity import as_seen
         connected = self.connected()
+        open_list = self.store.tasks(open_only=True)
+        open_tasks = {t["id"]: t for t in open_list}
         people = []
         for p in self.store.participants():
             people.append({
@@ -466,7 +503,11 @@ class Hub:
                 "skills_count": len(p.meta.get("skills") or []),
                 # What they are doing right now, so nobody has to ask. Flattened
                 # here like the rest: the roster is what every client reads.
-                "activity": p.meta.get("activity", {}),
+                # Checked against the board and their own traffic on the way
+                # out, so every client, old ones included, shows the same.
+                "activity": as_seen(p.meta.get("activity", {}), owner_id=p.id,
+                                    open_tasks=open_tasks,
+                                    last_spoke=self.store.last_spoke(p.id)),
                 # How long ago they were last heard from. A dot says whether
                 # someone is here; this says whether they only just left.
                 "last_seen": p.last_seen,
@@ -481,7 +522,7 @@ class Hub:
             "you_id": viewer,
             "rooms": self.store.rooms() or [DEFAULT_ROOM],
             "participants": people,
-            "tasks": self.store.tasks(open_only=True),
+            "tasks": open_list,
             # THE PROJECTS THE TASKS NAME. A task carries a project id, and
             # without this the title behind that id existed nowhere in the
             # payload every client renders from — so the level above the board
