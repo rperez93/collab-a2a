@@ -209,3 +209,12 @@ polling is cancellable and bounded. The pin remains unchanged.
   place; the pin is unchanged.
 
 - **Update (later than the pin)**: Recorded terminal-matched ancestor socket recovery for crowded tmux directories in the existing client/daemon page. The bundle revision and historical verification stamps are unchanged.
+
+- **Update (later than the pin, v2.3.0)**: Release 2.3.0 carries one hub per
+  session enforced by hub.lock (#202, #204, #205), passkey approval off
+  Windows (#185), installing a peer's shared skill with supporting files
+  (#189), the skill-request cap (#187), the self-maintaining panel status
+  (#192, #208), commit-pinned task evidence (#207), retained shared documents
+  (#209), process resource telemetry (#193), worker event batching and audit
+  (#149, #200), the tmux pane and pending decisions (#115), and proxy
+  operation docs (#194, #199). The pin is unchanged.
