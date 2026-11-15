@@ -167,8 +167,9 @@ def install(app, store, session_id):
         router.add_api_route(path, endpoint, methods=[method], name="approval_" + method.lower() + path.replace("/", "_"))
 
     route("/capabilities", "GET", lambda token, path, body: {
-        "api_version": 1, "available": False, "methods": [],
-        "reason": "operation_integration_pending", "supported_methods": ["hello", "passkey"],
+        # Strong approval is live in 2.2.0: Windows Hello, and passkey (#145).
+        "api_version": 1, "available": True, "methods": ["hello", "passkey"],
+        "supported_methods": ["hello", "passkey"],
         "algorithms": {"hello": [-257], "passkey": [-7, -257]}, "attestation_verification": False})
     route("/keys", "GET", lambda token, path, body: {"api_version": 1, "credentials": core.keys(token)})
     route("/audit", "GET", lambda token, path, body: {"api_version": 1, "events": core.audit(token)})

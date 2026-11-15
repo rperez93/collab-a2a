@@ -300,9 +300,13 @@ def test_no_window_opens_for_a_review_that_does_not_match(world, monkeypatch, ta
     assert world.hello.windows == []
 
 
-def test_a_hub_that_does_not_offer_strong_approval_opens_no_window(world):
-    """At 8257a05 the hub reports `available:false`: a strong request then
-    cannot be accepted at all, and nothing weaker is offered instead."""
+def test_a_hub_that_does_not_offer_strong_approval_opens_no_window(world, monkeypatch):
+    """A hub reporting `available:false` (an older hub, or one that turned it
+    off): a strong request then cannot be accepted at all, and nothing weaker
+    is offered instead."""
+    monkeypatch.setattr(strong.ApprovalClient, "capabilities", lambda self: {
+        "api_version": 1, "available": False, "methods": [], "reason": "operation_integration_pending",
+        "supported_methods": ["hello", "passkey"]})
     _ask(world)
     [match] = _requests(world)
     assert _accept(world, match) == 1
