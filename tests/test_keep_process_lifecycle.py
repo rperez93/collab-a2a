@@ -35,7 +35,12 @@ else:
 follower.grace = .15
 while True:
     process._follow_the_agent()
-    (home/'observed.json').write_text(json.dumps({'following':follower.following}))
+    # ATOMIC: write_text empties the file before writing it, and a reader that
+    # landed in between read '' and saw None. Under load that gap was hit and
+    # the merge queue went red (T_cf1f2c12b363).
+    tmp = home/'observed.json.tmp'
+    tmp.write_text(json.dumps({'following':follower.following}))
+    os.replace(tmp, home/'observed.json')
     if process._stop.is_set():
         sys.exit(7)
     time.sleep(.02)
@@ -76,7 +81,7 @@ def test_real_owner_exit_stops_only_unkept_processes(tmp_path, role, mode):
         until(lambda: observed(tmp_path) is not None)
         assert child.poll() is None
         if mode == 'kept_while_running':
-            assert observed(tmp_path)['following']
+            until(lambda: (observed(tmp_path) or {}).get('following') is True)
             owner.keep(tmp_path/'sessions'/'s')
             until(lambda: observed(tmp_path) == {'following':False})
         agent.terminate()
@@ -89,7 +94,7 @@ def test_real_owner_exit_stops_only_unkept_processes(tmp_path, role, mode):
             # Five shortened grace periods and many actual liveness beats.
             time.sleep(.8)
             assert child.poll() is None, (tmp_path/'child.log').read_text()
-            assert observed(tmp_path) == {'following':False}
+            until(lambda: observed(tmp_path) == {'following':False})
     finally:
         for process in (child, agent):
             if process is not None and process.poll() is None:
