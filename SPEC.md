@@ -626,7 +626,10 @@ Authenticated `GET /ext/collab/v1/task-pr-capabilities` returns `commit_evidence
 `POST /ext/collab/v1/task-prs` accepts optional `reviewed_sha`, `tested_sha`, and
 `head_sha` on add. Each is a full 40/64-digit hexadecimal hash; invalid values
 return 400 before writing. Omitted fields preserve existing values. The host
-records the authenticated reporter and host timestamp per supplied field.
+records the authenticated reporter (by participant id, shown under its current
+name) and host timestamp per supplied field. A task holds at most 20 pull
+requests; a further link is refused with 409, and a board read carries at most
+the 20 most recent.
 Task list/snapshot records include `prs`; PR events include the resulting commit
 evidence. This metadata reports observations and does not enforce forge merges.
 Clients preflight the capability before sending evidence to prevent old hosts

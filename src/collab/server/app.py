@@ -1119,7 +1119,7 @@ def create_app(
             ))
             return {"prs": store.task_prs(task_id)}
 
-        from collab.pr_review import FIELDS, commit_sha
+        from collab.pr_review import FIELDS, TaskPrLimit, commit_sha
         try:
             evidence = {field: commit_sha(body[field]) for field in FIELDS if field in body}
         except ValueError as exc:
@@ -1138,7 +1138,9 @@ def create_app(
         try:
             record = await asyncio.to_thread(
                 store.add_task_pr, task_id, url=url, number=number,
-                added_by=user.name, evidence=evidence)
+                added_by=user.name, evidence=evidence, reporter_id=user.id)
+        except TaskPrLimit as full:
+            raise HTTPException(status_code=409, detail=str(full)) from full
         except UnknownProject as gone:
             raise HTTPException(status_code=404,
                                 detail=f"no such task {str(gone)!r}") from gone

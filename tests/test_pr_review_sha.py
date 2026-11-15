@@ -202,7 +202,8 @@ def test_real_silent_gh_times_out_and_is_reaped(tmp_path, monkeypatch):
 def test_observation_time_from_a_malformed_host_cannot_control_the_terminal(capsys):
     """A host timestamp is response data, never trusted terminal formatting."""
     from collab.cli import _describe_pr_evidence
-    _describe_pr_evidence({'head_observed_at': '\x1b]52;c;SYNTHETIC\x07\nFAKE SUCCESS'})
+    _describe_pr_evidence({'head_sha': A, 'head_observed_by': '\x1b[2Jp_x\nFAKE',
+                           'head_observed_at': '\x1b]52;c;SYNTHETIC\x07\nFAKE SUCCESS'})
     out = capsys.readouterr().out
     assert '\x1b' not in out and '\x07' not in out
     assert '\nFAKE SUCCESS' not in out
@@ -227,3 +228,62 @@ def test_a_board_read_after_new_evidence_is_not_served_from_the_task_cache(tmp_p
         assert store.tasks()[0]['prs'] == []
     finally:
         store.close()
+
+
+def test_a_task_holds_a_bounded_number_of_pull_requests(client, session, host_headers):
+    """Every roster read carries every task's links: 5,000 rows made each read
+    2.4 MB. A 21st distinct link is refused with the way out named; relinking
+    one already there still records new evidence."""
+    from collab.pr_review import MAX_TASK_PRS
+    task(session["store"])
+    for n in range(MAX_TASK_PRS):
+        ok = client.post(EXT+"/task-prs", headers=host_headers,
+                         json={"id": "T_sha", "url": f"https://github.com/owner/repo/pull/{n + 1}"})
+        assert ok.status_code == 200, ok.text
+    full = client.post(EXT+"/task-prs", headers=host_headers,
+                       json={"id": "T_sha", "url": "https://github.com/owner/repo/pull/999"})
+    assert full.status_code == 409 and "pr-remove" in full.json()["detail"]
+    again = client.post(EXT+"/task-prs", headers=host_headers,
+                        json={"id": "T_sha", "url": "https://github.com/owner/repo/pull/1", "head_sha": B})
+    assert again.status_code == 200
+
+
+def test_a_hub_written_before_the_cap_still_ships_a_bounded_list(tmp_path):
+    """Rows a hub stored before the cap are kept, but a board read carries at
+    most the most recent MAX_TASK_PRS of them, and says how many there are."""
+    from collab.pr_review import MAX_TASK_PRS
+    store = Store(tmp_path / "hub.db")
+    try:
+        task(store)
+        with store._lock, store._db:
+            store._db.executemany(
+                "INSERT INTO task_prs (task_id,url,number,added_by,added_at) VALUES (?,?,?,?,?)",
+                [("T_sha", f"https://github.com/o/r/pull/{n}", n, "alice", float(n)) for n in range(25)])
+        row = store.tasks()[0]
+        assert len(row["prs"]) == MAX_TASK_PRS and row["prs_total"] == 25
+        assert row["prs"][-1]["number"] == 24 and row["prs"][0]["number"] == 5
+        assert len(store.task_prs("T_sha")) == MAX_TASK_PRS
+    finally:
+        store.close()
+
+
+def test_evidence_names_its_reporter_by_participant_id_and_shows_the_current_name(client, session, host_headers, capsys):
+    """A reporter stored by display name is whoever holds that name now: a
+    rename or a reused name would put another participant's name on the
+    statement. The id is stored; `task show` prints the current name and time
+    beside each commit."""
+    store = session["store"]
+    task(store)
+    host = store.participant_for_token(session["host_token"])
+    response = client.post(EXT+"/task-prs", headers=host_headers,
+                           json={"id": "T_sha", "url": URL, "reviewed_sha": A})
+    assert response.status_code == 200, response.text
+    pr = client.get(EXT+"/tasks", headers=host_headers).json()["tasks"][0]["prs"][0]
+    assert pr["reviewed_by"] == host.id and pr["reviewed_by_name"] == host.name
+    store.rename(host.id, "renamed-reviewer")
+    pr = client.get(EXT+"/tasks", headers=host_headers).json()["tasks"][0]["prs"][0]
+    assert pr["reviewed_by"] == host.id and pr["reviewed_by_name"] == "renamed-reviewer"
+    from collab.cli import _describe_pr_evidence
+    _describe_pr_evidence(pr)
+    line = [l for l in capsys.readouterr().out.splitlines() if "reviewed_sha" in l][0]
+    assert A in line and "by renamed-reviewer" in line and "unknown time" not in line
