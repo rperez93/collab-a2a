@@ -19,7 +19,7 @@ from ..privacy import machine_label
 from ..batch import DONE_STATE, WITHDRAWN_STATE, pace, percent, tally
 from ..protocol import (DEFAULT_ROOM, Envelope, KIND_CHAT, KIND_HELLO,
                         MessageRefused, message_refusal,
-                        KIND_PRESENCE, bounded_meta)
+                        KIND_PRESENCE, bounded_meta, public_stats)
 from .store import Store
 
 QUEUE_MAXSIZE = 1000
@@ -93,6 +93,17 @@ class Hub:
             # Usage rides along with ordinary traffic; fold it into the sender's
             # profile so the next roster everyone reads is already current.
             await asyncio.to_thread(self.merge_stats, env.sender_id, env.stats)
+        # WHAT IS STORED AND FANNED OUT IS SANITISED HERE, for every route that
+        # publishes a client's envelope — the message routes and A2A
+        # SendMessage alike. The message's own stats were stored and delivered
+        # exactly as sent (found by friday on #178), and a hello sent straight
+        # over A2A kept its whole body; both now carry only what a peer may
+        # see. `Envelope.to_dict` applies the stats rule again on the way out,
+        # for rows stored before this.
+        if env.stats:
+            env.stats = public_stats(env.stats)
+        if env.kind == KIND_HELLO and env.body:
+            env.body = bounded_meta(env.body)
         # Thread completion order is not persistence order. A later seq must
         # never reach a subscriber before an earlier one: reconnect resumes
         # from the highest durable seq and would otherwise skip the earlier.
