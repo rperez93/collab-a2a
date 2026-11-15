@@ -80,13 +80,19 @@ async def _body(request, required, optional):
         if int(length) > MAX_BODY:
             raise Rejected("body_too_large", 413)
     raw = bytearray()
+
+    async def read():
+        async for chunk in request.stream():
+            if len(raw) + len(chunk) > MAX_BODY:
+                raise Rejected("body_too_large", 413)
+            raw.extend(chunk)
     try:
-        async with asyncio.timeout(BODY_SECONDS):
-            async for chunk in request.stream():
-                if len(raw) + len(chunk) > MAX_BODY:
-                    raise Rejected("body_too_large", 413)
-                raw.extend(chunk)
-    except TimeoutError:
+        # wait_for, not asyncio.timeout(): that is 3.11+ and the floor is 3.10,
+        # where asyncio.TimeoutError is also NOT the builtin TimeoutError — so
+        # the old `except TimeoutError` would have let a slow body escape as a
+        # 500 there even had the context manager existed.
+        await asyncio.wait_for(read(), timeout=BODY_SECONDS)
+    except asyncio.TimeoutError:
         raise Rejected("body_timeout", 408) from None
     except ClientDisconnect:
         raise Rejected("body_disconnected", 400) from None
