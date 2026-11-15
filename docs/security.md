@@ -313,7 +313,8 @@ Be clear-eyed about the limits.
   It does not sandbox you from your own machine.
   This includes strong approval: anything running as you on the hub machine —
   your own agent among them — can already rewrite the hub's key records or its
-  code silently. The hub-machine reset of the host's approval keys lowers the
+  code silently. The hub-machine reset of the host's approval keys (internal
+  API only: there is no `collab` command for it) lowers the
   effort of replacing a host key, not the bar, and it is the loud route: a
   «reset» alarm to the whole session, then an «enrolled» alarm, then a
   10-minute cooling-off before the new key can approve anything.
@@ -348,9 +349,9 @@ on something it cannot be seen doing. On Windows, and on WSL through
 the TPM, and Windows asks for a fingerprint, a face or a PIN before every
 signature. An agent can ask for a signature; it cannot complete one.
 
-`collab.consent_hello` is the adapter for that. The hub-side registry,
-challenges and verification arrive with the strong-approval core; until that
-merges, nothing in collab calls the adapter. When it does:
+`collab.consent_hello` is the adapter for that. From 2.2.0 the hub-side
+registry, challenges and verification are live for Windows Hello (passkey is
+not yet), and a strong request goes through it:
 
 - **Approvals start in collab's own window**, not from a command the agent could
   type. The window shows who is asking — the participant id the hub assigned

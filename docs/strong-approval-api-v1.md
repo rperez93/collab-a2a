@@ -1,11 +1,12 @@
 # Strong approval API v1 — contract proposal
 
-Status: **partial implementation, not production-ready**. Internal state and
-the authenticated routes described below exist in this draft. Capability
-discovery returns `available:false`, an empty `methods` list and
-`reason:"operation_integration_pending"` until operation adoption and adapter
-integration are verified. Do not fall back to terminal approval when strong
-approval was requested.
+Status: **Windows Hello approval is live from 2.2.0; passkey is not yet.**
+Capability discovery returns `available:true` with `methods:["hello"]`.
+Passkey review exists, but nothing in this build lets a person enrol a passkey,
+so it is not advertised. A hub older than 2.2.0 returns `available:false` with
+`reason:"operation_integration_pending"`, or 404; a client treats both as
+unavailable. Never fall back to terminal approval when strong approval was
+requested.
 
 ### Implementation checkpoint (not production readiness)
 
@@ -30,7 +31,8 @@ rotation retires the selected key. New keys retain the 600-second cooldown.
 
 The HOST has no other host to recover through, so a key an agent enrolled for
 the host first could otherwise never be undone. `reset_host_credentials()` is
-the hub machine's own reset: it takes no bearer token and is on no HTTP route;
+the hub machine's own reset, internal API only (there is no `collab` command
+for it): it takes no bearer token and is on no HTTP route;
 only code holding the session database on the hub machine can call it. It
 retires every host key, declines the host's pending approvals, drops its
 challenges and re-opens first enrolment — under the same cooldown — and raises
@@ -168,10 +170,11 @@ attestation implementation needs its own bounded format and trust policy.
 The following routes are implemented in the draft; production readiness is
 reported separately by capability discovery.
 
-* `GET /capabilities` currently returns `{api_version:1, available:false,
-  methods:[], supported_methods:["hello","passkey"],
-  reason:"operation_integration_pending", algorithms:{hello:[-257],passkey:[-7,-257]},
-  attestation_verification:false}`. An old hub's 404 also means unavailable.
+* `GET /capabilities` returns `{api_version:1, available:true,
+  methods:["hello"], supported_methods:["hello","passkey"],
+  algorithms:{hello:[-257],passkey:[-7,-257]}, attestation_verification:false}`
+  from 2.2.0. An older hub reports `available:false` with
+  `reason:"operation_integration_pending"`; its 404 also means unavailable.
 * `GET /keys` returns the authenticated participant's credential metadata:
   `credential_id`, `method`, `algorithm`, `fingerprint`, `created_at`,
   `trust` (`tofu-unverified` initially), `usable_at` and `state`, wrapped in

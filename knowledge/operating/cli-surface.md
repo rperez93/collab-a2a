@@ -301,7 +301,8 @@ list.
   over the hub's enrolment challenge) and `collab consent keys`; `collab skills
   ask --strong` sends a request only the hub's review plus a Hello gesture can
   accept — `--human-approved`, the terminal y/N and a chat reply never do.
-  (Later than the pin, R22b.)
+  Live from 2.2.0 with Windows Hello; passkey is not yet. (Later than the pin,
+  R22b, v2.2.0.)
 - `collab file list --all` shows every file, including those that ended, with
   why — collected, expired or withdrawn; without it the list counts them.
 - The shared-machine proxy (`python -m collab.proxy_main`) is started by

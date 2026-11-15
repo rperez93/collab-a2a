@@ -55,11 +55,11 @@ def test_http_enrollment_review_approval_and_internal_dispatch(client, session, 
 
 
 def test_capabilities_report_strong_approval_live(client, host_headers):
-    """2.2.0: Windows Hello and passkey are offered; attestation is still not verified."""
+    """2.2.0: Windows Hello is offered (passkey enrolment is not in this build)."""
     response = client.get(P + "/capabilities", headers=host_headers)
     assert response.status_code == 200
     body = response.json()
-    assert body["available"] is True and body["methods"] == ["hello", "passkey"] and "reason" not in body
+    assert body["available"] is True and body["methods"] == ["hello"] and "reason" not in body
     assert response.json()["attestation_verification"] is False
     assert client.post(P + "/requests", headers=host_headers, json={}).status_code == 404
 
