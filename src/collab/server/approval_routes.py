@@ -172,8 +172,11 @@ def install(app, store, session_id):
     route("/capabilities", "GET", lambda token, path, body: {
         # Strong approval is live in 2.2.0 with Windows Hello. Passkey review
         # exists (#145) but nothing yet lets a person enrol a passkey, so it is
-        # not advertised until it can be used end to end.
-        "api_version": 1, "available": True, "methods": ["hello"],
+        # not advertised until it can be used end to end. Strong REMOTE
+        # delivery (R7) stays off until the concrete operation and installed
+        # adapter pass native human validation; the receiver refuses to review
+        # a remote offer while `remote_delivery` is not True.
+        "api_version": 1, "available": True, "methods": ["hello"], "remote_delivery": False,
         "supported_methods": ["hello", "passkey"],
         "algorithms": {"hello": [-257], "passkey": [-7, -257]}, "attestation_verification": False})
     route("/keys", "GET", lambda token, path, body: {"api_version": 1, "credentials": core.keys(token)})

@@ -1,4 +1,3 @@
-from remote_consent_helpers import receipt
 import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
@@ -15,16 +14,18 @@ def offered(tmp_path):
     offer = make_offer(session_id='s_room', sender_id='p_sender', recipient_id='p_receiver',
                        target='coding-session', kind='prompt', text='Run the selected tests.', now=100)
     route = dict(session_id='s_room', sender_id='p_sender', recipient_id='p_receiver')
-    inbox.receive(offer, **route, now=100)
+    inbox.receive(offer, **route, now=100, source_seq=1)
     return inbox, offer, route
 
 
 def approve(inbox, offer, **changes):
     options = dict(reviewed_digest=digest(offer), session_id='s_room', recipient_id='p_receiver',
                    target='coding-session', command=['local-adapter', '--session', 'coding-session'],
-                   approval=receipt(inbox, offer, 'coding-session', ['local-adapter', '--session', 'coding-session']), now=101)
+                   now=101)
     options.update(changes)
-    inbox.accept(offer['id'], **options)
+    # Explicit synthetic post-hub grant, not evidence of human approval.
+    attempt = inbox.begin_strong_attempt(offer['id'], **options)
+    inbox.finish_strong_attempt(offer['id'], attempt, 'rc_' + offer['id'], **options)
 
 
 def claim(inbox, **changes):
@@ -40,7 +41,9 @@ def test_receipt_and_remote_approval_field_never_authorize(offered):
     with pytest.raises(ValueError, match='fields'):
         validate({**offer, 'human_approved': True})
     with pytest.raises(ValueError, match='receipt'):
-        approve(inbox, offer, approval=False)
+        inbox.accept(offer['id'], reviewed_digest=digest(offer), session_id='s_room',
+                     recipient_id='p_receiver', target='coding-session',
+                     command=['local-adapter', '--session', 'coding-session'], approval=False)
     assert claim(inbox) is None
 
 
@@ -293,7 +296,7 @@ def test_lifecycle_audit_links_delivery_without_prompt_or_receipt_secrets(offere
     with sqlite3.connect(inbox.root.parent / 'consent' / 'audit.sqlite') as db:
         rows = db.execute('SELECT event,request_id,digest,details FROM events ORDER BY seq').fetchall()
     events = [r[0] for r in rows]
-    assert events == ['offer_received', 'approved', 'consumed', 'acceptance_requested', 'dispatch_requested', 'delivery_result']
+    assert events == ['offer_received', 'strong_attempt_requested', 'acceptance_requested', 'dispatch_requested', 'delivery_result']
     assert all(r[1:3] == (offer['id'], digest(offer)) for r in rows)
     assert json.loads(rows[-1][3])['result'] == 'delivered'
     encoded = json.dumps(rows)

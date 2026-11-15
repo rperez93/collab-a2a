@@ -160,8 +160,12 @@ def receive_connection_goal(profile, result):
     issuer = result.get('remote_goal_sender_id')
     if not isinstance(issuer, str) or not issuer or offer['kind'] != 'goal':
         raise ValueError('connection goal has no authenticated host issuer')
+    source_seq = result.get('remote_goal_source_seq')
+    if type(source_seq) is not int or not 0 < source_seq <= 2**63 - 1:
+        raise ValueError('connection goal has no authenticated source sequence')
     Inbox(profile.dir).receive(offer, session_id=profile.session_id,
-                               sender_id=issuer, recipient_id=profile.participant_id)
+                               sender_id=issuer, recipient_id=profile.participant_id,
+                               source_seq=source_seq)
     return offer['id']
 
 
@@ -222,6 +226,9 @@ def join_session(
     except RemoteQueueFull:
         pending_goal = None
         goal_refusal = 'connection goal refused: local receiver queue or sender limit reached'
+    except ValueError:
+        pending_goal = None
+        goal_refusal = 'connection goal refused: invalid authenticated offer or source binding'
     from ..worker import Store
     Store(profile.dir).ensure_default()
     from ..telemetry_setup import ensure

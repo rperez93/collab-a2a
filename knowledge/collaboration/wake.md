@@ -307,7 +307,8 @@ Remote prompts and goals use a separate receiver-local consent queue.
 `collab remote offer` sends through the worker with a stable recipient check;
 `collab remote goal` configures a host goal offered on each join. Neither
 receipt nor joining accepts an offer. The human reviews, binds a local target,
-then accepts the exact hash or declines. Ordinary worker and wake inputs
+then approves the exact hub-canonical operation in the enrolled-key window
+or declines. A supplied hash or terminal code is not approval. Ordinary worker and wake inputs
 exclude offer-protocol messages, including legacy queued wake batches.
 Approved delivery uses frozen local argv and cwd once; uncertain delivery is
 not retried. See [receiver consent](../../docs/remote-requests.md) for commands,

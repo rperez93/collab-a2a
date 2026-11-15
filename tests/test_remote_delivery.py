@@ -1,4 +1,3 @@
-from remote_consent_helpers import receipt
 import asyncio
 import os
 import sys
@@ -8,6 +7,12 @@ import pytest
 
 from collab import remote_delivery, wake
 from collab.remote_requests import Inbox, digest, make_offer
+
+
+def _grant(inbox, request_id, **options):
+    """Explicit synthetic hub consumption for dispatch tests, never human evidence."""
+    attempt = inbox.begin_strong_attempt(request_id, **options)
+    inbox.finish_strong_attempt(request_id, attempt, 'rc_' + request_id, **options)
 
 
 @pytest.fixture
@@ -23,11 +28,11 @@ def approved(tmp_path, monkeypatch):
     inbox = Inbox(tmp_path)
     offer = make_offer(session_id='s_room', sender_id='p_peer', recipient_id='p_local',
                        target='coding', kind='prompt', text='Approved test content')
-    inbox.receive(offer, session_id='s_room', sender_id='p_peer', recipient_id='p_local')
+    inbox.receive(offer, session_id='s_room', sender_id='p_peer', recipient_id='p_local', source_seq=1)
     inbox.bind('coding', command)
     assert remote_delivery.prepare(profile) is None
-    inbox.accept(offer['id'], reviewed_digest=digest(offer), session_id='s_room',
-                 recipient_id='p_local', target='coding', command=command, approval=receipt(inbox, offer, 'coding', command))
+    _grant(inbox, offer['id'], reviewed_digest=digest(offer), session_id='s_room',
+                 recipient_id='p_local', target='coding', command=command)
     return profile, inbox, output
 
 
@@ -43,12 +48,13 @@ def test_real_adapter_receives_approved_content_once(approved):
     assert os.stat(prompts[0]).st_mode & 0o777 == 0o600
 
 
-def test_command_is_frozen_after_claim(approved):
+def test_command_change_after_claim_refuses_delivery(approved):
     profile, inbox, output = approved
     prepared = remote_delivery.prepare(profile)
     wake.write_config(profile.dir, wake.WakeConfig(command=['unapproved-command']))
-    assert asyncio.run(remote_delivery.deliver(profile, prepared)) is True
-    assert output.exists()
+    assert asyncio.run(remote_delivery.deliver(profile, prepared)) is False
+    assert not output.exists()
+    assert remote_delivery.prepare(profile) is None
 
 
 def test_failed_delivery_is_not_replayed(approved, monkeypatch):
@@ -122,10 +128,10 @@ def test_relative_adapter_uses_bound_working_directory(approved, tmp_path):
     inbox.bind('coding', command, cwd=tmp_path)
     offer = make_offer(session_id=profile.session_id, sender_id='p_peer',
                        recipient_id=profile.participant_id, target='coding', kind='prompt', text='new review')
-    inbox.receive(offer, session_id=profile.session_id, sender_id='p_peer', recipient_id=profile.participant_id)
-    inbox.accept(offer['id'], reviewed_digest=digest(offer), session_id=profile.session_id,
+    inbox.receive(offer, session_id=profile.session_id, sender_id='p_peer', recipient_id=profile.participant_id, source_seq=2)
+    _grant(inbox, offer['id'], reviewed_digest=digest(offer), session_id=profile.session_id,
                  recipient_id=profile.participant_id, target='coding', command=command,
-                 approval=receipt(inbox, offer, 'coding', command, tmp_path), cwd=tmp_path)
+                 cwd=tmp_path)
     assert asyncio.run(remote_delivery.deliver(profile, remote_delivery.prepare(profile))) is True
     assert (tmp_path / 'cwd-result').read_text() == str(tmp_path)
 
@@ -184,9 +190,9 @@ def test_existing_custom_approval_cannot_dispatch(tmp_path):
     inbox.bind('coding', command)
     offer = make_offer(session_id='s_room', sender_id='p_peer', recipient_id='p_local',
                        target='coding', kind='prompt', text='old custom approval')
-    inbox.receive(offer, session_id='s_room', sender_id='p_peer', recipient_id='p_local')
-    inbox.accept(offer['id'], reviewed_digest=digest(offer), session_id='s_room', recipient_id='p_local',
-                 target='coding', command=command, approval=receipt(inbox, offer, 'coding', command))
+    inbox.receive(offer, session_id='s_room', sender_id='p_peer', recipient_id='p_local', source_seq=1)
+    _grant(inbox, offer['id'], reviewed_digest=digest(offer), session_id='s_room', recipient_id='p_local',
+                 target='coding', command=command)
     profile = SimpleNamespace(dir=tmp_path, session_id='s_room', participant_id='p_local')
     wake.write_config(tmp_path, wake.WakeConfig(command=command))
     assert remote_delivery.prepare(profile) is None
@@ -212,10 +218,9 @@ def test_native_codex_recipe_delivers_to_exact_thread_with_stub_cli(tmp_path, mo
     inbox.bind('test-only-thread', command)
     offer = make_offer(session_id='s_room', sender_id='p_peer', recipient_id='p_local',
                        target='test-only-thread', kind='prompt', text='approved fixture content')
-    inbox.receive(offer, session_id='s_room', sender_id='p_peer', recipient_id='p_local')
-    inbox.accept(offer['id'], reviewed_digest=digest(offer), session_id='s_room', recipient_id='p_local',
-                 target='test-only-thread', command=command,
-                 approval=receipt(inbox, offer, 'test-only-thread', command))
+    inbox.receive(offer, session_id='s_room', sender_id='p_peer', recipient_id='p_local', source_seq=1)
+    _grant(inbox, offer['id'], reviewed_digest=digest(offer), session_id='s_room', recipient_id='p_local',
+                 target='test-only-thread', command=command)
     assert asyncio.run(remote_delivery.deliver(profile, remote_delivery.prepare(profile))) is True
     args = json.loads(output.read_text())
     assert args[:4] == ['queue', '--thread', 'test-only-thread', '--message']

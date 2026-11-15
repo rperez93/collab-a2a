@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import json
 
-from . import consent, wake
-from .remote_requests import Inbox, make_offer, wire_text, digest, binding_digest, supports_remote_consent
+from . import wake
+from .remote_requests import Inbox, make_offer, wire_text, digest, supports_remote_consent
 from .remote_delivery import working_directory, destination
 
 
@@ -81,19 +81,26 @@ def run(args, profile):
     except ValueError:
         inbox.invalidate('unsupported_or_changed_destination')
         raise
-    receipt = consent.request(
-        profile.dir, subject='remote', request_id=args.request_id,
-        digest=row['sha256'], binding=binding_digest(target, command, cwd),
-        review={'offer': row, 'local_target': target, 'actual_destination': actual, 'local_command': command,
-                'local_cwd': str(cwd),
-                'authority': 'Uses the existing coding session permissions; may modify files and run commands. No additional sandbox is applied.'})
-    current_command = list(wake.read_config(profile.dir).command)
-    current_cwd = working_directory(profile)
-    current_target = inbox.bound_target(current_command, current_cwd)
-    if (current_command != command or current_cwd != cwd or current_target != target):
-        raise ValueError('local delivery configuration changed during review; review again')
-    inbox.accept(args.request_id, reviewed_digest=row['sha256'],
-                 session_id=profile.session_id, recipient_id=profile.participant_id,
-                 target=target, command=command, approval=receipt, cwd=cwd)
-    print('Accepted for one delivery to the bound local target.')
+    if type(row.get('source_seq')) is not int or row['source_seq'] <= 0:
+        raise ValueError('this offer needs its authenticated hub source before strong approval')
+    from .cli import _client
+    from .client import approval as strong
+    from .client import remote_approval
+    binding = {'target': target, 'command': command, 'cwd': str(cwd), 'destination': actual}
+    def ensure_current():
+        current_command = list(wake.read_config(profile.dir).command)
+        current_cwd = working_directory(profile)
+        current_target = inbox.bound_target(current_command, current_cwd)
+        if (current_command != command or current_cwd != cwd or current_target != target
+                or destination(current_command) != actual):
+            raise ValueError('local delivery configuration changed during review; review again')
+    try:
+        with _client(profile) as client:
+            accepted = remote_approval.accept(client, profile, inbox, row, binding, ensure_current)
+    except (strong.ApprovalRefused, strong.Mismatch, strong.Uncertain) as exc:
+        raise ValueError(str(exc)) from None
+    if accepted:
+        print('Strong approval consumed for one delivery to the bound local target.')
+    else:
+        print('Declined; no delivery was authorized.')
     return 0

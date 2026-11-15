@@ -106,6 +106,15 @@ async def deliver(profile, prepared):
         env = {**os.environ, 'COLLAB_WAKE_PROMPT': str(prompt_path),
                'COLLAB_WAKE_BATCH': '', 'COLLAB_WAKE_KIND': 'remote',
                'COLLAB_SESSION': profile.session_id}
+        # A prepared tuple is not authority after local configuration changes.
+        # Recheck immediately before launch; never re-claim on this failure.
+        current = list(wake.read_config(profile.dir).command)
+        current_cwd = working_directory(profile)
+        if (current != command or current_cwd != cwd
+                or inbox.bound_target(current, current_cwd) != offer['delivery_target']
+                or destination(current)['session_id'] != offer['delivery_target']
+                or time.time() >= offer['expires_at']):
+            raise ValueError('remote delivery binding changed or offer expired before launch')
         await _exchange(command, prompt.encode('utf-8'), cwd, env, timeout, None)
         delivered = True
         return True

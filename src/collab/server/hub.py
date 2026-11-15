@@ -204,7 +204,7 @@ class Hub:
             # the roster the same way. See collab.protocol.bounded_meta.
             hello = bounded_meta(hello)
             from ..remote_requests import supports_remote_consent
-            hello['remote_consent_version'] = 1 if supports_remote_consent(hello) else 0
+            hello['remote_consent_version'] = 2 if supports_remote_consent(hello) else 0
             meta.update({k: v for k, v in hello.items() if v not in ("", None)})
 
 
