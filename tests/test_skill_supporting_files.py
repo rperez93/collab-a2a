@@ -82,26 +82,30 @@ def record_with_files(files):
     return {**pub, "id": "sk_1", "owner": "Bob", "owner_id": "p_b"}
 
 
-def test_a3_a4_install_binds_the_manifest_and_writes_files_inside(monkeypatch, tmp_path):
-    from collab import consent
-    target = skills.Target("claude-code", "Claude Code", "skills", tmp_path / "skills", tmp_path)
-    rec = record_with_files([{"path": "lib/notes.txt", "content": "notes\n"}])
-    calls = []
-    monkeypatch.setattr(consent, "request", lambda root, *, review, **f: calls.append(("req", f, review))
-                        or consent.Receipt(token="t"))
-    monkeypatch.setattr(consent, "consume", lambda root, receipt, **f: calls.append(("use", f, None)))
-    monkeypatch.setattr(consent, "audit", lambda root, **kw: None)
+def _install(monkeypatch, tmp_path, rec, sha):
+    """Run install-shared with no terminal, as an agent does, approving `sha`."""
+    asked = []
+    monkeypatch.setattr("builtins.input", lambda *a: asked.append(1) or "y")
     class Hub:
         def __enter__(self): return self
         def __exit__(self, *e): return False
         def shared_skill(self, i): return {"skill": rec}
+    target = skills.Target("claude-code", "Claude Code", "skills", tmp_path / "skills", tmp_path)
     monkeypatch.setattr(cli, "_require_profile", lambda a: SimpleNamespace(session_id="s", dir=tmp_path / "p"))
     monkeypatch.setattr(cli, "_client", lambda p: Hub())
     monkeypatch.setattr(skills, "skills_target", lambda agent=None: target)
-    args = argparse.Namespace(action="install-shared", target="sk_1", agent=None, force=False)
-    assert cli.cmd_skills(args) == 0
-    assert calls[0][1]["digest"] == rec["manifest_sha256"] == calls[1][1]["digest"]
-    assert calls[0][2]["supporting_files"][0]["text"] == "notes\n"
+    args = argparse.Namespace(action="install-shared", target="sk_1", agent=None, force=False,
+                              human_approved=sha is not None, sha256=sha, strong=False)
+    return cli.cmd_skills(args), target, asked
+
+
+def test_a3_a4_install_binds_the_manifest_and_writes_files_inside(monkeypatch, tmp_path):
+    rec = record_with_files([{"path": "lib/notes.txt", "content": "notes\n"}])
+    # The hash of SKILL.md alone does not approve a bundle with files.
+    code, target, _ = _install(monkeypatch, tmp_path, rec, rec["sha256"])
+    assert code == 1 and not target.path.exists()
+    code, target, asked = _install(monkeypatch, tmp_path, rec, rec["manifest_sha256"])
+    assert code == 0 and asked == []
     dest = target.path / "shared-bob-review"
     assert (dest / "lib" / "notes.txt").read_text() == "notes\n"
     assert oct((dest / "lib" / "notes.txt").stat().st_mode & 0o777) == "0o644"
@@ -111,45 +115,23 @@ def test_a3_a4_install_binds_the_manifest_and_writes_files_inside(monkeypatch, t
     assert not dest.exists()
 
 
+def test_without_approval_every_file_goes_to_the_review_file(monkeypatch, tmp_path):
+    """The human reviews the whole bundle, untruncated, before anything installs."""
+    heavy = "é" * 14000
+    rec = record_with_files([{"path": "a.md", "content": "first file"}, {"path": "big.md", "content": heavy}])
+    code, target, _ = _install(monkeypatch, tmp_path, rec, None)
+    assert code == 1 and not target.path.exists()
+    review = next((tmp_path / "p" / "skill-reviews").iterdir()).read_text()
+    assert "first file" in review and heavy in review and "---- big.md ----" in review
+
+
 def test_a5_a_file_that_changed_after_the_manifest_is_refused(monkeypatch, tmp_path):
-    from collab import consent
     a = record_with_files([{"path": "x.md", "content": "one"}])
     b = record_with_files([{"path": "x.md", "content": "two"}])
     assert a["manifest_sha256"] != b["manifest_sha256"]
     tampered = {**a, "files": b["files"]}            # republished file, stale manifest
-    asked = []
-    monkeypatch.setattr(consent, "request", lambda *a, **k: asked.append(1))
-    class Hub:
-        def __enter__(self): return self
-        def __exit__(self, *e): return False
-        def shared_skill(self, i): return {"skill": tampered}
-    target = skills.Target("claude-code", "Claude Code", "skills", tmp_path / "skills", tmp_path)
-    monkeypatch.setattr(cli, "_require_profile", lambda a: SimpleNamespace(session_id="s", dir=tmp_path / "p"))
-    monkeypatch.setattr(cli, "_client", lambda p: Hub())
-    monkeypatch.setattr(skills, "skills_target", lambda agent=None: target)
-    args = argparse.Namespace(action="install-shared", target="sk_1", agent=None, force=False)
-    assert cli.cmd_skills(args) == 1
-    assert asked == [] and not target.path.exists(), "refused before the human is asked"
-
-
-def test_a3_a_review_too_large_to_show_in_full_is_refused_before_asking(monkeypatch, tmp_path):
-    from collab import consent
-    # escaping-heavy text: every char becomes \\uXXXX under ensure_ascii
-    heavy = "é" * 14000
-    rec = record_with_files([{"path": f"f{i}.md", "content": heavy[:3000]} for i in range(3)] +
-                            [{"path": "big.md", "content": heavy}])
-    asked = []
-    monkeypatch.setattr(consent, "request", lambda *a, **k: asked.append(1))
-    class Hub:
-        def __enter__(self): return self
-        def __exit__(self, *e): return False
-        def shared_skill(self, i): return {"skill": rec}
-    target = skills.Target("claude-code", "Claude Code", "skills", tmp_path / "skills", tmp_path)
-    monkeypatch.setattr(cli, "_require_profile", lambda a: SimpleNamespace(session_id="s", dir=tmp_path / "p"))
-    monkeypatch.setattr(cli, "_client", lambda p: Hub())
-    monkeypatch.setattr(skills, "skills_target", lambda agent=None: target)
-    args = argparse.Namespace(action="install-shared", target="sk_1", agent=None, force=False)
-    assert cli.cmd_skills(args) == 1 and asked == [] and not target.path.exists()
+    code, target, asked = _install(monkeypatch, tmp_path, tampered, a["manifest_sha256"])
+    assert code == 1 and asked == [] and not target.path.exists(), "refused before anything is asked"
 
 
 def test_a3_publish_refuses_a_bundle_no_peer_could_review(skill_dir, monkeypatch, capsys):
@@ -177,21 +159,11 @@ def test_the_count_is_refused_before_any_file_is_read(skill_dir, monkeypatch):
 
 
 def test_a_manifest_naming_files_the_record_dropped_is_refused(monkeypatch, tmp_path):
-    from collab import consent
     with_files = record_with_files([{"path": "x.md", "content": "one"}])
     stripped = {**with_files, "files": []}            # manifest kept, files gone
-    asked = []
-    monkeypatch.setattr(consent, "request", lambda *a, **k: asked.append(1))
-    class Hub:
-        def __enter__(self): return self
-        def __exit__(self, *e): return False
-        def shared_skill(self, i): return {"skill": stripped}
-    target = skills.Target("claude-code", "Claude Code", "skills", tmp_path / "skills", tmp_path)
-    monkeypatch.setattr(cli, "_require_profile", lambda a: SimpleNamespace(session_id="s", dir=tmp_path / "p"))
-    monkeypatch.setattr(cli, "_client", lambda p: Hub())
-    monkeypatch.setattr(skills, "skills_target", lambda agent=None: target)
-    args = argparse.Namespace(action="install-shared", target="sk_1", agent=None, force=False)
-    assert cli.cmd_skills(args) == 1 and asked == []
+    # The hash it would otherwise accept: the refusal must come from the manifest check.
+    code, target, asked = _install(monkeypatch, tmp_path, stripped, stripped["sha256"])
+    assert code == 1 and asked == [] and not target.path.exists()
 
 
 def test_a_new_hub_publish_reply_carries_the_manifest(client, host_headers, skill_dir):
