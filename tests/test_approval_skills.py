@@ -39,6 +39,39 @@ def ready(hub, signer):
     return adapter, original, req, result
 
 
+@pytest.mark.parametrize("newer_source", [False, True])
+def test_completion_requires_consumed_approval_for_latest_exact_source(hub, signer, newer_source):
+    adapter, original, req, result = ready(hub, signer)
+    def response(state="done", **changes):
+        fields = dict(kind=KIND_CHAT, sender="bob", sender_id=hub.people["bob"].id,
+            to="alice", to_id=hub.people["alice"].id, room=None,
+            body={"skill_response": {"id": original.body["skill_request"]["id"],
+                                     "state": state, "text": "execution reported"}})
+        fields.update(changes)
+        return Envelope(**fields)
+    # A verified proof alone has not yet consumed the operation receipt.
+    with pytest.raises(SkillApprovalRefused):
+        hub.store.append(response())
+    adapter.accept("test-bob", req["request_id"], receipt=result["receipt"])
+    with pytest.raises(SkillApprovalRefused):
+        hub.store.append(response("accepted"))
+    with pytest.raises(SkillApprovalRefused):
+        hub.store.append(response(room="general"))
+    # Insert a later source with the same short ID before reporting completion.
+    # A previous acceptance must not cover that newly published request.
+    if newer_source:
+        source(hub, args="a different operation")
+        with pytest.raises(SkillApprovalRefused):
+            hub.store.append(response())
+        return
+    reported = hub.store.append(response())
+    assert reported.body["skill_response"]["state"] == "done"
+    assert "strong_skill_response" not in reported.body
+    # Publishing yet another source cannot inherit the now-existing report.
+    with pytest.raises(SkillApprovalRefused):
+        source(hub, args="reuse after done")
+
+
 def test_exact_server_owned_review_and_private_durable_acceptance(hub, signer):
     adapter, original, req, result = ready(hub, signer)
     review = hub.api.review("test-bob", req["request_id"])["review"]
@@ -167,18 +200,23 @@ def test_restart_and_two_connections_accept_only_once(hub, signer):
         other.close()
 
 
-def test_strong_acceptance_cannot_mark_different_legacy_request_accepted(hub, signer):
+@pytest.mark.parametrize("first_strength", ["strong", "weak"])
+def test_strong_acceptance_cannot_mark_different_legacy_request_accepted(hub, signer, first_strength):
     from collab.cli import _skill_requests
     cred, _ = enrol(hub, signer)
     # Legacy lists the first request with a reused id. Explicitly review the
     # second source and ensure its strong response cannot authorize the first.
-    first = source(hub, args="original unreviewed arguments")
+    first = source(hub, args="original unreviewed arguments", required_strength=first_strength)
     second = source(hub, args="reviewed different arguments")
     adapter = SkillApprovals(hub.api)
     req = adapter.prepare("test-bob", source_seq=second.seq)
     c = hub.api.challenge("test-bob", req["request_id"], credential_id=cred)
     result = approve(hub, signer, req, c, cred)
     adapter.accept("test-bob", req["request_id"], receipt=result["receipt"])
+    with pytest.raises(SkillApprovalRefused):
+        hub.store.append(Envelope(kind=KIND_CHAT, sender="bob", sender_id=hub.people["bob"].id,
+            to="alice", to_id=hub.people["alice"].id, room=None,
+            body={"skill_response": {"id": "sr_123456789abc", "state": "done"}}))
     asyncio.run(events.drain(Hub(hub.store, session_id="s_test", host_name="alice"), hub.api))
     client = SimpleNamespace(history=lambda limit: hub.store.history(viewer=hub.people["bob"].id, limit=limit))
     profile = SimpleNamespace(name="bob", participant_id=hub.people["bob"].id)
