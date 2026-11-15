@@ -8224,13 +8224,16 @@ def cmd_skills_install_shared(args: argparse.Namespace) -> int:
         if not digest or digest != record.get("sha256"):
             raise ValueError("the publication's text does not match its SHA-256; not installing it")
         sk.install_lock()  # before asking: never approve what this platform cannot install
-        files = record.get("files") or []
+        # Files and manifest as validate_publication rebuilds them: every file
+        # rehashed here, never the hub's stated sha256 or size (lead gate on #189).
+        from .skill_sharing import validate_publication
+        files = validate_publication(record).get("files") or []
         from .skill_sharing import manifest_digest
         bound = manifest_digest(digest, files) if files else digest
         stated = record.get("manifest_sha256")
         # Any stated manifest must match exactly, including one that names
         # files the record no longer carries.
-        if (files or stated) and stated != (manifest_digest(digest, files) if files else None):
+        if (files or stated) and stated != (bound if files else None):
             raise ValueError("the supporting files do not match the publication's manifest; not installing it")
         dest = sk.check_installable(record, target=target, force=args.force)  # before asking
         terminal = sys.stdin.isatty() and sys.stdout.isatty()

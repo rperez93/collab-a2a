@@ -231,3 +231,16 @@ def test_a_file_that_is_also_a_directory_is_refused(files):
 
 def test_siblings_with_a_shared_prefix_are_fine():
     record_with_files([{"path": "ab", "content": "x"}, {"path": "a/b", "content": "y"}])
+
+
+def test_files_are_rehashed_here_and_missing_hub_fields_are_not_a_crash(monkeypatch, tmp_path):
+    """Lead gate on #189: the install takes files from validate_publication,
+    which hashes each one locally; a record missing a file's sha256 or size
+    no longer raises KeyError, and a wrong one is refused."""
+    rec = record_with_files([{"path": "x.md", "content": "one"}])
+    bare = {**rec, "files": [{"path": "x.md", "content": "one"}]}      # no sha256, no size
+    code, target, _ = _install(monkeypatch, tmp_path, bare, rec["manifest_sha256"])
+    assert code == 0
+    lying = {**rec, "files": [{"path": "x.md", "content": "one", "sha256": "0" * 64, "size_bytes": 3}]}
+    code, target2, _ = _install(monkeypatch, tmp_path / "b", lying, rec["manifest_sha256"])
+    assert code == 1
