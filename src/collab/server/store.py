@@ -331,6 +331,11 @@ class Store:
             # cannot change inside one.  Run after, the pragma quietly does
             # nothing and every migrated session stays on the rollback journal.
             self._db.execute("PRAGMA journal_mode=WAL")
+            # Deleted content overwritten where SQLite can do it cheaply (FAST:
+            # in pages already being written, no extra IO). A remote review's
+            # argv and cwd, cleared at consume, decline and expiry, should not
+            # linger readable in freed pages of hub.db.
+            self._db.execute("PRAGMA secure_delete=FAST")
             self._migrate()
             # Identity columns may not exist until migration of an old DB.
             # Bound skill-policy history scans by their actual routing pair.

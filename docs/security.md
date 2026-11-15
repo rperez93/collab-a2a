@@ -413,8 +413,8 @@ only — never a process name, PID, command line or path.
 approval (`collab remote accept`) puts the command and working directory you
 bound into the review the hub stores and checks your gesture against. No collab
 route serves it to anyone else — it is never sent to the requester, and the
-audit leaves it out — but the host machine's own account can read `hub.db`. It
-is held only while the request is open: it is deleted when the review is
+audit leaves it out — but while a review is pending the host machine's own
+account can read it in `hub.db`. It is held only while the request is open: it is deleted when the review is
 consumed or declined, and when it expires (at most ten minutes after review,
 cleared within a minute of expiry even on a hub nobody is using).
 

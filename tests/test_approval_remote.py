@@ -262,6 +262,13 @@ def _canonical(hub, request_id):
     return None if row is None else bytes(row[0])
 
 
+def _held(store, request_id):
+    """The receiver's bytes the hub still holds for this request: nothing,
+    once the review is consumed, declined or expired."""
+    return store._db.execute("SELECT canonical FROM approval_requests WHERE id=? AND length(canonical)>0",
+                             (request_id,)).fetchone()
+
+
 def test_a_consumed_remote_review_keeps_its_state_but_not_the_receivers_argv_and_cwd(hub, signer):
     """At consume the hub hands the reviewed bytes back once, then keeps the
     request's state and nothing of the receiver's private configuration."""
@@ -269,7 +276,7 @@ def test_a_consumed_remote_review_keeps_its_state_but_not_the_receivers_argv_and
     assert b'/private/work' in _canonical(hub, request['request_id'])
     used = adapter.consume('test-bob', request['request_id'], receipt=approved['receipt'])
     assert b'/private/work' in crypto.decode(used['canonical_review'], limit=65536)
-    assert _canonical(hub, request['request_id']) == b''
+    assert _held(hub.store, request['request_id']) is None
     assert hub.store._db.execute("SELECT state FROM approval_requests WHERE id=?",
                                  (request['request_id'],)).fetchone()[0] == 'consumed'
 
@@ -277,7 +284,7 @@ def test_a_consumed_remote_review_keeps_its_state_but_not_the_receivers_argv_and
 def test_a_declined_remote_review_keeps_nothing_of_the_receivers_configuration(hub, signer):
     adapter, env, offer, request, approved = ready(hub, signer)
     hub.api.decline('test-bob', request['request_id'])
-    assert _canonical(hub, request['request_id']) == b''
+    assert _held(hub.store, request['request_id']) is None
 
 
 def test_an_expired_review_loses_its_bytes_at_the_next_approval_read(hub, signer):
@@ -327,3 +334,32 @@ def test_an_idle_hub_clears_an_expired_review_on_its_own(tmp_path, monkeypatch):
             time.sleep(0.02)
         assert row is None or bytes(row[0]) == b'', 'an idle hub kept an expired review'
     store.close()
+
+
+def test_a_reviews_receiver_binding_does_not_outlast_its_expiry_past_any_approval_route(client, session, host_headers):
+    """The opposite of what this branch first pinned («lasts past expiry until
+    the next approval request»): the top of EVERY approval route clears an
+    expired review's bytes, even a route that opens no store transaction —
+    here the capabilities read."""
+    from test_approval_routes import P
+    store = session["store"]
+    bob = store.add_participant("bob", "bob-token")
+    with store._lock, store._db:
+        store._db.execute(
+            "INSERT INTO approval_requests(id,session_id,requester_id,target_id,canonical,digest,subject,"
+            "created_at,expires_at,state,kind) VALUES('ar_old','s_test',?,?,?,'d','Remote prompt',1,2,"
+            "'pending','remote-deliver')", (bob.id, bob.id, b'{"cwd": "/private/work"}'))
+    assert _held(store, 'ar_old') is not None
+    assert client.get(P + "/capabilities", headers=host_headers).status_code == 200
+    assert _held(store, 'ar_old') is None
+
+
+def test_the_hub_overwrites_deleted_content_where_it_is_cheap(tmp_path):
+    """secure_delete=FAST: a cleared review's argv and cwd are overwritten in
+    pages SQLite is already writing, rather than left readable in free pages."""
+    from collab.server.store import Store
+    store = Store(tmp_path / "hub.db")
+    try:
+        assert store._db.execute("PRAGMA secure_delete").fetchone()[0] == 2  # FAST
+    finally:
+        store.close()

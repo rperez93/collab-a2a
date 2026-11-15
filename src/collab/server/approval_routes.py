@@ -164,6 +164,10 @@ def install(app, store, session_id):
 
     def authenticate(token):
         # Before reading a body; the mutation revalidates again after admission.
+        # THE FIRST STORE STEP OF EVERY APPROVAL ROUTE, capabilities included:
+        # `_transaction` runs the expiry sweep (`forget_expired`) before it
+        # even checks the token, so any route call, a refused one too, clears
+        # an expired review's argv and cwd.
         with core._transaction(token, charge=False) as (_, owner, _now):
             return owner
 
