@@ -180,5 +180,5 @@ polling is cancellable and bounded. The pin remains unchanged.
 * **Update (later than the pin)**: Recorded the hub approval-security alarm route and filtered custom-recipe inputs in [the wake page](collaboration/wake.md). The bundle revision and historical verification stamps are unchanged.
 
 - **Update (later than the pin, v2.2.0)**: The shared proxy is the default host
-  route (`proxy` = `auto`); a session's first attach claims the bare domain so
-  pre-proxy root links keep reaching it. Recorded in operating/cli-surface.md.
+  route (`proxy` = `auto`); a session that served the bare domain before claims
+  it on its first attach, so pre-proxy root links keep reaching it. Recorded in operating/cli-surface.md.

@@ -308,8 +308,8 @@ list.
 - The shared-machine proxy (`python -m collab.proxy_main`) is started by
   `collab host` when the `proxy` machine setting is `on`/`auto` or the host
   passes `--tunnel proxy`; the setting defaults to `auto` from 2.2.0, and a
-  session's first attach claims the bare domain when nobody holds it (later
-  than the pin, v2.2.0).
+  session that served the bare domain before claims it on its first attach
+  when nobody holds it (later than the pin, v2.2.0).
   `collab host --primary` names the session bare-domain links reach (only the
   recorded primary may set it; `kill --purge` releases it), `host --resume <id>
   --tunnel proxy` stops the session's listener, hub and own tunnel before the

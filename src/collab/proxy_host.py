@@ -108,8 +108,12 @@ class SharedProxy:
             self.primary = False
 
     def start(self) -> str:
-        self._claim()
         state = proxy.ProxyState.load()
+        # The domain first: a session on another domain must not claim this
+        # proxy's root (its public address is refused below anyway).
+        if not (self.domain and state.public_url
+                and urlsplit(state.public_url).hostname != self.domain):
+            self._claim()
         if self._alive(state):
             self.public_url = self._url(state)
             return self.public_url

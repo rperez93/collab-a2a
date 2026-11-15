@@ -182,8 +182,8 @@ proceed within the accepted goal and its native delegation permissions.
 
 `collab config proxy on` and `auto` use one machine proxy for ngrok.
 `auto` is the default from 2.2.0; `collab config proxy off` keeps per-hub
-tunnels. On the proxy, a session's first attach claims the bare domain when
-nobody holds it, so its pre-proxy root links keep working. It is a machine setting: one proxy serves
+tunnels. On the proxy, a session that served the bare domain before claims it on its
+first attach when nobody holds it, so its pre-proxy root links keep working. It is a machine setting: one proxy serves
 the whole machine, so no agent's own layer can set it. A host can override the
 policy with `collab host --tunnel own` or `--tunnel proxy`; `--tunnel auto` returns to
 the setting. `--no-tunnel` wins over all modes. The selected explicit mode is

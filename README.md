@@ -160,8 +160,10 @@ Merged on `main` after the 2.1.2 release; the next release carries them.
 - **Logs capped at 10 MB** each, at write time — `daemon.log`, `hub.log`,
   `ngrok.log` and the new `worker.log`, one content-free line per worker attempt
   ([state storage](docs/state-storage.md)).
-- **One proxy for every session on the machine** — the core is merged
-  (`collab.proxy_main`), but `collab host` does not use it yet.
+- **One proxy for every session on the machine, by default.** `collab host`
+  attaches each session to the machine's shared proxy and its address becomes
+  `/s/<id>`; a session that served the bare domain before keeps it, so its
+  old links still work. `collab config proxy off` or `--tunnel own` opts out.
 
 ---
 
@@ -2491,7 +2493,7 @@ collab config --json              # the same table, for an agent to read
 | `share_stats` | share your usage with the session | `collab stats --share on\|off` | `on` |
 | `rules` | print collab's rules of conduct at `host` and `join`; the pointer to the repo's own `COLLAB.md` always prints | — | `on` |
 | `ngrok_domain` | reserved ngrok domain `collab host` uses when `--domain` is not given; a session you gave its own `--domain` keeps it | `collab host --domain` | empty |
-| `proxy` | shared machine tunnel policy: on/auto share one machine tunnel, off gives each hub its own | `collab host --tunnel own\|proxy` | `off` this release |
+| `proxy` | shared machine tunnel policy: on/auto share one machine tunnel, off gives each hub its own | `collab host --tunnel own\|proxy` | `auto` |
 | `watch_layout` | `split`, `tmux`, `chat` or `roster` | `collab watch --layout <l> --save` | `split` |
 | `watch_roster_size` | how much room the roster gets, in percent | `collab watch --roster-size <n> --save` | `30` |
 | `watch_roster_position` | `top`, `bottom`, `left` or `right` | `collab watch --roster-position <p> --save` | `top` |
@@ -2980,8 +2982,10 @@ Provider call duration still contributes to reply time. See
 ### Shared public tunnel
 
 One machine proxy can serve every hosted session through one tunnel: sessions
-receive `/s/<id>` links under the shared domain. It is opt-in this release —
-`collab config proxy on`, or `collab host --tunnel proxy` for one session — and
-each hub keeps its own tunnel otherwise. The session named with `collab host
---primary` keeps the bare-domain links handed out before. See [proxy hosting
+receive `/s/<id>` links under the shared domain. It is the default from 2.2.0
+(`proxy` = `auto`); `collab config proxy off`, or `collab host --tunnel own`
+for one session, keeps a hub on its own tunnel. A session that served the bare
+domain with its own tunnel before keeps it automatically, so the links handed
+out then still reach it; `collab host --primary` asks for it explicitly, and a
+session refused it is told. See [proxy hosting
 and migration](docs/proxy-hosting.md).
