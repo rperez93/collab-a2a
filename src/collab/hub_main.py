@@ -214,13 +214,18 @@ def main() -> int:
         time.sleep(0.1)
     try:
         if not hub_lock.acquire():
-            holder = HubConfig.load(cfg.session_id, cfg.home)
+            from .server.session import lock_holder
+            holder = lock_holder(cfg)
             logging.getLogger("collab.hub").warning(
                 "another hub already runs session %s (pid %s); this one exits",
                 cfg.session_id, holder.pid if holder else "unknown")
             return 0
     except exclusive.UnsupportedPlatform:
         pass  # no lock to take here (native Windows): run as before
+    else:
+        # The lock names its holder by Stamp, so kill and revive can find the
+        # hub that runs even when hub.json still names one that lost.
+        hub_lock.note(exclusive.stamp_for().encode())
 
     cfg.pid = os.getpid()
     # BOTH of the files this process and its children write to, capped while

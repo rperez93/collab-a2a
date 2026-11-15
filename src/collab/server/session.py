@@ -467,11 +467,10 @@ def stop_session(cfg: HubConfig, *, purge: bool = False) -> dict[str, Any]:
     # AND WHOEVER HOLDS hub.lock. Two hubs spawned at once can each record
     # themselves before either has the lock, so hub.json may name the one that
     # lost and is exiting; the lock names the one that runs.
-    from ..client import exclusive
-    running = exclusive.holder(cfg.dir, name=exclusive.HUB_LOCK_FILE)
-    if running and running != os.getpid() and running != cfg.hub_stamp().pid:
+    running = lock_holder(cfg)
+    if running is not None and running.pid not in (os.getpid(), cfg.hub_stamp().pid):
         try:
-            os.kill(running, signal.SIGTERM)
+            os.kill(running.pid, signal.SIGTERM)
             result["hub_stopped"] = True
         except (OSError, ProcessLookupError):
             pass
@@ -480,6 +479,22 @@ def stop_session(cfg: HubConfig, *, purge: bool = False) -> dict[str, Any]:
         shutil.rmtree(cfg.dir, ignore_errors=True)
         result["purged"] = True
     return result
+
+
+def lock_holder(cfg: "HubConfig") -> "Stamp | None":
+    """The hub that holds this session's hub.lock right now, by the Stamp it
+    wrote there, or None. Asked of the kernel first (a shared, non-blocking
+    probe): a lock nobody holds names nobody, whatever its file still says;
+    and a stamp that is no longer alive is nobody either."""
+    from ..client import exclusive
+    if exclusive.taken(cfg.dir, name=exclusive.HUB_LOCK_FILE) is not True:
+        return None
+    try:
+        text = (cfg.dir / exclusive.HUB_LOCK_FILE).read_text().strip()
+    except OSError:
+        return None
+    stamp = decode(text)
+    return stamp if stamp.pid and stamp.alive() else None
 
 
 def spawn_hub(cfg: "HubConfig", env: dict[str, str], log_path: Path,

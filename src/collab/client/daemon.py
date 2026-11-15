@@ -2886,8 +2886,9 @@ class Daemon:
         # alive, so a dead hub was never revived. The stamp also refuses one
         # written on another boot. (The hub itself refuses to run twice on a
         # session: hub.lock, in hub_main.)
-        if cfg.hub_stamp().alive():
-            return  # still alive; this is a network problem, not a dead hub
+        from ..server.session import lock_holder
+        if cfg.hub_stamp().alive() or lock_holder(cfg) is not None:
+            return  # a hub runs (the recorded one, or the lock's holder): not dead
 
         logger.warning("hub process %s is gone; restarting it", cfg.pid)
         # THE LOG OPENER, closed once the child has it: a bare `open("a")` here
