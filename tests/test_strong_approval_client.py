@@ -423,6 +423,33 @@ def test_enrolment_creates_proves_and_registers_one_key(live_server, monkeypatch
         assert "signed key change" in capsys.readouterr().err
 
 
+def test_after_a_host_reset_enrolment_creates_a_fresh_key_under_a_fresh_name(live_server, monkeypatch):
+    """arma's review of #172: after the hub machine resets the host's keys, the
+    old key stays on record as retired and the hub refuses its name and public
+    key. Enrolling again must create a FRESH Hello key under a name the hub has
+    never seen — not re-prove the retired one under the base name."""
+    from collab.server.approval_store import ApprovalStore
+    store = live_server["store"]
+    bob = store.add_participant("bob", "bob-token")
+    with store._lock, store._db:              # bob is this hub's one host
+        store._db.execute("UPDATE participants SET is_host=(id=?)", (bob.id,))
+    hello = FakeHello()
+    monkeypatch.setattr(strong, "_hello", lambda: hello)
+    base = strong.hello_key_name("s_test", bob.id)
+    with HubClient(live_server["base"], "bob-token") as hub:
+        w = SimpleNamespace(profile=SimpleNamespace(name="bob", participant_id=bob.id,
+                                                    session_id="s_test"), bob_hub=hub,
+                            base=live_server["base"])
+        assert _consent(w, monkeypatch) == 0
+        ApprovalStore(live_server["store"], "s_test").reset_host_credentials()
+        assert _consent(w, monkeypatch) == 0
+        keys = {k["credential_id"]: k["state"] for k in strong.ApprovalClient(hub).keys()}
+        assert keys[base] == "retired"
+        [fresh] = [name for name, state in keys.items() if state == "active"]
+        assert fresh != base and fresh in hello.keys
+        assert hello.keys[fresh] is not hello.keys[base]
+
+
 def test_a_key_left_by_a_cancelled_proof_is_proven_not_replaced(live_server, monkeypatch):
     bob = live_server["store"].add_participant("bob", "bob-token")
     hello = FakeHello()
@@ -751,3 +778,16 @@ def test_the_passkey_pages_answer_is_taken_in_the_hello_shapes(answer, expected,
     /approve itself — the page never does."""
     monkeypatch.setattr(strong, "PASSKEY", lambda request, fetch: answer)
     assert strong.open_window({}, lambda **kw: {}, method="passkey") == expected
+
+
+@pytest.mark.parametrize("strength, asked", [
+    ("strong", True), ("weak", False), ("STRONG", True), (5, True), (None, True),
+])
+def test_only_an_explicit_weak_request_is_read_the_ordinary_way(strength, asked):
+    """The hub registers only «strong». An explicit «weak» is an ordinary
+    request; anything else that names a strength is strong-asked, so a
+    malformed one is dropped rather than downgraded."""
+    env = SimpleNamespace(body={"skill_request": {"id": "sr_123456789abc", "skill": "example",
+                                                  "args": "", "required_strength": strength}})
+    assert strong.is_strong_ask(env) is asked
+    assert strong.is_strong_ask(SimpleNamespace(body={"skill_request": {"id": "sr_123456789abc"}})) is False
