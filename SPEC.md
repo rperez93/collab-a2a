@@ -95,7 +95,7 @@ arrives. Names are unique among live participants, so this is never ambiguous.
 | kind | `body` |
 |---|---|
 | `chat` | *(usually empty; the message is in `text`)* — `{learning: true}` marks a fact worth keeping past the session, see below |
-| `hello` | `{repo, branch, dirty, focus}` — merged into the sender's profile, so the roster shows it. Never the working directory, the git remote, the hostname or the account: the hub drops `cwd`, `remote`, `machine`, `user` and any absolute path an older client sends |
+| `hello` | `{repo, branch, dirty, focus}` — merged into the sender's profile, so the roster shows it. The hub keeps ONLY `focus`, `repo`, `branch`, `dirty`, `version` and the agent-kind fields, and refuses a value that is an absolute path, a `file:` URL, a home-relative path or a URL with userinfo: never the working directory, the git remote, the hostname or the account |
 | `presence` | `{event, was?}` |
 | `task` | `{action, id, title, state, owner}` — `state` is a real A2A `TaskState` |
 | `file` | `{action: "shared"\|"received", id, name, size, sha256, url}` |
@@ -400,8 +400,9 @@ Usage travels two ways, both optional:
              "context_pct": 18.4 } }
 ```
 
-What travels is a label derived from the hashed `machine_id` — never the
-hostname, never the OS account. The hub stores only `machine_id` and shows the
+What travels is a label taken from `machine_id` — a random identity generated
+once per machine and account, never derived from the hostname — and never the
+OS account. The hub stores only `machine_id` and shows the
 label; a raw `machine` or `user`, or a figure that names a local path (`cwd`,
 `transcript_path`, any absolute path), is dropped on the way in.
 

@@ -39,24 +39,19 @@ def machine_label(machine_id: str) -> str:
 
 def shareable_path(raw: str, root: str | os.PathLike | None = None) -> str:
     """A path as it may be shown to peers: relative to the repository when it
-    is inside it, `~/…` when it is under the home directory, else its final
-    part. A relative path is already the repository's and is kept."""
+    is inside it, else its final part — the same rule the hub applies to what
+    any client sends (`activity._shareable`). A relative path is already the
+    repository's and is kept."""
     text = str(raw or "").strip()
     if not text:
         return ""
     path = Path(os.path.expanduser(text)) if text.startswith("~") else Path(text)
     if not path.is_absolute():
         return text
-    candidates = []
     if root:
-        candidates.append((Path(root), ""))
-    candidates.append((Path.home(), "~"))
-    for base, prefix in candidates:
         try:
-            rel = path.resolve().relative_to(Path(base).resolve())
+            rel = path.resolve().relative_to(Path(root).resolve())
+            return rel.as_posix() or "."
         except (ValueError, OSError):
-            continue
-        if prefix:
-            return "~" if str(rel) == "." else f"~/{rel.as_posix()}"
-        return rel.as_posix() or "."
+            pass
     return path.name

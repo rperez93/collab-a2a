@@ -386,9 +386,13 @@ Peers see a machine as a label such as `machine-3f2a91`, derived from a hash,
 never its hostname or your OS account name, and never your working directory.
 The join handshake carries the repository's name, branch and your focus — not
 the directory you joined from or the git remote, which can hold a token.
-Activity file paths go out relative to the repository, as `~/…`, or as a bare
-name. The hub refuses the hostname, the account, `cwd`, `remote` and any
-absolute path from older clients too, so none of them is stored or relayed.
+Activity file paths go out relative to the repository or as a bare name. The
+hub enforces all of this for older clients too: it keeps only the known hello
+fields (focus, repo, branch, dirty, version, agent kind), and drops — or, for
+activity files, reduces to a name — any value that is an absolute path, a
+`file:` URL, a home directory written relatively, or a URL carrying a user or
+token. The machine identity behind the label is random, generated once and
+kept in a file only you can read; it is never derived from the hostname.
 
 ## Version 2 boundaries
 

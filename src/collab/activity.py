@@ -54,6 +54,20 @@ MAX_FILES = 6
 MAX_FILE = 80
 
 
+def _shareable(path: str) -> str:
+    """A file as every participant may see it. Applied HERE, where the hub
+    stores activity, and not only in our own client (review of #178): an
+    older client or a hook posts `/home/<account>/…` as readily as
+    `src/auth.py`. A repository-relative path is kept; anything that names
+    the machine — absolute, `~/…`, `file:`, «home/<account>/…» — is reduced
+    to its final name, which is what a peer needs to recognise the file."""
+    from .protocol import exposes_the_machine
+
+    if not exposes_the_machine(path):
+        return path
+    return path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+
+
 def sanitise(reported: Any, *, previous: dict[str, Any] | None = None) -> dict[str, Any]:
     """What is safe to put on everyone else's roster.
 
@@ -76,7 +90,7 @@ def sanitise(reported: Any, *, previous: dict[str, Any] | None = None) -> dict[s
     if isinstance(raw, (list, tuple)):
         for item in raw[:MAX_FILES]:
             if isinstance(item, (str, int, float)):
-                cleaned = str(item).strip()[:MAX_FILE]
+                cleaned = _shareable(str(item).strip())[:MAX_FILE]
                 if cleaned:
                     files.append(cleaned)
 

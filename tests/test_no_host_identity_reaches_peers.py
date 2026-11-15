@@ -147,7 +147,7 @@ def test_an_older_client_sending_all_three_gets_none_of_them_stored(live_server,
 
 def test_an_activity_path_is_shared_relative_never_absolute(tmp_path, monkeypatch):
     """`collab working … --files /home/<account>/…` would put the account on
-    every roster: paths go out repository-relative, `~/…`, or as a bare name."""
+    every roster: paths go out repository-relative, or as a bare name."""
     from collab.privacy import shareable_path
 
     home = tmp_path / "home" / USER
@@ -155,7 +155,7 @@ def test_an_activity_path_is_shared_relative_never_absolute(tmp_path, monkeypatc
     (repo / "src").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
     assert shareable_path(str(repo / "src" / "auth.py"), repo) == "src/auth.py"
-    assert shareable_path(str(home / "notes.md"), repo) == "~/notes.md"
+    assert shareable_path(str(home / "notes.md"), repo) == "notes.md"
     assert shareable_path("/srv/other/thing.py", repo) == "thing.py"
     assert shareable_path("src/auth.py", repo) == "src/auth.py"
 
@@ -216,7 +216,7 @@ def test_the_path_refusal_breaks_no_feature_that_names_a_file(live_server, senti
     """Refusing absolute paths at the hub applies to self-description (hello,
     stats extras), not to features that name files: a file sent from deep in
     the account's home goes out by its NAME and is delivered; activity for a
-    file outside the repository falls back to `~/…` or a bare name."""
+    file outside the repository falls back to a bare name."""
     from collab.cli import _publish_activity  # noqa: F401  (the path it uses)
     from collab.privacy import shareable_path
 
@@ -230,5 +230,116 @@ def test_the_path_refusal_breaks_no_feature_that_names_a_file(live_server, senti
     assert sent and any(f.get("name") == "report.txt" for f in listed), listed
     _assert_absent(json.dumps(listed), sentinel_machine)
     outside = sentinel_machine.parents[3] / "notes.md"          # ~/notes.md
-    assert shareable_path(str(outside), sentinel_machine.parents[1]) == "~/notes.md"
+    assert shareable_path(str(outside), sentinel_machine.parents[1]) == "notes.md"
     assert shareable_path("/etc/hosts", sentinel_machine.parents[1]) == "hosts"
+
+
+def test_no_identity_file_creates_one(tmp_path, monkeypatch):
+    stored = tmp_path / "machine-id"
+    assert not stored.exists()
+    ident = _fresh_machine_id(monkeypatch, tmp_path, "anything")
+    assert stored.exists() and len(stored.read_text().strip()) == 32
+    assert ident == "m_" + stored.read_text().strip()[:16]
+
+
+# --- review of #178: what an OLDER client (or a hook) still sends -----------------------
+
+#: The reviewer's probe values (scratchpad/pr178, test_zz_probe_178.py).
+PROBE = {"host": "SENTHOSTNAME", "user": "sentacct", "cwd": "/home/sentacct/secretproj",
+         "remote": "https://ghp_SENTTOKEN@github.com/o/r.git", "win": "C:\\Users\\sentacct\\x",
+         "rel": "home/sentacct/relpath", "fileurl": "file:///home/sentacct/f"}
+NEEDLES = ("SENTHOSTNAME", "sentacct", "secretproj", "SENTTOKEN", "relpath", "file:///home")
+
+
+def _old_client(client, session, name, hello):
+    r = client.post("/ext/collab/v1/join", json={
+        "protocol_major": 2, "version": "2.0.0", "invite": session["invite"], "name": name,
+        "hello": hello})
+    return {**COMPAT, "Authorization": f"Bearer {r.json()['token']}"}
+
+
+def _peers_see(client, host_headers) -> str:
+    return "\n".join(client.get(path, headers=host_headers).text for path in (
+        "/ext/collab/v1/snapshot", "/ext/collab/v1/participants", "/ext/collab/v1/history"))
+
+
+def test_an_older_client_cannot_put_the_machine_on_any_roster(client, session, host_headers):
+    """The reviewer's probe, as a test. Hello is an ALLOWLIST now: `git_remote`
+    with a token, `relhome`, `furl`, `winpath`, a capitalised `Cwd` and a
+    nested object are not kept. Stats extras drop userinfo URLs, `file:` URLs
+    and home-relative paths. Activity files that name the machine are reduced
+    to a name at the hub, whatever client sent them."""
+    h = _old_client(client, session, "old", {
+        "focus": "work", "repo": "r", "branch": "b", "cwd": PROBE["cwd"],
+        "remote": PROBE["remote"], "machine": PROBE["host"], "user": PROBE["user"],
+        "hostname": PROBE["host"], "Cwd": PROBE["cwd"], "git_remote": PROBE["remote"],
+        "workdir": PROBE["cwd"], "winpath": PROBE["win"], "relhome": PROBE["rel"],
+        "furl": PROBE["fileurl"], "nested": {"cwd": PROBE["cwd"]},
+        # Not a private-sounding key, not a path: only an ALLOWLIST drops it.
+        "box_label": PROBE["host"]})
+    # Allowed keys carrying what names the machine: the value is refused.
+    _old_client(client, session, "old3", {"focus": "x", "repo": PROBE["cwd"],
+                                          "branch": PROBE["rel"], "version": PROBE["remote"]})
+    client.post("/ext/collab/v1/stats", headers=h, json={
+        "machine": PROBE["host"], "user": PROBE["user"], "machine_id": "m_0123456789abcdef",
+        "stats": {"cwd": PROBE["cwd"], "transcript_path": PROBE["cwd"] + "/t.jsonl",
+                  "workspace": {"current_dir": PROBE["cwd"]}, "model": "x",
+                  "tool_dir": PROBE["cwd"], "winp": PROBE["win"], "remote_url": PROBE["remote"],
+                  "relp": PROBE["rel"], "furl": PROBE["fileurl"]}})
+    posted = client.post("/ext/collab/v1/activity", headers=h, json={
+        "state": "working", "what": "editing",
+        "files": [PROBE["cwd"] + "/a.py", PROBE["win"], "~/secret/x.py", PROBE["rel"] + "/b.py",
+                  PROBE["fileurl"] + "/c.py", "src/ok.py"]})
+    assert posted.status_code == 200, posted.text
+    seen = _peers_see(client, host_headers)
+    stored = "\n".join(session["store"]._db.iterdump())
+    for needle in NEEDLES:
+        assert needle not in seen, f"peers see {needle!r}"
+        assert needle not in stored, f"the hub stores {needle!r}"
+    me = next(p for p in client.get("/ext/collab/v1/participants",
+                                     headers=host_headers).json()["participants"]
+              if p["name"] == "old")
+    assert me["activity"]["files"] == ["a.py", "x", "x.py", "b.py", "c.py", "src/ok.py"]
+    assert me["repo"] == "r" and me["branch"] == "b" and me["focus"] == "work"
+
+
+def _seed_stale(session, name):
+    """What an OLDER hub stored before this release: the raw two in meta."""
+    person = next(p for p in session["store"].participants() if p.name == name)
+    with session["store"].edit_meta(person.id) as meta:
+        meta["machine"], meta["user"] = PROBE["host"], PROBE["user"]
+    return person.id
+
+
+def _meta(session, name):
+    return next(p for p in session["store"].participants() if p.name == name).meta
+
+
+def test_a_stored_hostname_is_never_relayed_even_before_it_is_removed(client, session,
+                                                                       host_headers):
+    """P4: the roster derives `machine` from the id; a raw value an older hub
+    stored is not shown, even while it still sits in meta."""
+    _old_client(client, session, "stale", {"focus": "x"})
+    _seed_stale(session, "stale")
+    seen = _peers_see(client, host_headers)
+    assert PROBE["host"] not in seen and PROBE["user"] not in seen
+
+
+def test_a_stats_post_removes_a_stale_hostname_and_never_writes_one(client, session):
+    """P7: any /stats post removes the raw machine and user an older hub
+    stored. P3: figures carrying them — on /stats or riding on a message —
+    never write them, even when the identity half of the post is absent."""
+    h = _old_client(client, session, "stale2", {"focus": "x"})
+    _seed_stale(session, "stale2")
+    client.post("/ext/collab/v1/stats", headers=h, json={"stats": {"model": "x"}})
+    assert not {"machine", "user"} & set(_meta(session, "stale2"))
+
+    client.post("/ext/collab/v1/messages", headers=h, json={
+        "text": "on it", "stats": {"machine": PROBE["host"], "user": PROBE["user"],
+                                   "model": "y"}})
+    assert not {"machine", "user"} & set(_meta(session, "stale2")), "a message wrote them"
+    client.post("/ext/collab/v1/stats", headers=h, json={
+        "machine": PROBE["host"], "user": PROBE["user"], "stats": {}})
+    meta = _meta(session, "stale2")
+    assert not {"machine", "user"} & set(meta), sorted(meta)
+    assert PROBE["host"] not in json.dumps(meta) and PROBE["user"] not in json.dumps(meta)

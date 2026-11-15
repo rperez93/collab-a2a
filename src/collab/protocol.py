@@ -12,6 +12,7 @@ from .terminal_text import HUB_LABEL, display_text
 
 import time
 import unicodedata
+import re
 import uuid
 from datetime import date, datetime, timezone
 from dataclasses import dataclass, field
@@ -314,6 +315,27 @@ PRIVATE_KEYS = frozenset({
 #: machine: a focus may begin with «/» («/review the auth PR») and is kept.
 FREE_TEXT_KEYS = frozenset({"focus"})
 
+#: THE ONLY hello fields the hub keeps (review of #178). A denylist missed
+#: `git_remote` carrying a token and `relhome` naming the account; an
+#: allowlist cannot. These are what clients send (`client.context.gather`) and
+#: what the roster reads; the agent-kind fields say which tool a peer runs.
+HELLO_KEYS = frozenset({"focus", "repo", "branch", "dirty", "version",
+                        "kind", "agent", "agent_kind"})
+
+_USERINFO = re.compile(r"://[^/\s@]*@")
+_HOME_RELATIVE = re.compile(r"(?:^|[/\\])(?:home|Users)[/\\][^/\\]+[/\\]")
+
+
+def exposes_the_machine(value: Any) -> bool:
+    """Whether a string names this machine's layout or carries a credential:
+    an absolute path, a `file:` URL, a home directory written relatively
+    («home/<account>/…»), or a URL with userinfo («://user:token@»)."""
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    return bool(looks_like_a_local_path(text) or text.lower().startswith("file:")
+                or _USERINFO.search(text) or _HOME_RELATIVE.search(text))
+
 
 def looks_like_a_local_path(value: Any) -> bool:
     """An absolute path on some machine: it names a home, an account or a
@@ -343,12 +365,12 @@ def bounded_meta(raw: Any) -> dict[str, Any]:
     for key, value in raw.items():
         if len(out) >= MAX_META_KEYS:
             break
-        if not isinstance(key, str) or key.lower() in PRIVATE_KEYS:
+        if not isinstance(key, str) or key not in HELLO_KEYS:
             continue
         if isinstance(value, bool) or isinstance(value, (int, float)):
             out[key[:MAX_META_VALUE]] = value
         elif isinstance(value, str) and (key in FREE_TEXT_KEYS
-                                         or not looks_like_a_local_path(value)):
+                                         or not exposes_the_machine(value)):
             out[key[:MAX_META_VALUE]] = value[:MAX_META_VALUE]
         # A dict or a list is dropped on purpose: stats and activity reach the
         # roster through their own sanitised endpoints, never through hello.
