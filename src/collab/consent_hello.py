@@ -239,11 +239,13 @@ try {
       $body.Controls.Add($b); $b
     }
     $ok = Button 'Approve with Windows Hello' 16 270 $green
+    $ok.TabStop = $false     # nor Tab then Space: approving takes a click
     $ok.Add_Click({ $script:choice = 'approve'; $f.Close() })
     $no = Button '&Decline' 296 140 $fg
     $no.Add_Click({ $script:choice = 'decline'; $f.Close() })
     $pk = Button 'Use a passkey instead' 564 220 $dim
     $pk.Anchor = 'Bottom, Right'
+    $pk.TabStop = $false
     $pk.Add_Click({ $script:choice = 'passkey'; $f.Close() })
     $hint = Text 'Enter, Esc, Alt+D or x declines  -  approving takes a click  -  nothing here is logged' 16 584 768 $dim $font
     $hint.Anchor = 'Bottom, Left, Right'
@@ -268,7 +270,8 @@ try {
         if ([Windows.Forms.Control]::IsMnemonic($c, $b.Text)) { $c } } })
       $keys = @{status = 'Success'; choice = 'built'; typed = $(if ($keyed.Count) { 'approve-key' } else { $script:choice });
                 accept = [bool]($f.AcceptButton -eq $no); cancel = [bool]($f.CancelButton -eq $no);
-                chrome = [bool]($f.FormBorderStyle -eq 'None')}
+                chrome = [bool]($f.FormBorderStyle -eq 'None');
+                tabbable = [bool]($ok.TabStop -or $pk.TabStop)}
       $timer.Dispose(); $f.Dispose(); Say $keys; exit 0
     }
     [void]$f.ShowDialog()

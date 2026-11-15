@@ -114,15 +114,15 @@ def test_a_security_only_retry_keeps_ordinary_rows_and_survives_restart(tmp_path
     subject = waker(tmp_path, delivery=delivery)
     subject.note(Envelope(kind='chat', sender='peer', seq=1, text='private ordinary context'))
     subject.note(alarm(2))
-    batch = subject.take_security()
+    batch = subject.take_for_main()
     assert [event['seq'] for event in batch.events()] == [2]
     assert 'private ordinary context' not in subject.prompt(batch)
     subject.failed(batch)
     restored = wake.Waker(tmp_path, 's_alarm', attended=lambda: False, now=lambda: 2000.0)
-    retried = restored.take_security()
+    retried = restored.take_for_main()
     assert retried.path == batch.path and [event['seq'] for event in retried.events()] == [2]
     restored.succeeded(retried)
-    assert not restored.security_pending()
+    assert not restored.for_main_pending()
     assert [event['seq'] for event in restored.take().events()] == [1]
     if delivery == 'notice':
         assert not attention.all_read(tmp_path, [1])
@@ -177,7 +177,7 @@ async def test_an_alarm_only_actual_daemon_wake_claims_the_shared_notice_latch(p
     subject._schedule_refresh = lambda *args: None
     monkeypatch.setattr(attention, 'claim', claim)
     monkeypatch.setattr(attention, 'release', lambda *args, **kwargs: None)
-    await subject._wake(subject.waker.take_security())
+    await subject._wake(subject.waker.take_for_main())
     assert claims == [(10, [10])]
     assert bool(deliveries) is admitted
 
@@ -260,7 +260,7 @@ async def test_an_actual_wake_recipe_cannot_read_the_mixed_batch_through_its_env
     subject._log_wake = lambda *args: None
     subject.waker.note(Envelope(kind='chat', sender='peer', seq=1, text='ordinary private context'))
     subject.waker.note(alarm(2))
-    await subject._wake_once(subject.waker.take_security())
+    await subject._wake_once(subject.waker.take_for_main())
     observed = json.loads(output.read_text())
     assert observed['pointer'] == ''
     assert 'ordinary private context' not in observed['stdin'] + observed['prompt']

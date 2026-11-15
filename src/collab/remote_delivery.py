@@ -162,6 +162,9 @@ def flush(profile, client):
     api = strong.ApprovalClient(client)
     reports, replies = inbox.owed()
     done = 0
+    # REPORTS BEFORE REPLIES: the hub takes an answer only after the hand-off
+    # was reported, and a pass that cannot send a report stops before any
+    # reply (each `return done` below).
     for table, rows, route in (('outcomes', reports, 'report'), ('replies', replies, 'reply')):
         for row in rows:
             body = ({'state': row['state'], 'key': row['key']} if table == 'outcomes'

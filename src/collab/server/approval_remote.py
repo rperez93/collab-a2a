@@ -308,6 +308,11 @@ class RemoteApprovals:
         fingerprint = hashlib.sha256(answer.encode('utf-8')).hexdigest()
         with self.core._transaction(token) as (db, owner, now):
             row = self._consumed(db, owner, offer_id, now)
+            # AN ANSWER FOLLOWS A HAND-OFF: the receiver reports delivered or
+            # uncertain first (flush sends reports before replies). Not final:
+            # the receiver keeps the answer and sends it after its report.
+            if row['delivery'] not in ('delivered', 'uncertain'):
+                raise Rejected('remote_not_delivered', 409)
             if row['reply_sha256'] is not None:
                 if (row['reply_sha256'], row['reply_key']) != (fingerprint, key):
                     raise Rejected('remote_already_answered', 409)

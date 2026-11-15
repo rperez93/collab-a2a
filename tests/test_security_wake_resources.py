@@ -51,7 +51,7 @@ async def run(root):
    subject.waker.note(Envelope(kind='chat',sender='peer',seq=seq*2,text='ordinary-private'))
    subject.waker.note(Envelope(kind='system',sender='collab',seq=seq*2+1,body={'event':'approval-security'},text='synthetic alarm'))
    await subject._maybe_wake();assert subject._waking is not None;await subject._waking
-   assert not subject.waker.security_pending()
+   assert not subject.waker.for_main_pending()
    assert len(subject.waker.outstanding())==1
   assert len(delivered)==60
   ordinary=subject.waker.take().events();assert any(e['kind']=='chat' for e in ordinary)

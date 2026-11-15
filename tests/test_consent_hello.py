@@ -543,6 +543,7 @@ def test_the_real_script_parses_and_its_window_builds_without_showing():
     assert built["cancel"] is True, "Esc must be bound to Decline"
     assert built["typed"] == "decline", "a typed letter must never approve"
     assert built["chrome"] is True, "the window draws its own title bar"
+    assert built["tabbable"] is False, "Tab must never reach Approve or the passkey button"
 
 
 def test_a_signature_that_does_not_verify_locally_is_never_an_approval(fake):
