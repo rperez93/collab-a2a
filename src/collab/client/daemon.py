@@ -2892,14 +2892,13 @@ class Daemon:
         # up to a generation — but by this daemon's own `logcap` watcher
         # thread, which on a host watches `hub.log` (see daemon_main), so a hub
         # that dies before its own watcher starts is still capped.
-        with open_log(self.paths.root / "hub.log", trim=False) as log:
-            subprocess.Popen(
-                [sys.executable, "-m", "collab.hub_main", cfg.session_id],
-                stdout=log, stderr=log, stdin=subprocess.DEVNULL,
-                start_new_session=True,
-                env={**os.environ, "COLLAB_HOME": cfg.home,
-                     **({"COLLAB_AGENT_KIND": k} if (k := current_kind()) else {})},
-            )
+        # Through the same helper as `collab host`, so the revived hub's pid
+        # and stamp are on record at once: until its own first save, hub.json
+        # still named the dead one, and `collab kill` stopped nothing.
+        from ..server.session import spawn_hub
+        spawn_hub(cfg, {**os.environ, "COLLAB_HOME": cfg.home,
+                        **({"COLLAB_AGENT_KIND": k} if (k := current_kind()) else {})},
+                  self.paths.root / "hub.log", trim=False)
 
     # --- the feed --------------------------------------------------------------
 

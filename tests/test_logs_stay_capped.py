@@ -274,6 +274,7 @@ def test_the_daemons_hub_restart_opens_hub_log_without_trimming_on_the_loop(
     from collab.client import daemon as d
 
     opened = []
+    from collab.client import daemon_files as df  # the revive opens hub.log via spawn_hub
     real = d.open_log
 
     def spy(path, *args, **kwargs):
@@ -282,7 +283,7 @@ def test_the_daemons_hub_restart_opens_hub_log_without_trimming_on_the_loop(
 
     log = tmp_path / "hub.log"
     log.write_bytes(b"old traceback\n" * 100_000)            # past a tiny cap
-    monkeypatch.setattr(d, "open_log", lambda p, **k: (seen.append(k), spy(p, cap=1000, **k))[1])
+    monkeypatch.setattr(df, "open_log", lambda p, **k: (seen.append(k), spy(p, cap=1000, **k))[1])
     seen = []
     children = []
     monkeypatch.setattr(d.subprocess, "Popen", lambda *a, **k: children.append(k))
@@ -1496,9 +1497,10 @@ def test_a_restarted_hub_keeps_the_agent_kind_and_goes_through_the_log_opener(
     loop), closing its own handle — the two changes met in one Popen and both
     must survive."""
     from collab.client import daemon as d
+    from collab.client import daemon_files as df  # the revive opens hub.log via spawn_hub
 
     opened = []
-    monkeypatch.setattr(d, "open_log",
+    monkeypatch.setattr(df, "open_log",
                         lambda p, **k: (opened.append(k), open(p, "a"))[1])
     children = []
     monkeypatch.setattr(d.subprocess, "Popen", lambda *a, **k: children.append(k))

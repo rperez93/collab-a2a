@@ -764,29 +764,6 @@ def _release_own_tunnel_for_the_proxy(previous: Any, mode: str, primary: bool,
 
 
 @_preserve_cwd()
-def _spawn_hub(cfg, env: dict[str, str], command: list[str] | None = None) -> int:
-    """Start the hub detached, and record its pid and start stamp at once.
-
-    The hub writes its own pid when it is up, but `collab host` may stop
-    waiting first (a loaded machine, a slow tunnel), and until then hub.json
-    said 0: `collab kill` signalled nothing and the hub ran on for hours
-    (T_cf1f2c12b363). Only these two keys are written (update_fields), so the
-    hub's own later save is not overwritten, and it writes the same pid.
-    """
-    from .client.exclusive import stamp_for
-    from .server.session import update_fields
-    log = DaemonPaths(cfg.dir).root / "hub.log"
-    with open_log(log) as fh:
-        child = subprocess.Popen(
-            command or [sys.executable, "-m", "collab.hub_main", cfg.session_id],
-            stdout=fh, stderr=fh, stdin=subprocess.DEVNULL,
-            start_new_session=True, env=env,
-        )
-    fresh = stamp_for(child.pid)
-    update_fields(cfg.dir, pid=child.pid, pid_stamp=fresh.encode() if fresh.started else "")
-    return child.pid
-
-
 def cmd_host(args: argparse.Namespace) -> int:
     from .server.session import (HubConfig, create_session,
                                  hosted_sessions, join_line,
@@ -853,6 +830,20 @@ def cmd_host(args: argparse.Namespace) -> int:
                 previous[0], args.tunnel or ("proxy" if primary else ""),
                 primary, no_tunnel)) is not None:
             return code
+        # NEVER A SECOND HUB (T_60789ecd1e22). Read again after the proxy
+        # cutover, which stops the old hub itself when it moves the session;
+        # any other resume found a live hub and started another beside it,
+        # and hub.json named only one of the two.
+        # A hub just told to stop (`collab kill`, then resume at once) takes a
+        # moment to exit: wait a bounded few seconds before calling it running.
+        live = HubConfig.load(previous[0].session_id, previous[0].home) or previous[0]
+        settle = time.monotonic() + 5
+        while live.hub_stamp().alive() and time.monotonic() < settle:
+            time.sleep(0.1)
+        if live.hub_stamp().alive():
+            fail(f"session {live.session_id} already has a running hub (pid {live.hub_stamp().pid}); "
+                 "join it, or stop it first with `collab kill` and resume again")
+            return 1
         domain, source = host_domain(args.domain, previous[0].domain,
                                      previous[0].domain_from, ngrok_domain())
         cfg = resume_session(previous[0], port, bind=args.bind, domain=domain)
@@ -910,7 +901,9 @@ def cmd_host(args: argparse.Namespace) -> int:
     env = (owner.without_owner(env) if owner.kept(cfg.dir)
            else owner.spawn_env(env))
 
-    _spawn_hub(cfg, env)
+    from .server.session import spawn_hub
+    log = DaemonPaths(cfg.dir).root / "hub.log"   # named again below if the hub does not come up
+    spawn_hub(cfg, env, log)
 
     ok(f"session {c(cfg.session_id, '36')} starting as {c(name, '1')}")
     _name_source_note()

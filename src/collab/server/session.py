@@ -470,6 +470,40 @@ def stop_session(cfg: HubConfig, *, purge: bool = False) -> dict[str, Any]:
     return result
 
 
+def spawn_hub(cfg: "HubConfig", env: dict[str, str], log_path: Path,
+              command: list[str] | None = None, *, trim: bool = True) -> int:
+    """Start the hub detached, and record its pid and start stamp at once.
+
+    The hub writes its own pid when it is up, but whoever started it may stop
+    waiting first, and until then hub.json named 0 (or a dead hub, when the
+    daemon revives one): `collab kill` signalled nothing and the hub ran on
+    (T_cf1f2c12b363). Only these two keys are written (update_fields), so the
+    hub's own later save is not overwritten, and it writes the same pid. Both
+    `collab host` and the daemon's revive start the hub here.
+
+    A pid whose start time cannot be read is recorded as 0, not as a bare
+    number: a bare number is trusted as-is and, once reused, names a stranger.
+    """
+    import subprocess
+    import sys
+    from ..client.exclusive import stamp_for
+    from ..client.daemon_files import open_log
+    with open_log(log_path, trim=trim) as fh:
+        child = subprocess.Popen(
+            command or [sys.executable, "-m", "collab.hub_main", cfg.session_id],
+            stdout=fh, stderr=fh, stdin=subprocess.DEVNULL,
+            start_new_session=True, env=env,
+        )
+    if not getattr(child, "pid", 0):
+        return 0  # nothing we can name (a stand-in in tests)
+    fresh = stamp_for(child.pid)
+    if fresh.started:
+        update_fields(cfg.dir, pid=child.pid, pid_stamp=fresh.encode())
+    else:
+        update_fields(cfg.dir, pid=0, pid_stamp="")
+    return child.pid
+
+
 def update_fields(session_dir: Path, **fields: Any) -> bool:
     """Change exactly these keys in a `hub.json`, leaving every other one alone.
 
