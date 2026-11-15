@@ -1,6 +1,6 @@
 # Strong approval API v1 — contract proposal
 
-Status: **Windows Hello approval is live from 2.2.0; passkey approval after 2.2.0.**
+Status: **Windows Hello approval is live from 2.2.0; passkey approval from 2.3.0.**
 Capability discovery returns `available:true` with `methods:["hello","passkey"]`
 (2.2.0 itself advertised `["hello"]` only). Off Windows, `collab consent enrol`
 enrols a passkey through the local enrolment page; on Windows and WSL the client
@@ -174,7 +174,7 @@ reported separately by capability discovery.
 * `GET /capabilities` returns `{api_version:1, available:true,
   methods:["hello","passkey"], supported_methods:["hello","passkey"],
   algorithms:{hello:[-257],passkey:[-7,-257]}, attestation_verification:false}`
-  after 2.2.0 (2.2.0 itself returned `methods:["hello"]`). An older hub reports `available:false` with
+  from 2.3.0 (2.2.0 itself returned `methods:["hello"]`). An older hub reports `available:false` with
   `reason:"operation_integration_pending"`; its 404 also means unavailable.
 * `GET /keys` returns the authenticated participant's credential metadata:
   `credential_id`, `method`, `algorithm`, `fingerprint`, `created_at`,

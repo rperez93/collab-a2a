@@ -5,13 +5,13 @@
 profile, an immutable operation binding and an explicit credential ID.
 Request windows cannot enrol or replace a key: neither the page nor its HTTP
 capability exposes registration. The separate human-started service is
-`collab.client.passkey_enrol.EnrolService`; after 2.2.0, `collab consent
+`collab.client.passkey_enrol.EnrolService`; from 2.3.0, `collab consent
 enrol` runs it off Windows (`enrol_with_passkey`), and refuses on Windows and
 WSL, which use Hello only. This module does not provide a hub
 approval API, register a real credential by itself, or turn a terminal receipt
 into cryptographic approval. With no adapter it reports «unsupported» and
 submits no decision. The authenticated adapter checks capability discovery: from 2.2.0
-the hub reports Windows Hello available, and after 2.2.0 passkeys too; an
+the hub reports Windows Hello available, and from 2.3.0 passkeys too; an
 older hub reports «operation_integration_pending», and nothing is offered. No
 local flag overrides the hub's answer.
 

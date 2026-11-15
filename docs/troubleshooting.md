@@ -150,8 +150,12 @@ error code and reason. The session is still reachable on this machine.
   session at a time. Give this session a different reserved domain —
   `collab kill`, then `collab host --resume --domain <domain>`. The session
   keeps that domain from then on, even with a different `ngrok_domain`
-  default. Or stop the other process yourself. Do not run `collab host --resume` while the hub is still up: that
-  starts a second hub on the same session.
+  default. Or stop the other process yourself. `collab host --resume` while the hub is
+  still up is refused on an own-tunnel or local session (`collab kill` first);
+  on the shared proxy it stops the old hub and resumes. Since 2.3.0 a second
+  hub cannot run a session at all: the hub holds `hub.lock` in the session
+  directory, and a second one exits at once, logging `another hub already runs
+  session <id> (pid N); this one exits` in `hub.log`.
 - `ERR_NGROK_4018` — ngrok has no authtoken: `ngrok config add-authtoken <token>`.
   The running hub retries the tunnel every 15 s; `collab url` prints the link
   once it is up. Nothing needs restarting.

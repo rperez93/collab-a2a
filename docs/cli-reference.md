@@ -1,6 +1,6 @@
 # CLI reference
 
-Generated from the command parser. Existing commands remain available; `collab config --tui` adds the interactive editor.
+Generated from the command parser by `scripts/gen-cli-reference.py`. Existing commands remain available; `collab config --tui` adds the interactive editor.
 
 ## Commands
 
@@ -51,6 +51,7 @@ Generated from the command parser. Existing commands remain available; `collab c
 - [worker](#worker)
 - [daemon](#daemon)
 - [capacity](#capacity)
+- [consent](#consent)
 - [skills](#skills)
 - [statusline](#statusline)
 
@@ -1096,15 +1097,15 @@ options:
 
 ```text
 usage: collab skills [-h] [--to TO] [--args ARGS] [--note NOTE]
-                     [--human-approved] [--strong] [--name NAME]
-                     [--description DESCRIPTION] [--after AFTER]
-                     [--limit LIMIT] [--session SESSION] [--agent NAME]
-                     [--copy] [--force] [--all] [--json]
-                     {install,uninstall,status,publish,shared,show,withdraw,peers,ask,requests,sent,accept,decline,done}
+                     [--sha256 SHA256] [--human-approved] [--strong]
+                     [--name NAME] [--file REL] [--description DESCRIPTION]
+                     [--after AFTER] [--limit LIMIT] [--session SESSION]
+                     [--agent NAME] [--copy] [--force] [--all] [--json]
+                     {install,uninstall,status,publish,shared,show,withdraw,peers,ask,requests,sent,accept,decline,done,install-shared,uninstall-shared}
                      [target]
 
 positional arguments:
-  {install,uninstall,status,publish,shared,show,withdraw,peers,ask,requests,sent,accept,decline,done}
+  {install,uninstall,status,publish,shared,show,withdraw,peers,ask,requests,sent,accept,decline,done,install-shared,uninstall-shared}
   target                selected SKILL.md path, shared publication ID, skill
                         name (ask) or request ID
 
@@ -1113,12 +1114,16 @@ options:
   --to TO               with ask: the participant to ask
   --args ARGS           with ask: arguments for the requested skill
   --note NOTE           with accept/decline/done: a reason or the result
-  --human-approved      with accept, without a terminal: your human has
-                        explicitly consented (never enough for a strong
-                        request)
+  --sha256 SHA256       with install-shared --human-approved: the hash your
+                        human reviewed
+  --human-approved      with accept or install-shared, without a terminal:
+                        your human has explicitly consented (never enough for
+                        a strong request)
   --strong              with ask: require strong approval, a human gesture
                         checked by the hub
   --name NAME           published skill name override
+  --file REL            with publish: a supporting file, relative to the skill
+                        directory (repeatable)
   --description DESCRIPTION
                         published skill description override
   --after AFTER         shared inventory page cursor

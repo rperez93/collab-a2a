@@ -46,6 +46,7 @@ somebody who is in fact free.
 |---|---|
 | you start a piece of work | `collab working "<objective>" --files <the files>` |
 | the objective changes | `collab working "<the new one>"` — the clock keeps running |
+| still on the same thing after a while | `collab working "<the same words>"` — refreshes its age, so it does not show as `last said …` |
 | you finish, or stop | `collab idle` |
 | you are blocked on them | `collab idle "waiting on your review of T_9d63"` |
 

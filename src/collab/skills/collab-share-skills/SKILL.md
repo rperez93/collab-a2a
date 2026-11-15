@@ -115,7 +115,7 @@ and the terminal y/N never accept a strong request, and a chat reply saying
 enrols a key first, themselves, in a terminal: `collab consent enrol` (two
 Hello prompts; the key is usable after a 10-minute cooling-off, and everyone in
 the session is told). `collab consent keys` lists it. On other platforms
-(after 2.2.0) `collab consent enrol` enrols a passkey through a local browser
+(from 2.3.0) `collab consent enrol` enrols a passkey through a local browser
 page instead, and approval uses it; on Windows and WSL it is always Hello.
 Against a hub that
 reports strong approval unavailable (older than 2.2.0) it cannot be accepted at
