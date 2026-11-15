@@ -8223,13 +8223,16 @@ def cmd_skills_install_shared(args: argparse.Namespace) -> int:
         digest = hashlib.sha256(content.encode()).hexdigest() if isinstance(content, str) else ""
         if not digest or digest != record.get("sha256"):
             raise ValueError("the publication's text does not match its SHA-256; not installing it")
+        sk.install_lock()  # before asking: never approve what this platform cannot install
         dest = sk.check_installable(record, target=target, force=args.force)  # before asking
         terminal = sys.stdin.isatty() and sys.stdout.isatty()
         owner_tag = hashlib.sha256(str(record.get("owner_id", "")).encode()).hexdigest()[:8]
         heading(f"shared skill {said(record.get('name', ''))} from {said(record.get('owner', '?'))} "
                 f"(participant {owner_tag})")
         print(f"  {len(content.encode())} bytes · sha256 {digest}")
-        print(f"  description: {said(str(record.get('description', '')))}")
+        # What is installed: the description inside the reviewed text, never the
+        # publication's separate (unhashed) field.
+        print(f"  description: {said(sk.front_description(content))}")
         print(f"  would install as {said(str(dest))}, renamed `{said(dest.name)}` in its front matter")
         if dropped := sk.dropped_keys(content):
             print(f"  front-matter keys dropped on install: {', '.join(said(k) for k in dropped)}")
