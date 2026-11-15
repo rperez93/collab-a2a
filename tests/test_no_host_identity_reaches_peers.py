@@ -162,8 +162,8 @@ def test_an_activity_path_is_shared_relative_never_absolute(tmp_path, monkeypatc
 
 # --- the machine identity is random, not a hash of the host ----------------------------
 
-def _fresh_machine_id(monkeypatch, config_dir, hostname):
-    monkeypatch.setenv("COLLAB_CONFIG", str(config_dir / "config.json"))
+def _fresh_machine_id(monkeypatch, registry, hostname):
+    monkeypatch.setenv("COLLAB_PEERS_DIR", str(registry))
     monkeypatch.setattr(socket, "gethostname", lambda: hostname)
     monkeypatch.setattr(platform, "node", lambda: hostname)
     peers._MACHINE_IDS.clear()
@@ -194,7 +194,7 @@ def test_agents_starting_together_agree_on_one_identity(tmp_path, monkeypatch):
     import concurrent.futures
     import sys
 
-    monkeypatch.setenv("COLLAB_CONFIG", str(tmp_path / "config.json"))
+    monkeypatch.setenv("COLLAB_PEERS_DIR", str(tmp_path))
     env = {**__import__("os").environ}
     code = "from collab import peers; print(peers.machine_id())"
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
