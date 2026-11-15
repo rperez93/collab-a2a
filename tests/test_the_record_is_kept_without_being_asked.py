@@ -387,3 +387,18 @@ def test_a_gap_followed_by_silence_is_still_said(tmp_path):
     assert taken[-1] is daemon_files._SENTINEL
     gaps = [t for t in taken if isinstance(t, stdlib.LogRecord)]
     assert gaps and gaps[0].getMessage().startswith("2 log lines dropped"), taken
+
+
+def test_setting_up_logging_twice_attaches_each_handler_once(tmp_path):
+    """The guards in setup_logging are what keep a warning from being recorded
+    twice (#184): a second call must add neither a diagnostics.Handler on the
+    collab logger nor a second QueueHandler on the root."""
+    from collab import diagnostics
+    root, ours = logging.getLogger(), logging.getLogger("collab")
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+    root.addHandler(logging.FileHandler(tmp_path / "daemon.log"))
+    daemon_files.setup_logging()
+    daemon_files.setup_logging()
+    assert sum(isinstance(h, diagnostics.Handler) for h in ours.handlers) == 1
+    assert sum(isinstance(h, handlers.QueueHandler) for h in root.handlers) == 1
