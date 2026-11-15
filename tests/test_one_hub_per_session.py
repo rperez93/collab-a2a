@@ -72,3 +72,41 @@ def test_a_reused_pid_does_not_stop_the_daemon_reviving_a_dead_hub(tmp_path, mon
     finally:
         stranger.kill()
         stranger.wait()
+
+
+def test_a_losing_hub_spawned_for_real_never_takes_over_the_record(tmp_path, monkeypatch):
+    """Lead gate on #205: the real spawn_hub against a held hub.lock. The new
+    hub loses and exits; the record keeps naming the holder; collab kill's
+    stop_session still stops the holder."""
+    import os
+    import time
+    from collab.server.session import spawn_hub, stop_session
+    cfg = _session(tmp_path, monkeypatch)
+    holder = subprocess.Popen([sys.executable, "-c", (
+        "import sys, time; from collab.client import exclusive; "
+        f"lock = exclusive.DaemonLock({str(cfg.dir)!r}, name=exclusive.HUB_LOCK_FILE); "
+        "assert lock.acquire(); print('HELD', flush=True); time.sleep(60)")],
+        stdout=subprocess.PIPE, text=True, env={**os.environ})
+    try:
+        assert holder.stdout.readline().strip() == "HELD"
+        cfg.pid, cfg.pid_stamp = holder.pid, stamp_for(holder.pid).encode()
+        cfg.save()
+        loser = spawn_hub(cfg, {**os.environ, "COLLAB_HOME": cfg.home}, cfg.dir / "hub.log")
+        for _ in range(200):
+            try:
+                os.kill(loser, 0)
+                if open(f"/proc/{loser}/stat").read().split()[2] == "Z":
+                    break
+            except ProcessLookupError:
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError("the losing hub is still running")
+        record = HubConfig.load(cfg.session_id, cfg.home)
+        assert record.pid == holder.pid, "the record still names the hub that holds the lock"
+        assert stop_session(record)["hub_stopped"]
+        holder.wait(10)
+    finally:
+        if holder.poll() is None:
+            holder.kill()
+            holder.wait()
