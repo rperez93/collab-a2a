@@ -89,6 +89,9 @@ def test_an_installed_ngrok_that_fails_is_not_called_missing(isolated, monkeypat
     finally:
         for cfg in hosted_sessions(home):
             stop_session(HubConfig.load(cfg.session_id, cfg.home) or cfg)
+        # This cleanup does NOT verify stop_session: it only makes sure nothing
+        # this test started outlives it. The pid-0 case stop_session used to
+        # miss is covered by tests/test_hub_pid_at_spawn.py (#202).
         for child in started:
             if child.poll() is None:
                 os.killpg(child.pid, signal.SIGTERM)  # its own session: the group is its own
