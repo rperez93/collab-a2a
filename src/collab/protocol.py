@@ -335,6 +335,35 @@ def scrub_free_text(text: str) -> str:
     return _FILE_URL.sub("[local file]", _USERINFO.sub("://", text))
 
 
+def public_stats(stats: Any, _depth: int = 0) -> dict[str, Any]:
+    """A message's usage figures as any peer may see them: every key that
+    names the machine (`PRIVATE_KEYS`) and every value that
+    `exposes_the_machine` gone, at any depth; everything else kept as it was.
+
+    The roster's figures had their sanitiser (`stats.sanitise`); the stats an
+    envelope carries did not — they were stored with the message, delivered to
+    every subscriber and replayed by history exactly as the client sent them,
+    so an older or hostile client's `hostname`, `cwd` or `workspace` reached
+    everyone (found by friday on #178). Applied before the message is stored
+    (`Hub.publish`) and again whenever one is serialised (`Envelope.to_dict`).
+    """
+    if not isinstance(stats, dict) or _depth > 4:
+        return {}
+    out: dict[str, Any] = {}
+    for key, value in stats.items():
+        if not isinstance(key, str) or key.lower() in PRIVATE_KEYS:
+            continue
+        if isinstance(value, dict):
+            if kept := public_stats(value, _depth + 1):
+                out[key] = kept
+        elif isinstance(value, list):
+            out[key] = [v for v in value if not exposes_the_machine(v)
+                        and not isinstance(v, (dict, list))]
+        elif not exposes_the_machine(value):
+            out[key] = value
+    return out
+
+
 def exposes_the_machine(value: Any) -> bool:
     """Whether a string names this machine's layout or carries a credential:
     an absolute path, a `file:` URL, a home directory written relatively
@@ -560,8 +589,11 @@ class Envelope:
             d["fromId"] = self.sender_id
         if self.to_id:
             d["toId"] = self.to_id
-        if self.stats:
-            d["stats"] = self.stats
+        if self.stats and (stats := public_stats(self.stats)):
+            # ON THE WAY OUT TOO (review of #178): every history read, replay,
+            # snapshot and live delivery goes through here, so a row stored
+            # before the hub sanitised message stats is never relayed as it is.
+            d["stats"] = stats
         return d
 
     @classmethod

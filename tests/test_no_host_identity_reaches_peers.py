@@ -397,3 +397,148 @@ def test_a_focus_keeps_its_words_but_not_a_credential_or_a_local_file():
     assert kept.startswith("/review https://github.com/o/r")
     assert "SENTTOKEN" not in kept and "sentacct" not in kept and "file:" not in kept
     assert bounded_meta({"focus": "/fix the auth PR"})["focus"] == "/fix the auth PR"
+
+
+# --- review of #178 (friday, P1): the stats a MESSAGE carries -----------------------------
+
+LEAKED = {"cwd": "/home/SENTACCOUNT/private", "hostname": "SENTHOST",
+          "workspace": {"current_dir": "/home/SENTACCOUNT/private"},
+          "remote_url": "https://SENTACCOUNT:ghp_SENTTOKEN@github.com/o/r",
+          # Nested under a key that is not private: only a DEEP check finds it.
+          "tool": {"dir": "/home/SENTACCOUNT/tools", "socket": "file:///run/SENTHOST"}}
+LEGIT = {"model": "Opus 5", "cost_usd": 1.25, "note": "on the token refresh"}
+LEAK_NEEDLES = ("SENTACCOUNT", "SENTHOST", "SENTTOKEN")
+
+
+def test_a_messages_stats_are_sanitised_before_they_are_stored_or_delivered(tmp_path):
+    """friday's reproducer: the hub sanitised the ROSTER's copy of a message's
+    stats, but stored the original envelope, delivered it to every subscriber
+    and replayed it from history unchanged. Now none of the three carries the
+    machine, and the legitimate figures survive."""
+    import asyncio
+
+    from collab.protocol import Envelope
+    from collab.server.hub import Hub
+    from collab.server.store import Store
+
+    async def run():
+        store = Store(tmp_path / "hub.db")
+        try:
+            alice = store.add_participant("alice", "token-a")
+            bob = store.add_participant("bob", "token-b")
+            hub = Hub(store, session_id="s_t", host_name="alice")
+            sub = await hub.subscribe(bob.id)
+            await hub.publish(Envelope(kind="chat", text="ordinary", sender="alice",
+                                       sender_id=alice.id, stats={**LEAKED, **LEGIT}))
+            received = await asyncio.wait_for(sub.queue.get(), 2)
+            # The envelope OBJECT a subscriber receives, not only its JSON:
+            # anything in the hub that reads `.stats` sees the clean copy.
+            assert received.stats == LEGIT, received.stats
+            delivered = received.to_dict()
+            history = store.history(viewer=bob.id)[0].to_dict()
+            dump = "\n".join(store._db.iterdump())
+            await hub.unsubscribe(sub)
+            return delivered, history, dump
+        finally:
+            store.close()
+
+    delivered, history, dump = asyncio.run(run())
+    for needle in LEAK_NEEDLES:
+        assert needle not in json.dumps(delivered), f"delivered {needle!r}"
+        assert needle not in json.dumps(history), f"history {needle!r}"
+        assert needle not in dump, f"stored {needle!r}"
+    assert delivered["stats"] == LEGIT == history["stats"]
+
+
+@pytest.mark.parametrize("route", ["messages", "a2a"])
+def test_every_route_that_takes_a_clients_envelope_sanitises_its_stats(
+        client, session, host_headers, route):
+    """The REST message route and A2A SendMessage both publish a client's
+    envelope; neither may store or relay the machine through its stats."""
+    import uuid
+
+    h = _old_client(client, session, "sender-" + route, {"focus": "x"})
+    if route == "messages":
+        r = client.post("/ext/collab/v1/messages", headers=h,
+                        json={"text": "on it", "stats": {**LEAKED, **LEGIT}})
+    else:
+        r = client.post("/a2a", headers={**h, "A2A-Version": "1.0"}, json={
+            "jsonrpc": "2.0", "id": "1", "method": "SendMessage", "params": {"message": {
+                "messageId": uuid.uuid4().hex, "role": "ROLE_USER", "parts": [{
+                    "data": {"collab": "v1", "kind": "chat", "room": "general", "text": "on it",
+                             "stats": {**LEAKED, **LEGIT}},
+                    "mediaType": "application/json"}]}}})
+    assert r.status_code == 200 and "error" not in r.json(), r.text
+    seen = _peers_see(client, host_headers)
+    stored = "\n".join(session["store"]._db.iterdump())
+    for needle in LEAK_NEEDLES:
+        assert needle not in seen and needle not in stored, (route, needle)
+    events = client.get("/ext/collab/v1/history", headers=host_headers).json()["events"]
+    sent = [e for e in events if e.get("text") == "on it"]
+    assert sent and sent[-1]["stats"]["model"] == "Opus 5"
+    assert sent[-1]["stats"]["note"] == "on the token refresh"
+
+
+def test_a_row_stored_with_leaked_stats_before_this_release_is_never_relayed(live_server):
+    """Old rows are not rewritten: the database keeps what an older hub
+    stored. Every way out — history, the snapshot's recent events, the event
+    stream's replay — serialises through `Envelope.to_dict`, which drops it."""
+    import time
+
+    store = live_server["store"]
+    base, token = live_server["base"], live_server["host_token"]
+    headers = {**COMPAT, "Authorization": f"Bearer {token}"}
+    alice = next(p for p in store.participants() if p.name == "alice")
+    payload = {"kind": "chat", "from": "alice", "fromId": alice.id, "room": "general",
+               "text": "an old message", "ts": "2026-11-01T00:00:00Z",
+               "stats": {**LEAKED, **LEGIT}}
+    with store._lock:
+        store._db.execute(
+            "INSERT INTO events (kind, room, sender, recipient, sender_id, recipient_id, ts,"
+            " payload) VALUES (?,?,?,?,?,?,?,?)",
+            ("chat", "general", "alice", None, alice.id, None, payload["ts"],
+             json.dumps(payload)))
+        store._db.commit()
+    assert "SENTACCOUNT" in "\n".join(store._db.iterdump()), "the old row is as it was"
+
+    seen = _everything_the_hub_relays(base, token)
+    for needle in LEAK_NEEDLES:
+        assert needle not in seen, f"relayed {needle!r} from an old row"
+    old = [e for e in httpx.get(base + "/ext/collab/v1/history?limit=200", headers=headers,
+                                timeout=10).json()["events"] if e.get("text") == "an old message"]
+    assert old and old[0]["stats"] == LEGIT
+
+    # Replay: the event stream from the start, read (bounded) until the old row.
+    replayed, deadline = [], time.monotonic() + 10
+    with httpx.stream("GET", base + "/ext/collab/v1/events?since=0", headers=headers,
+                      timeout=httpx.Timeout(10, read=5)) as feed:
+        for line in feed.iter_lines():
+            replayed.append(line)
+            if "an old message" in line or time.monotonic() > deadline:
+                break
+    replayed = "\n".join(replayed)
+    assert "an old message" in replayed
+    for needle in LEAK_NEEDLES:
+        assert needle not in replayed, f"replayed {needle!r}"
+
+
+def test_a_hello_sent_over_a2a_is_bounded_like_one_sent_at_join(client, session, host_headers):
+    """The join route stored only the bounded hello; a KIND_HELLO envelope sent
+    straight over A2A — the host's own announcement, the one client allowed to
+    send it — kept its whole body in history."""
+    import uuid
+
+    r = client.post("/a2a", headers={**host_headers, "A2A-Version": "1.0"}, json={
+        "jsonrpc": "2.0", "id": "1", "method": "SendMessage", "params": {"message": {
+            "messageId": uuid.uuid4().hex, "role": "ROLE_USER", "parts": [{
+                "data": {"collab": "v1", "kind": "hello", "room": "general", "text": "hi",
+                         "body": {"focus": "x", "cwd": "/home/SENTACCOUNT/p",
+                                  "git_remote": LEAKED["remote_url"]}},
+                "mediaType": "application/json"}]}}})
+    assert r.status_code == 200 and "error" not in r.json(), r.text
+    seen = _peers_see(client, host_headers)
+    for needle in LEAK_NEEDLES:
+        assert needle not in seen
+    hellos = [e for e in client.get("/ext/collab/v1/history", headers=host_headers).json()[
+        "events"] if e.get("kind") == "hello" and e.get("from") == "alice"]
+    assert hellos and hellos[-1]["body"].get("focus") == "x", "the hello itself still arrives"
