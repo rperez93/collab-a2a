@@ -786,7 +786,11 @@ class Store:
                     "quarantined_delivery": record_id, "target_label": label,
                     "observed_current_id": observed, "observed_at": time.time()})
 
-    def acknowledge(self, record_id: str) -> None:
+    def acknowledge(self, record_id: str, *, retention_note: str = "") -> None:
+        """A delivered send. `retention_note` is the hub saying a queued file
+        was stored otherwise than asked — temporary, over its kept-bytes cap —
+        and is told to the main agent the way a refused send is: as a blocker
+        it sees in `collab worker status` and `worker pending`."""
         with self._db() as db:
             row = db.execute("SELECT data FROM records WHERE id=? AND kind='outbox'", (record_id,)).fetchone()
             db.execute("DELETE FROM records WHERE id=? AND kind='outbox'", (record_id,))
@@ -796,6 +800,13 @@ class Store:
                 state = self._state(db)
                 self._mark_sent(state, record_id, "delivered")
                 self._save(db, state)
+                data = json.loads(row[0])
+                if retention_note and data.get("kind") == "file":
+                    target = "@" + data["to"] if data.get("to") else "#" + (data.get("room") or "general")
+                    self._add(db, "escalation", {"reason": "blocker", "seq": 0, "question": (
+                        f"Your file {str(data.get('name'))[:200]!r} reached {target}, but the hub did not "
+                        f"keep it: {str(retention_note)[:300]}. It will be deleted on receipt or "
+                        f"expiry; withdraw a kept file and send it again if it must stay.")})
         _drop_stash(row)
 
     def defer(self, record_id: str, *, retry_at: float, error: str) -> bool:

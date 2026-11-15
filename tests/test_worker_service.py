@@ -590,6 +590,34 @@ async def test_a_queued_file_carries_its_senders_retention_choice_to_the_hub(con
     assert seen[0].get("source") == (source or None)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("note", ["stored as temporary: your kept files would exceed 50 MiB", None])
+async def test_a_queued_file_the_hub_did_not_keep_is_told_to_the_main_agent(conversation, tmp_path, note):
+    """Over its kept-bytes cap the hub stores a file as temporary and says so
+    in its answer. The worker read only the status code, so a `--keep` sent
+    through the queue silently became temporary. The note now raises a
+    blocker, as a refused send does: in `worker status`, `worker pending`,
+    and the main agent's attention. No note, no blocker."""
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    path = tmp_path / "evidence.zip"
+    path.write_text("data")
+    store.queue_file(path, to="bob", to_id="p_b", keep=True)
+    async def transport(request):
+        return httpx.Response(200, json={"id": "f_1", "kept": note is None,
+                                         **({"retention_note": note} if note else {})})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        conversation.daemon._http = client
+        await conversation._flush(store, store.snapshot()["generation"])
+    assert not store.outbox()
+    told = [p for p in store.pending() if "evidence.zip" in p["question"]]
+    if note:
+        assert len(told) == 1 and note in told[0]["question"] and told[0]["reason"] == "blocker"
+        assert any(note in p["question"] for p in store.status()["pending"])
+    else:
+        assert told == []
+
+
 def test_a_queued_file_with_an_unsafe_source_is_refused_before_it_is_queued(tmp_path):
     """A `--source` the hub would refuse must fail at the send, not later in
     the worker, where the file would wait and then fail out of sight."""
