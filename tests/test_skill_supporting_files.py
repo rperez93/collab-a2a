@@ -106,7 +106,7 @@ def test_a3_a4_install_binds_the_manifest_and_writes_files_inside(monkeypatch, t
     assert code == 1 and not target.path.exists()
     code, target, asked = _install(monkeypatch, tmp_path, rec, rec["manifest_sha256"])
     assert code == 0 and asked == []
-    dest = target.path / "shared-bob-review"
+    dest = target.path / skills.shared_install_name(rec["owner_id"], "review")
     assert (dest / "lib" / "notes.txt").read_text() == "notes\n"
     assert oct((dest / "lib" / "notes.txt").stat().st_mode & 0o777) == "0o644"
     meta = json.loads((dest / skills.PROVENANCE).read_text())
