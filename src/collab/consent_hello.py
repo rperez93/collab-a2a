@@ -128,55 +128,115 @@ try {
   if ($req.op -eq 'window') {
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
+    [Windows.Forms.Application]::EnableVisualStyles()
+    # A terminal's look: the Campbell palette, a monospaced face.
+    $mono = 'Consolas'
+    $have = (New-Object Drawing.Text.InstalledFontCollection).Families | ForEach-Object { $_.Name }
+    foreach ($n in @('Cascadia Mono', 'Cascadia Code')) { if ($have -contains $n) { $mono = $n; break } }
+    function Rgb($r, $g, $b) { [Drawing.Color]::FromArgb($r, $g, $b) }
+    $bg = Rgb 12 12 12; $panel = Rgb 24 24 24; $fg = Rgb 204 204 204; $dim = Rgb 118 118 118
+    $green = Rgb 22 198 12; $yellow = Rgb 249 241 165; $blue = Rgb 59 120 255
+    $font = New-Object Drawing.Font($mono, 10)
+    $bold = New-Object Drawing.Font($mono, 10, [Drawing.FontStyle]::Bold)
     $f = New-Object Windows.Forms.Form
     $f.Text = 'collab - approval requested'
+    $f.AutoScaleMode = 'Dpi'
+    $f.AutoScaleDimensions = New-Object Drawing.SizeF(96, 96)
     $f.TopMost = $true
     $f.StartPosition = 'CenterScreen'
-    $f.Size = New-Object Drawing.Size(760, 600)
     $f.MinimizeBox = $false
-    $id = New-Object Windows.Forms.Label
-    $id.Text = $req.requester
-    $id.AutoEllipsis = $true
-    $id.Font = New-Object Drawing.Font('Segoe UI', 11, [Drawing.FontStyle]::Bold)
-    $id.SetBounds(12, 8, 720, 24)
-    $name = New-Object Windows.Forms.Label
-    $name.Text = $req.name
-    $name.AutoEllipsis = $true
-    $name.SetBounds(12, 34, 720, 20)
-    $what = New-Object Windows.Forms.Label
-    $what.Text = $req.summary
-    $what.AutoEllipsis = $true
-    $what.SetBounds(12, 58, 720, 20)
+    $f.ClientSize = New-Object Drawing.Size(800, 620)
+    $f.MinimumSize = New-Object Drawing.Size(640, 480)
+    $f.BackColor = $bg; $f.ForeColor = $fg; $f.Font = $font
+    function Text($t, $x, $y, $w, $color, $fnt) {
+      $l = New-Object Windows.Forms.Label
+      $l.Text = $t; $l.AutoEllipsis = $true; $l.UseMnemonic = $false
+      $l.ForeColor = $color; $l.Font = $fnt; $l.SetBounds($x, $y, $w, 20)
+      $l.Anchor = 'Top, Left, Right'
+      $f.Controls.Add($l); $l
+    }
+    [void](Text 'collab > approval requested' 16 14 520 $green $bold)
+    $left = [int]$req.expires_in
+    $clock = Text '' 560 14 224 $yellow $font
+    $clock.TextAlign = 'TopRight'; $clock.Anchor = 'Top, Right'
+    $rule = New-Object Windows.Forms.Label
+    $rule.BackColor = $dim; $rule.SetBounds(16, 40, 768, 1); $rule.Anchor = 'Top, Left, Right'
+    $f.Controls.Add($rule)
+    # One row per value: the key dim, the value as sent (already made visible
+    # and single-line by the caller), the self-chosen name marked as such.
+    $rows = @(
+      @('requester', "$($req.requester_id)  (assigned by the hub)", $fg),
+      @('calls itself', "$($req.requester_name)  (self-chosen)", $yellow),
+      @('subject', $req.subject, $fg),
+      @('destination', $req.destination, $fg),
+      @('grants', $req.authority, $fg))
+    $y = 52
+    foreach ($row in $rows) {
+      [void](Text $row[0] 16 $y 130 $dim $font)
+      [void](Text $row[1] 150 $y 634 $row[2] $font)
+      $y += 22
+    }
+    [void](Text 'digest' 16 $y 130 $dim $font)
+    $digest = Text $req.digest_short 150 $y 520 $fg $font
+    $digest.Anchor = 'Top, Left'
+    $more = New-Object Windows.Forms.LinkLabel
+    $more.Text = 'show full'; $more.LinkColor = $blue; $more.ActiveLinkColor = $blue
+    $more.Font = $font; $more.SetBounds(680, $y, 104, 20); $more.Anchor = 'Top, Right'
+    $more.TextAlign = 'TopRight'
+    $more.Add_LinkClicked({
+      if ($digest.Text -eq $req.digest_short) { $digest.Text = $req.digest_full; $more.Text = 'show short' }
+      else { $digest.Text = $req.digest_short; $more.Text = 'show full' }
+      $digest.Width = $f.ClientSize.Width - 166 - $more.Width })
+    $f.Controls.Add($more)
+    $y += 34
+    [void](Text 'review' 16 $y 768 $dim $font)
+    $y += 24
     $box = New-Object Windows.Forms.TextBox
     $box.Multiline = $true
     $box.ReadOnly = $true
     $box.ScrollBars = 'Vertical'
     $box.WordWrap = $true
-    $box.Font = New-Object Drawing.Font('Consolas', 10)
-    $box.Text = $req.review
-    $box.SetBounds(12, 84, 720, 410)
+    $box.BorderStyle = 'FixedSingle'
+    $box.BackColor = $panel; $box.ForeColor = $fg; $box.Font = $font
     $box.MaxLength = 0
+    $box.Text = $req.review
+    $box.SetBounds(16, $y, 768, 520 - $y)
+    $box.Anchor = 'Top, Bottom, Left, Right'
+    $f.Controls.Add($box)
     $script:choice = 'decline'
-    $ok = New-Object Windows.Forms.Button
-    $ok.Text = 'Approve with Windows Hello'
-    $ok.SetBounds(12, 505, 230, 36)
+    function Button($t, $x, $w, $color) {
+      $b = New-Object Windows.Forms.Button
+      $b.Text = $t; $b.FlatStyle = 'Flat'; $b.FlatAppearance.BorderColor = $color
+      $b.ForeColor = $color; $b.BackColor = $bg; $b.Font = $font
+      $b.SetBounds($x, 536, $w, 36); $b.Anchor = 'Bottom, Left'
+      $f.Controls.Add($b); $b
+    }
+    $ok = Button '&Approve with Windows Hello' 16 270 $green
     $ok.Add_Click({ $script:choice = 'approve'; $f.Close() })
-    $no = New-Object Windows.Forms.Button
-    $no.Text = 'Decline'
-    $no.SetBounds(252, 505, 140, 36)
+    $no = Button '&Decline' 296 140 $fg
     $no.Add_Click({ $script:choice = 'decline'; $f.Close() })
-    $pk = New-Object Windows.Forms.Button
-    $pk.Text = 'Use a passkey instead'
-    $pk.SetBounds(522, 505, 210, 36)
+    $pk = Button 'Use a &passkey instead' 564 220 $dim
+    $pk.Anchor = 'Bottom, Right'
     $pk.Add_Click({ $script:choice = 'passkey'; $f.Close() })
-    $f.Controls.AddRange(@($id, $name, $what, $box, $ok, $no, $pk))
+    $hint = Text 'Enter or Esc declines  -  Alt+A approves  -  nothing here is logged' 16 584 768 $dim $font
+    $hint.Anchor = 'Bottom, Left, Right'
     $f.CancelButton = $no
     $f.AcceptButton = $no
-    $f.Add_Shown({ $f.Activate(); $no.Focus() })
+    # The countdown to this request's own expiry; at zero Approve is disabled.
+    function Tick { $m = [math]::Floor($script:left / 60); $s = $script:left % 60
+      $clock.Text = ('expires in {0:00}:{1:00}' -f $m, $s)
+      if ($script:left -le 0) { $clock.Text = 'expired'; $ok.Enabled = $false } }
+    $script:left = $left
+    Tick
+    $timer = New-Object Windows.Forms.Timer
+    $timer.Interval = 1000
+    $timer.Add_Tick({ if ($script:left -gt 0) { $script:left -= 1 }; Tick })
+    $f.Add_Shown({ $f.Activate(); $no.Focus(); $timer.Start() })
+    $f.Add_FormClosed({ $timer.Stop() })
     if ($req.dry) {
       $keys = @{status = 'Success'; choice = 'built';
                 accept = [bool]($f.AcceptButton -eq $no); cancel = [bool]($f.CancelButton -eq $no)}
-      $f.Dispose(); Say $keys; exit 0
+      $timer.Dispose(); $f.Dispose(); Say $keys; exit 0
     }
     [void]$f.ShowDialog()
     Say @{status = 'Success'; choice = $script:choice}
@@ -616,6 +676,14 @@ def fields(request: dict) -> dict:
         digest = _digest(request.get("digest"))[:16]
     except ValueError:
         digest = "invalid"
+    try:
+        full = _digest(request.get("digest"))
+    except ValueError:
+        full = "invalid"
+    try:
+        expires_in = int(max(0, min(float(request.get("expires_at")) - time.time(), WINDOW_DEADLINE)))
+    except (TypeError, ValueError):
+        expires_in = int(WINDOW_DEADLINE)
     return {
         "requester": f"Requester: {_line(request.get('requester_id'), 64)}"
                      "  — participant id, assigned by the hub",
@@ -624,7 +692,47 @@ def fields(request: dict) -> dict:
                     f"{_line(request.get('destination'), 60)}"
                     f" · grants {_line(request.get('authority'), 60)}"
                     f" · digest {digest}"),
+        # The same values, one per row of the window's table: each single-line
+        # and bounded like the lines above, so none can draw a second row.
+        "requester_id": _line(request.get("requester_id"), 64),
+        "requester_name": _line(request.get("requester_name"), 64),
+        "subject": _line(request.get("subject"), 80),
+        "destination": _line(request.get("destination"), 80),
+        "authority": _line(request.get("authority"), 80),
+        "digest_short": digest,
+        "digest_full": full,
+        "expires_in": expires_in,
     }
+
+
+def _formatted(text: Any) -> str:
+    """The review laid out to read: a JSON object as indented `key: value`
+    lines (a long or multi-line string as an indented block), anything else
+    as it came. Values are shown as they are, never interpreted; `_visible`
+    runs on the result afterwards like on any other review text."""
+    try:
+        value = json.loads(text) if isinstance(text, str) else None
+    except ValueError:
+        value = None
+    if not isinstance(value, dict):
+        return "" if text is None else str(text)
+    out: list[str] = []
+
+    def put(item: Any, pad: str) -> None:
+        pairs = item.items() if isinstance(item, dict) else ((None, v) for v in item)
+        for key, val in pairs:
+            label = f"{pad}{key}:" if key is not None else f"{pad}-"
+            if isinstance(val, (dict, list)) and val:
+                out.append(label)
+                put(val, pad + "  ")
+            elif isinstance(val, str) and ("\n" in val or len(val) > 72):
+                out.append(label)
+                out.extend(f"{pad}  │ {part}" for part in val.split("\n"))
+            else:
+                shown = val if isinstance(val, str) else json.dumps(val, ensure_ascii=False)
+                out.append(f"{label} {shown}")
+    put(value, "")
+    return "\n".join(out)
 
 
 def open_window(request: dict, fetch_challenge: Callable[[], dict]) -> dict:
@@ -677,7 +785,7 @@ def open_window(request: dict, fetch_challenge: Callable[[], dict]) -> dict:
             raise ValueError("no request id")
     except (ValueError, TypeError):
         return {"choice": "unavailable", "reason": "BadRequest"}
-    review = _visible(request.get("review_text"), lines=True)
+    review = _visible(_formatted(request.get("review_text")), lines=True)
     if len(review) > REVIEW_MAX:
         review = review[:REVIEW_MAX] + "\n… [the review is longer than the window shows]"
     review = ("UNTRUSTED — this is what the requester sent, shown as text:\n\n"
@@ -776,7 +884,7 @@ def build_window_only(request: dict) -> dict:
     """Build the window with this request's text and dispose of it unshown —
     a real check of the WinForms code that raises nothing on the screen."""
     return _checked(_run({"op": "window", "dry": True, **fields(request),
-                          "review": _visible(request.get("review_text"), lines=True)},
+                          "review": _visible(_formatted(request.get("review_text")), lines=True)},
                          QUICK))
 
 
