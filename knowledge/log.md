@@ -1,5 +1,8 @@
 # Bundle Update Log
 
+## 2026-11-15 (R7 takeover)
+* **Update (later than the pin)**: Recorded in [wake](collaboration/wake.md) that a remote offer's requester is told nothing about its outcome — the «bounded delivery status» in `docs/remote-strong-adoption.md` is not built — and that hubs do not yet advertise strong remote delivery, so `collab remote accept` refuses for now. The pin and verification stamps are unchanged.
+
 ## 2026-11-14 (no host identity)
 * **Update (later than the pin)**: Peers no longer receive the hostname, the OS account or the working directory: `machine` is a label taken from `machine_id`, a random identity generated once per machine and account (not a hash), `user`, `cwd` and `remote` are neither sent nor stored by the hub in new writes, while rows stored earlier stay at rest and are cleaned on output (recorded in `docs/security.md` and SPEC.md, not re-verified against the pinned pages). The pin and verification stamps are unchanged.
 

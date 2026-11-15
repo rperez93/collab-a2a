@@ -311,5 +311,8 @@ then approves the exact hub-canonical operation in the enrolled-key window
 or declines. A supplied hash or terminal code is not approval. Ordinary worker and wake inputs
 exclude offer-protocol messages, including legacy queued wake batches.
 Approved delivery uses frozen local argv and cwd once; uncertain delivery is
-not retried. See [receiver consent](../../docs/remote-requests.md) for commands,
+not retried. Nothing about the outcome is sent back to the requester — a
+bounded delivery status is planned, not built — and hubs do not yet advertise
+strong remote delivery, so acceptance refuses for now. See
+[receiver consent](../../docs/remote-requests.md) for commands,
 trust boundary, expiry and prompt retention. Historical pins remain unchanged.

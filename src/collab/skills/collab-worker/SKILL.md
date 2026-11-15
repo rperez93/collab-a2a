@@ -168,6 +168,10 @@ hash or stdin. Only a proof verified by the hub for the enrolled key issues a
 single-use receipt; there is no terminal-code fallback.
 A goal offered at connection is also pending, never acceptance by joining.
 Uncertain or dispatching deliveries are not automatically repeated.
+The sender is told nothing about the outcome: no delivery status comes back,
+so do not report an offer as delivered or declined unless the receiver says so.
+Hubs do not yet advertise strong remote delivery, so `collab remote accept`
+refuses for now; offers are still held and listed.
 
 On the receiving machine, after the human selects the local coding session:
 
