@@ -9,6 +9,7 @@ ran the minimum-version integration tests by hand. `ast.parse(feature_version=)`
 does not catch it (the tokenizer, not the grammar, changed), so this asks the
 real interpreter.
 """
+import os
 import pathlib
 import re
 import shutil
@@ -29,18 +30,38 @@ def _floor():
 FLOOR = _floor()
 
 
-def _runnable(name):
-    # A pyenv shim is on PATH whether or not that version is active, and then
-    # answers «command not found»: on PATH is not the same as installed.
-    if shutil.which(name) is None:
-        return False
+def _runs(path):
     try:
-        return subprocess.run([name, "-c", "pass"], capture_output=True, timeout=30).returncode == 0
+        return subprocess.run([path, "-c", "pass"], capture_output=True, timeout=30).returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
 
 
-@pytest.mark.skipif(not _runnable(FLOOR), reason=f"{FLOOR} is not runnable here")
+def _interpreter(name):
+    """The floor interpreter, or None when this machine has none.
+
+    A pyenv shim is on PATH whether or not that version is ACTIVE, and then
+    answers «command not found» — so the first version of this test skipped
+    on the very machine whose pyenv held 3.10.14, and the guard never ran
+    where the suite runs (review of #170). Fall back to the installed pyenv
+    version's own binary, which needs no activation.
+    """
+    found = shutil.which(name)
+    if found and _runs(found):
+        return found
+    root = os.environ.get("PYENV_ROOT") or os.path.expanduser("~/.pyenv")
+    version = name[len("python"):]
+    for candidate in sorted(pathlib.Path(root, "versions").glob(version + ".*"), reverse=True):
+        binary = candidate / "bin" / name
+        if binary.is_file() and _runs(str(binary)):
+            return str(binary)
+    return None
+
+
+INTERPRETER = _interpreter(FLOOR)
+
+
+@pytest.mark.skipif(INTERPRETER is None, reason=f"no runnable {FLOOR} here")
 def test_every_source_file_parses_on_the_declared_minimum_python():
     sources = sorted(str(p) for p in (ROOT / "src").rglob("*.py"))
     script = ("import ast, sys\n"
@@ -52,5 +73,5 @@ def test_every_source_file_parses_on_the_declared_minimum_python():
               "        bad.append(f'{path}:{exc.lineno}: {exc.msg}')\n"
               "print('\\n'.join(bad))\n"
               "sys.exit(1 if bad else 0)\n")
-    done = subprocess.run([FLOOR, "-I", "-c", script, *sources], capture_output=True, text=True, timeout=120)
+    done = subprocess.run([INTERPRETER, "-I", "-c", script, *sources], capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, f"does not parse on {FLOOR}:\n{done.stdout}{done.stderr}"
