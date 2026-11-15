@@ -158,3 +158,77 @@ def test_an_activity_path_is_shared_relative_never_absolute(tmp_path, monkeypatc
     assert shareable_path(str(home / "notes.md"), repo) == "~/notes.md"
     assert shareable_path("/srv/other/thing.py", repo) == "thing.py"
     assert shareable_path("src/auth.py", repo) == "src/auth.py"
+
+
+# --- the machine identity is random, not a hash of the host ----------------------------
+
+def _fresh_machine_id(monkeypatch, config_dir, hostname):
+    monkeypatch.setenv("COLLAB_CONFIG", str(config_dir / "config.json"))
+    monkeypatch.setattr(socket, "gethostname", lambda: hostname)
+    monkeypatch.setattr(platform, "node", lambda: hostname)
+    peers._MACHINE_IDS.clear()
+    return peers.machine_id()
+
+
+def test_the_machine_label_is_not_a_function_of_the_hostname(tmp_path, monkeypatch):
+    """A hostname is guessable («DESKTOP-XXXXXXX», «<name>-laptop»), so a short
+    unsalted hash of it is reversible with a dictionary (review of #178). The
+    identity is random, generated once and kept in a 0600 file: two different
+    hostnames over the same file give the same label, and the same hostname
+    over a different file gives a different one."""
+    from collab.privacy import machine_label
+
+    one = _fresh_machine_id(monkeypatch, tmp_path / "a", "DESKTOP-ABC1234")
+    renamed = _fresh_machine_id(monkeypatch, tmp_path / "a", "alice-laptop")
+    assert one == renamed and machine_label(one) == machine_label(renamed)
+    other = _fresh_machine_id(monkeypatch, tmp_path / "b", "DESKTOP-ABC1234")
+    assert other != one, "the same hostname must not give the same identity"
+    stored = tmp_path / "a" / "machine-id"
+    assert (stored.stat().st_mode & 0o777) == 0o600
+    assert one == "m_" + stored.read_text().strip()[:16]
+
+
+def test_agents_starting_together_agree_on_one_identity(tmp_path, monkeypatch):
+    """Two agents on one machine must say «same machine»: racing to create
+    the file, every process reads the one that won."""
+    import concurrent.futures
+    import sys
+
+    monkeypatch.setenv("COLLAB_CONFIG", str(tmp_path / "config.json"))
+    env = {**__import__("os").environ}
+    code = "from collab import peers; print(peers.machine_id())"
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+        ids = set(pool.map(lambda _: subprocess.run(
+            [sys.executable, "-c", code], env=env, capture_output=True, text=True,
+            check=True).stdout.strip(), range(6)))
+    assert len(ids) == 1 and next(iter(ids)).startswith("m_")
+
+
+def test_a_corrupt_identity_file_is_replaced_not_trusted(tmp_path, monkeypatch):
+    (tmp_path / "machine-id").write_text("DESKTOP-ABC1234\n")
+    ident = _fresh_machine_id(monkeypatch, tmp_path, "DESKTOP-ABC1234")
+    assert "DESKTOP" not in ident and ident.startswith("m_")
+    peers._MACHINE_IDS.clear()
+    assert peers.machine_id() == ident
+
+
+def test_the_path_refusal_breaks_no_feature_that_names_a_file(live_server, sentinel_machine):
+    """Refusing absolute paths at the hub applies to self-description (hello,
+    stats extras), not to features that name files: a file sent from deep in
+    the account's home goes out by its NAME and is delivered; activity for a
+    file outside the repository falls back to `~/…` or a bare name."""
+    from collab.cli import _publish_activity  # noqa: F401  (the path it uses)
+    from collab.privacy import shareable_path
+
+    with HubClient(live_server["base"]) as client:
+        joined = client.join(live_server["invite"], "dave", {"focus": "files"})
+    source = sentinel_machine / "report.txt"
+    source.write_text("hello")
+    with HubClient(live_server["base"], joined["token"]) as dave:
+        sent = dave.upload_file(source, room="general")
+        listed = dave.list_files()
+    assert sent and any(f.get("name") == "report.txt" for f in listed), listed
+    _assert_absent(json.dumps(listed), sentinel_machine)
+    outside = sentinel_machine.parents[3] / "notes.md"          # ~/notes.md
+    assert shareable_path(str(outside), sentinel_machine.parents[1]) == "~/notes.md"
+    assert shareable_path("/etc/hosts", sentinel_machine.parents[1]) == "hosts"

@@ -18,10 +18,10 @@ from __future__ import annotations
 
 import contextlib
 import getpass
-import hashlib
 import json
 import os
 import platform
+import re
 import socket
 import time
 from dataclasses import asdict, dataclass
@@ -89,25 +89,82 @@ def current_user() -> str:
         return os.environ.get("USER") or os.environ.get("USERNAME") or "unknown"
 
 
-def machine_id() -> str:
-    """A stable, non-identifying fingerprint for this machine and user.
+#: The machine's own random identity, read once per path and process.
+_MACHINE_IDS: dict[str, str] = {}
 
-    Hashed rather than raw: it travels to the hub and on to every participant,
-    including people on other machines, so it should say "same box as me" and
-    nothing more.
+#: What a stored identity may look like: 16 to 64 lowercase hex digits.
+_STORED_ID = re.compile(r"[0-9a-f]{16,64}")
+
+
+def machine_id_path() -> Path:
+    """Beside the machine-wide config (`COLLAB_CONFIG`'s directory, else
+    ~/.config/collab): every agent of this account on this machine reads the
+    same file, so they agree on «same machine» without any of them deriving it
+    from the host."""
+    from .config import global_config_path
+
+    return global_config_path().parent / "machine-id"
+
+
+def machine_id() -> str:
+    """A stable, non-identifying identity for this machine (and account).
+
+    RANDOM, NOT DERIVED (review of T_5b4dac18307e). It travels to the hub and
+    on to every participant, and its first six hex digits are the label the
+    roster shows. It used to be a SHA-256 of the machine-id file or, failing
+    that, of the hostname — and a hostname is low-entropy and guessable
+    («DESKTOP-XXXXXXX», «<name>-laptop»), so a short unsalted hash of it can be
+    reversed with a dictionary. Now 64 random bits, generated once, kept in a
+    file only this account can read (0600), never computed from anything the
+    machine is called.
     """
-    seed = ""
-    for path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
+    path = machine_id_path()
+    key = str(path)
+    if key in _MACHINE_IDS:
+        return _MACHINE_IDS[key]
+    ident = _read_machine_id(path)
+    if ident is None:
+        ident = _create_machine_id(path)
+    _MACHINE_IDS[key] = "m_" + ident[:16]
+    return _MACHINE_IDS[key]
+
+
+def _read_machine_id(path: Path) -> str | None:
+    try:
+        text = path.read_text().strip()
+    except (OSError, UnicodeError):
+        return None
+    return text if _STORED_ID.fullmatch(text) else None
+
+
+def _create_machine_id(path: Path) -> str:
+    """Generated once. Two agents starting together race on O_EXCL: one
+    writes, the other reads what it wrote. A file that exists but is not an
+    identity is replaced whole, atomically."""
+    import secrets
+
+    fresh = secrets.token_hex(8)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        existing = _read_machine_id(path)
+        if existing is not None:
+            return existing
         try:
-            seed = Path(path).read_text().strip()
-            if seed:
-                break
+            tmp = path.with_name(f".machine-id.{os.getpid()}.tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as fh:
+                fh.write(fresh + "\n")
+            os.replace(tmp, path)
         except OSError:
-            continue
-    if not seed:
-        seed = f"{platform.node()}|{platform.system()}"
-    digest = hashlib.sha256(f"{seed}|{current_user()}".encode()).hexdigest()
-    return "m_" + digest[:16]
+            pass
+        return fresh
+    except OSError:
+        return fresh                     # unwritable: this process only
+    with os.fdopen(fd, "w") as fh:
+        fh.write(fresh + "\n")
+    return fresh
 
 
 def identity() -> dict[str, str]:
