@@ -172,6 +172,25 @@ def _json(value):
     return encoded
 
 
+async def _drain(receive):
+    """Read and discard what is left of a request body: at most MAX_REQUEST
+    bytes within BODY_SECONDS. Past either bound the connection closes as
+    before; nothing read here is used."""
+    async def rest():
+        seen = 0
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                return
+            seen += len(message.get("body", b""))
+            if not message.get("more_body", False) or seen > MAX_REQUEST:
+                return
+    try:
+        await asyncio.wait_for(rest(), BODY_SECONDS)
+    except asyncio.TimeoutError:
+        pass
+
+
 def _reply(status, message, code):
     return Response(_json({"status": status, "message": message}), status_code=code,
                     media_type="application/json", headers=SECURITY_HEADERS)
@@ -338,6 +357,26 @@ class PasskeyPage:
             await send({"type": "websocket.close", "code": 1008})
             return
         if scope["type"] != "http": return
+        # READ WHAT WAS SENT BEFORE ANSWERING. Every response closes the
+        # connection; closing a socket with request bytes still unread makes
+        # the kernel send RST, which can destroy the response before the
+        # client reads it: a refusal (403/409/400) answered before its body
+        # was read showed up as ECONNRESET under load. So the rest of the
+        # body is drained, bounded in bytes and time, before the response
+        # starts.
+        state = {"done": False}
+        original_receive, original_send = receive, send
+
+        async def receive():
+            message = await original_receive()
+            if message["type"] != "http.request" or not message.get("more_body", False):
+                state["done"] = True
+            return message
+
+        async def send(message):
+            if message["type"] == "http.response.start" and not state["done"]:
+                await _drain(receive)
+            await original_send(message)
         headers = dict(scope.get("headers", []))
         sensitive = (b"host", b"origin", b"content-length", b"content-type", b"x-collab-approval-token")
         names = [name for name, _ in scope.get("headers", []) if name in sensitive]
