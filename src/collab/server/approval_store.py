@@ -268,6 +268,18 @@ class ApprovalStore:
             if now >= row["expires_at"]:
                 raise Rejected("challenge_expired", 410)
             fingerprint = hashlib.sha256(crypto.decode(public_key_spki, limit=crypto.MAX_SPKI)).hexdigest()
+            # After a host reset first enrolment is open again, but every old
+            # key is still on record as retired. Reusing its NAME used to hit
+            # the primary key as a raw IntegrityError (a 500; arma's review of
+            # #172); reusing its PUBLIC KEY would quietly bring back the very
+            # key the reset retired. Both are a structured refusal: the client
+            # creates a fresh native key under a fresh name.
+            prior = db.execute("SELECT state FROM approval_keys WHERE session_id=? AND owner_id=? "
+                               "AND (credential_id=? OR fingerprint=?) LIMIT 1",
+                               (self.session_id, owner, credential_id, fingerprint)).fetchone()
+            if prior is not None:
+                raise Rejected("credential_retired" if prior["state"] == "retired"
+                               else "credential_already_registered", 409)
             db.execute("INSERT INTO approval_keys VALUES(?,?,?,?,?,?,?,?,?,'active',?,?)",
                 (self.session_id, owner, credential_id, row["method"], algorithm, public_key_spki,
                  fingerprint, now, now + KEY_COOLDOWN, assertion.counter if assertion else 0,

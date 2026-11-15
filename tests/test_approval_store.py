@@ -499,3 +499,26 @@ def test_a_receipt_issued_before_a_host_reset_cannot_be_consumed_after_it(hub, s
     hub.api.reset_host_credentials()
     with pytest.raises(approvals.Rejected):
         consume(hub.api, req, result)
+
+
+def test_a_retired_key_cannot_come_back_after_a_host_reset(hub, signer):
+    """arma's review of #172: re-enrolling under the retired key's NAME raised a
+    raw IntegrityError (a 500), and the retired PUBLIC KEY under a new name
+    would have quietly undone the reset. Both are a structured 409; a fresh
+    key under a fresh name enrols."""
+    with hub.store._lock, hub.store._db:
+        hub.store._db.execute("UPDATE participants SET is_host=1 WHERE id=?", (hub.people["bob"].id,))
+    cred, _ = enrol(hub, signer)
+    hub.api.reset_host_credentials()
+    fresh = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    c = hub.api.begin_enrol("test-bob", method="hello")
+    with pytest.raises(approvals.Rejected, match="credential_retired") as same_name:
+        finish(hub, fresh, c, cred=cred)
+    assert same_name.value.status == 409
+    hub.now[0] += 600                     # let the refused enrolment's reservation lapse
+    c = hub.api.begin_enrol("test-bob", method="hello")
+    with pytest.raises(approvals.Rejected, match="credential_retired"):
+        finish(hub, signer, c, cred="collab.test.renamed")
+    hub.now[0] += 600
+    c = hub.api.begin_enrol("test-bob", method="hello")
+    assert finish(hub, fresh, c, cred="collab.test.fresh")["state"] == "active"
