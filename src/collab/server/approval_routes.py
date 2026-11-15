@@ -18,6 +18,7 @@ from starlette.responses import JSONResponse
 from ..protocol import EXT_PREFIX
 from .approval_keys import KeyChanges
 from .approval_skills import SkillApprovals
+from .approval_remote import RemoteApprovals
 from .approval_store import ApprovalStore, Rejected
 from .auth import RateLimiter
 
@@ -123,9 +124,11 @@ def install(app, store, session_id):
     core = ApprovalStore(store, session_id)
     changes = KeyChanges(core)
     skills = SkillApprovals(core)
+    remote = RemoteApprovals(core)
     app.state.approvals = core
     app.state.approval_keys = changes
     app.state.approval_skills = skills
+    app.state.approval_remote = remote
     slots = asyncio.Semaphore(MAX_INFLIGHT)
     ingress = RateLimiter(limit=HTTP_RATE, window=60)
     router = APIRouter(prefix=PREFIX, tags=["approval"])
@@ -196,4 +199,8 @@ def install(app, store, session_id):
     route("/skills/prepare", "POST", lambda token, path, body: skills.prepare(token, **body), {"source_seq": int})
     route("/skills/{request_id}/accept", "POST", lambda token, path, body: skills.accept(token, path["request_id"], **body), {"receipt": str})
     route("/skills/{request_id}", "GET", lambda token, path, body: skills.status(token, path["request_id"]))
+    route("/remote/prepare", "POST", lambda token, path, body: remote.prepare(token, **body),
+          {"source_seq": int, "binding": dict})
+    route("/remote/{request_id}/consume", "POST", lambda token, path, body: remote.consume(token, path["request_id"], **body),
+          {"receipt": str})
     app.include_router(router)
