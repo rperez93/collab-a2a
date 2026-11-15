@@ -194,3 +194,5 @@ polling is cancellable and bounded. The pin remains unchanged.
   live with Windows Hello (#181) and the shared proxy as the default host
   route (#182). Pages that describe these were updated in
   place; the pin is unchanged.
+
+- **Update (later than the pin)**: Recorded terminal-matched ancestor socket recovery for crowded tmux directories in the existing client/daemon page. The bundle revision and historical verification stamps are unchanged.

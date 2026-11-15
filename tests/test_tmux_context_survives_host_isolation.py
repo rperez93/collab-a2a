@@ -33,7 +33,7 @@ def test_inherited_socket_paths_with_commas_keep_the_exact_pane(monkeypatch):
 
 def test_matching_terminal_wins_over_an_unrelated_active_pane(monkeypatch):
     monkeypatch.setattr(context.shutil, "which", lambda _: "/usr/bin/tmux")
-    monkeypatch.setattr(context, "own_tty", lambda: "/dev/pts/7")
+    monkeypatch.setattr(context, "own_tty", lambda **kwargs: "/dev/pts/7")
     monkeypatch.setattr(context, "sockets", lambda **kwargs: ["/private/socket"])
     monkeypatch.setattr(context, "run", lambda *args, **kwargs:
         subprocess.CompletedProcess(args, 0, "%1\t/dev/pts/99\n%6\t/dev/pts/7\n", ""))
@@ -48,7 +48,7 @@ def test_matching_terminal_wins_over_an_unrelated_active_pane(monkeypatch):
 
 def test_ambiguous_terminal_matches_never_guess_a_server(monkeypatch):
     monkeypatch.setattr(context.shutil, "which", lambda _: "/usr/bin/tmux")
-    monkeypatch.setattr(context, "own_tty", lambda: "/dev/pts/7")
+    monkeypatch.setattr(context, "own_tty", lambda **kwargs: "/dev/pts/7")
     monkeypatch.setattr(context, "sockets", lambda **kwargs: ["one", "two"])
     monkeypatch.setattr(context, "run", lambda *args, **kwargs:
         subprocess.CompletedProcess(args, 0, "%1\t/dev/pts/7\n", ""))
@@ -59,9 +59,9 @@ def test_a_known_server_without_a_pane_still_requires_this_terminal(monkeypatch)
     """TMUX alone must not authorize splitting somebody else's active pane."""
     monkeypatch.setenv("TMUX", "/private/socket,123,0")
     monkeypatch.setattr(context.shutil, "which", lambda _: "/usr/bin/tmux")
-    monkeypatch.setattr(context, "own_tty", lambda: "")
+    monkeypatch.setattr(context, "own_tty", lambda **kwargs: "")
     assert context.detect() is None
-    monkeypatch.setattr(context, "own_tty", lambda: "/dev/pts/7")
+    monkeypatch.setattr(context, "own_tty", lambda **kwargs: "/dev/pts/7")
     monkeypatch.setattr(context, "run", lambda *args, **kwargs:
         subprocess.CompletedProcess(args, 0, "%1\t/dev/pts/99\n%6\t/dev/pts/7\n", ""))
     assert context.detect() == context.Target("/private/socket", "%6")
@@ -69,7 +69,7 @@ def test_a_known_server_without_a_pane_still_requires_this_terminal(monkeypatch)
 
 def test_a_failed_query_cannot_make_another_server_match_look_unambiguous(monkeypatch):
     monkeypatch.setattr(context.shutil, "which", lambda _: "/usr/bin/tmux")
-    monkeypatch.setattr(context, "own_tty", lambda: "/dev/pts/7")
+    monkeypatch.setattr(context, "own_tty", lambda **kwargs: "/dev/pts/7")
     monkeypatch.setattr(context, "sockets", lambda **kwargs: ["one", "two"])
     replies = iter([subprocess.CompletedProcess("one", 0, "%1\t/dev/pts/7\n", ""),
                     subprocess.CompletedProcess("two", 1, "", "query failed")])
@@ -92,13 +92,33 @@ def test_a_split_timeout_does_not_retry_an_uncertain_mutation(monkeypatch):
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("target", [None, context.Target(None, "%6"), context.Target("/private/socket", None)])
+def test_a_lost_context_before_the_split_never_selects_the_default_active_pane(monkeypatch, target):
+    """A successful availability check is not authority for a later mutation."""
+    monkeypatch.setattr(watch, "tmux_available", lambda: True)
+    monkeypatch.setattr(watch, "in_tmux", lambda: True)
+    monkeypatch.setattr(context, "detect", lambda: target)
+    commands = []
+    monkeypatch.setattr(watch, "_tmux_command", lambda argv:
+        commands.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""))
+    with pytest.raises(RuntimeError, match="could not identify"):
+        watch.open_tmux_pane(["true"])
+    assert commands == []
+
+
 @pytest.mark.skipif(not shutil.which("tmux"), reason="tmux is not installed")
-@pytest.mark.parametrize("inherited_server", [False, True])
-def test_a_detached_host_command_opens_its_own_pane_even_when_another_window_is_active(tmp_path, inherited_server):
+@pytest.mark.parametrize("inherited_server,stale_entries", [(False, 0), (True, 0), (False, 300)])
+def test_a_detached_host_command_opens_its_own_pane_even_when_another_window_is_active(tmp_path, inherited_server, stale_entries):
     """Execute the launcher through a real host parent tty and actual tmux parser."""
     socket_root = tmp_path / "sockets"
     directory = socket_root / f"tmux-{os.getuid()}"
     directory.mkdir(parents=True, mode=0o700)
+    # Stale names deliberately precede the live server; the directory cap
+    # must stay unchanged while a terminal-matched ancestor supplies its server.
+    import socket as unix_socket
+    for index in range(stale_entries):
+        with unix_socket.socket(unix_socket.AF_UNIX) as dead:
+            dead.bind(str(directory / f"d{index:03d}"))
     socket = directory / "isolated"
     command = ["tmux", "-S", str(socket)]
     output, viewer, gate = (tmp_path / name for name in ("result.json", "viewer.json", "gate"))
@@ -164,7 +184,7 @@ def test_lookup_bounds_a_misbehaving_tmux_and_reaps_only_its_client(tmp_path, sh
 import json,os,time
 from pathlib import Path
 from collab.client import tmux_context as c
-c.own_tty=lambda:'/dev/pts/7'
+c.own_tty=lambda **kwargs:'/dev/pts/7'
 c.sockets=lambda **kwargs:['/ignored/socket']
 before,cpu=time.monotonic(),time.process_time()
 assert c.detect() is None

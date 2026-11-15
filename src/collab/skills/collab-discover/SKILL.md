@@ -342,7 +342,9 @@ unique, fully stamped matching parent agent process.
 
 **`TMUX` may be missing from your environment** even while the user's tmux is
 running. The launcher can recover an exact pane from a coding host's tty on
-Linux when private socket evidence is visible. It refuses ambiguous matches
+Linux when private socket evidence is visible. A terminal-matched coding
+ancestor can identify the exact server even when old sockets exceed the
+bounded directory scan. Its pane still requires a live tty match. It refuses ambiguous matches
 instead of using another active window. If the context is hidden, run
 `collab watch` in a separate terminal pane; do not infer tmux is absent.
 

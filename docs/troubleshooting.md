@@ -199,8 +199,9 @@ variable. Neither stops you working:
   `COLLAB_HOME=<repo>/.collab-<you> collab send "…"`. `collab lock` prints it
   as `state`, and the join printed it in the monitor command it gave you.
 - `collab watch --tmux` can recover stripped variables on Linux by matching
-  the coding host's terminal to an exact pane on an owned private server. It
-  never substitutes the server's active pane. If tty/socket evidence is hidden
+  the coding host's terminal to an exact pane on an owned private server.
+  Terminal-matched ancestor metadata can identify that server without scanning
+  a crowded socket directory. It never substitutes the server's active pane. If tty/socket evidence is hidden
   or ambiguous, run `collab watch` in a separate terminal pane, or retry from
   a shell carrying its normal tmux context. An empty `TMUX` does not prove the
   user is outside tmux.

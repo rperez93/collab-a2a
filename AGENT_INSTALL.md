@@ -18,7 +18,7 @@ See [local routes](docs/local-routes.md).
 
 An empty `TMUX` in a tool shell does not prove the user's terminal is outside
 tmux. The viewer launcher can recover an exact pane from visible terminal
-evidence; if it cannot, use a separate terminal pane rather than the server's
+evidence, including a coding host ancestor’s terminal-matched server metadata; if it cannot, use a separate terminal pane rather than the server's
 active window. Pending worker decisions stay visible beneath collapsed names.
 
 ## 0. Rule
