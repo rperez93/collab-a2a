@@ -56,6 +56,11 @@ async def test_a_source_runs_off_the_heartbeat_and_publishes_a_separate_snapshot
         await poller.stop()
 
 
+async def _appears(path):
+    while not path.exists():
+        await asyncio.sleep(.01)
+
+
 async def test_changing_source_cancels_the_old_result_and_its_child(profile, tmp_path):
     marker = tmp_path / 'started'
     source = command(f"import pathlib,time; pathlib.Path({str(marker)!r}).write_text('started'); time.sleep(30); print('{{\"cost_usd\":999}}')")
@@ -64,9 +69,7 @@ async def test_changing_source_cancels_the_old_result_and_its_child(profile, tmp
     await poller.tick()
     old = poller.task
     try:
-        async with asyncio.timeout(3):
-            while not marker.exists():
-                await asyncio.sleep(.01)
+        await asyncio.wait_for(_appears(marker), 3)  # asyncio.timeout is 3.11+
         telemetry.configure_source(profile.dir, command=command("print('{\"cost_usd\":1}')"))
         await poller.tick()
         assert old.cancelled()
@@ -82,9 +85,7 @@ async def test_disabling_sharing_stops_an_inflight_worker_source(profile, tmp_pa
     poller = telemetry.SourcePoller(profile)
     await poller.tick()
     try:
-        async with asyncio.timeout(3):
-            while not marker.exists():
-                await asyncio.sleep(.01)
+        await asyncio.wait_for(_appears(marker), 3)  # asyncio.timeout is 3.11+
         config.set_share_stats(False)
         await poller.tick()
         assert poller.task is None
