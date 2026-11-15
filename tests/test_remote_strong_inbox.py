@@ -287,3 +287,36 @@ def test_writer_wait_cannot_extend_offer_expiry(setup, monkeypatch, operation):
         else:
             with pytest.raises(ValueError):
                 future.result(timeout=3)
+
+
+def test_a_rebinding_that_revoked_nothing_still_fails_the_attempt_it_outlived(setup):
+    """R6 of the #118 review. Every rebinding this build performs revokes an
+    `approving` row first, so the comparison at finish is the last guard
+    against a writer that does not — an older collab sharing this inbox,
+    whose bind() predates the `approving` state. The hub approved delivery to
+    the binding reviewed at begin; finishing under another one would hand
+    that approval to a program and directory the human never saw."""
+    s = setup
+    attempt = begin(s)
+    moved = ['other-adapter', '--session', 'coding']
+    with sqlite3.connect(s.inbox.path) as db:
+        db.execute('UPDATE local_binding SET digest=? WHERE singleton=1',
+                   (remote.binding_digest('coding', moved, s.root),))
+    with pytest.raises(ValueError, match='changed during approval'):
+        finish(s, attempt, command=moved)
+    assert s.inbox.list()[0]['state'] == 'failed'
+    assert claim(SimpleNamespace(inbox=s.inbox, options={**s.options, 'command': moved})) is None
+
+
+def test_a_grant_recorded_under_an_unknown_approval_version_is_never_claimed(setup):
+    """R7 of the #118 review. The migration at open revokes accepted rows
+    below version 3, so the claim's own `approval_version=3` filter is what
+    stands between this build and a grant written under rules it does not
+    know — by a newer collab, before a downgrade. Such a grant is not this
+    build's to dispatch."""
+    s = setup
+    finish(s, begin(s))
+    with sqlite3.connect(s.inbox.path) as db:
+        db.execute('UPDATE offers SET approval_version=4')
+    assert claim(s) is None
+    assert s.inbox.list()[0]['state'] == 'accepted'
