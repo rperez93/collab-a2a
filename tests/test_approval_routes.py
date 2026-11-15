@@ -294,3 +294,25 @@ def test_revocation_during_body_read_is_rechecked_before_mutation(session, host_
     asyncio.run(exercise())
     with session["store"]._lock:
         assert session["store"]._db.execute("SELECT COUNT(*) FROM approval_challenges").fetchone()[0] == 0
+
+
+def test_a_body_that_stalls_is_refused_with_408_on_every_supported_python(monkeypatch):
+    """A client that opens a request and never finishes its body must get a
+    clean 408, not hold the handler or escape as a 500. The first version used
+    asyncio.timeout(), which does not exist on Python 3.10 (the floor), and
+    caught the builtin TimeoutError, which on 3.10 is not asyncio's."""
+    monkeypatch.setattr(routes, "BODY_SECONDS", 0.05)
+
+    class Stalled:
+        headers = {"content-type": "application/json"}
+
+        async def stream(self):
+            yield b"{"
+            await asyncio.sleep(10)
+            yield b"}"
+
+    async def call():
+        await routes._body(Stalled(), (), ())
+    with pytest.raises(routes.Rejected) as caught:
+        asyncio.run(call())
+    assert (caught.value.code, caught.value.status) == ("body_timeout", 408)
