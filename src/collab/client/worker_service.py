@@ -459,6 +459,11 @@ class Conversation:
                         "usage": [], "began": time.monotonic()}, "skipped-local",
                        escalation_count=escalations)
 
+    #: The upload's answer is one file record, well under a kilobyte; read no
+    #: more than this of it, however much the hub (or anything posing as it)
+    #: sends.
+    MAX_UPLOAD_ANSWER = 64 * 1024
+
     async def _upload(self, message, *, timeout) -> int:
         """Upload a queued file's private copy; the HTTP status decides its fate."""
         import hashlib
@@ -484,25 +489,35 @@ class Conversation:
                 params["keep"] = "true" if message["keep"] else "false"
             if message.get("source"):
                 params["source"] = message["source"]
-            response = await self.daemon._http.post(
-                f"{self.daemon.profile.url}{EXT_PREFIX}/{route}",
-                headers=request_headers(self.daemon.profile.token), params=params,
-                files={"file": (message["name"], data, "application/octet-stream")}, timeout=timeout)
-            # THE HUB MAY HAVE STORED IT OTHERWISE THAN ASKED: over its kept-bytes
-            # cap a file is kept as temporary and the answer says why (#135).
-            # Only the status code was read, so a `--keep` sent through the
-            # worker became temporary with nobody told. The answer is a small
-            # JSON record; anything larger or unreadable carries no note.
+            # THE ANSWER IS READ AS A STREAM, CAPPED WHILE READING. The hub may
+            # have stored the file otherwise than asked — over its kept-bytes
+            # cap a file is kept as temporary and the answer says why (#135) —
+            # and reading only the status code let a `--keep` sent through the
+            # worker become temporary with nobody told. The answer is a small
+            # JSON record; `post` would have buffered any size before a check
+            # could run, so the cap is applied as bytes arrive, like the
+            # message path's stream. Over it: delivered, with no note.
             message.pop("retention_note", None)
-            body = getattr(response, "content", b"") or b""
-            if response.status_code < 300 and isinstance(body, (bytes, bytearray)) and len(body) <= 65536:
-                try:
-                    note = json.loads(body).get("retention_note")
-                except (ValueError, AttributeError):
-                    note = None
-                if isinstance(note, str) and note:
-                    message["retention_note"] = note[:300]
-            return response.status_code
+            async with self.daemon._http.stream(
+                    "POST", f"{self.daemon.profile.url}{EXT_PREFIX}/{route}",
+                    headers=request_headers(self.daemon.profile.token), params=params,
+                    files={"file": (message["name"], data, "application/octet-stream")},
+                    timeout=timeout) as response:
+                status = response.status_code
+                if status >= 300:
+                    return status
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    body += chunk
+                    if len(body) > self.MAX_UPLOAD_ANSWER:
+                        return status  # delivered; an answer this large carries no note
+            try:
+                note = json.loads(bytes(body)).get("retention_note")
+            except (ValueError, AttributeError):
+                note = None
+            if isinstance(note, str) and note:
+                message["retention_note"] = note[:300]
+            return status
 
         return await asyncio.wait_for(send(), timeout=timeout)
 
