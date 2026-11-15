@@ -79,7 +79,7 @@ def record_with_files(files):
     content = "---\nname: review\ndescription: d\n---\nbody\n"
     pub = validate_publication({"name": "review", "description": "d", "content": content,
                                 "sha256": hashlib.sha256(content.encode()).hexdigest(), "files": files})
-    return {**pub, "id": "sk_1", "owner": "Bob", "owner_id": "p_b"}
+    return {**pub, "id": "sk_00000000000000000001", "owner": "Bob", "owner_id": "p_b"}
 
 
 def _install(monkeypatch, tmp_path, rec, sha):
@@ -94,7 +94,7 @@ def _install(monkeypatch, tmp_path, rec, sha):
     monkeypatch.setattr(cli, "_require_profile", lambda a: SimpleNamespace(session_id="s", dir=tmp_path / "p"))
     monkeypatch.setattr(cli, "_client", lambda p: Hub())
     monkeypatch.setattr(skills, "skills_target", lambda agent=None: target)
-    args = argparse.Namespace(action="install-shared", target="sk_1", agent=None, force=False,
+    args = argparse.Namespace(action="install-shared", target="sk_00000000000000000001", agent=None, force=False,
                               human_approved=sha is not None, sha256=sha, strong=False)
     return cli.cmd_skills(args), target, asked
 
