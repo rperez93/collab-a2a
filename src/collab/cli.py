@@ -8050,14 +8050,18 @@ def cmd_consent(args: argparse.Namespace) -> int:
                 fail("this session has no participant id for you yet; reconnect, then retry")
                 return 1
             hello = strong._hello()
-            if not hello.available() and strong._native_hello_platform():
+            # ONE probe: it can take seconds of PowerShell, and two probes can
+            # disagree — a flaky helper is exactly the case being handled
+            # (gate re-review of #185).
+            hello_available = hello.available()
+            if not hello_available and strong._native_hello_platform():
                 # Windows/WSL never fall back to a passkey: one enrolled here
                 # could never approve here (gate review of #185).
                 fail("Windows Hello is not available here — check that Hello (a PIN or "
                      "biometric) is set up and, under WSL, that Windows interop is on; on "
                      "Windows and WSL strong approval uses Windows Hello only")
                 return 1
-            if not hello.available():
+            if not hello_available:
                 # NOT WINDOWS: a passkey, through the local enrolment page. The
                 # human started this at a terminal; the browser's own user
                 # verification proves possession, and the hub announces the
