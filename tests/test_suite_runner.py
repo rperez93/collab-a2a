@@ -15,27 +15,15 @@ def runner():
     return module
 
 
-def test_lock_excludes_second_suite_and_has_deadline(runner, tmp_path):
-    path = tmp_path / 'lock'
-    with runner.acquire(path, 0):
-        with pytest.raises(TimeoutError):
-            runner.acquire(path, 0)
-    with runner.acquire(path, 0):
-        pass
-
-
-def test_existing_readonly_descriptor_can_hold_lock(runner, tmp_path):
-    path = tmp_path / 'lock'
-    path.write_text('')
-    path.chmod(0o444)
-    with runner.acquire(path, 0) as lock:
-        assert not lock.writable()
-
-
-def test_runner_uses_actual_config_optout_and_inherits_lock(runner, tmp_path, monkeypatch):
+def test_the_runner_takes_no_lock_of_its_own_and_never_disables_the_suites(runner, tmp_path, monkeypatch):
+    """#186's per-account conftest lock is the one mechanism for full runs.
+    A second, machine-wide lock here meant two protocols: a run honouring one
+    could overlap a run honouring the other. The runner only lowers priority
+    and isolates config — and must not switch the suite's lock off."""
+    assert not hasattr(runner, 'LOCK_PATH') and not hasattr(runner, 'acquire')
     monkeypatch.setattr(runner, 'supports_worker_optout', lambda root: True)
-    monkeypatch.setattr(runner, 'LOCK_PATH', tmp_path / 'lock')
-    monkeypatch.setattr(runner.sys, 'argv', ['runner', '--lock-timeout', '0', 'tests/test_resources.py', '-q'])
+    monkeypatch.setenv('COLLAB_TEST_LOCK', 'off')
+    monkeypatch.setattr(runner.sys, 'argv', ['runner', 'tests/test_resources.py', '-q'])
     monkeypatch.setattr(runner.os, 'nice', lambda priority: 0)
     monkeypatch.setattr(runner.shutil, 'which', lambda name: '/usr/bin/ionice')
     captured = {}
@@ -46,19 +34,12 @@ def test_runner_uses_actual_config_optout_and_inherits_lock(runner, tmp_path, mo
         config = Path(kwargs['env']['COLLAB_CONFIG'])
         assert json.loads(config.read_text())['worker_auto_start'] is False
         assert config.stat().st_mode & 0o777 == 0o600
-        os.fstat(kwargs['pass_fds'][0])
-        with pytest.raises(TimeoutError):
-            runner.acquire(runner.LOCK_PATH, 0)
+        assert 'pass_fds' not in kwargs
+        assert kwargs['env'].get('COLLAB_TEST_LOCK') != 'off'
         return 7
     monkeypatch.setattr(runner.subprocess, 'call', run)
     assert runner.main() == 7
     assert not Path(captured['env']['COLLAB_CONFIG']).exists()
-
-
-@pytest.mark.parametrize('value', ['nan', 'inf', '-1', '3601'])
-def test_invalid_wait_budget_starts_nothing(runner, monkeypatch, value):
-    monkeypatch.setattr(runner.sys, 'argv', ['runner', '--lock-timeout', value])
-    assert runner.main() == 2
 
 
 def test_missing_runtime_worker_guard_refuses_to_start_suite(runner, monkeypatch):

@@ -460,3 +460,16 @@ def test_machine_figures_reach_peers_through_the_hub_and_nothing_else_does():
     assert 'build-box' not in json.dumps(shown)
     # Anywhere else, `machine` is still the hostname key and still dropped.
     assert 'build-box' not in json.dumps(public_stats({'nested': {'machine': 'build-box'}}))
+
+
+def test_an_absurd_but_finite_figure_from_a_peer_is_unknown_not_printed():
+    """10**300 passes `isfinite`; the dashboard printed its ~300 digits. Any
+    figure above 2**63 is no measurement of a real machine."""
+    from collab.resources import sanitise, MAX_FIGURE
+    shown = sanitise({'observed_at': 1, 'source': 'linux-procfs',
+                      'roles': {'agent': {'rss_bytes': 10 ** 300, 'cpu_pct': float(MAX_FIGURE),
+                                          'complete': True}},
+                      'machine': {'memory_total_bytes': MAX_FIGURE + 1, 'load1': 1e300}})
+    assert shown['roles']['agent']['rss_bytes'] is None
+    assert shown['roles']['agent']['cpu_pct'] == float(MAX_FIGURE)
+    assert shown['machine']['memory_total_bytes'] is None and shown['machine']['load1'] is None

@@ -254,7 +254,9 @@ async def test_with_stats_shared_the_list_rides_the_stats_report(monkeypatch):
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
         await daemon_mod.Daemon._report_stats(fake, client)
     assert posted[-1]['skills'] == [{'name': 'review', 'description': 'r'}]
-    assert posted[-1]['stats'] == {'model': 'm'}
+    # The fake has no session home, so the resource sample fails and the daemon
+    # reports `resources: None`, which clears a stale copy on the hub (R16).
+    assert posted[-1]['stats'] == {'model': 'm', 'resources': None}
 
 
 def test_without_a_terminal_accept_is_refused_for_the_right_reason(monkeypatch, capsys):
@@ -279,3 +281,30 @@ def test_a_legacy_request_without_a_verified_requester_cannot_receive_sensitive_
                        body={'skill_request': {'id':'sr_abcdefabcdef','skill':'review'}})], stamp=False)
     assert run(monkeypatch, hub, 'decline', 'sr_abcdefabcdef', name='bob') == 1
     assert hub.sent == []
+
+
+@pytest.mark.asyncio
+async def test_stats_sharing_revoked_during_the_skill_scan_publishes_no_figures(monkeypatch):
+    """friday's review of #193: sharing is checked before the resource sample,
+    then the daemon awaits the sample and the skill scan. Turning `share_stats`
+    off during that wait must stop the figures — resources included — that
+    were read before it; a final check right before the POST decides."""
+    import httpx
+    from collab.client import daemon as daemon_mod
+    sharing = {'on': True}
+    monkeypatch.setattr(daemon_mod, 'share_stats_enabled', lambda: sharing['on'])
+    monkeypatch.setattr(daemon_mod, 'read_stats', lambda profile: {'model': 'm'})
+    monkeypatch.setattr('collab.worker.metrics', lambda root: None)
+    posted = []
+    async def transport(request):
+        posted.append(json.loads(request.content))
+        return httpx.Response(200, json={})
+    async def installed():
+        sharing['on'] = False  # the user opts out while the scan runs
+        return [{'name': 'review', 'description': 'r'}]
+    fake = SimpleNamespace(profile=SimpleNamespace(url='http://hub', token='t', dir='/nonexistent'),
+                           _installed_skills=installed, _stats_file_mtime=lambda: 0.0,
+                           _last_stats=None, _stats_sent_mtime=0.0, _stats_sent_at=0.0)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        await daemon_mod.Daemon._report_stats(fake, client)
+    assert not any('stats' in body for body in posted)

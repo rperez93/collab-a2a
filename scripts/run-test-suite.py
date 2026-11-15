@@ -2,7 +2,6 @@
 """Coordinate heavy suites without changing the user's worker settings."""
 from __future__ import annotations
 
-import argparse
 import json
 import os
 from pathlib import Path
@@ -10,53 +9,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 
-LOCK_PATH = Path('/tmp/collab-suite.lock')
-
-
-def holder(path):
-    """Only a public PID, never another process's command or environment."""
-    try:
-        inode = str(path.stat().st_ino)
-        with open('/proc/locks') as source:
-            text = source.read(1024 * 1024)
-        for line in text.splitlines():
-            fields = line.split()
-            if len(fields) > 5 and fields[1] == 'FLOCK' and fields[5].split(':')[-1] == inode:
-                return fields[4]
-    except OSError:
-        pass
-    return 'unknown'
-
-
-def acquire(path, timeout):
-    import fcntl
-    try:
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o666)
-        os.fchmod(fd, 0o666)
-    except FileExistsError:
-        # An existing lock may belong to another uid and be mode0644. Linux
-        # flock permits an exclusive lock on a readable descriptor.
-        fd = os.open(path, os.O_RDONLY)
-    lock = os.fdopen(fd, 'r')
-    deadline = time.monotonic() + timeout
-    announced = False
-    while True:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return lock
-        except BlockingIOError:
-            if not announced:
-                print(f'Waiting for suite lock held by PID {holder(path)} (up to {timeout:g}s).', flush=True)
-                announced = True
-            if time.monotonic() >= deadline:
-                lock.close()
-                raise TimeoutError('suite lock wait deadline reached; no tests started')
-            time.sleep(min(.2, max(0, deadline - time.monotonic())))
-        except BaseException:
-            lock.close()
-            raise
+# NO LOCK OF ITS OWN. One full run per machine at a time is the suite's own
+# rule (#186): its conftest takes a per-account lock for any run collecting
+# 1,000 tests or more, and waits for another. This runner used to hold a
+# second, machine-wide `/tmp/collab-suite.lock` (mode 0666, shared across
+# accounts); two mechanisms meant a run honouring one could still overlap a
+# run honouring the other. It now only lowers priority and isolates config.
 
 
 def supports_worker_optout(root):
@@ -79,40 +38,28 @@ def supports_worker_optout(root):
 
 
 def main():
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument('--lock-timeout', type=float, default=900)
-    args, pytest_args = parser.parse_known_args()
-    if not 0 <= args.lock_timeout <= 3600:
-        sys.stderr.write('lock timeout must be 0..3600 seconds\n')
-        return 2
-    try:
-        import fcntl  # noqa: F401
-    except ImportError:
-        sys.stderr.write('Full-suite coordination requires POSIX flock; use WSL on Windows.\n')
-        return 2
+    pytest_args = sys.argv[1:]
     root = Path(__file__).resolve().parents[1]
     if not supports_worker_optout(root):
         sys.stderr.write('Suite requires runtime COLLAB_NO_WORKER support (PR #100); no tests started.\n')
         return 2
-    try:
-        lock = acquire(LOCK_PATH, args.lock_timeout)
-    except (OSError, TimeoutError) as exc:
-        sys.stderr.write(f'Cannot acquire machine-wide suite lock: {exc}\n')
-        return 2
-    with lock, tempfile.TemporaryDirectory(prefix='collab-suite-config-') as folder:
+    with tempfile.TemporaryDirectory(prefix='collab-suite-config-') as folder:
         os.nice(10)
         config = Path(folder) / 'config.json'
         config.write_text(json.dumps({'worker_auto_start': False}))
         os.chmod(config, 0o600)
         env = {**os.environ, 'PYTHONPATH': str(root / 'src'),
                'COLLAB_CONFIG': str(config), 'COLLAB_NO_WORKER': '1'}
+        # The full-run lock is pytest's own (#186); never switched off here.
+        if env.get('COLLAB_TEST_LOCK') == 'off':
+            del env['COLLAB_TEST_LOCK']
         command = [sys.executable, '-m', 'pytest', *(pytest_args or ['tests', '-q'])]
         ionice = shutil.which('ionice') if sys.platform.startswith('linux') else None
         if ionice:
             command = [ionice, '-c', '3', *command]
-        print('Suite lock held; reduced CPU priority' + (' and idle IO priority.' if ionice else '.'), flush=True)
-        # The child retains the lock even if this wrapper is killed.
-        return subprocess.call(command, cwd=root, env=env, pass_fds=(lock.fileno(),))
+        print('Reduced CPU priority' + (' and idle IO priority' if ionice else '') +
+              '; a full run waits for the suite\'s own per-machine lock.', flush=True)
+        return subprocess.call(command, cwd=root, env=env)
 
 
 if __name__ == '__main__':

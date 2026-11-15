@@ -80,28 +80,23 @@ Run full suites with the repository virtualenv's interpreter:
 .venv/bin/python scripts/run-test-suite.py
 ```
 
-The runner holds `/tmp/collab-suite.lock`, lowers CPU priority by 10 nice levels,
-sets an absolute source path and supplies a temporary `COLLAB_CONFIG` containing
-`worker_auto_start=false`. Because pytest fixtures can replace that config,
-the runner also requires the runtime `COLLAB_NO_WORKER=1` guard from PR #100.
-It probes that guard in isolated state without starting a listener or model;
-unsupported builds refuse to start the suite. Tests that deliberately remove
-the guard must isolate every provider call. The scratch config alone is not
-claimed to disable every test worker.
-Lock waiting has a 900-second deadline (`--lock-timeout SECONDS`, at most one
-hour) and reports the holder PID where procfs exposes it. Existing readable
-locks can be acquired without write permission. On Linux, available `ionice`
-runs pytest at idle IO priority. Its pytest child inherits the lock descriptor: killing the wrapper does not
-release the lock while that child runs. It does not change the user's persistent
-worker settings. It interoperates with the session's direct command:
+The runner lowers CPU priority by 10 nice levels, sets an absolute source path
+and supplies a temporary `COLLAB_CONFIG` containing `worker_auto_start=false`.
+Because pytest fixtures can replace that config, the runner also requires the
+runtime `COLLAB_NO_WORKER=1` guard from PR #100. It probes that guard in
+isolated state without starting a listener or model; unsupported builds refuse
+to start the suite. Tests that deliberately remove the guard must isolate every
+provider call. The scratch config alone is not claimed to disable every test
+worker. On Linux, available `ionice` runs pytest at idle IO priority. It does
+not change the user's persistent worker settings.
 
-```bash
-flock /tmp/collab-suite.lock nice -n 10 env PYTHONPATH="$PWD/src" .venv/bin/python -m pytest tests -q
-```
-
-Every participant must honor this shared lock; it cannot prevent unrelated
-programs from starting heavy work outside the protocol. Stop scratch processes
-by their recorded identity when finished. Do not kill processes by name.
+**The runner takes no lock of its own.** One full run per machine at a time is
+the suite's own rule: any pytest run collecting 1,000 tests or more takes a
+per-account lock in `tests/conftest.py` (`tests/suite_lock.py`) and waits for
+another full run, up to `COLLAB_TEST_LOCK_WAIT` seconds. That lock is the one
+mechanism, whether the suite is started through this runner or by plain
+`pytest`; the runner never switches it off. Stop scratch processes by their
+recorded identity when finished. Do not kill processes by name.
 
 ## Integration status
 
