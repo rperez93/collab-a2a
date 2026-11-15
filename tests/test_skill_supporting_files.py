@@ -215,3 +215,17 @@ def test_paths_that_collide_on_a_case_insensitive_disk_are_refused(files):
     in case, would overwrite each other on macOS or Windows after review."""
     with pytest.raises(ValueError):
         record_with_files(files)
+
+
+@pytest.mark.parametrize("files", [
+    [{"path": "a", "content": "x"}, {"path": "a/b", "content": "y"}],
+    [{"path": "A", "content": "x"}, {"path": "a/b/c", "content": "y"}],
+])
+def test_a_file_that_is_also_a_directory_is_refused(files):
+    """friday's follow-up on #189: `a` beside `a/b` cannot both be written."""
+    with pytest.raises(ValueError, match="also a directory"):
+        record_with_files(files)
+
+
+def test_siblings_with_a_shared_prefix_are_fine():
+    record_with_files([{"path": "ab", "content": "x"}, {"path": "a/b", "content": "y"}])

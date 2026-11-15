@@ -109,6 +109,14 @@ def validate_files(files: Any) -> list[dict[str, Any]]:
             raise ValueError(f'{path}: SHA-256 does not match its content')
         seen.add(path.casefold())
         clean.append({'path': path, 'content': content, 'sha256': digest, 'size_bytes': len(raw)})
+    # A file and a directory of the same name (casefolded: `a` beside `A/b`)
+    # cannot both be written: one would replace or block the other.
+    folded = {f['path'].casefold() for f in clean}
+    for path in folded:
+        parts = path.split('/')
+        for i in range(1, len(parts)):
+            if '/'.join(parts[:i]) in folded:
+                raise ValueError(f"supporting file {'/'.join(parts[:i])!r} is also a directory in {path!r}")
     return sorted(clean, key=lambda f: f['path'])
 
 
