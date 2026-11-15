@@ -394,6 +394,12 @@ activity files, reduces to a name — any value that is an absolute path, a
 token. The machine identity behind the label is random, generated once and
 kept in a file only you can read; it is never derived from the hostname.
 
+**Upgrading changes the identity once.** Earlier releases derived it from the
+machine, so until every agent on a machine runs this release, an upgraded
+agent and an older one there read each other as different machines: the
+roster's «same machine» mark and local-route discovery between them stop
+matching, and resume once both are upgraded.
+
 ## Version 2 boundaries
 
 Both peers validate the compatibility advertisement before admission; a guest
