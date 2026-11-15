@@ -1186,21 +1186,23 @@ class Store:
             row = self._db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
         return dict(row)
 
-    def last_spoke(self, participant_id: str) -> float:
-        """When this participant last did something real: a message or a task
-        change it sent. 0 when never. Read from the events kept anyway, so it
-        survives a hub restart."""
-        with self._lock:
-            row = self._db.execute(
-                "SELECT ts FROM events WHERE sender_id=? AND kind IN ('chat','task')"
-                " ORDER BY seq DESC LIMIT 1", (participant_id,)).fetchone()
-        if not row:
-            return 0.0
+    def last_spoke_all(self) -> dict[str, float]:
+        """Participant id -> when they last sent a message or a task change,
+        from the events kept anyway, in one query. The hub loads it once and
+        keeps it current itself."""
         from datetime import datetime
-        try:
-            return datetime.fromisoformat(str(row["ts"]).replace("Z", "+00:00")).timestamp()
-        except ValueError:
-            return 0.0
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT e.sender_id AS who, e.ts AS ts FROM events e JOIN"
+                " (SELECT sender_id, MAX(seq) AS seq FROM events WHERE kind IN ('chat','task')"
+                "  AND sender_id IS NOT NULL GROUP BY sender_id) m ON e.seq = m.seq").fetchall()
+        out = {}
+        for row in rows:
+            try:
+                out[row["who"]] = datetime.fromisoformat(str(row["ts"]).replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                pass
+        return out
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         with self._lock:

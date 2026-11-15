@@ -43,6 +43,10 @@ class Hub:
         self._subs: dict[str, list[Subscription]] = {}
         self._lock = asyncio.Lock()
         self._publish_lock = asyncio.Lock()
+        #: participant id -> when they last sent a message or a task change.
+        #: Loaded once from the events, then kept current by publish: a roster
+        #: poll must not scan the history (lead gate on #192).
+        self._last_spoke: dict[str, float] | None = None
         self.slow_subscriber_disconnects = 0
 
     @property
@@ -85,6 +89,8 @@ class Hub:
         # acted on in part, and the sender is the one person who can fix it.
         if env.kind == KIND_CHAT and (reason := message_refusal(env.text or "")):
             raise MessageRefused(reason)
+        if env.kind in ("chat", "task") and env.sender_id and self._last_spoke is not None:
+            self._last_spoke[env.sender_id] = time.time()
         if env.kind == KIND_HELLO and env.sender_id and env.body:
             # The host announces itself the same way a guest does, so its repo,
             # branch and focus show up in the roster like everyone else's.
@@ -267,16 +273,17 @@ class Hub:
         if person and (person.meta.get("activity") or {}).get("task") == task_id:
             self.set_activity(participant_id, {"state": IDLE})
 
-    def follow_pr(self, record: dict[str, Any], number: int | None) -> None:
-        """A PR attached to a task: its owner is shown on it, with the number,
-        unless they have said they are working on something else."""
-        from ..activity import WORKING
+    def follow_pr(self, record: dict[str, Any], number: int | None, attached_by: str) -> None:
+        """The task's owner attached a PR to it: show the number on their status,
+        if that status is about this task or they are idle. Never when someone
+        else attached it, and never over `quiet` or other work (lead gate on #192)."""
+        from ..activity import IDLE, WORKING
         owner = record.get("owner_id") or ""
-        person = self.store.participant_by_id(owner) if owner else None
+        person = self.store.participant_by_id(owner) if owner and owner == attached_by else None
         if person is None:
             return
         current = person.meta.get("activity") or {}
-        if current.get("task") == record.get("id") or current.get("state") != WORKING:
+        if current.get("task") == record.get("id") or current.get("state") in (None, IDLE):
             title = record.get("title", "")
             self.set_activity(owner, {"state": WORKING, "task": record.get("id", ""),
                                       "what": f"{title} (PR #{number})" if number else title})
@@ -474,6 +481,9 @@ class Hub:
         connected = self.connected()
         open_list = self.store.tasks(open_only=True)
         open_tasks = {t["id"]: t for t in open_list}
+        if self._last_spoke is None:
+            self._last_spoke = self.store.last_spoke_all()
+        spoke = self._last_spoke
         people = []
         for p in self.store.participants():
             people.append({
@@ -507,7 +517,7 @@ class Hub:
                 # out, so every client, old ones included, shows the same.
                 "activity": as_seen(p.meta.get("activity", {}), owner_id=p.id,
                                     open_tasks=open_tasks,
-                                    last_spoke=self.store.last_spoke(p.id)),
+                                    last_spoke=spoke.get(p.id, 0.0)),
                 # How long ago they were last heard from. A dot says whether
                 # someone is here; this says whether they only just left.
                 "last_seen": p.last_seen,
