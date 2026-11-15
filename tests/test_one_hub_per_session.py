@@ -174,3 +174,35 @@ def test_the_daemon_does_not_revive_while_another_hub_holds_the_lock(tmp_path, m
         holder.kill()
         holder.wait()
 
+
+
+def test_rewriting_the_lock_body_is_never_seen_empty(tmp_path):
+    """Lead gate on #205: note() truncated, then wrote, so concurrent
+    lock_holder reads found an empty stamp. Rewritten in a tight loop while
+    another thread reads it: no read is ever empty."""
+    import threading
+    lock = exclusive.DaemonLock(tmp_path, name=exclusive.HUB_LOCK_FILE)
+    assert lock.acquire()
+    stamp = stamp_for().encode()
+    lock.note(stamp)
+    done, empty, reads = threading.Event(), [], [0]
+
+    def writer():
+        while not done.is_set():
+            lock.note(stamp)
+
+    def reader():
+        path = tmp_path / exclusive.HUB_LOCK_FILE
+        while not done.is_set():
+            reads[0] += 1
+            if not path.read_text().strip():
+                empty.append(1)
+    threads = [threading.Thread(target=writer), threading.Thread(target=reader)]
+    for t in threads:
+        t.start()
+    import time
+    time.sleep(1.0)
+    done.set()
+    for t in threads:
+        t.join(5)
+    assert reads[0] > 1000 and not empty, f"{len(empty)} empty reads in {reads[0]}"
