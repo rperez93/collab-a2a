@@ -28,3 +28,16 @@ def test_actual_temporary_upload_warns_when_ack_is_wrong_or_malformed(tmp_path,m
         assert 'retention unconfirmed' in output.out
         assert 'kept until withdrawal' not in output.out
         assert 'withdraw explicitly' not in output.out
+
+
+@pytest.mark.parametrize('flag,warned', [(['--temporary'], False), (['--keep'], True), ([], False)])
+def test_an_older_hub_that_never_answers_kept_is_flagged_only_when_keeping_was_asked(tmp_path, monkeypatch, capsys, flag, warned):
+    """Lead gate on #214: a pre-2.3.0 hub answers without 'kept'. Only an
+    explicit --keep (or a source) can then go unconfirmed; a temporary file,
+    or one left to the default, is not flagged."""
+    path = tmp_path / 'notes.txt'; path.write_text('x')
+    record = {'id': 'f_old', 'name': 'notes.txt', 'size': 1, 'sender': 'alice', 'state': 'available'}
+    monkeypatch.setattr(cli, '_require_own_profile', lambda args: SimpleNamespace(room='general'))
+    monkeypatch.setattr(cli, '_client', lambda p: contextlib.nullcontext(SimpleNamespace(upload_file=lambda *a, **k: record)))
+    assert cli.cmd_file(cli.build_parser().parse_args(['file', 'send', str(path), *flag])) == 0
+    assert ('did not confirm requested retention/source' in capsys.readouterr().err) is warned
