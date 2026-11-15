@@ -326,6 +326,15 @@ _USERINFO = re.compile(r"://[^/\s@]*@")
 _HOME_RELATIVE = re.compile(r"(?:^|[/\\])(?:home|Users)[/\\][^/\\]+[/\\]")
 
 
+_FILE_URL = re.compile(r"\bfile:\S*", re.IGNORECASE)
+
+
+def scrub_free_text(text: str) -> str:
+    """Free text as a peer may see it: the words kept, a URL's user and token
+    («://user:token@») and any `file:` URL taken out (review of #178)."""
+    return _FILE_URL.sub("[local file]", _USERINFO.sub("://", text))
+
+
 def exposes_the_machine(value: Any) -> bool:
     """Whether a string names this machine's layout or carries a credential:
     an absolute path, a `file:` URL, a home directory written relatively
@@ -369,8 +378,11 @@ def bounded_meta(raw: Any) -> dict[str, Any]:
             continue
         if isinstance(value, bool) or isinstance(value, (int, float)):
             out[key[:MAX_META_VALUE]] = value
-        elif isinstance(value, str) and (key in FREE_TEXT_KEYS
-                                         or not exposes_the_machine(value)):
+        elif isinstance(value, str) and key in FREE_TEXT_KEYS:
+            # The participant's own words, kept — a leading «/» is ordinary
+            # prose — but never a credential or a local file's address.
+            out[key[:MAX_META_VALUE]] = scrub_free_text(value)[:MAX_META_VALUE]
+        elif isinstance(value, str) and not exposes_the_machine(value):
             out[key[:MAX_META_VALUE]] = value[:MAX_META_VALUE]
         # A dict or a list is dropped on purpose: stats and activity reach the
         # roster through their own sanitised endpoints, never through hello.

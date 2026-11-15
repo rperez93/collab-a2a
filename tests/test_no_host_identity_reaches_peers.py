@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import getpass
 import json
+import os
 import platform
 import socket
 import subprocess
@@ -343,3 +344,56 @@ def test_a_stats_post_removes_a_stale_hostname_and_never_writes_one(client, sess
     meta = _meta(session, "stale2")
     assert not {"machine", "user"} & set(meta), sorted(meta)
     assert PROBE["host"] not in json.dumps(meta) and PROBE["user"] not in json.dumps(meta)
+
+
+# --- review of #178: the identity file's race -------------------------------------------
+
+def test_an_agent_interleaved_between_write_and_publish_ends_with_the_same_id(
+        tmp_path, monkeypatch):
+    """A has written its identity but not yet published it; B runs its whole
+    creation in that gap. A's publish must then fail, and A must adopt B's
+    identity — one machine, one identity. It used to be O_EXCL-then-write:
+    B saw A's empty file, replaced it, and A kept a different identity for its
+    whole life (reproduced by the review of #178)."""
+    monkeypatch.setenv("COLLAB_PEERS_DIR", str(tmp_path))
+    path = peers.machine_id_path()
+    real_link = os.link
+    seen = {}
+
+    def interleaved(src, dst, *a, **kw):
+        if not seen:
+            seen["a"] = src                                  # A is here, written
+            seen["b"] = peers._create_machine_id(path)       # B, entirely, in the gap
+        return real_link(src, dst, *a, **kw)
+
+    monkeypatch.setattr(os, "link", interleaved)
+    a = peers._create_machine_id(path)
+    assert a == seen["b"] == path.read_text().strip()
+    assert not list(tmp_path.glob(".machine-id.*.tmp")), "a temporary file was left"
+
+
+def test_a_file_still_being_written_is_waited_for_not_replaced(tmp_path, monkeypatch):
+    """An older release creates the file and writes it in two steps. A reader
+    finding it empty waits briefly for the identity rather than replacing it."""
+    import threading
+
+    monkeypatch.setenv("COLLAB_PEERS_DIR", str(tmp_path))
+    path = peers.machine_id_path()
+    path.write_text("")
+    winner = "ab" * 16
+    threading.Timer(0.1, lambda: path.write_text(winner + "\n")).start()
+    peers._MACHINE_IDS.clear()
+    assert peers.machine_id() == "m_" + winner[:16]
+    assert path.read_text().strip() == winner
+
+
+def test_a_focus_keeps_its_words_but_not_a_credential_or_a_local_file():
+    """The focus is the participant's own words, and a leading «/» is prose;
+    a URL's token and a `file:` URL are taken out of it all the same."""
+    from collab.protocol import bounded_meta
+
+    focus = "/review https://bob:ghp_SENTTOKEN@github.com/o/r and file:///home/sentacct/x"
+    kept = bounded_meta({"focus": focus})["focus"]
+    assert kept.startswith("/review https://github.com/o/r")
+    assert "SENTTOKEN" not in kept and "sentacct" not in kept and "file:" not in kept
+    assert bounded_meta({"focus": "/fix the auth PR"})["focus"] == "/fix the auth PR"

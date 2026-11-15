@@ -385,7 +385,10 @@ Peers see a machine as a label such as `machine-3f2a91`, derived from a hash,
 never its hostname or your OS account name, and never your working directory.
 The join handshake carries the repository's name, branch and your focus — not
 the directory you joined from or the git remote, which can hold a token.
-Activity file paths go out relative to the repository or as a bare name. The
+Your focus and the activity description are your own words and are shown as
+written — except that a user or token inside a URL, and a `file:` URL, are
+taken out of the focus. Activity file paths go out relative to the repository
+or as a bare name. The
 hub enforces all of this for older clients too: it keeps only the known hello
 fields (focus, repo, branch, dirty, version, agent kind), and drops — or, for
 activity files, reduces to a name — any value that is an absolute path, a

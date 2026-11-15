@@ -121,11 +121,17 @@ def machine_id() -> str:
     key = str(path)
     if key in _MACHINE_IDS:
         return _MACHINE_IDS[key]
-    ident = _read_machine_id(path)
+    ident = _read_settled(path)
     if ident is None:
         ident = _create_machine_id(path)
     _MACHINE_IDS[key] = "m_" + ident[:16]
     return _MACHINE_IDS[key]
+
+
+#: How long a reader waits for a file that exists but does not yet hold an
+#: identity, before treating it as corrupt: a writer from an older release
+#: creates the file and writes it in two steps (see `_create_machine_id`).
+SETTLE_SECONDS = 0.5
 
 
 def _read_machine_id(path: Path) -> str | None:
@@ -136,34 +142,60 @@ def _read_machine_id(path: Path) -> str | None:
     return text if _STORED_ID.fullmatch(text) else None
 
 
+def _read_settled(path: Path) -> str | None:
+    """The stored identity; for a file that exists but is not one yet, a
+    brief wait first — replacing it at once is what split one machine into
+    two identities (review of #178)."""
+    deadline = time.monotonic() + SETTLE_SECONDS
+    while True:
+        ident = _read_machine_id(path)
+        if ident is not None or not path.exists() or time.monotonic() >= deadline:
+            return ident
+        time.sleep(0.02)
+
+
 def _create_machine_id(path: Path) -> str:
-    """Generated once. Two agents starting together race on O_EXCL: one
-    writes, the other reads what it wrote. A file that exists but is not an
-    identity is replaced whole, atomically."""
+    """Generated once, and PUBLISHED WHOLE.
+
+    The identity is written to a private temporary file in the same directory
+    and then hard-linked into place, so `path` either does not exist or holds
+    a complete identity — never an empty or partial one. It used to be created
+    with O_EXCL and written afterwards, and in that gap a second agent saw an
+    empty file, took it for corrupt and replaced it, while the first wrote
+    into the unlinked inode and kept a different identity for its whole life
+    (reproduced deterministically by the review of #178). The link fails if
+    another agent got there first, and then that agent's identity is read.
+    A file that exists but is not an identity (left by an older release) is
+    replaced atomically, after `_read_settled` has waited for it.
+    """
     import secrets
 
     fresh = secrets.token_hex(16)
     try:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        existing = _read_machine_id(path)
-        if existing is not None:
-            return existing
-        try:
-            tmp = path.with_name(f".machine-id.{os.getpid()}.tmp")
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w") as fh:
-                fh.write(fresh + "\n")
-            os.replace(tmp, path)
-        except OSError:
-            pass
-        return fresh
     except OSError:
         return fresh                     # unwritable: this process only
-    with os.fdopen(fd, "w") as fh:
-        fh.write(fresh + "\n")
-    return fresh
+    tmp = path.with_name(f".machine-id.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(fresh + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.link(tmp, path)
+            return fresh
+        except FileExistsError:
+            existing = _read_settled(path)
+            if existing is not None:
+                return existing
+            os.replace(tmp, path)        # corrupt: replaced whole
+            return _read_machine_id(path) or fresh
+    except OSError:
+        return fresh
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
 
 
 def identity() -> dict[str, str]:
