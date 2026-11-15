@@ -59,7 +59,16 @@ all reviewed heads in an isolated integration worktree, freeze its exact commit,
 and run the serialized full suite once on that candidate. A green fast subset
 cannot replace that run. Review and test evidence must identify the candidate
 SHA; adding or changing a commit invalidates the old candidate's acceptance.
-Coordinate the suite owner before starting another full run. Preserve failures
+
+**One full run per machine at a time, and the suite enforces it.** A run that
+collects 1,000 tests or more takes a per-machine lock (`tests/suite_lock.py`)
+and waits for any other full run to finish, so two agents' suites cannot slow
+each other into timing failures. That lock is the one mechanism: there is no
+separate hand-off to arrange. A fast run never takes it — the helper sets
+`COLLAB_TEST_LOCK=off` for its pytest — because iteration must neither queue
+behind a merge-gate run nor hold one up.
+
+Preserve failures
 and explicit skips, and resolve them before the lead merges that tested wave.
 The release additionally requires the live-session checks and participant
 agreement in the accepted collaboration brief. This helper does not merge,

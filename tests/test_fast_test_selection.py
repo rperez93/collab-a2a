@@ -80,6 +80,21 @@ def test_main_propagates_failure_and_pins_child_source(helper, repo, monkeypatch
     assert 'FAIL: fast iteration' in capsys.readouterr().out
 
 
+def test_a_fast_run_never_takes_the_full_suite_lock(helper, repo, monkeypatch):
+    """The full suite locks the machine for any run of 1,000 tests or more
+    (#186). A fast selection after a change to a widely imported module can
+    reach that, and must not then wait behind — or hold up — another agent's
+    merge-gate run: it is iteration, not a full run."""
+    monkeypatch.setattr(helper, 'ROOT', repo)
+    monkeypatch.setattr(helper, 'supports_worker_optout', lambda root: True)
+    monkeypatch.setenv('COLLAB_TEST_LOCK', '/tmp/a-lock-the-caller-chose')
+    calls = []
+    monkeypatch.setattr(helper.subprocess, 'run',
+                        lambda argv, **kw: calls.append(kw) or SimpleNamespace(returncode=0))
+    assert helper.main(['test', '--fast', '--test', helper.GATES[0]]) == 0
+    assert calls[0]['env']['COLLAB_TEST_LOCK'] == 'off'
+
+
 def test_git_tracks_branch_staged_working_and_untracked_changes(helper, repo):
     def git(*args):
         subprocess.run(['git', *args], cwd=repo, check=True, capture_output=True)
