@@ -359,7 +359,7 @@ not yet), and a strong request goes through it:
   one-line summary of what is asked, and the full review marked as untrusted
   text, with control and invisible characters shown as `\u{XXXX}` rather than
   obeyed. Its buttons are **Approve with Windows Hello**, **Decline** and **Use
-  a passkey instead**; Enter and Esc decline. Approve is followed by the Hello
+  a passkey instead** (passkey approval is not in this release); Enter and Esc decline. Approve is followed by the Hello
   prompt; a cancelled prompt is a decline, and a window nobody answers within
   ten minutes lets the request expire. The hub's challenge is asked for only
   after Approve — it lives 120 s, which reading a review can outlast — and is
@@ -382,8 +382,11 @@ not yet), and a strong request goes through it:
 
 ## What other participants learn about your machine
 
-Peers see a machine as a label such as `machine-3f2a91`, derived from a hash,
-never its hostname or your OS account name, and never your working directory.
+In the metadata collab sends on its own, peers see a machine as a label such as
+`machine-3f2a91`, taken from a random machine identity, never its hostname or
+your OS account name, and never your working directory. (Messages you write are
+sent as written. Records a hub stored before 2.2.0 are cleaned when served, not
+rewritten.)
 The join handshake carries the repository's name, branch and your focus — not
 the directory you joined from or the git remote, which can hold a token.
 Your focus and the activity description are your own words and are shown as

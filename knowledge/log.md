@@ -1,7 +1,7 @@
 # Bundle Update Log
 
 ## 2026-11-14 (no host identity)
-* **Update (later than the pin)**: Peers no longer receive the hostname, the OS account or the working directory: `machine` is a label derived from the hashed `machine_id`, `user`, `cwd` and `remote` are neither sent nor stored by the hub (recorded in `docs/security.md` and SPEC.md, not re-verified against the pinned pages). The pin and verification stamps are unchanged.
+* **Update (later than the pin)**: Peers no longer receive the hostname, the OS account or the working directory: `machine` is a label taken from `machine_id`, a random identity generated once per machine and account (not a hash), `user`, `cwd` and `remote` are neither sent nor stored by the hub in new writes, while rows stored earlier stay at rest and are cleaned on output (recorded in `docs/security.md` and SPEC.md, not re-verified against the pinned pages). The pin and verification stamps are unchanged.
 
 ## 2026-11-14 (R22b client)
 * **Update (later than the pin)**: Recorded in [the command surface](operating/cli-surface.md) the client half of strong approval — `collab consent enrol|keys`, `collab skills ask --strong`, and that a strong request is accepted only through the hub's review and a Hello gesture, never `--human-approved` or a chat reply. The pin and verification stamps are unchanged.
@@ -182,3 +182,10 @@ polling is cancellable and bounded. The pin remains unchanged.
 - **Update (later than the pin, v2.2.0)**: The shared proxy is the default host
   route (`proxy` = `auto`); a session that served the bare domain before claims
   it on its first attach, so pre-proxy root links keep reaching it. Recorded in operating/cli-surface.md.
+
+- **Update (later than the pin, v2.2.0)**: Release 2.2.0 carries offline-name
+  reservation (#150), reserved names and hub alarms (#168), task release and
+  handoff (#177), peer-facing identity minimisation (#178), strong approval
+  live with Windows Hello (#181) and the shared proxy as the default host
+  route (#182). Pages that describe these were updated in
+  place; the pin is unchanged.

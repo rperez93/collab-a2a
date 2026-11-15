@@ -82,7 +82,7 @@ reports strong approval unavailable (older than 2.2.0) it cannot be accepted at
 all — nothing weaker is offered instead.
 
 **Only between clients that have it.** Strong approval holds only when the
-asked side runs a collab with this client half (#164 or later). An older
+asked side runs a collab with this client half (2.2.0 or later). An older
 collab ignores `required_strength`: its human can accept the request the
 ordinary way, with a typed «yes» or `--human-approved`, and run it. Your side
 never counts that as accepted — `collab skills sent` keeps it pending — but it
