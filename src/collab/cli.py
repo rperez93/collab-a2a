@@ -8170,7 +8170,9 @@ def cmd_skills_install_shared(args: argparse.Namespace) -> int:
         print(f"  {len(content.encode())} bytes · sha256 {digest}")
         # What is installed: the description inside the reviewed text, never the
         # publication's separate (unhashed) field.
-        print(f"  description: {said(sk.front_description(content))}")
+        shown = sk.front_description(content)
+        print(f"  description: {said(shown)}" if shown else
+              dim("  description: (none in the text's front matter; installed without one)"))
         print(f"  would install as {said(str(dest))}, renamed `{said(dest.name)}` in its front matter")
         if dropped := sk.dropped_keys(content):
             print(f"  front-matter keys dropped on install: {', '.join(said(k) for k in dropped)}")
