@@ -30,9 +30,10 @@ def remote(world, tmp_path, monkeypatch):
     receive_envelope(profile, env)
     inbox = Inbox(tmp_path)
     inbox.bind('thread-remote', command, tmp_path)
-    original = strong.ApprovalClient.capabilities
-    monkeypatch.setattr(strong.ApprovalClient, 'capabilities', lambda self: {
-        **original(self), 'available': True, 'remote_delivery': True})
+    # The host's real setting, not a patched capability: the hub then both
+    # advertises remote delivery and prepares and consumes the review.
+    from collab.config import set_remote_delivery
+    set_remote_delivery(True)
     return SimpleNamespace(world=world, profile=profile, inbox=inbox, offer=offer, env=env, command=command)
 
 
@@ -301,3 +302,23 @@ def test_a_consumption_answer_for_other_bytes_authorizes_no_delivery(remote, mon
     assert 'the consumption answer did not match this reviewed operation' in capsys.readouterr().err
     assert remote.inbox.list()[0]['state'] == 'approving'
     assert remote_delivery.prepare(remote.profile) is None
+
+
+def test_remote_delivery_is_off_by_default_and_on_only_by_the_host_setting(remote, capsys):
+    """Nothing patched: with the host's `remote_delivery` at its default (off)
+    the hub advertises no remote delivery, the receiver opens no window and
+    the hub prepares no review; `collab config remote_delivery on` is what
+    turns it on."""
+    from collab.config import set_remote_delivery, settings, REMOTE_DELIVERY_DEFAULT
+    assert REMOTE_DELIVERY_DEFAULT is False
+    assert next(s for s in settings() if s.name == 'remote_delivery').default is False
+    set_remote_delivery(False)
+    assert strong.ApprovalClient(remote.world.bob_hub).capabilities()['remote_delivery'] is False
+    assert accept(remote) == 1
+    assert 'not enabled strong remote delivery' in capsys.readouterr().err
+    assert remote.world.hello.windows == []
+    db = remote.world.store._db
+    assert db.execute("SELECT COUNT(*) FROM approval_requests WHERE kind='remote-deliver'").fetchone()[0] == 0
+    set_remote_delivery(True)
+    assert strong.ApprovalClient(remote.world.bob_hub).capabilities()['remote_delivery'] is True
+    assert accept(remote) == 0

@@ -934,6 +934,29 @@ def resolve_name(explicit: str | None = None) -> str:
 SHARE_STATS_DEFAULT = True
 
 
+#: STRONG REMOTE DELIVERY (R7) IS OFF UNTIL THE HOST TURNS IT ON. A peer's
+#: prompt or connection goal reaching this machine's coding agent is the
+#: largest thing collab can do on a person's behalf, and its release gate is a
+#: native human ceremony — a real Hello or passkey gesture on the installed
+#: adapter — that no automated test performs. This is an AVAILABILITY switch,
+#: not consent: an agent can run `collab config`, so what authorises each
+#: delivery is still the receiver's own gesture on the reviewed operation.
+#: Off, the hub neither advertises it nor prepares or consumes a remote review.
+REMOTE_DELIVERY_DEFAULT = False
+
+
+def remote_delivery_enabled() -> bool:
+    value = load_config().get("remote_delivery")
+    return REMOTE_DELIVERY_DEFAULT if value is None else value is True
+
+
+def set_remote_delivery(enabled: bool) -> bool:
+    cfg = load_config()
+    cfg["remote_delivery"] = bool(enabled)
+    save_config(cfg)
+    return bool(enabled)
+
+
 def share_stats_enabled() -> bool:
     value = load_config().get("share_stats")
     return SHARE_STATS_DEFAULT if value is None else bool(value)
@@ -2666,6 +2689,14 @@ def settings() -> tuple[Setting, ...]:
         Setting("proxy", "share one machine tunnel (auto, the default, or on), or use "
                          "one per hub (off)",
                 PROXY_DEFAULT, str, proxy_mode, set_proxy_mode),
+        # A MACHINE setting, read by the hub this machine hosts: whether its
+        # session offers strong remote delivery at all. After the hosting
+        # settings it belongs with. See REMOTE_DELIVERY_DEFAULT.
+        Setting("remote_delivery", "let a hub you host accept remote prompts and goals, "
+                                   "each still approved by the receiver's own gesture; "
+                                   "default off",
+                REMOTE_DELIVERY_DEFAULT, _as_bool, remote_delivery_enabled,
+                lambda v: set_remote_delivery(v)),
         Setting("stats_command", "a command printing your usage as JSON, for "
                                  "an agent whose host tool cannot report it",
                 "", str,

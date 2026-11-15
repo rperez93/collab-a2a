@@ -113,7 +113,17 @@ class RemoteApprovals:
         except crypto.InvalidProof:
             raise Rejected('remote_review_too_large', 413) from None
 
+    @staticmethod
+    def _enabled():
+        """ENFORCED, NOT ONLY ADVERTISED: a client that skips the capability
+        check gets no review prepared and no receipt consumed while the host
+        has `remote_delivery` off (config.REMOTE_DELIVERY_DEFAULT)."""
+        from ..config import remote_delivery_enabled
+        if not remote_delivery_enabled():
+            raise Rejected('remote_delivery_disabled', 403)
+
     def prepare(self, token, *, source_seq, binding):
+        self._enabled()
         fingerprint = delivery_binding(binding)
         core = self.core
         with core._transaction(token) as (db, owner, now):
@@ -161,6 +171,7 @@ class RemoteApprovals:
             return {**result, 'source_seq': source_seq}
 
     def consume(self, token, request_id, *, receipt):
+        self._enabled()
         core = self.core
         with core._transaction(token) as (db, owner, now):
             row = db.execute('SELECT * FROM approval_remote_bindings WHERE session_id=? AND owner_id=? AND request_id=?',

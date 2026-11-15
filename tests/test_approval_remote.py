@@ -9,6 +9,14 @@ from collab.server import approval_crypto as crypto
 from test_approval_store import hub, signer, enrol, approve
 
 
+@pytest.fixture(autouse=True)
+def _remote_delivery_on():
+    """These tests exercise remote review itself, so the host has turned it
+    on; what happens while it is off is tested below on its own."""
+    from collab.config import set_remote_delivery
+    set_remote_delivery(True)
+
+
 def binding():
     return {'target': 'thread-123', 'command': ['/usr/bin/collab', 'wake', 'deliver', '--to', 'codex', '--target', 'thread-123'],
             'cwd': '/private/work', 'destination': {'adapter': 'codex', 'session_id': 'thread-123', 'scope': 'codex-thread'}}
@@ -216,3 +224,17 @@ def test_an_expired_offer_cannot_be_prepared_for_review(hub):
     hub.now[0] = offer['expires_at']
     with pytest.raises(Rejected, match='remote_offer_expired'):
         RemoteApprovals(hub.api).prepare('test-bob', source_seq=env.seq, binding=binding())
+
+
+def test_with_remote_delivery_off_the_hub_prepares_and_consumes_nothing(hub, signer):
+    """Off is enforced, not only advertised: a client that ignores the
+    capability still gets no review prepared and no receipt consumed."""
+    from collab.config import set_remote_delivery
+    adapter, env, offer, request, approved = ready(hub, signer)
+    set_remote_delivery(False)
+    with pytest.raises(Rejected, match='remote_delivery_disabled'):
+        adapter.prepare('test-bob', source_seq=env.seq, binding=binding())
+    with pytest.raises(Rejected, match='remote_delivery_disabled'):
+        adapter.consume('test-bob', request['request_id'], receipt=approved['receipt'])
+    set_remote_delivery(True)
+    assert adapter.consume('test-bob', request['request_id'], receipt=approved['receipt'])['state'] == 'consumed'

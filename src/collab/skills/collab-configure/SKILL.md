@@ -70,7 +70,8 @@ the project. A session belongs to a repository; a theme does not.
 | `share_stats` | publish your quota and spend to the session | they say not to share usage |
 | `rules` | print collab's rules of conduct at `host` and `join` | they say the rules are noise — the pointer to the repo's own `COLLAB.md` prints regardless |
 | `ngrok_domain` | the reserved ngrok domain `collab host` uses when `--domain` is not given | they want one stable public link — a session given its own `--domain` keeps it; the shared proxy serves several sessions under one domain |
-| `proxy` | `on`/`auto` share one machine tunnel; `off`, the default this release, uses per-hub tunnels | choose the tunnel policy before starting a hub; `host --tunnel own` or `--tunnel proxy` overrides it for one session |
+| `proxy` | `on`/`auto` (`auto` is the default from 2.2.0) share one machine tunnel; `off` uses per-hub tunnels | choose the tunnel policy before starting a hub; `host --tunnel own` or `--tunnel proxy` overrides it for one session |
+| `remote_delivery` | whether a hub you host lets peers' remote prompts and goals reach a receiver's coding agent; default `off` | the host's human asks for remote delivery. It is an availability switch, not consent: each delivery still needs the receiver's own Hello or passkey gesture on the reviewed operation. Never turn it on on an agent's own initiative |
 | `stats_command` | a command printing your usage as JSON | this agent's host tool has no status line — for Codex, `collab stats --agent codex` writes it for you |
 | `stats_interval` | how often to run it, in seconds | rarely — 120s is right |
 | `remind_every` | minutes between the standing reminder the daemon puts back in front of this agent; `0` turns it off | they say the reminder is too frequent, or ask for it to stop |
