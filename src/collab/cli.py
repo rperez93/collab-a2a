@@ -2342,13 +2342,22 @@ def cmd_activity(args: argparse.Namespace) -> int:
 
 
 def _describe_pr_evidence(pr: dict) -> None:
-    from collab.pr_review import FIELDS, status
+    """Each commit with who stated it and when, as the tasks skill promises:
+    evidence is a participant's statement, so the reader sees whose."""
+    from collab.pr_review import FIELDS, PREFIX, status
+    from .config import reading_timezone
     print(f"    {status(pr)}")
     for field in FIELDS:
-        if pr.get(field):
-            print(f"    {field}: {said(pr[field])}")
-    if pr.get("head_observed_at"):
-        print(f"    head observed at: {said(str(pr['head_observed_at']))}")
+        if not pr.get(field):
+            continue
+        prefix = PREFIX[field]
+        who = pr.get(f"{prefix}_by_name") or pr.get(f"{prefix}_by") or "unknown reporter"
+        when = pr.get(f"{prefix}_at")
+        try:
+            stamp = datetime.fromtimestamp(float(when), reading_timezone()).isoformat(timespec="seconds")
+        except (TypeError, ValueError, OverflowError, OSError):
+            stamp = "unknown time"
+        print(f"    {field}: {said(pr[field])}  (by {said(str(who))}, {said(stamp)})")
 
 
 def _task_review_warning(task: dict) -> None:

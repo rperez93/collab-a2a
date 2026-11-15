@@ -6,6 +6,20 @@ import subprocess
 
 FIELDS = ("reviewed_sha", "tested_sha", "head_sha")
 
+#: Where each field's reporter and time are kept: `<prefix>_by` holds the
+#: reporter's PARTICIPANT ID, never a display name, which a rename or a
+#: reused name would hand to someone else; `<prefix>_at` the hub's time.
+PREFIX = {"reviewed_sha": "reviewed", "tested_sha": "tested", "head_sha": "head_observed"}
+
+#: PULL REQUESTS PER TASK. Each roster read carries every task's links, so an
+#: unbounded list grew every read: 5,000 rows made each 2.4 MB (gate review of
+#: #198). A task's real history — a fix, its follow-ups, a rework — fits in 20.
+MAX_TASK_PRS = 20
+
+
+class TaskPrLimit(ValueError):
+    """A new link would exceed MAX_TASK_PRS on one task."""
+
 
 def commit_sha(value):
     if not isinstance(value, str) or not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", value):

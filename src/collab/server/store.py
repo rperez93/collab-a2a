@@ -32,6 +32,7 @@ from typing import Any, Iterable
 from ..batch import DONE_STATE as COMPLETED_STATE
 from ..protocol import Envelope, public_stats
 from ..names import validate_participant_name
+from ..pr_review import MAX_TASK_PRS, PREFIX, TaskPrLimit
 from . import skill_approval_policy
 
 class TaskClaimConflict(ValueError):
@@ -1258,7 +1259,33 @@ class Store:
         by_task: dict[str, list[dict[str, Any]]] = {}
         for pr in self._task_query("SELECT * FROM task_prs ORDER BY added_at", ()):
             by_task.setdefault(pr["task_id"], []).append(pr)
-        return [dict(r, prs=by_task.get(r["id"], [])) for r in self._task_query(sql, ())]
+        names = self._reporter_names()
+        out = []
+        for row in self._task_query(sql, ()):
+            prs = by_task.get(row["id"], [])
+            out.append(dict(row, prs=self._bounded_prs(prs, names),
+                            **({"prs_total": len(prs)} if len(prs) > MAX_TASK_PRS else {})))
+        return out
+
+    def _reporter_names(self) -> dict[str, str]:
+        """Participant id -> current name, read fresh: a rename writes no task,
+        so the task cache would otherwise show the name a reporter used to have."""
+        with self._lock:
+            return {r[0]: r[1] for r in self._db.execute("SELECT id, name FROM participants")}
+
+    @staticmethod
+    def _bounded_prs(prs: list[dict[str, Any]], names: dict[str, str]) -> list[dict[str, Any]]:
+        """At most the MAX_TASK_PRS most recent links, each reporter shown by
+        its current name beside the stored id. A hub written before the cap
+        may hold more; the reader still gets a bounded list."""
+        shown = []
+        for pr in prs[-MAX_TASK_PRS:]:
+            pr = dict(pr)
+            for prefix in PREFIX.values():
+                if pr.get(f"{prefix}_by"):
+                    pr[f"{prefix}_by_name"] = names.get(pr[f"{prefix}_by"], "")
+            shown.append(pr)
+        return shown
 
     def _task_query(self, sql: str, args: tuple) -> list[dict[str, Any]]:
         """Task rows for `sql`, from the per-change cache when it still holds.
@@ -1523,7 +1550,8 @@ class Store:
         return [dict(r) for r in rows]
 
     def add_task_pr(self, task_id: str, *, url: str, number: int | None,
-                    added_by: str, evidence: dict[str, str] | None = None) -> dict[str, Any]:
+                    added_by: str, evidence: dict[str, str] | None = None,
+                    reporter_id: str | None = None) -> dict[str, Any]:
         """Record a pull request against a task. Idempotent on the URL.
 
         A task has as many pull requests as the work took — a fix and its
@@ -1554,6 +1582,12 @@ class Store:
             if known is None:
                 raise UnknownProject(task_id)
             url = normalise_pr_url(url)
+            linked = self._db.execute("SELECT 1 FROM task_prs WHERE task_id=? AND url=?",
+                                      (task_id, url)).fetchone()
+            if linked is None and self._db.execute(
+                    "SELECT COUNT(*) FROM task_prs WHERE task_id=?", (task_id,)).fetchone()[0] >= MAX_TASK_PRS:
+                raise TaskPrLimit(f"{task_id} already has {MAX_TASK_PRS} pull requests; "
+                                  "remove one with `collab task pr-remove` first")
             self._db.execute(
                 "INSERT INTO task_prs (task_id,url,number,added_by,added_at)"
                 " VALUES (?,?,?,?,?)"
@@ -1562,10 +1596,12 @@ class Store:
                 (task_id, url, number, added_by, now),
             )
             for field, value in evidence.items():
-                prefix = {"reviewed_sha": "reviewed", "tested_sha": "tested", "head_sha": "head_observed"}[field]
+                prefix = PREFIX[field]
+                # The reporter by participant ID (gate review of #198): a name
+                # is whoever holds it now, not who made the statement.
                 self._db.execute(
                     f"UPDATE task_prs SET {field}=?, {prefix}_by=?, {prefix}_at=? WHERE task_id=? AND url=?",
-                    (value, added_by, now, task_id, url))
+                    (value, reporter_id or added_by, now, task_id, url))
             self._db.commit()
             self._task_rev += 1  # tasks() carries PR rows from the task cache
             row = self._db.execute(
@@ -1588,7 +1624,7 @@ class Store:
             rows = self._db.execute(
                 "SELECT * FROM task_prs WHERE task_id=? ORDER BY added_at",
                 (task_id,)).fetchall()
-        return [dict(r) for r in rows]
+        return self._bounded_prs([dict(r) for r in rows], self._reporter_names())
 
     # --- batches of work --------------------------------------------------------
     #
