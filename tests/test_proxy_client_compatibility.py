@@ -3,6 +3,7 @@
 Set COLLAB_LEGACY_CLIENT_SRC to the src directory of tag v2.1.2 to exercise
 the old implementation in a separate interpreter; no source is downloaded.
 """
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -85,14 +86,26 @@ print(json.dumps({'version': collab.__version__, 'joined': True, 'round_trip': T
 '''
 
 
-@pytest.fixture
-def proxy_server(live_server, tmp_path, monkeypatch):
+@contextlib.contextmanager
+def _serve(live_server, tmp_path, monkeypatch, *, root_owner):
+    """The proxy as main runs it (#163, #182): it routes only a session whose
+    OWN record says it attached to the proxy, and the bare domain reaches the
+    recorded primary — claimed on its first attach by the session that
+    published the root before, never by one born on the proxy."""
     monkeypatch.setenv('COLLAB_PEERS_DIR', str(tmp_path / 'registry'))
+    home = tmp_path / 'home'
+    record = home / 'sessions' / 's_test'
+    record.mkdir(parents=True)
+    (record / 'hub.json').write_text(json.dumps({
+        'session_id': 's_test', 'host_name': 'alice', 'port': 1, 'bind': '127.0.0.1',
+        'invite': 'i', 'host_token': 't', 'no_tunnel': False, 'tunnel': 'proxy'}))
     peers.announce(session_id='s_test', name='alice', role='host',
                    url=live_server['base'], local_url=live_server['base'],
-                   repo=str(tmp_path), home=str(tmp_path), pid=os.getpid())
+                   repo=str(tmp_path), home=str(home), pid=os.getpid())
+    if root_owner:
+        assert proxy.claim_primary('s_test') == 's_test'
     port = free_port()
-    app = proxy.build_app(primary=lambda: 's_test')
+    app = proxy.build_app()
     server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=port,
                                          log_level='error', access_log=False))
     thread = threading.Thread(target=server.run, daemon=True)
@@ -102,7 +115,7 @@ def proxy_server(live_server, tmp_path, monkeypatch):
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             try:
-                if httpx.get(base + '/ext/collab/v1/health', timeout=.5).status_code == 200:
+                if httpx.get(base + '/s/s_test/ext/collab/v1/health', timeout=.5).status_code == 200:
                     break
             except httpx.HTTPError:
                 pass
@@ -116,8 +129,22 @@ def proxy_server(live_server, tmp_path, monkeypatch):
         assert not thread.is_alive(), 'test proxy did not stop'
 
 
+@pytest.fixture
+def proxy_server(live_server, tmp_path, monkeypatch):
+    """s_test published the bare domain before the proxy, so it owns the root."""
+    with _serve(live_server, tmp_path, monkeypatch, root_owner=True) as base:
+        yield base
+
+
+@pytest.fixture
+def proxy_without_root_owner(live_server, tmp_path, monkeypatch):
+    """s_test was born on the proxy: it never claims the bare domain."""
+    with _serve(live_server, tmp_path, monkeypatch, root_owner=False) as base:
+        yield base
+
+
 @pytest.mark.parametrize('legacy', [False, True], ids=['current', 'v2.1.2'])
-@pytest.mark.parametrize('route', ['routed', 'legacy-root', 'direct-hub'])
+@pytest.mark.parametrize('route', ['routed', 'previous-owner-root', 'direct-hub'])
 def test_client_join_and_message_round_trip(route, legacy, proxy_server, live_server, tmp_path):
     source = os.environ.get('COLLAB_LEGACY_CLIENT_SRC') if legacy else str(Path(__file__).resolve().parents[1] / 'src')
     if not source:
@@ -139,3 +166,13 @@ def test_unknown_routed_session_never_falls_back_to_primary(proxy_server, live_s
     response = httpx.post(proxy_server + '/s/s_missing/ext/collab/v1/join',
                           json={'invite': live_server['invite'], 'name': 'wrong-route'}, timeout=5)
     assert response.status_code == 404
+
+
+def test_a_root_link_reaches_nobody_when_no_session_owned_the_root(proxy_without_root_owner):
+    """A session born on the proxy never claims the bare domain (#182), so an
+    old-style root link must reach no session at all rather than a guess —
+    while the session's own `/s/<id>` link still works."""
+    root = httpx.get(proxy_without_root_owner + '/ext/collab/v1/health', timeout=5)
+    assert root.status_code == 404
+    routed = httpx.get(proxy_without_root_owner + '/s/s_test/ext/collab/v1/health', timeout=5)
+    assert routed.status_code == 200 and routed.json()['session_id'] == 's_test'
