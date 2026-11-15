@@ -145,15 +145,42 @@ try {
     $f.TopMost = $true
     $f.StartPosition = 'CenterScreen'
     $f.MinimizeBox = $false
-    $f.ClientSize = New-Object Drawing.Size(800, 620)
-    $f.MinimumSize = New-Object Drawing.Size(640, 480)
-    $f.BackColor = $bg; $f.ForeColor = $fg; $f.Font = $font
+    # OUR OWN TITLE BAR, drawn in the window's colours: no system caption,
+    # a 1 px border, and every way to close it — the x, Esc, Alt+F4, the
+    # taskbar — leaves the choice at its default, decline.
+    $f.FormBorderStyle = 'None'
+    $f.ShowInTaskbar = $true
+    $f.ClientSize = New-Object Drawing.Size(802, 652)
+    $f.Padding = New-Object Windows.Forms.Padding(1)
+    $f.BackColor = $dim; $f.ForeColor = $fg; $f.Font = $font
+    $body = New-Object Windows.Forms.Panel
+    $body.Dock = 'Fill'; $body.BackColor = $bg
+    $bar = New-Object Windows.Forms.Panel
+    $bar.Dock = 'Top'; $bar.Height = 30; $bar.BackColor = $panel
+    $title = New-Object Windows.Forms.Label
+    $title.Text = 'collab - approval requested'; $title.UseMnemonic = $false
+    $title.ForeColor = $dim; $title.Font = $font; $title.SetBounds(12, 6, 600, 20)
+    $x = New-Object Windows.Forms.Label
+    $x.Text = 'x'; $x.TextAlign = 'MiddleCenter'; $x.ForeColor = $fg; $x.Font = $bold
+    $x.Dock = 'Right'; $x.Width = 44; $x.Cursor = 'Hand'
+    $x.Add_MouseEnter({ $x.BackColor = (Rgb 196 43 28) }); $x.Add_MouseLeave({ $x.BackColor = $panel })
+    $x.Add_Click({ $script:choice = 'decline'; $f.Close() })
+    $bar.Controls.Add($title); $bar.Controls.Add($x)
+    # Dragged by its bar, as a captioned window is.
+    $script:grab = $null
+    $down = { $script:grab = @([Windows.Forms.Cursor]::Position, $f.Location) }
+    $move = { if ($script:grab) { $p = [Windows.Forms.Cursor]::Position
+      $f.Location = New-Object Drawing.Point(($script:grab[1].X + $p.X - $script:grab[0].X), ($script:grab[1].Y + $p.Y - $script:grab[0].Y)) } }
+    $up = { $script:grab = $null }
+    foreach ($c in @($bar, $title)) { $c.Add_MouseDown($down); $c.Add_MouseMove($move); $c.Add_MouseUp($up) }
+    $f.Controls.Add($body); $f.Controls.Add($bar)
+    $body.BringToFront()
     function Text($t, $x, $y, $w, $color, $fnt) {
       $l = New-Object Windows.Forms.Label
       $l.Text = $t; $l.AutoEllipsis = $true; $l.UseMnemonic = $false
       $l.ForeColor = $color; $l.Font = $fnt; $l.SetBounds($x, $y, $w, 20)
       $l.Anchor = 'Top, Left, Right'
-      $f.Controls.Add($l); $l
+      $body.Controls.Add($l); $l
     }
     [void](Text 'collab > approval requested' 16 14 520 $green $bold)
     $left = [int]$req.expires_in
@@ -161,7 +188,7 @@ try {
     $clock.TextAlign = 'TopRight'; $clock.Anchor = 'Top, Right'
     $rule = New-Object Windows.Forms.Label
     $rule.BackColor = $dim; $rule.SetBounds(16, 40, 768, 1); $rule.Anchor = 'Top, Left, Right'
-    $f.Controls.Add($rule)
+    $body.Controls.Add($rule)
     # One row per value: the key dim, the value as sent (already made visible
     # and single-line by the caller), the self-chosen name marked as such.
     $rows = @(
@@ -186,8 +213,8 @@ try {
     $more.Add_LinkClicked({
       if ($digest.Text -eq $req.digest_short) { $digest.Text = $req.digest_full; $more.Text = 'show short' }
       else { $digest.Text = $req.digest_short; $more.Text = 'show full' }
-      $digest.Width = $f.ClientSize.Width - 166 - $more.Width })
-    $f.Controls.Add($more)
+      $digest.Width = $body.ClientSize.Width - 166 - $more.Width })
+    $body.Controls.Add($more)
     $y += 34
     [void](Text 'review' 16 $y 768 $dim $font)
     $y += 24
@@ -202,23 +229,23 @@ try {
     $box.Text = $req.review
     $box.SetBounds(16, $y, 768, 520 - $y)
     $box.Anchor = 'Top, Bottom, Left, Right'
-    $f.Controls.Add($box)
+    $body.Controls.Add($box)
     $script:choice = 'decline'
     function Button($t, $x, $w, $color) {
       $b = New-Object Windows.Forms.Button
       $b.Text = $t; $b.FlatStyle = 'Flat'; $b.FlatAppearance.BorderColor = $color
       $b.ForeColor = $color; $b.BackColor = $bg; $b.Font = $font
       $b.SetBounds($x, 536, $w, 36); $b.Anchor = 'Bottom, Left'
-      $f.Controls.Add($b); $b
+      $body.Controls.Add($b); $b
     }
-    $ok = Button '&Approve with Windows Hello' 16 270 $green
+    $ok = Button 'Approve with Windows Hello' 16 270 $green
     $ok.Add_Click({ $script:choice = 'approve'; $f.Close() })
     $no = Button '&Decline' 296 140 $fg
     $no.Add_Click({ $script:choice = 'decline'; $f.Close() })
-    $pk = Button 'Use a &passkey instead' 564 220 $dim
+    $pk = Button 'Use a passkey instead' 564 220 $dim
     $pk.Anchor = 'Bottom, Right'
     $pk.Add_Click({ $script:choice = 'passkey'; $f.Close() })
-    $hint = Text 'Enter or Esc declines  -  Alt+A approves  -  nothing here is logged' 16 584 768 $dim $font
+    $hint = Text 'Enter, Esc, Alt+D or x declines  -  approving takes a click  -  nothing here is logged' 16 584 768 $dim $font
     $hint.Anchor = 'Bottom, Left, Right'
     $f.CancelButton = $no
     $f.AcceptButton = $no
@@ -234,8 +261,14 @@ try {
     $f.Add_Shown({ $f.Activate(); $no.Focus(); $timer.Start() })
     $f.Add_FormClosed({ $timer.Stop() })
     if ($req.dry) {
-      $keys = @{status = 'Success'; choice = 'built';
-                accept = [bool]($f.AcceptButton -eq $no); cancel = [bool]($f.CancelButton -eq $no)}
+      # NO KEY APPROVES: neither Approve nor the passkey button may carry a
+      # mnemonic (Alt+A was Approve's). Asked of the built buttons' own text,
+      # for every letter, because an unshown form processes no keys at all.
+      $keyed = @(foreach ($b in @($ok, $pk)) { foreach ($c in [char[]]'abcdefghijklmnopqrstuvwxyz0123456789') {
+        if ([Windows.Forms.Control]::IsMnemonic($c, $b.Text)) { $c } } })
+      $keys = @{status = 'Success'; choice = 'built'; typed = $(if ($keyed.Count) { 'approve-key' } else { $script:choice });
+                accept = [bool]($f.AcceptButton -eq $no); cancel = [bool]($f.CancelButton -eq $no);
+                chrome = [bool]($f.FormBorderStyle -eq 'None')}
       $timer.Dispose(); $f.Dispose(); Say $keys; exit 0
     }
     [void]$f.ShowDialog()
@@ -705,6 +738,9 @@ def fields(request: dict) -> dict:
     }
 
 
+_PLAIN_KEY = re.compile(r"[A-Za-z0-9_.-]{1,64}", re.ASCII)
+
+
 def _formatted(text: Any) -> str:
     """The review laid out to read: a JSON object as indented `key: value`
     lines (a long or multi-line string as an indented block), anything else
@@ -717,11 +753,23 @@ def _formatted(text: Any) -> str:
     if not isinstance(value, dict):
         return "" if text is None else str(text)
     out: list[str] = []
+    # THE PROMPT FIRST: what the requester asks the agent to do is what the
+    # human must read; the fields that frame it follow, with the text itself
+    # pointed back to rather than shown twice.
+    offer = value.get("offer")
+    if isinstance(offer, dict) and isinstance(offer.get("text"), str):
+        out.append("prompt:")
+        out.extend(f"  │ {part}" for part in offer["text"].split("\n"))
+        out.append("")
+        value = {**value, "offer": {**offer, "text": "(the prompt above)"}}
 
     def put(item: Any, pad: str) -> None:
         pairs = item.items() if isinstance(item, dict) else ((None, v) for v in item)
         for key, val in pairs:
-            label = f"{pad}{key}:" if key is not None else f"{pad}-"
+            # A key is the requester's text too: one that is not a plain name
+            # is shown quoted, so a newline in it cannot draw a line of its own.
+            name = key if key is None or _PLAIN_KEY.fullmatch(str(key)) else json.dumps(key)
+            label = f"{pad}{name}:" if key is not None else f"{pad}-"
             if isinstance(val, (dict, list)) and val:
                 out.append(label)
                 put(val, pad + "  ")
