@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import shutil
 from pathlib import Path
@@ -9,11 +10,14 @@ import tempfile
 import time
 
 from . import wake
-from .remote_requests import Inbox
+from .remote_requests import Inbox, delivery_text
 from .worker_runtime import WorkerRuntimeError, _exchange
 
 
 PROMPT_TTL = 7200
+#: Refusals that will never change: the row is dropped, and said refused.
+FINAL = frozenset({'unknown_remote_approval', 'remote_reply_window_closed',
+                   'remote_already_reported', 'remote_already_answered'})
 MAX_PROMPTS = 128
 
 
@@ -92,6 +96,7 @@ async def deliver(profile, prepared):
     delivered = False
     prompt_path = None
     started = False
+    launched = False
     try:
         recorded = await asyncio.to_thread(inbox.start_delivery, offer['id'], offer['receipt'],
                                            target=offer['delivery_target'], command=command, cwd=cwd)
@@ -103,9 +108,11 @@ async def deliver(profile, prepared):
         # the same approved content. Neither argv nor environment comes from
         # the remote envelope. An exit status confirms delivery, not success
         # of the requested task inside the coding session.
-        prompt = ('Human-approved remote ' + offer['kind'] + ' request.\n'
-                  'Request: ' + offer['id'] + '\n'
-                  'Target: ' + offer['delivery_target'] + '\n\n' + offer['text'])
+        # EXACTLY THE REVIEWED BYTES: the review bound their SHA-256, and
+        # start_delivery refused a row whose recorded digest differs.
+        prompt = delivery_text(offer, offer['delivery_target'])
+        if hashlib.sha256(prompt.encode('utf-8')).hexdigest() != offer['delivery_sha256']:
+            raise ValueError('delivery text differs from the reviewed text')
         fd, filename = tempfile.mkstemp(prefix='approved-', suffix='.txt', dir=inbox.root)
         prompt_path = Path(filename)
         with os.fdopen(fd, 'w', encoding='utf-8') as stream:
@@ -122,6 +129,7 @@ async def deliver(profile, prepared):
                 or destination(current)['session_id'] != offer['delivery_target']
                 or time.time() >= offer['expires_at']):
             raise ValueError('remote delivery binding changed or offer expired before launch')
+        launched = True   # from here on, a failure may have reached the agent
         await _exchange(command, prompt.encode('utf-8'), cwd, env, timeout, None)
         delivered = True
         return True
@@ -132,6 +140,55 @@ async def deliver(profile, prepared):
         # grant. If finishing itself fails, dispatching remains non-replayable.
         if started:
             await asyncio.shield(asyncio.to_thread(
-                inbox.finish, offer['id'], offer['receipt'], delivered=delivered))
+                inbox.finish, offer['id'], offer['receipt'], delivered=delivered, launched=launched))
         # Keep the private prompt file: notice-based adapters hand its path to
         # an existing session, which may open it only after the adapter exits.
+
+
+def flush(profile, client):
+    """Send the hub every owed delivery report and reply; keep what fails.
+
+    Safe to repeat: the hub answers an identical report or reply (same key,
+    same content) with its existing success, so a lost acknowledgement costs a
+    resend, never a second outcome. A refusal that will never change (the
+    request is unknown, expired, or already has another answer) is dropped as
+    sent, so one bad row cannot block the rest; anything else stops the pass
+    and is tried again on the next one.
+    """
+    from .client import approval as strong
+    inbox = Inbox(profile.dir)
+    if not inbox.path.exists():
+        return 0
+    api = strong.ApprovalClient(client)
+    reports, replies = inbox.owed()
+    done = 0
+    for table, rows, route in (('outcomes', reports, 'report'), ('replies', replies, 'reply')):
+        for row in rows:
+            body = ({'state': row['state'], 'key': row['key']} if table == 'outcomes'
+                    else {'answer': row['answer'], 'key': row['key']})
+            try:
+                api._call('POST', f"/remote/offers/{strong._path(row['id'])}/{route}", body)
+            except strong.ApprovalRefused as exc:
+                # Only the hub's own final codes drop a row; an older hub's
+                # 404 for a route it lacks keeps it for after an upgrade.
+                if exc.code not in FINAL:
+                    return done
+                inbox.sent(table, row['id'], row['key'], refused=exc.code)
+                done += 1
+                continue
+            except strong.Uncertain:
+                return done
+            inbox.sent(table, row['id'], row['key'])
+            done += 1
+    return done
+
+
+def flush_owed(profile):
+    """Blocking; run off the daemon loop. A pass only when something is owed."""
+    inbox = Inbox(profile.dir)
+    if not inbox.path.exists() or inbox.owed() == ([], []):
+        return 0
+    from .client.hub_client import HubClient
+    from .routes import options
+    with HubClient(profile.url, profile.token, **options(profile)) as client:
+        return flush(profile, client)

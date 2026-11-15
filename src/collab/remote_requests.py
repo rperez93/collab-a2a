@@ -27,6 +27,54 @@ REMOTE_AUTHORITY = ("Uses the existing coding session permissions; may modify fi
                     "No additional sandbox is applied.")
 
 
+#: The longest answer a receiving agent may send back, in UTF-8 bytes.
+REPLY_MAX_BYTES = 16384
+#: How long after consumption a reply is accepted and its correlation kept.
+REPLY_WINDOW = 6 * 3600
+#: Longer than any adapter timeout (300 s): a launch still open this long died.
+STALE_LAUNCH = 900
+OUTCOME_STATES = ('approved', 'delivered', 'failed', 'uncertain', 'answered')
+
+
+def reply_footer(offer):
+    """Written by collab, never by the requester, and shown in the review."""
+    return ('When you are done, send your answer back with:\n'
+            f'  collab remote reply {offer["id"]} "<your answer>"\n'
+            f'It goes automatically to participant {offer["sender_id"]}, who sent this request, '
+            f'at most {REPLY_MAX_BYTES} UTF-8 bytes. Send one answer; leave out anything '
+            'they should not see, such as secrets, local paths or command lines.')
+
+
+def reply_policy(offer):
+    """The return path the human approves along with the delivery."""
+    return {'recipient_id': offer['sender_id'], 'max_bytes': REPLY_MAX_BYTES,
+            'window_seconds': REPLY_WINDOW, 'footer': reply_footer(offer)}
+
+
+def delivery_text(offer, target):
+    """The exact bytes the receiving agent is given. The review binds their
+    SHA-256, so nothing is appended after the human approved."""
+    return ('Human-approved remote ' + offer['kind'] + ' request.\n'
+            'Request: ' + offer['id'] + '\n'
+            'Target: ' + target + '\n\n' + offer['text'] + '\n\n' + reply_footer(offer))
+
+
+def delivery_sha256(offer, target):
+    return hashlib.sha256(delivery_text(offer, target).encode('utf-8')).hexdigest()
+
+
+def check_answer(answer):
+    if not isinstance(answer, str) or not answer.strip() or '\0' in answer:
+        raise ValueError('an answer is nonempty text without NUL')
+    try:
+        size = len(answer.encode('utf-8'))
+    except UnicodeError as exc:
+        raise ValueError('an answer must be UTF-8') from exc
+    if size > REPLY_MAX_BYTES:
+        raise ValueError(f'an answer is at most {REPLY_MAX_BYTES} UTF-8 bytes')
+    return answer
+
+
 class RemoteQueueFull(ValueError):
     """A bounded receiver queue refused further offers without evicting any."""
 FIELDS = frozenset({'id', 'session_id', 'sender_id', 'recipient_id', 'target',
@@ -123,6 +171,15 @@ class Inbox:
         rows = list(rows)
         for row in rows:
             db.execute('UPDATE offers SET state=?,updated=? WHERE id=?', (state, now, row['id']))
+            # (delivery_started defaults to 1 on an unclaimed row; only a
+            # dispatching row's flag says whether the adapter was started.)
+            # An `approving` row may have been consumed by the hub before the
+            # local step failed; if the hub never consumed it, it answers the
+            # report with unknown_remote_approval and the row is dropped.
+            if row['state'] == 'approving' or (row['consumption_id'] is not None and (
+                    row['state'] == 'accepted' or (row['state'] == 'dispatching' and not row['delivery_started']))):
+                # The hub consumed the approval but nothing reached the agent.
+                self._outcome(db, row['id'], 'failed', now)
         try:
             for row in rows:
                 self._audit('revocation_requested', json.loads(row['payload']),
@@ -158,6 +215,23 @@ class Inbox:
             if 'delivery_started' not in columns:
                 # Existing in-flight rows may already have reached an adapter.
                 db.execute('ALTER TABLE offers ADD COLUMN delivery_started INTEGER NOT NULL DEFAULT 1')
+            if 'delivery_sha256' not in columns:
+                db.execute('ALTER TABLE offers ADD COLUMN delivery_sha256 TEXT')
+            # OUTBOXES, written in the same transaction as the state they
+            # report: a report is owed from the commit on, and `flush` sends
+            # it until the hub has it. A flag set before a POST is not delivery.
+            db.execute('CREATE TABLE IF NOT EXISTS outcomes (id TEXT PRIMARY KEY, state TEXT NOT NULL, '
+                       'key TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, updated REAL NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS replies (id TEXT PRIMARY KEY, key TEXT NOT NULL, '
+                       'answer TEXT NOT NULL, sha256 TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0, '
+                       'updated REAL NOT NULL)')
+            # What THIS participant offered: an outcome is shown only for an
+            # offer recorded here, to the recipient and content recorded here.
+            for table in ('outcomes', 'replies'):
+                if 'refused' not in {r[1] for r in db.execute(f'PRAGMA table_info({table})')}:
+                    db.execute(f'ALTER TABLE {table} ADD COLUMN refused TEXT')
+            db.execute('CREATE TABLE IF NOT EXISTS sent (id TEXT PRIMARY KEY, recipient_id TEXT NOT NULL, '
+                       'digest TEXT NOT NULL, created REAL NOT NULL)')
             db.execute('CREATE UNIQUE INDEX IF NOT EXISTS offers_consumption ON offers(consumption_id) WHERE consumption_id IS NOT NULL')
             # Earlier local terminal grants are not strong hub approval.
             self._revoke(db, db.execute("SELECT * FROM offers WHERE state='accepted' AND approval_version<3"),
@@ -170,6 +244,12 @@ class Inbox:
         finally:
             db.close()
 
+    @staticmethod
+    def _outcome(db, request_id, state, now):
+        """Owe the hub one delivery report; the first state recorded stands."""
+        db.execute('INSERT OR IGNORE INTO outcomes(id,state,key,sent,updated) VALUES (?,?,?,0,?)',
+                   (request_id, state, secrets.token_urlsafe(24), now))
+
     def _expire(self, db, now):
         for row in list(db.execute('SELECT * FROM offers')):
             expires = json.loads(row['payload'])['expires_at']
@@ -179,8 +259,21 @@ class Inbox:
             # an ambiguous in-flight dispatch as a side effect of intake.
             if row['state'] in ('pending', 'accepted', 'approving') and expires <= now:
                 self._revoke(db, [row], now=now, reason='expired', state='expired')
-            if row['state'] != 'dispatching' and expires + MAX_TTL <= now:
+            # A launch whose process died never finished: past any adapter
+            # timeout it is uncertain, reported once, and never relaunched.
+            if (row['state'] == 'dispatching' and row['delivery_started']
+                    and row['consumption_id'] is not None and row['updated'] + STALE_LAUNCH <= now):
+                db.execute("UPDATE offers SET state='uncertain',updated=? WHERE id=?", (now, row['id']))
+                self._outcome(db, row['id'], 'uncertain', now)
+            # A consumed request stays for the reply window, so its agent can
+            # still answer; anything else goes after one offer lifetime.
+            keep = REPLY_WINDOW if row['consumption_id'] is not None else MAX_TTL
+            # An unsent report or reply goes with it: past this window the hub
+            # refuses it anyway (remote_reply_window_closed).
+            if row['state'] != 'dispatching' and expires + keep <= now:
                 db.execute('DELETE FROM offers WHERE id=?', (row['id'],))
+                db.execute('DELETE FROM outcomes WHERE id=?', (row['id'],))
+                db.execute('DELETE FROM replies WHERE id=?', (row['id'],))
 
     def receive(self, value, *, session_id, sender_id, recipient_id, now=None, source_seq=None):
         """IDs must come from authenticated transport, never the offer body."""
@@ -205,11 +298,13 @@ class Inbox:
                     if old['source_seq'] is None:
                         db.execute('UPDATE offers SET source_seq=? WHERE id=?', (source_seq, offer['id']))
                 return False
-            if db.execute('SELECT COUNT(*) FROM offers').fetchone()[0] >= MAX_RECORDS:
+            # Requests a human approved and the hub consumed do not count: they
+            # stay only for the reply window and cannot be added by a peer.
+            if db.execute('SELECT COUNT(*) FROM offers WHERE consumption_id IS NULL').fetchone()[0] >= MAX_RECORDS:
                 self._audit('offer_refused', offer, details={'reason': 'queue_full'})
                 raise RemoteQueueFull('remote request queue is full; wait for expired records to be compacted')
             sender_count = sum(json.loads(row[0])['sender_id'] == sender_id
-                               for row in db.execute('SELECT payload FROM offers'))
+                               for row in db.execute('SELECT payload FROM offers WHERE consumption_id IS NULL'))
             if sender_count >= MAX_SENDER_RECORDS:
                 self._audit('offer_refused', offer, details={'reason': 'sender_queue_full'})
                 raise RemoteQueueFull('remote sender queue limit reached; wait for expiry and compaction')
@@ -311,7 +406,8 @@ class Inbox:
         return attempt
 
     def finish_strong_attempt(self, request_id, attempt, consumption_id, *, reviewed_digest,
-                              session_id, recipient_id, target, command, cwd=None, now=None):
+                              session_id, recipient_id, target, command, cwd=None, now=None,
+                              delivery_digest=None):
         """Record a verified strong hub consumption; never substitute a local receipt."""
         failure = None
         with self._db() as db:
@@ -330,14 +426,17 @@ class Inbox:
                     raise ValueError('local delivery binding changed during approval')
                 if db.execute('SELECT 1 FROM offers WHERE consumption_id=?', (consumption_id,)).fetchone():
                     raise ValueError('hub consumption was already recorded')
+                if delivery_digest != delivery_sha256(offer, target):
+                    raise ValueError('the reviewed delivery text is not what would be delivered')
             except ValueError as exc:
                 failure = exc
                 self._revoke(db, [row], now=moment, reason='strong_approval_binding_changed')
             else:
                 self._audit('acceptance_requested', offer, binding=binding,
                             details={'approval_version': 3})
-                db.execute("UPDATE offers SET state='accepted',approval_version=3,consumption_id=?,updated=? WHERE id=?",
-                           (consumption_id, moment, request_id))
+                db.execute("UPDATE offers SET state='accepted',approval_version=3,consumption_id=?,"
+                           "delivery_sha256=?,updated=? WHERE id=?",
+                           (consumption_id, delivery_digest, moment, request_id))
         if failure is not None:
             raise failure
 
@@ -373,7 +472,8 @@ class Inbox:
                 receipt = uuid.uuid4().hex
                 self._audit('dispatch_requested', offer, binding=binding)
                 db.execute("UPDATE offers SET state='dispatching',receipt=?,updated=?,delivery_started=0 WHERE id=?", (receipt, now, row['id']))
-                return {**offer, 'receipt': receipt, 'sha256': row['digest'], 'delivery_target': target}
+                return {**offer, 'receipt': receipt, 'sha256': row['digest'], 'delivery_target': target,
+                        'delivery_sha256': row['delivery_sha256']}
         return None
 
     def start_delivery(self, request_id, receipt, *, target, command, cwd=None):
@@ -396,14 +496,20 @@ class Inbox:
             if digest(offer) != row['digest']:
                 self._revoke(db, [row], now=time.time(), reason='delivery_content_changed')
                 return None
+            if row['delivery_sha256'] != delivery_sha256(offer, target):
+                self._revoke(db, [row], now=time.time(), reason='delivery_text_changed')
+                return None
             self._audit('delivery_started', offer, binding=binding)
             db.execute('UPDATE offers SET delivery_started=1,updated=? WHERE id=?', (time.time(), request_id))
-            return {**offer, 'receipt': receipt, 'sha256': row['digest'], 'delivery_target': target}
+            return {**offer, 'receipt': receipt, 'sha256': row['digest'], 'delivery_target': target,
+                    'delivery_sha256': row['delivery_sha256']}
 
-    def finish(self, request_id, receipt, *, delivered, now=None):
+    def finish(self, request_id, receipt, *, delivered, launched=True, now=None):
+        """`launched` False: every check failed before the adapter started,
+        so nothing reached the agent — `failed`, not `uncertain`."""
         now = time.time() if now is None else now
         with self._db() as db:
-            state = 'delivered' if delivered else 'uncertain'
+            state = 'delivered' if delivered else ('uncertain' if launched else 'failed')
             row = db.execute("SELECT payload,binding FROM offers WHERE id=? AND receipt=? AND state='dispatching'",
                              (request_id, receipt)).fetchone()
             if not row:
@@ -414,6 +520,68 @@ class Inbox:
                                  (state, now, request_id, receipt)).rowcount
             if not changed:
                 raise ValueError('no matching in-flight delivery')
+            self._outcome(db, request_id, state, now)
+
+    def record_reply(self, request_id, answer, *, now=None):
+        """Keep the receiving agent's one answer in the outbox, then `flush`.
+
+        Only for a request this receiver consumed and launched. The same
+        answer again returns the stored key, so a retry is not a second
+        answer; a different one is refused here before the hub refuses it.
+        """
+        check_answer(answer)
+        fingerprint = hashlib.sha256(answer.encode('utf-8')).hexdigest()
+        moment = time.time() if now is None else now
+        with self._db() as db:
+            row = db.execute('SELECT * FROM offers WHERE id=?', (request_id,)).fetchone()
+            if (not row or row['consumption_id'] is None or not row['delivery_started']
+                    or row['state'] not in ('dispatching', 'delivered', 'uncertain')):
+                raise ValueError('no delivered remote request with this id')
+            if moment > row['updated'] + REPLY_WINDOW:
+                raise ValueError('the reply window for this request has closed')
+            old = db.execute('SELECT key,sha256 FROM replies WHERE id=?', (request_id,)).fetchone()
+            if old:
+                if old['sha256'] != fingerprint:
+                    raise ValueError('this request already has a different answer')
+                return old['key']
+            key = secrets.token_urlsafe(24)
+            db.execute('INSERT INTO replies(id,key,answer,sha256,sent,updated) VALUES (?,?,?,?,0,?)',
+                       (request_id, key, answer, fingerprint, moment))
+            return key
+
+    def remember_sent(self, offer):
+        with self._db() as db:
+            db.execute('DELETE FROM sent WHERE created<?', (time.time() - MAX_TTL - REPLY_WINDOW,))
+            db.execute('INSERT OR REPLACE INTO sent VALUES (?,?,?,?)',
+                       (offer['id'], offer['recipient_id'], digest(offer), offer['created_at']))
+
+    def sent_offers(self):
+        with self._db() as db:
+            return {r['id']: dict(r) for r in db.execute('SELECT * FROM sent ORDER BY created')}
+
+    def owed(self):
+        """Reports and replies the hub does not have yet, oldest first."""
+        with self._db() as db:
+            reports = [dict(r) for r in db.execute(
+                'SELECT id,state,key FROM outcomes WHERE sent=0 ORDER BY updated,id')]
+            replies = [dict(r) for r in db.execute(
+                'SELECT id,key,answer FROM replies WHERE sent=0 ORDER BY updated,id')]
+        return reports, replies
+
+    def sent(self, table, request_id, key, *, refused=None):
+        """Done with a row: the hub has it, or `refused` names the hub's final
+        refusal (kept, so `collab remote reply` can say so)."""
+        if table not in ('outcomes', 'replies'):
+            raise ValueError('unknown outbox')
+        with self._db() as db:
+            db.execute(f'UPDATE {table} SET sent=1,refused=? WHERE id=? AND key=?', (refused, request_id, key))
+
+    def reply_state(self, request_id):
+        with self._db() as db:
+            row = db.execute('SELECT sent,refused FROM replies WHERE id=?', (request_id,)).fetchone()
+        if row is None:
+            return 'none'
+        return ('refused: ' + row['refused']) if row['refused'] else ('sent' if row['sent'] else 'owed')
 
 
 OFFER_PREFIX = 'Collab remote offer — pending human acceptance; do not execute:\n'
@@ -462,3 +630,44 @@ def receive_envelope(profile, envelope, *, now=None):
     return Inbox(profile.dir).receive(value, session_id=profile.session_id,
                                       sender_id=envelope.sender_id,
                                       recipient_id=profile.participant_id, now=now, source_seq=envelope.seq)
+
+
+def outcomes(profile, events):
+    """The requester's view: hub outcome events for offers recorded as sent
+    here, from this participant, to the recorded recipient, for the recorded
+    content. Anything else is not shown. An answer stays peer-derived data."""
+    mine = Inbox(profile.dir).sent_offers() if Inbox(profile.dir).path.exists() else {}
+    rows = {}
+    for env in events:
+        body = env.body if isinstance(env.body, dict) else {}
+        found = body.get('remote_outcome')
+        if (env.kind != 'system' or body.get('event') != 'remote-outcome' or not isinstance(found, dict)
+                or found.get('state') not in OUTCOME_STATES):
+            continue
+        sent = mine.get(found.get('offer_id'))
+        if (sent is None or found.get('requester_id') != profile.participant_id
+                or env.to_id not in (None, '', profile.participant_id)
+                or found.get('receiver_id') != sent['recipient_id'] or found.get('offer_digest') != sent['digest']):
+            continue
+        row = rows.setdefault(sent['id'], {'request_id': sent['id'], 'receiver_id': sent['recipient_id'],
+                                           'states': [], 'answer': None})
+        if found['state'] not in row['states']:
+            row['states'].append(found['state'])
+        if found.get('reply_deadline'):
+            row['reply_deadline'] = found['reply_deadline']
+        if found['state'] == 'answered' and isinstance(found.get('answer'), str):
+            row['answer'] = found['answer']
+    for offer_id, sent in mine.items():
+        rows.setdefault(offer_id, {'request_id': offer_id, 'receiver_id': sent['recipient_id'],
+                                   'states': [], 'answer': None})
+    now = time.time()
+    for row in rows.values():
+        states = row['states']
+        row['state'] = ('answered' if 'answered' in states else
+                        next((s for s in ('failed', 'uncertain') if s in states), None)
+                        or ('delivered' if 'delivered' in states else
+                            'approved' if 'approved' in states else 'offered'))
+        if (row['state'] in ('approved', 'delivered', 'uncertain') and row.get('reply_deadline')
+                and now > row['reply_deadline']):
+            row['state'] = 'reply-timeout'
+    return list(rows.values())

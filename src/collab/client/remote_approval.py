@@ -6,7 +6,8 @@ import time
 
 from . import approval as strong
 from ..consent_hello import unb64url
-from ..remote_requests import FIELDS, validate, digest, binding_digest, REMOTE_AUTHORITY
+from ..remote_requests import (FIELDS, validate, digest, binding_digest, REMOTE_AUTHORITY,
+                               reply_policy, delivery_sha256)
 AUTHORITY = REMOTE_AUTHORITY
 
 
@@ -28,7 +29,8 @@ def verify_review(answer, prepared, row, binding, profile):
                 'subject': 'Remote ' + offer['kind'], 'destination': binding['target'],
                 'offer': offer, 'offer_digest': digest(offer), 'binding': binding,
                 'binding_digest': binding_digest(binding['target'], binding['command'], binding['cwd']),
-                'authority': AUTHORITY}
+                'authority': AUTHORITY, 'reply': reply_policy(offer),
+                'delivery_sha256': delivery_sha256(offer, binding['target'])}
     if (type(parsed) is not dict or set(parsed) != set(expected) | {'source_hash'}
             or any(parsed[k] != v for k, v in expected.items())
             or type(parsed['source_hash']) is not str or not re.fullmatch('[0-9a-f]{64}', parsed['source_hash'])
@@ -126,5 +128,6 @@ def accept(hub, profile, inbox, row, binding, ensure_current):
             or not re.fullmatch(r'rc_[A-Za-z0-9_-]{1,100}', identity)):
         raise strong.Uncertain('the consumption answer did not match this reviewed operation')
     ensure_current()
-    inbox.finish_strong_attempt(row['id'], attempt, identity, **args)
+    inbox.finish_strong_attempt(row['id'], attempt, identity, **args,
+                                delivery_digest=reviewed.review['delivery_sha256'])
     return True

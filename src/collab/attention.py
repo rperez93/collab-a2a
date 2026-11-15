@@ -29,6 +29,21 @@ def approval_security(kind: str, body: object = None) -> bool:
     return kind == KIND_SYSTEM and isinstance(body, dict) and body.get("event") == "approval-security"
 
 
+def remote_outcome(kind: str, body: object = None) -> bool:
+    """The hub's report on a remote request THIS participant sent: approved,
+    delivered, failed, uncertain, or the receiving agent's answer. Hub-stamped
+    (clients cannot send KIND_SYSTEM) and addressed to the requester alone."""
+    return (kind == KIND_SYSTEM and isinstance(body, dict) and body.get("event") == "remote-outcome"
+            and isinstance(body.get("remote_outcome"), dict))
+
+
+def for_main(kind: str, body: object = None) -> bool:
+    """Events that go to the working agent itself, with the worker on or off:
+    the security alarm, and the outcome of the agent's own remote request —
+    the requester's answer must not stop at the worker or the panel."""
+    return approval_security(kind, body) or remote_outcome(kind, body)
+
+
 def relevant(kind: str, body: object = None) -> bool:
     """Wake on conversation or a hub-stamped approval security event.
 
@@ -36,7 +51,7 @@ def relevant(kind: str, body: object = None) -> bool:
     nor SECURITY prose nor chat body metadata may become a trusted alarm.
     Other system bookkeeping remains quiet.
     """
-    return kind in KINDS or approval_security(kind, body)
+    return kind in KINDS or for_main(kind, body)
 
 
 def notice(session: str, count: int, seq: int) -> str:

@@ -242,4 +242,8 @@ def install(app, store, session_id):
           {"source_seq": int, "binding": dict})
     route("/remote/{request_id}/consume", "POST", lambda token, path, body: remote.consume(token, path["request_id"], **body),
           {"receipt": str})
+    route("/remote/offers/{offer_id}/report", "POST", lambda token, path, body: remote.report(token, path["offer_id"], **body),
+          {"state": str, "key": str})
+    route("/remote/offers/{offer_id}/reply", "POST", lambda token, path, body: remote.reply(token, path["offer_id"], **body),
+          {"answer": str, "key": str})
     app.include_router(router)

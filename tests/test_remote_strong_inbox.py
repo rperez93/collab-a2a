@@ -33,6 +33,7 @@ def begin(s, **changes):
 
 
 def finish(s, attempt, consumption='rc_synthetic', **changes):
+    changes.setdefault('delivery_digest', remote.delivery_sha256(s.offer, s.options['target']))
     return s.inbox.finish_strong_attempt(s.offer['id'], attempt, consumption, **{**s.options, **changes})
 
 
@@ -216,7 +217,8 @@ def test_one_hub_consumption_cannot_authorize_two_offers(setup):
     options = {**s.options, 'reviewed_digest': remote.digest(other)}
     token = s.inbox.begin_strong_attempt(other['id'], **options)
     with pytest.raises(ValueError, match='already recorded'):
-        s.inbox.finish_strong_attempt(other['id'], token, 'rc_synthetic', **options)
+        s.inbox.finish_strong_attempt(other['id'], token, 'rc_synthetic', **options,
+                                      delivery_digest=remote.delivery_sha256(other, 'coding'))
     assert next(r for r in s.inbox.list() if r['id'] == other['id'])['state'] == 'failed'
     assert claim(s)['id'] == s.offer['id']
     assert claim(s) is None

@@ -112,7 +112,8 @@ its process group is reaped on failure or cancellation.
 
 Offers expire within one hour and the local queue is bounded to 128 records.
 At most 16 retained records may belong to one sender, including completed or
-declined records until compaction. Duplicate receipt does not consume another
+declined records until compaction; a request the hub consumed does not count,
+because only the receiver's own strong gesture can create one. Duplicate receipt does not consume another
 slot. The hub permits 16 explicit offers per authenticated sender and 32 per
 recipient in a rolling 60-second window. Automatic connection goals have a
 separate 16-per-minute host budget, so guest joins cannot spend the host's
@@ -139,6 +140,67 @@ queue commit may still leave the queue dispatching. Audit failure prevents
 new dispatch. Revocation is committed even if its audit write fails, so an
 unavailable audit cannot restore permission; that failure is reported to the
 caller. A crash after dispatch reservation remains non-replayable.
+
+## The answer comes back automatically
+
+One approval covers the delivery and its answer; nobody relays anything by hand.
+
+What the human approves includes the return path: the review shows a `reply`
+section and binds `delivery_sha256`. The `reply` section names the recipient
+(the requester), the 16 KiB limit, the reply window (six hours after
+consumption) and the exact footer that collab adds after the requester's
+text. `delivery_sha256` is the SHA-256 of the exact bytes the agent receives.
+The receiver stores that digest, and delivery refuses any other bytes.
+
+The footer asks the receiving agent to answer with:
+
+```sh
+collab remote reply <request id> "<answer>"
+```
+
+That answer is the agent's deliberate, bounded statement. Collab never captures
+the agent's turn or terminal output. The answer shows in the receiver's own
+transcript, and it is not asked about a second time.
+
+The requester sees these states, each one a hub event addressed only to the
+requester:
+
+| State | Meaning |
+|-------|---------|
+| `approved` | The receiver's strong approval was consumed, in the same hub transaction. |
+| `delivered` | The receiver's adapter accepted the prompt. This does not mean the task is done. |
+| `failed` | It was approved but never reached the agent, and nothing ran. |
+| `uncertain` | The hand-off may or may not have happened. |
+| `answered` | The receiving agent's answer arrived. |
+| `reply-timeout` | No answer arrived within the window. This is computed locally and does not mean the task failed. |
+
+Nothing is ever executed again to resolve `failed` or `uncertain`.
+
+These events take the same route as the hub's security alarm: past the
+conversation worker and straight to the main agent, through `collab listen`,
+`collab recv` and the wake, with the worker on or off. They are durable hub
+events, so they replay after a reconnect. An answer is shown below a label
+that marks it as peer-derived, untrusted data. Its controls are escaped, and
+it cannot impersonate the hub's own label.
+
+On the requester's side:
+
+- `collab remote sent` lists the offers sent from here and their states;
+- `collab remote result <request id>` prints the answer as escaped JSON.
+
+Both show only outcomes for an offer recorded locally when it was sent, from
+this participant, to the recorded recipient, and for the recorded content
+digest.
+
+Every event carries ids, a state and digests, plus the answer itself. None
+carries the receiver's argv, working directory or proof.
+
+On the receiver's side, each delivery report and the reply are committed to a
+local outbox in the same transaction as the state they report. The daemon
+sends what is owed every few seconds until the hub has it. The hub keeps the
+first report and the first answer for each request: sending the same one again
+(same key, same bytes) returns the existing success, and a different one gets
+409.
 
 ## Offer a goal to joining participants
 
