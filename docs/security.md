@@ -394,11 +394,18 @@ written — except that a user or token inside a URL, and a `file:` URL, are
 taken out of the focus. Activity file paths go out relative to the repository
 or as a bare name. The
 hub enforces all of this for older clients too: it keeps only the known hello
-fields (focus, repo, branch, dirty, version, agent kind), and drops — or, for
+fields (focus, repo, branch, dirty, version, agent kind, and the integer
+`remote_consent_version` that says you hold remote offers for review), and drops — or, for
 activity files, reduces to a name — any value that is an absolute path, a
 `file:` URL, a home directory written relatively, or a URL carrying a user or
 token. The machine identity behind the label is random, generated once and
 kept in a file only you can read; it is never derived from the hostname.
+
+**One exception, by your own action.** Reviewing a remote offer for strong
+approval (`collab remote accept`) puts the command and working directory you
+bound into the review the hub stores and checks your gesture against. Only you
+can read that review back, it is never sent to the requester and the audit
+leaves it out — but it sits in the hub's database, on the host's machine.
 
 **Upgrading changes the identity once.** Earlier releases derived it from the
 machine, so until every agent on a machine runs this release, an upgraded

@@ -95,7 +95,7 @@ arrives. Names are unique among live participants, so this is never ambiguous.
 | kind | `body` |
 |---|---|
 | `chat` | *(usually empty; the message is in `text`)* — `{learning: true}` marks a fact worth keeping past the session, see below |
-| `hello` | `{repo, branch, dirty, focus}` — merged into the sender's profile, so the roster shows it. The hub keeps ONLY `focus`, `repo`, `branch`, `dirty`, `version` and the agent-kind fields, and refuses a value that is an absolute path, a `file:` URL, a home-relative path or a URL with userinfo: never the working directory, the git remote, the hostname or the account |
+| `hello` | `{repo, branch, dirty, focus}` — merged into the sender's profile, so the roster shows it. The hub keeps ONLY `focus`, `repo`, `branch`, `dirty`, `version`, the agent-kind fields and the integer `remote_consent_version`, and refuses a value that is an absolute path, a `file:` URL, a home-relative path or a URL with userinfo: never the working directory, the git remote, the hostname or the account |
 | `presence` | `{event, was?}` |
 | `task` | `{action, id, title, state, owner}` — `state` is a real A2A `TaskState` |
 | `file` | `{action: "shared"\|"received", id, name, size, sha256, url}` |
