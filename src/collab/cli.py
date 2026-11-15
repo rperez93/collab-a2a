@@ -8164,7 +8164,7 @@ def cmd_skills_install_shared(args: argparse.Namespace) -> int:
         sk.install_lock()  # before asking: never approve what this platform cannot install
         dest = sk.check_installable(record, target=target, force=args.force)  # before asking
         terminal = sys.stdin.isatty() and sys.stdout.isatty()
-        owner_tag = hashlib.sha256(str(record.get("owner_id", "")).encode()).hexdigest()[:8]
+        owner_tag = sk.publisher_tag(str(record.get("owner_id", "")))
         heading(f"shared skill {said(record.get('name', ''))} from {said(record.get('owner', '?'))} "
                 f"(participant {owner_tag})")
         print(f"  {len(content.encode())} bytes · sha256 {digest}")

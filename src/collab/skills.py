@@ -192,9 +192,18 @@ def _slug(text: str) -> str:
     return slug[:32] or "peer"
 
 
-def shared_install_name(publisher: str, name: str) -> str:
-    """Namespaced so a peer's skill can never shadow one of the user's own."""
-    return f"shared-{_slug(publisher)}-{name}"[:64]
+def publisher_tag(owner_id: str) -> str:
+    """Eight hex digits naming a publisher by its stable participant id: the
+    tag the review shows. Never the display name, which can change between the
+    review and the approval (lead gate on #188)."""
+    import hashlib
+    return hashlib.sha256(str(owner_id).encode()).hexdigest()[:8]
+
+
+def shared_install_name(owner_id: str, name: str) -> str:
+    """Namespaced so a peer's skill can never shadow one of the user's own,
+    and fixed by what the review showed: the publisher's id, not its name."""
+    return f"shared-{publisher_tag(owner_id)}-{name}"[:64]
 
 
 def skills_target(agent: str | None = None) -> Target:
@@ -319,7 +328,9 @@ def check_installable(record: dict, *, target: Target, force: bool) -> Path:
         raise ValueError("the text contains invisible or control characters ("
                          + ", ".join(hidden[:6]) + ") that can make the review differ from "
                          "what is installed; not installing it")
-    dest = target.path / shared_install_name(str(record.get("owner") or "peer"), str(record.get("name") or ""))
+    if not record.get("owner_id"):
+        raise ValueError("the publication names no publisher id, so where it would install is not fixed; not installing it")
+    dest = target.path / shared_install_name(str(record["owner_id"]), str(record.get("name") or ""))
     if dest.is_symlink() or (dest.exists() and not dest.is_dir()):
         raise ValueError(f"{dest} exists and is not a skill directory")
     if dest.exists():

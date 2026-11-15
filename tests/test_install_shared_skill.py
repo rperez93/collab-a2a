@@ -22,7 +22,7 @@ def target(tmp_path):
 
 def test_install_is_namespaced_records_provenance_and_never_overwrites(target):
     dest = skills.install_shared(record(), target=target, session_id="s_1")
-    assert dest.name == "shared-bob-b-review"
+    assert dest.name == "shared-d0425312-review"
     assert (dest / "SKILL.md").read_text().endswith("Do it.\n")
     meta = json.loads((dest / skills.PROVENANCE).read_text())
     assert meta["publisher"] == "Bob B" and meta["publication_id"] == "sk_00000000000000000001" and meta["session_id"] == "s_1"
@@ -31,7 +31,7 @@ def test_install_is_namespaced_records_provenance_and_never_overwrites(target):
     skills.install_shared(record(content="---\nname: review\ndescription: v2\n---\nv2\n"),
                           target=target, session_id="s_1", force=True)
     assert (dest / "SKILL.md").read_text().endswith("v2\n")
-    assert [i["dir"] for i in skills.shared_installs(target)] == ["shared-bob-b-review"]
+    assert [i["dir"] for i in skills.shared_installs(target)] == ["shared-d0425312-review"]
 
 
 def test_uninstall_removes_only_what_collab_installed(target):
@@ -100,13 +100,13 @@ def test_the_front_matter_name_is_namespaced_so_it_cannot_shadow_a_user_skill(ta
     dest = skills.install_shared(record(content="---\nname: commit\ndescription: d\n---\nx\n"),
                                  target=target, session_id="s")
     text = (dest / "SKILL.md").read_text()
-    assert "name: shared-bob-b-review" in text and "name: commit" not in text
+    assert "name: shared-d0425312-review" in text and "name: commit" not in text
     meta = json.loads((dest / skills.PROVENANCE).read_text())
     assert meta["sha256"] != meta["installed_sha256"]
 
 
 def test_force_never_takes_a_users_own_directory_or_another_peers(target):
-    own = target.path / "shared-bob-b-review"
+    own = target.path / "shared-d0425312-review"
     own.mkdir(parents=True)
     (own / "run.sh").write_text("mine")
     with pytest.raises(ValueError, match="not installed by collab"):
@@ -114,9 +114,11 @@ def test_force_never_takes_a_users_own_directory_or_another_peers(target):
     assert (own / "run.sh").read_text() == "mine"
     other = skills.Target("x", "x", "skills", target.path.parent / "other", target.path.parent)
     skills.install_shared(record(), target=other, session_id="s")
-    impostor = {**record(), "owner_id": "p_evil"}
-    with pytest.raises(ValueError, match="another publisher"):
-        skills.install_shared(impostor, target=other, session_id="s", force=True)
+    # Same display name, another publisher: it lands in its own directory and
+    # cannot even reach the first one, since the name comes from the id.
+    first = skills.install_shared(record(), target=other, session_id="s", force=True)
+    impostor = skills.install_shared({**record(), "owner_id": "p_evil"}, target=other, session_id="s", force=True)
+    assert impostor != first and (first / "SKILL.md").exists()
 
 
 def test_force_replaces_cleanly_with_no_stale_files(target):
@@ -164,7 +166,7 @@ def test_front_matter_is_rebuilt_so_nothing_rides_along(target):
     dest = skills.install_shared(record(content=content), target=target, session_id="s")
     text = (dest / "SKILL.md").read_text()
     assert "commit" not in text and "allowed-tools" not in text and text.endswith("body\n")
-    assert text.startswith("---\nname: shared-bob-b-review\ndescription: ")
+    assert text.startswith("---\nname: shared-d0425312-review\ndescription: ")
 
 
 @pytest.mark.parametrize("ch", ["\u202e", "\u200b", "\U000E0100", "\u3164", "\u2800", "\x1b", "\ufe0f"])
@@ -194,7 +196,7 @@ def test_a_symlinked_destination_is_refused_and_scratch_is_never_listed(target, 
     target.path.mkdir(parents=True)
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
-    (target.path / "shared-bob-b-review").symlink_to(elsewhere)
+    (target.path / "shared-d0425312-review").symlink_to(elsewhere)
     with pytest.raises(ValueError, match="not a skill directory"):
         skills.install_shared(record(), target=target, session_id="s")
     (target.path / ".collab-install-x").mkdir()
@@ -300,3 +302,15 @@ def test_without_fcntl_install_is_refused_before_the_human_is_asked(monkeypatch,
     monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
     assert run(monkeypatch, target, record(), approved=False) == 1
     assert asked == [] and not target.path.exists()
+
+
+def test_the_install_directory_follows_the_publisher_id_not_its_name(target):
+    """Lead gate on #188: a publisher renamed between review and approval must
+    not move the install. The directory comes from the stable participant id,
+    the tag the review shows."""
+    before = skills.check_installable(record(owner="Bob B"), target=target, force=False)
+    after = skills.check_installable(record(owner="Somebody Else"), target=target, force=False)
+    assert before == after and before.name == "shared-d0425312-review"
+    with pytest.raises(ValueError, match="no publisher id"):
+        skills.check_installable({**record(), "owner_id": ""}, target=target, force=False)
+
