@@ -476,3 +476,26 @@ def test_a_session_on_another_domain_does_not_claim_this_proxys_root(monkeypatch
     shared.start()
     assert claimed == [], "domain checked before the claim"
 
+
+def test_a_legacy_hub_json_that_served_the_root_loads_as_root_published(tmp_path):
+    """A pre-2.2.0 hub.json has no root_published; load derives it, so both
+    resume and a daemon revive let that session keep its pre-proxy links."""
+    import json
+    from collab.server.session import HubConfig
+    def write(sid, **fields):
+        d = tmp_path / "sessions" / sid
+        d.mkdir(parents=True)
+        (d / "hub.json").write_text(json.dumps(fields))
+    import dataclasses
+    required = {f.name: "x" for f in dataclasses.fields(HubConfig)
+                if f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING}
+    write("s_old", **required, tunnel="ngrok", domain="team.example.app",
+          public_url="https://team.example.app")
+    write("s_new", **required, tunnel="ngrok", domain="team.example.app",
+          public_url="https://team.example.app", root_published=False)
+    write("s_sub", **required, tunnel="proxy", domain="team.example.app",
+          public_url="https://team.example.app/s/s_sub")
+    assert HubConfig.load("s_old", tmp_path).root_published is True
+    assert HubConfig.load("s_new", tmp_path).root_published is False, "a recorded value wins"
+    assert HubConfig.load("s_sub", tmp_path).root_published is False
+

@@ -283,9 +283,15 @@ class HubConfig:
         # and state moved to another folder. Never resolve it again after chdir.
         data["home"] = str(base.resolve())
         try:
-            return cls(**{k: v for k, v in data.items() if k in known})
+            cfg = cls(**{k: v for k, v in data.items() if k in known})
         except TypeError:
             return None            # a required field is missing: not a session
+        # A hub.json from before 2.2.0 has no root_published: derive it from the
+        # address it recorded, on load, so a daemon revive (which never runs
+        # resume_session) still lets a pre-proxy session keep its root links.
+        if "root_published" not in data and published_root(cfg):
+            cfg.root_published = True
+        return cfg
 
 
 def new_session_id() -> str:
