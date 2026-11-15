@@ -111,27 +111,67 @@ def test_a_roster_poll_never_rescans_the_history(client, session, host_headers, 
     assert len(calls) <= 1
 
 
-def test_a_status_written_during_the_check_is_never_overwritten(client, session, host_headers):
-    """friday's P2 on #192: the predicate and the write are one locked edit, so
-    a newer status written in between lands after it and is kept."""
+def _race(hub, monkeypatch, who, newer):
+    """Arrange for `newer` to be written for `who` in the middle of the next
+    automatic update, whichever way that update is built: inside its locked
+    edit, or between a separate read and write. Whatever ends up stored must
+    be `newer`, which came last."""
+    import contextlib
     import threading
+    fired = []
+    writer = threading.Thread(target=hub.set_activity, args=(who, newer))
+    real_edit, real_lookup = type(hub.store).edit_meta, type(hub.store).participant_by_id
+
+    @contextlib.contextmanager
+    def edit(self, pid):
+        with real_edit(self, pid) as meta:
+            if pid == who and not fired:
+                fired.append("in-edit")
+                writer.start()          # must wait for this edit's lock
+                time.sleep(0.2)
+            yield meta
+
+    def lookup(self, pid):
+        found = real_lookup(self, pid)
+        if pid == who and not fired:    # a read before a separate write
+            fired.append("between")
+            writer.start()
+            writer.join(5)
+        return found
+    monkeypatch.setattr(type(hub.store), "edit_meta", edit)
+    monkeypatch.setattr(type(hub.store), "participant_by_id", lookup)
+    return writer
+
+
+def test_completing_never_overwrites_a_status_written_meanwhile(client, session, host_headers, monkeypatch):
+    """friday's P2 on #192, through the real path: completing task one must
+    not erase a newer status about task two written while it ran."""
     bob = _join(client, session)
     one = _task(client, host_headers, "propose", title="one").json()["task"]
     two = _task(client, host_headers, "propose", title="two").json()["task"]
     _task(client, _headers(bob), "claim", id=one["id"])
     hub = client.app.state.hub
     bob_id = next(p.id for p in hub.store.participants() if p.name == "bob")
-    writer = threading.Thread(target=hub.set_activity, args=(bob_id, {
-        "state": "working", "what": "two", "task": two["id"]}))
-
-    def allowed(current):
-        writer.start()          # tries to write while the edit is open
-        time.sleep(0.2)
-        return current.get("task") == one["id"]
-    hub._set_activity_if(bob_id, {"state": "idle"}, allowed)
+    record = {**hub.store.get_task(one["id"]), "state": "TASK_STATE_COMPLETED"}
+    writer = _race(hub, monkeypatch, bob_id, {"state": "working", "what": "two", "task": two["id"]})
+    hub.follow_task(record, "complete")
     writer.join(5)
-    stored = hub.store.participant_by_id(bob_id).meta.get("activity") or {}
-    assert stored.get("task") == two["id"], "the newer status survives"
+    monkeypatch.undo()
+    assert (hub.store.participant_by_id(bob_id).meta.get("activity") or {}).get("task") == two["id"]
+
+
+def test_a_pr_never_overwrites_a_status_written_meanwhile(client, session, host_headers, monkeypatch):
+    bob = _join(client, session)
+    one = _task(client, host_headers, "propose", title="one").json()["task"]
+    _task(client, _headers(bob), "claim", id=one["id"])
+    hub = client.app.state.hub
+    bob_id = next(p.id for p in hub.store.participants() if p.name == "bob")
+    hub.set_activity(bob_id, {"state": "idle"})
+    writer = _race(hub, monkeypatch, bob_id, {"state": "quiet", "what": "stepped away"})
+    hub.follow_pr(hub.store.get_task(one["id"]), 5, bob_id)
+    writer.join(5)
+    monkeypatch.undo()
+    assert (hub.store.participant_by_id(bob_id).meta.get("activity") or {}).get("state") == "quiet"
 
 
 def test_a_pr_on_a_closed_task_leaves_the_status_alone(client, session, host_headers):
