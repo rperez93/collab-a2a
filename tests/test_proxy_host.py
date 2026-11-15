@@ -55,7 +55,7 @@ def test_proxy_tunnel_recovery_updates_prefixed_url(monkeypatch):
 def test_proxy_config_is_validated_and_persisted():
     """OFF by default this release: an upgrade must not move every host onto
     the shared proxy and a new address. Opting in persists; junk is refused."""
-    assert config.proxy_mode() == 'off'
+    assert config.proxy_mode() == 'auto'  # the default from 2.2.0
     assert config.set_proxy_mode('on') == 'on'
     assert config.proxy_mode() == 'on'
     with pytest.raises(ValueError):
@@ -356,7 +356,7 @@ def test_an_agent_kind_cannot_choose_the_machines_proxy(capsys):
 
     assert main(['config', 'proxy', 'on', '--kind', 'claude']) != 0
     assert 'belongs to the machine' in capsys.readouterr().err
-    assert config.proxy_mode() == 'off'
+    assert config.proxy_mode() == 'auto'  # the default from 2.2.0
     assert main(['config', 'proxy', 'on']) == 0
     assert config.proxy_mode() == 'on'
 
@@ -425,3 +425,21 @@ def test_a_file_transfer_never_follows_a_redirect_with_the_bearer(tmp_path, whic
     assert 'redirect' in str(raised.value)
     assert len(asked) == 1, f'followed: {asked}'
     assert asked[0][0].startswith('/s/s_mine/')
+
+
+def test_the_first_attach_claims_the_bare_domain_and_later_ones_never_ask_again():
+    """2.2.0: the proxy is the default, and pre-proxy root links must keep
+    reaching the session that owned the domain, without `--primary`."""
+    from types import SimpleNamespace
+    from collab.hub_main import asks_for_primary, record_attach
+    first = SimpleNamespace(proxy_primary=False, proxy_seen=False)
+    assert asks_for_primary(first), "a session's first attach asks"
+    record_attach(first, won=True)
+    assert (first.proxy_primary, first.proxy_seen) == (True, True)
+    assert asks_for_primary(first), "a revive keeps asking for the primary it won"
+    second = SimpleNamespace(proxy_primary=False, proxy_seen=False)
+    assert asks_for_primary(second)
+    record_attach(second, won=False)                   # someone already holds it
+    assert not asks_for_primary(second), "not primary, and never asks again"
+    asked = SimpleNamespace(proxy_primary=True, proxy_seen=True)
+    assert asks_for_primary(asked), "an explicit --primary still asks"

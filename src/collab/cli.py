@@ -925,7 +925,9 @@ def cmd_host(args: argparse.Namespace) -> int:
     else:
         for line in tunnel_report(cfg, installed=ngrok_path() is not None):
             print(line)
-    if cfg.tunnel == "proxy" and cfg.proxy_primary:
+    # Asked for on this command: the hub records a refused claim as not primary,
+    # so cfg alone no longer says the person wanted it.
+    if cfg.tunnel == "proxy" and (cfg.proxy_primary or getattr(args, "primary", False)):
         # Said here, to the person who asked: the hub's refusal is in hub.log,
         # where nobody would read it before a guest's old link reached the
         # wrong session — or none.

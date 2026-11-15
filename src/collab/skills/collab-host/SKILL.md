@@ -95,11 +95,12 @@ are protected. `collab sessions` marks the current and most recent saved records
 
 ## Shared proxy hosting
 
-The shared proxy is opt-in this release (`proxy` defaults to `off`): with
-`collab config proxy on` or `collab host --tunnel proxy` one machine tunnel
-serves every session. Each session advertises a `/s/<session_id>` URL; only the
-session hosted with `--primary` keeps the bare-domain route, and a second
-session asking for it is refused.
+The shared proxy is the default (`proxy` defaults to `auto`): one machine
+tunnel serves every session. Each session advertises a `/s/<session_id>` URL;
+the domain's first session keeps the bare-domain route automatically (so its
+pre-proxy links keep working), `--primary` asks for it explicitly, and a
+second session asking for it is refused. `collab config proxy off` or
+`--tunnel own` keeps a hub on its own tunnel.
 Stopping one hub leaves the shared proxy and other hubs alone. A distinct
 reserved domain requires `collab host --tunnel own`; do not stop another
 session to resolve a domain conflict. `--no-tunnel` keeps hosting local-only.
