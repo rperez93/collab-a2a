@@ -320,8 +320,9 @@ This global cap is a storage bound, not per-peer flood protection. Draft-state
 compatibility checks inspect at most 500 indexed pair events, matching the old
 reader's maximum history window, with bounded SQL payload prefixes. The pair
 indexes are installed after identity migration so old databases remain valid.
-Production frontend consumption, native signing, local execution policy and
-human ceremonies remain integration gates. Collab does not execute a skill
+Frontend consumption, native Windows Hello signing and the human ceremonies are
+live from 2.2.0, and passkey enrolment and approval after it; local execution
+policy for remote prompts remains with #118's adoption. Collab does not execute a skill
 as a side effect of this API.
 
 ## Proof bytes and origin binding

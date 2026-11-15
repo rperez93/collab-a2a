@@ -127,3 +127,25 @@ def test_a_browser_that_stops_before_the_proof_times_out_without_a_key(tmp_path,
                                                transport=httpx.MockTransport(hub))
     assert outcome == {"status": "expired", "credential": None}
     assert not [c for c in hub.calls if c[1] == "enrol/finish"]
+
+
+def test_a_lost_finish_answer_is_reported_as_uncertain(tmp_path, monkeypatch):
+    """The hub may have committed the key when its answer was lost: the runner
+    says «uncertain», never «expired» (gate re-review of #185, mutant n4)."""
+    _not_windows(monkeypatch)
+    monkeypatch.setattr(passkey_enrol, "ENROL_WAIT_SECONDS", 3.0)
+    hub = SyntheticHub()
+    hub.lose_finish = True
+
+    def browser(url):
+        try:
+            _browser(url)
+        except AssertionError:
+            pass                      # the page reports the lost answer as not-OK
+
+    def opener(url):
+        threading.Thread(target=browser, args=(url,), daemon=True).start()
+        return True
+    outcome = passkey_enrol.enrol_with_passkey(_profile(tmp_path), opener=opener,
+                                               transport=httpx.MockTransport(hub))
+    assert outcome == {"status": "uncertain", "credential": None}

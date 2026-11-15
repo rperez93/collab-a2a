@@ -888,3 +888,25 @@ def test_a_hub_without_passkeys_is_told_so_before_any_page(live_server, monkeypa
                               methods=["hello"])
     assert _consent(w, monkeypatch) == 1 and not calls
     assert "does not support passkeys" in capsys.readouterr().err
+
+
+def test_the_terminal_asks_windows_hello_once(live_server, monkeypatch, capsys):
+    """Each Hello probe can cost seconds of PowerShell, and two can disagree: a
+    flaky helper (the case being handled) once got a passkey prompt on WSL
+    after the second probe said otherwise (gate re-review of #185)."""
+    from collab.client import passkey_enrol
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+    bob = live_server["store"].add_participant("bob", "bob-token")
+    hello = FakeHello()
+    answers = iter([True, False, False])
+    probes = []
+    hello.available = lambda: probes.append(1) or next(answers)
+    monkeypatch.setattr(strong, "_hello", lambda: hello)
+    monkeypatch.setattr(passkey_enrol, "enrol_with_passkey",
+                        lambda profile, **kw: pytest.fail("WSL reached passkey enrolment"))
+    with HubClient(live_server["base"], "bob-token") as hub:
+        w = SimpleNamespace(profile=SimpleNamespace(name="bob", participant_id=bob.id, session_id="s_test"),
+                            bob_hub=hub, base=live_server["base"])
+        _consent(w, monkeypatch, answer="n")
+    assert len(probes) == 1
+    assert "Enrol a passkey" not in capsys.readouterr().out
