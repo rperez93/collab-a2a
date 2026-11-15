@@ -475,7 +475,9 @@ def test_the_hello_key_name_is_per_session_and_participant_and_fits():
         strong.hello_key_name("s_x", "p_" + "x" * 80)
 
 
-def test_a_passkey_key_is_unavailable_here_not_a_lesser_approval():
+def test_an_explicitly_disabled_passkey_leg_remains_unavailable(monkeypatch):
+    monkeypatch.setattr(strong, "_native_hello_platform", lambda: False)
+    monkeypatch.setattr(strong, "PASSKEY", None)
     assert strong.open_window({}, lambda: {}, method="passkey") == {
         "choice": "unavailable", "reason": "passkey page not integrated"}
 
@@ -721,12 +723,33 @@ def test_the_window_request_carries_the_verified_canonical_review_and_expiry(wor
     """Both legs receive the hub's canonical bytes (already checked against
     the digest) and the request's expiry; the Hello leg ignores them."""
     import hashlib
+    from collab.client.passkey_dispatch import _Prepared
+
+    parsed_windows = []
+    original_window_request = strong.window_request
+    def record_contract(reviewed, *, requester_name, credential_id):
+        # Parse a real verified hub review through the production window
+        # builder. The Hello key name is not a WebAuthn credential ID; only
+        # this parallel contract value substitutes an explicit synthetic ID.
+        request = original_window_request(reviewed, requester_name=requester_name,
+            credential_id=consent_hello.b64url(b'synthetic-passkey-credential'))
+        parsed = _Prepared.parse(request)
+        assert parsed.canonical == reviewed.canonical
+        assert parsed.digest.hex() == reviewed.digest
+        assert parsed.requester_id == reviewed.review['requester_id']
+        assert parsed.request_id == reviewed.request_id
+        assert parsed.expires == reviewed.expires_at
+        parsed_windows.append(parsed)
+        return original_window_request(reviewed, requester_name=requester_name,
+                                       credential_id=credential_id)
+    monkeypatch.setattr(strong, 'window_request', record_contract)
 
     _available(monkeypatch)
     _ask(world)
     [match] = _requests(world)
     assert _accept(world, match) == 0
     [window] = world.hello.windows
+    assert len(parsed_windows) == 1
     canonical = consent_hello.unb64url(window["canonical_review"], limit=64 * 1024)
     assert hashlib.sha256(canonical).hexdigest() == window["digest"]
     assert json.loads(canonical) == json.loads(window["review_text"])
@@ -754,6 +777,7 @@ def test_the_fetcher_forwards_a_passkey_origin_into_the_challenge(world, monkeyp
             fetch_challenge(origin="http://localhost:43210")
         return {"status": "unavailable", "reason": "test"}
 
+    monkeypatch.setattr(strong, "_native_hello_platform", lambda: False)
     monkeypatch.setattr(strong, "PASSKEY", passkey_leg)
     keys = strong.ApprovalClient.keys
     monkeypatch.setattr(strong.ApprovalClient, "keys",
@@ -776,6 +800,7 @@ def test_the_fetcher_forwards_a_passkey_origin_into_the_challenge(world, monkeyp
 def test_the_passkey_pages_answer_is_taken_in_the_hello_shapes(answer, expected, monkeypatch):
     """«proof-ready» hands back the untouched proof; this client posts
     /approve itself — the page never does."""
+    monkeypatch.setattr(strong, "_native_hello_platform", lambda: False)
     monkeypatch.setattr(strong, "PASSKEY", lambda request, fetch: answer)
     assert strong.open_window({}, lambda **kw: {}, method="passkey") == expected
 

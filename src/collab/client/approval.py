@@ -25,7 +25,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import sys
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -433,10 +435,36 @@ def _hello():
     return consent_hello
 
 
-#: The passkey leg (#145's page, on the daemon's loop). Not integrated in this
-#: branch: until it is, a passkey credential is unavailable here — never a
-#: reason to fall back to anything weaker.
-PASSKEY: Callable[[dict, Callable[[], dict]], dict] | None = None
+def _native_hello_platform() -> bool:
+    """Windows and WSL use native Hello, never a browser fallback or probe.
+
+    Kernel metadata and marker presence are enough to refuse the browser leg;
+    do not launch PowerShell or availability checks to choose a platform.
+    Unknown kernel metadata fails closed as well.
+    """
+    if sys.platform.startswith(("win", "cygwin", "msys")) or os.name == "nt":
+        return True
+    if "WSL_INTEROP" in os.environ or "WSL_DISTRO_NAME" in os.environ:
+        return True
+    try:
+        release = os.uname().release
+    except (OSError, AttributeError):
+        return True
+    return (type(release) is not str or len(release) > 1024 or not release.strip()
+            or any(marker in release.casefold() for marker in ("microsoft", "wsl")))
+
+
+def _default_passkey(request: dict, fetch_challenge: Callable) -> dict:
+    if _native_hello_platform():
+        return {"choice": "unavailable", "reason": "NativeHelloRequired"}
+    # Import only after explicit passkey selection on a supported platform.
+    # The page returns raw proof privately; this dispatcher still owns the
+    # one authenticated approve-then-accept path and its readiness policy.
+    from .passkey import approve_with_passkey
+    return approve_with_passkey(request, fetch_challenge)
+
+
+PASSKEY: Callable[[dict, Callable[..., dict]], dict] | None = _default_passkey
 PASSKEY_SEAM = "passkey page not integrated"
 
 
@@ -454,9 +482,11 @@ def open_window(request: dict, fetch_challenge: Callable[[], dict], *,
         if outcome.get("choice") == "passkey":
             # «Use a passkey instead»: that is a different enrolled key, and
             # its page; not a lesser way to approve with this one.
-            return {"choice": "unavailable", "reason": PASSKEY_SEAM}
+            return {"choice": "unavailable", "reason": "ExplicitPasskeySelectionRequired"}
         return outcome
     if method == "passkey":
+        if _native_hello_platform():
+            return {"choice": "unavailable", "reason": "NativeHelloRequired"}
         if PASSKEY is None:
             return {"choice": "unavailable", "reason": PASSKEY_SEAM}
         return _from_passkey(PASSKEY(request, fetch_challenge))

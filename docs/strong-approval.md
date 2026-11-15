@@ -1,25 +1,27 @@
 # Local passkey review frontend
 
 `collab.client.passkey` provides a localhost review page. The bounded
-`PasskeyHubAdapter` forwards the draft v1 hub protocol using an authenticated
+`PasskeyHubAdapter` forwards the v1 hub protocol using an authenticated
 profile, an immutable operation binding and an explicit credential ID.
 Request windows cannot enrol or replace a key: neither the page nor its HTTP
 capability exposes registration. The separate human-started service is
-`collab.client.passkey_enrol.EnrolService`; CLI and dispatcher adoption remain
-core integration gates. This module does not provide a hub
+`collab.client.passkey_enrol.EnrolService`; its human-started enrolment CLI
+adoption remains an integration gate. This module does not provide a hub
 approval API, register a real credential by itself, or turn a terminal receipt
 into cryptographic approval. With no adapter it reports «unsupported» and
 submits no decision. The authenticated adapter checks capability discovery: the current
-draft core reports «operation_integration_pending» and refuses production
+core reports «operation_integration_pending» and refuses production
 availability. No local flag overrides it. Real human enrolment and approval
 remain integration gates.
 
 The asynchronous adapter entrypoint awaits `passkey.open(request_id, adapter=adapter)` on its existing
 daemon event loop, then calls `passkey.close()` during shutdown. The adapter
 must stay on that loop. The module neither launches Windows Hello nor chooses
-a fallback. The dispatch contract sends Windows and WSL to native Hello;
-this page must not become an automatic fallback there. Dispatcher wiring is
-still pending. A trusted browser opener runs in a thread; its await has a three
+a fallback. The approval dispatcher loads the browser passkey collector lazily
+for an explicitly selected passkey on non-Windows hosts. Windows and WSL use
+native Hello and refuse the browser leg, including an explicit passkey choice;
+an unavailable or declined Hello flow never falls back to this page. Native
+human acceptance and production readiness remain gates. A trusted browser opener runs in a thread; its await has a three
 second timeout, but Python cannot stop a stuck opener thread. A late launch can
 show a refused page after its capability has been invalidated. This is a
 best-effort desktop integration, not a subprocess cleanup guarantee.
@@ -116,8 +118,8 @@ the hub's confirmation», never a receipt or an approved result. This mode has
 no hub approval transport: the dispatcher alone posts `/approve`, confirms its
 result and consumes any receipt through the adopting execution path. Decline
 returns a choice for the dispatcher; local Cancel and unavailable/expired
-flows submit no hub decision. Actual human enrolment and final dispatcher
-adoption remain separate gates.
+flows submit no hub decision. Actual human enrolment and final connected-host
+acceptance remain separate gates.
 
 If the synchronous collector rejects an assertion submitted through its
 authorized page for the current ceremony, it ends the local flow immediately
