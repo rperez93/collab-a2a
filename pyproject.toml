@@ -11,6 +11,8 @@ requires-python = ">=3.10"
 license = { text = "MIT" }
 
 dependencies = [
+    # Hub-side Hello/WebAuthn signature verification (R22b).
+    "cryptography>=46",
     "a2a-sdk[fastapi]>=1.1.2",
     "uvicorn>=0.30",
     "httpx>=0.28.1",
@@ -30,6 +32,10 @@ dependencies = [
     # while working everywhere else. It is the standard fallback wheel and the
     # marker keeps it off machines that already have a tz database.
     "tzdata; platform_system == 'Windows'",
+    # Verifying Windows Hello and passkey signatures (RSA PKCS#1 v1.5, ECDSA,
+    # SubjectPublicKeyInfo). Already installed as a transitive dependency of
+    # the A2A stack; named here because strong approval depends on it directly.
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]
