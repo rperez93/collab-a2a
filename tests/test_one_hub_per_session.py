@@ -110,3 +110,30 @@ def test_a_losing_hub_spawned_for_real_never_takes_over_the_record(tmp_path, mon
         if holder.poll() is None:
             holder.kill()
             holder.wait()
+
+
+def test_stop_session_stops_the_lock_holder_even_when_the_record_names_the_loser(tmp_path, monkeypatch):
+    """Two hubs spawned at once can each record themselves before either holds
+    hub.lock, so hub.json may name the one that lost. collab kill also stops
+    whoever holds the lock now."""
+    import os
+    from collab.server.session import stop_session
+    cfg = _session(tmp_path, monkeypatch)
+    loser = subprocess.Popen([sys.executable, "-c", "pass"]); loser.wait()
+    cfg.pid, cfg.pid_stamp = loser.pid, ""        # the record names the hub that exited
+    cfg.save()
+    holder = subprocess.Popen([sys.executable, "-c", (
+        "import time; from collab.client import exclusive; "
+        f"lock = exclusive.DaemonLock({str(cfg.dir)!r}, name=exclusive.HUB_LOCK_FILE); "
+        "assert lock.acquire(); print('HELD', flush=True); time.sleep(60)")],
+        stdout=subprocess.PIPE, text=True, env={**os.environ})
+    try:
+        assert holder.stdout.readline().strip() == "HELD"
+        assert exclusive.holder(cfg.dir, name=exclusive.HUB_LOCK_FILE) == holder.pid
+        assert stop_session(HubConfig.load(cfg.session_id, cfg.home))["hub_stopped"]
+        assert holder.wait(10) is not None
+    finally:
+        if holder.poll() is None:
+            holder.kill()
+            holder.wait()
+    assert exclusive.holder(cfg.dir, name=exclusive.HUB_LOCK_FILE) == 0, "a released lock names nobody"
