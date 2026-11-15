@@ -103,8 +103,11 @@ The target-only consume endpoint reauthenticates, reloads the source, checks its
 fingerprint/expiry and consumes the receipt against the exact review digest in
 one transaction. It records an immutable remote-consumption identity and returns
 canonical reviewed bytes. It never executes the command or broadcasts the local
-argv/cwd. The requester may receive a bounded delivery status, not the receiver's
-private local configuration. Do not copy the skill adapter's canonical-review
+argv/cwd. A bounded delivery status for the requester is NOT implemented: today
+nothing about review, approval, decline or delivery is sent back to the
+requester, which learns only what the receiver chooses to say in an ordinary
+message. If one is added it must stay bounded and must never carry the
+receiver's private local configuration. Do not copy the skill adapter's canonical-review
 broadcast: remote reviews contain receiver-local details the sender did not own.
 
 The receiver verifies returned canonical bytes against the locally reviewed
