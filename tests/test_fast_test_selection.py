@@ -66,6 +66,7 @@ def test_external_paths_and_oversized_sources_refuse(helper, repo, tmp_path):
 def test_main_propagates_failure_and_pins_child_source(helper, repo, monkeypatch, capsys):
     monkeypatch.setattr(helper, 'ROOT', repo)
     monkeypatch.setattr(helper, 'supports_worker_optout', lambda root: True)
+    monkeypatch.setattr(helper, 'collected_count', lambda root, tests, env: 3)
     calls = []
     def run(argv, **kwargs):
         calls.append((argv, kwargs))
@@ -87,6 +88,7 @@ def test_a_fast_run_never_takes_the_full_suite_lock(helper, repo, monkeypatch):
     merge-gate run: it is iteration, not a full run."""
     monkeypatch.setattr(helper, 'ROOT', repo)
     monkeypatch.setattr(helper, 'supports_worker_optout', lambda root: True)
+    monkeypatch.setattr(helper, 'collected_count', lambda root, tests, env: 3)
     monkeypatch.setenv('COLLAB_TEST_LOCK', '/tmp/a-lock-the-caller-chose')
     calls = []
     monkeypatch.setattr(helper.subprocess, 'run',
@@ -275,3 +277,68 @@ def test_failed_descriptor_validation_closes_the_owned_fd(helper, repo, monkeypa
         with pytest.raises(OSError, match='simulated'):
             helper.regular_fd(repo / helper.GATES[0])
     assert len(closed) == 1
+
+
+def test_main_refuses_a_source_change_no_test_imports_and_never_starts_pytest(helper, repo, monkeypatch, capsys):
+    """An incomplete selection is an error, never a partial green: a changed
+    module nothing imports leaves no test to run, and the three gates passing
+    would read as the change being tested (gate review of #196: the mutant
+    `if unmatched: raise` -> `if False:` passed every test)."""
+    monkeypatch.setattr(helper, 'ROOT', repo)
+    monkeypatch.setattr(helper, 'changed_paths', lambda root, base: {'src/collab/orphan.py'})
+    monkeypatch.setattr(helper, 'supports_worker_optout', lambda root: True)
+    monkeypatch.setattr(helper, 'collected_count',
+                        lambda *a: pytest.fail('collection must not start'))
+    monkeypatch.setattr(helper.subprocess, 'run', lambda *a, **k: pytest.fail('pytest must not start'))
+    assert helper.main(['test', '--fast']) == 2
+    assert 'collab.orphan' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('count,code', [(999, 0), (1000, 2), (4000, 2)])
+def test_a_selection_the_size_of_a_full_run_is_refused_unlocked(helper, repo, monkeypatch, capsys, count, code):
+    """A fast run never takes the full-run lock (#186), so a selection of
+    1,000 tests or more would be a near-full suite running unlocked beside
+    another agent's merge-gate run. It is refused, with the full suite named."""
+    monkeypatch.setattr(helper, 'ROOT', repo)
+    monkeypatch.setattr(helper, 'supports_worker_optout', lambda root: True)
+    monkeypatch.delenv('COLLAB_TEST_LOCK_MIN', raising=False)
+    monkeypatch.setattr(helper, 'collected_count', lambda root, tests, env: count)
+    ran = []
+    monkeypatch.setattr(helper.subprocess, 'run',
+                        lambda argv, **kw: ran.append(argv) or SimpleNamespace(returncode=0))
+    assert helper.main(['test', '--fast', '--test', helper.GATES[0]]) == code
+    assert bool(ran) is (code == 0)
+    if code:
+        assert 'run the full suite' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('out,status,expected', [
+    (b'tests/test_a.py::test_x\n\n1234 tests collected in 1.20s\n', 0, 1234),
+    (b'tests/test_a.py::test_x\n\n1 test collected in 0.01s\n', 0, 1),
+    (b'\nno tests collected in 0.01s\n', 5, 0),
+    # A node id can carry the same words; only pytest's last line is the count.
+    (b'tests/t.py::test_x[9999 tests collected]\n\n2 tests collected in 0.01s\n', 0, 2),
+])
+def test_the_collected_count_is_read_from_pytest(helper, repo, monkeypatch, out, status, expected):
+    monkeypatch.setattr(helper, 'capture', lambda argv, **kw: (status, out))
+    assert helper.collected_count(repo, ['tests/test_a.py'], {}) == expected
+
+
+@pytest.mark.parametrize('out,status', [(b'ERROR collecting\n', 2), (b'garbage', 0)])
+def test_an_unreadable_collection_starts_nothing(helper, repo, monkeypatch, out, status):
+    monkeypatch.setattr(helper, 'capture', lambda argv, **kw: (status, out))
+    with pytest.raises(ValueError, match='no tests started'):
+        helper.collected_count(repo, ['tests/test_a.py'], {})
+
+
+@pytest.mark.parametrize('returncode,expected', [(-9, 137), (-15, 143), (0, 0), (1, 1)])
+def test_a_pytest_killed_by_a_signal_never_reports_success(helper, repo, monkeypatch, returncode, expected):
+    """subprocess reports death by signal N as -N. The helper returns 128+N,
+    the shell's convention, so a pytest killed mid-run can never exit 0 —
+    which a «tidier» `max(code, 0)` would make it do."""
+    monkeypatch.setattr(helper, 'ROOT', repo)
+    monkeypatch.setattr(helper, 'supports_worker_optout', lambda root: True)
+    monkeypatch.setattr(helper, 'collected_count', lambda root, tests, env: 3)
+    monkeypatch.setattr(helper.subprocess, 'run',
+                        lambda argv, **kw: SimpleNamespace(returncode=returncode))
+    assert helper.main(['test', '--fast', '--test', helper.GATES[0]]) == expected

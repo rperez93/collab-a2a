@@ -6,6 +6,7 @@ import argparse
 import ast
 import json
 import os
+import re
 import selectors
 import signal
 import stat
@@ -215,6 +216,43 @@ def select(root: Path, changed: set[str], explicit: list[str]) -> tuple[list[str
     return sorted(selected), unmatched
 
 
+#: A run that collects this many tests is a full run, and the suite's own
+#: per-machine lock (#186, tests/suite_lock.py: FULL_RUN, overridden there by
+#: COLLAB_TEST_LOCK_MIN) serialises those. A fast run never takes that lock, so
+#: one this large would be a near-full suite running unlocked beside another
+#: agent's merge-gate run: refused instead, with the full suite named.
+def full_run_threshold() -> int:
+    try:
+        return max(1, int(os.environ.get('COLLAB_TEST_LOCK_MIN', '1000')))
+    except ValueError:
+        return 1000
+
+
+#: Collection output is node ids, about 100 bytes each; 8 MiB is ~80,000.
+MAX_COLLECT_BYTES = 8 * 1024 * 1024
+COLLECT_SECONDS = 120
+
+
+def collected_count(root: Path, tests: list[str], env) -> int:
+    """How many tests `tests` selects, by pytest's own collection, bounded."""
+    status, out = capture([sys.executable, '-m', 'pytest', '--collect-only', '-q', *tests],
+                          cwd=root, env=env, limit=MAX_COLLECT_BYTES, timeout=COLLECT_SECONDS)
+    text = out.decode('utf-8', 'replace')
+    if status not in (0, 5):  # 5: nothing collected
+        raise ValueError(f'test collection failed (pytest exit {status}); no tests started')
+    # ONLY THE SUMMARY LINE, which pytest prints last. A node id may contain the
+    # same words — a parametrised id here did, «1234 tests collected» — and a
+    # search of the whole listing read it as the count and refused every run.
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    summary = lines[-1] if lines else ''
+    match = re.fullmatch(r'(\d+) tests? collected(?: in [\d.]+s)?', summary)
+    if match:
+        return int(match.group(1))
+    if status == 5 or summary.startswith('no tests collected'):
+        return 0
+    raise ValueError('could not read the collected test count; no tests started')
+
+
 def supports_worker_optout(root: Path) -> bool:
     # Configuring a scratch Store never runs a provider. Force auto-start on
     # so a missing host marker or default-off preference cannot fake support.
@@ -276,6 +314,15 @@ def main(argv=None) -> int:
     # agent's merge-gate run. A fast run is iteration, never a full run.
     env = {**os.environ, 'COLLAB_NO_WORKER': '1', 'COLLAB_NO_UPDATE_CHECK': '1',
            'COLLAB_TEST_LOCK': 'off', 'PYTHONPATH': str(ROOT / 'src')}
+    try:
+        count = collected_count(ROOT, tests, env)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        print(f'FAIL: selection: {exc}', file=sys.stderr)
+        return 2
+    if count >= full_run_threshold():
+        print(f'FAIL: this selection collects {count} tests, a full run: run the full suite '
+              f'(it takes the machine\'s full-run lock); no tests started.', file=sys.stderr)
+        return 2
     try:
         result = subprocess.run([sys.executable, '-m', 'pytest', '-q', *tests], cwd=ROOT, env=env)
         code = result.returncode

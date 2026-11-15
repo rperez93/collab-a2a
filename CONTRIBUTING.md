@@ -66,7 +66,10 @@ and waits for any other full run to finish, so two agents' suites cannot slow
 each other into timing failures. That lock is the one mechanism: there is no
 separate hand-off to arrange. A fast run never takes it — the helper sets
 `COLLAB_TEST_LOCK=off` for its pytest — because iteration must neither queue
-behind a merge-gate run nor hold one up.
+behind a merge-gate run nor hold one up. For the same reason a fast selection
+that collects 1,000 tests or more (the lock's threshold) is refused before it
+starts, with the full suite named: it would be a near-full run without the
+lock.
 
 Preserve failures
 and explicit skips, and resolve them before the lead merges that tested wave.
