@@ -74,6 +74,10 @@ class HubConfig:
     #: revives asks again (idempotent: see `proxy.claim_primary`), and so the
     #: choice is the host's, never a side effect of starting the proxy.
     proxy_primary: bool = False
+    #: Whether this session has attached to the shared proxy before. Its FIRST
+    #: attach claims the bare domain when nobody holds it, so links handed out
+    #: before the proxy keep reaching it (see hub_main).
+    proxy_seen: bool = False
     pid: int = 0
     home: str = ""
     #: The hub and the tunnel again, STAMPED — the pid with the start time and
