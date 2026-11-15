@@ -14,6 +14,44 @@ import pytest
 from collab.client import passkey as page, passkey_dispatch as seam
 
 
+
+# A REAL BROWSER RETURNS AT ONCE. The dispatcher gives the opener 3 s
+# (`_fetch(..., timeout=3.0)`), because webbrowser.open only hands the URL over.
+# These tests used to run the whole scripted browser session — six HTTP
+# requests — inside the opener, so under a loaded machine (load ~14 during the
+# merge queue) it overran the 3 s and the dispatcher correctly answered
+# «unavailable»: a test artefact that turned the queue red twice. The scripted
+# browser now runs on its own thread, and anything it asserts is re-raised at
+# teardown, so a failure inside it can never pass silently.
+_BROWSER_THREADS = []
+_BROWSER_ERRORS = []
+
+
+def _in_a_browser(work):
+    def opener(url):
+        def run():
+            try:
+                work(url)
+            except BaseException as exc:      # surfaced at teardown
+                _BROWSER_ERRORS.append(exc)
+        thread = threading.Thread(target=run, daemon=True)
+        _BROWSER_THREADS.append(thread)
+        thread.start()
+        return True
+    return opener
+
+
+@pytest.fixture(autouse=True)
+def _browser_errors_fail_the_test():
+    _BROWSER_THREADS.clear()
+    _BROWSER_ERRORS.clear()
+    yield
+    for thread in _BROWSER_THREADS:
+        thread.join(timeout=10)
+    assert not any(t.is_alive() for t in _BROWSER_THREADS), "a scripted browser never finished"
+    if _BROWSER_ERRORS:
+        raise _BROWSER_ERRORS[0]
+
 def encoded(raw):
     return base64.urlsafe_b64encode(raw).rstrip(b'=').decode()
 
@@ -83,7 +121,7 @@ def test_the_synchronous_seam_hosts_a_guarded_page_and_returns_the_choice_privat
                 assert response.status_code == 200, response.text
             browser.append(response.json())
         return True
-    monkeypatch.setattr(page.webbrowser, 'open_new', opener)
+    monkeypatch.setattr(page.webbrowser, 'open_new', _in_a_browser(opener))
     result = page.approve_with_passkey(prepared, fetch_challenge)
     expected = 'approve' if choice == 'approve' else 'decline' if choice == 'decline' else 'unavailable'
     assert result['choice'] == expected
@@ -242,7 +280,7 @@ def test_cancel_during_a_held_challenge_refuses_the_late_result(prepared, monkey
                 callback_release.set()
                 thread.join(2)
         return True
-    monkeypatch.setattr(page.webbrowser, 'open_new', opener)
+    monkeypatch.setattr(page.webbrowser, 'open_new', _in_a_browser(opener))
     try:
         assert page.approve_with_passkey(prepared, fetch_challenge) == {'choice': 'unavailable'}
     finally:callback_release.set()
@@ -301,7 +339,7 @@ def test_a_rejected_current_browser_proof_finishes_the_synchronous_collector(pre
             # leave the opener successful so the actual collector wait is tested.
             responses.append((response.status_code, response.json()))
         return True
-    monkeypatch.setattr(page.webbrowser, 'open_new', opener)
+    monkeypatch.setattr(page.webbrowser, 'open_new', _in_a_browser(opener))
     started = time.monotonic()
     result = page.approve_with_passkey(prepared, fetch_challenge)
     assert result == {'choice': 'unavailable', 'reason': 'browser_assertion_rejected'}
@@ -355,7 +393,7 @@ def test_unrelated_http_refusals_do_not_abort_a_valid_proof_collection(prepared,
             assert response.status_code == 200 and response.json()['status'] == 'proof-ready'
             evidence_sent.append(valid)
         return True
-    monkeypatch.setattr(page.webbrowser, 'open_new', opener)
+    monkeypatch.setattr(page.webbrowser, 'open_new', _in_a_browser(opener))
     result = page.approve_with_passkey(prepared, lambda **kwargs: challenge(prepared, kwargs['origin']))
     assert result['choice'] == 'approve' and len(evidence_sent) == 1
     assert result['proof']['client_data_json'] == evidence_sent[0]['response']['clientDataJSON']
@@ -391,7 +429,7 @@ def test_an_expired_exact_browser_ceremony_finishes_without_waiting_for_review_e
                 json={'ceremony_id': issued['ceremony_id'], 'credential': {}})
             responses.append((response.status_code, response.json()))
         return True
-    monkeypatch.setattr(page.webbrowser, 'open_new', opener)
+    monkeypatch.setattr(page.webbrowser, 'open_new', _in_a_browser(opener))
     result = page.approve_with_passkey(prepared, lambda **kwargs: challenge(prepared, kwargs['origin']))
     assert result == {'choice': 'expired'}
     assert adapters[0].finished.is_set() and adapters[0].ceremony is None
