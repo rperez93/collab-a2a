@@ -254,7 +254,7 @@ async def test_a_finishing_wake_cannot_schedule_sources_after_stop(profile):
 def test_simultaneous_activity_and_usage_cannot_erase_each_other(tmp_path, monkeypatch):
     """Hold one metadata edit open while another HTTP thread tries to commit."""
     import threading
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
     from collab.server.store import Store
     from collab.server.hub import Hub
     from collab import activity
@@ -279,7 +279,7 @@ def test_simultaneous_activity_and_usage_cannot_erase_each_other(tmp_path, monke
             assert stats_started.wait(2)
             try:
                 second.result(timeout=.1)
-            except TimeoutError:
+            except FutureTimeout:  # not the builtin TimeoutError before 3.11
                 pass
             finally:
                 release.set()
