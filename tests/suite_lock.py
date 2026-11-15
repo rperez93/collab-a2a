@@ -51,7 +51,7 @@ def acquire(path: Path, on_wait=None, blocking: bool = True):
             return None
         if on_wait is not None:
             handle.seek(0)
-            on_wait(handle.read().strip() or "unknown")
+            on_wait(handle.read(32).strip() or "unknown")  # a pid; never trust the file's size
         fcntl.flock(handle, fcntl.LOCK_EX)
     handle.seek(0)
     handle.truncate()
