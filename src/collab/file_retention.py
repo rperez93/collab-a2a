@@ -45,6 +45,16 @@ def durable_source(value: str) -> str:
     return value
 
 
+def unconfirmed_retention(answer, keep, source) -> str:
+    """What a drain tells the main agent about an uploaded file: the hub's own
+    retention_note when it gave one, else retention_warning on its answer.
+    `answer` is the parsed hub reply, or None when it could not be read, which
+    counts as unconfirmed (friday's review of #209)."""
+    if isinstance(answer, dict) and isinstance(answer.get("retention_note"), str) and answer["retention_note"]:
+        return answer["retention_note"][:300]
+    return retention_warning(answer, keep if isinstance(keep, bool) else None, source or "")
+
+
 def retention_warning(record, keep, source):
     """Only an explicit matching host response confirms durable metadata."""
     if not isinstance(record, dict) or type(record.get('kept')) is not bool or (keep is not None and record.get('kept') is not keep) or (source and record.get('source') != source):

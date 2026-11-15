@@ -6755,8 +6755,8 @@ def cmd_worker(args: argparse.Namespace) -> int:
                                                    delivery=record["id"],
                                                    keep=record.get("keep") if isinstance(record.get("keep"), bool) else None,
                                                    source=record.get("source") or "")
-                                note = (uploaded.get("retention_note") if isinstance(uploaded, dict) else None)
-                                note = note[:300] if isinstance(note, str) else ""
+                                from .file_retention import unconfirmed_retention
+                                note = unconfirmed_retention(uploaded, record.get("keep"), record.get("source"))
                                 if note:
                                     warn(f"{said(str(record.get('name')))}: {scrub(note)}")
                                 store.acknowledge(record["id"], retention_note=note)

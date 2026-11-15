@@ -518,15 +518,20 @@ class Conversation:
                 if status >= 300:
                     return status
                 body = bytearray()
+                answer = None
                 async for chunk in response.aiter_bytes():
                     body += chunk
                     if len(body) > self.MAX_UPLOAD_ANSWER:
-                        return status  # delivered; an answer this large carries no note
-            try:
-                note = json.loads(bytes(body)).get("retention_note")
-            except (ValueError, AttributeError):
-                note = None
-            if isinstance(note, str) and note:
+                        break  # delivered; an answer this large is unreadable, so unconfirmed
+                else:
+                    try:
+                        answer = json.loads(bytes(body))
+                    except ValueError:
+                        answer = None
+            # The hub's own note, or, when it gave none (an older hub that
+            # ignores keep), the same check the direct `file send` makes.
+            from ..file_retention import unconfirmed_retention
+            if note := unconfirmed_retention(answer, message.get("keep"), message.get("source")):
                 message["retention_note"] = note[:300]
             return status
 
