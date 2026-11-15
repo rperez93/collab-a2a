@@ -322,3 +322,35 @@ def test_remote_delivery_is_off_by_default_and_on_only_by_the_host_setting(remot
     set_remote_delivery(True)
     assert strong.ApprovalClient(remote.world.bob_hub).capabilities()['remote_delivery'] is True
     assert accept(remote) == 0
+
+
+def test_a_passkey_receiver_is_shown_this_remote_operation_on_the_passkey_page(remote, monkeypatch):
+    """Main now advertises passkeys, and remote acceptance dispatches on the
+    enrolled key's method. The passkey page binds the hub-canonical bytes it
+    is handed, so those must be THIS remote review — offer, binding and the
+    summary fields — verified against the digest. A decline there consumes
+    nothing. (The page's WebAuthn signing itself is exercised only through
+    main's own passkey tests; remote signatures here use the Hello fake.)"""
+    import hashlib
+    from collab.consent_hello import unb64url
+    shown = []
+    def passkey_page(request, fetch_challenge):
+        shown.append(request)
+        return {"choice": "decline"}
+    monkeypatch.setattr(strong, "_native_hello_platform", lambda: False)
+    monkeypatch.setattr(strong, "PASSKEY", passkey_page)
+    keys = strong.ApprovalClient.keys
+    monkeypatch.setattr(strong.ApprovalClient, "keys",
+                        lambda self: [k | {"method": "passkey"} for k in keys(self)])
+    assert accept(remote) == 0
+    [request] = shown
+    canonical = unb64url(request["canonical_review"], limit=strong.MAX_REVIEW)
+    assert hashlib.sha256(canonical).hexdigest() == request["digest"]
+    review = json.loads(canonical)
+    assert review["operation"] == "remote-deliver" and review["offer"] == remote.offer
+    assert review["binding"]["command"] == remote.command
+    assert all(request[k] == review[k] for k in ("subject", "destination", "authority"))
+    assert remote.world.hello.windows == []  # never the Hello window for a passkey key
+    assert remote.inbox.list()[0]["state"] == "declined"
+    db = remote.world.store._db
+    assert db.execute("SELECT COUNT(*) FROM approval_requests WHERE state='consumed'").fetchone()[0] == 0

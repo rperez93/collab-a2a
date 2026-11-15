@@ -309,7 +309,10 @@ class Conversation:
                 self.task = asyncio.create_task(self._deliver_only(store, generation))
             return
         events = self.daemon.inbox.after(state["cursor"], limit=setting("worker_page_size"))
-        relevant = any(event.kind in CONVERSATION_KINDS and not (
+        # The SAME exclusion the turn applies: a remote offer is for its human,
+        # never model input, so it must not open a coalescing window either.
+        from ..remote_requests import OFFER_PREFIX
+        relevant = any(event.kind in CONVERSATION_KINDS and not (event.text or "").startswith(OFFER_PREFIX) and not (
             event.sender_id == self.daemon.profile.participant_id
             if event.sender_id and self.daemon.profile.participant_id
             else event.sender == self.daemon.profile.name) for event in events)

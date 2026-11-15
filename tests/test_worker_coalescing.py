@@ -196,3 +196,23 @@ async def test_cancelling_a_window_never_reserves_or_advances_work(conversation,
     await asyncio.sleep(0)
     await service.stop()
     assert not calls and service.task is None and state.snapshot()["cursor"] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_remote_offer_alone_opens_no_window_and_reaches_no_model(conversation, monkeypatch):
+    """A remote offer is held for its human (R7), never conversation input:
+    the turn already dropped it, but the coalescing check counted it as
+    arriving work and waited a window for nothing."""
+    from collab.remote_requests import OFFER_PREFIX
+    service, state = conversation
+    calls = provider(monkeypatch)
+
+    async def forbidden(_):
+        raise AssertionError("a remote offer opened a coalescing window")
+
+    monkeypatch.setattr(service, "_coalesced_turn", forbidden)
+    service.daemon.inbox.record(Envelope(seq=1, kind="chat", sender="bob", sender_id="p_b",
+                                         to="alice", to_id="p_a", text=OFFER_PREFIX + "{}"))
+    await service.tick()
+    await service.task
+    assert not calls and state.snapshot()["cursor"] == 1
