@@ -62,8 +62,19 @@ Before consuming the receipt, the receiver durably records an `approving`
 attempt. A lost response or crash leaves that attempt non-dispatchable; it is
 never automatically retried. Only a matching consumption answer containing the
 exact reviewed canonical bytes can make it accepted. The hub never sends the
-receiver's private argv or cwd back to the requester. See the
-[strong-approval contract](remote-strong-adoption.md).
+receiver's private argv or cwd back to the requester.
+
+**The requester is told nothing about the outcome.** There is no delivery
+status yet: neither the hub nor the receiver reports back whether an offer was
+reviewed, approved, declined, delivered or left uncertain. A sender that needs
+to know must ask in an ordinary message, and the receiver's answer is only its
+own word.
+
+**Hubs do not yet advertise strong remote delivery.** `collab remote accept`
+asks the hub for `remote_delivery` and refuses («this hub has not enabled
+strong remote delivery») until it is advertised, which waits on native human
+validation of the operation and its adapter. Offers are still received, held
+and listed. See the [strong-approval contract](remote-strong-adoption.md).
 
 Old accepted flag/hash/terminal-receipt grants are invalidated when the queue
 opens. Pending offers need their authenticated hub sequence before review;
