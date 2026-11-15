@@ -667,8 +667,9 @@ options:
 ## file
 
 ```text
-usage: collab file [-h] [--to TO] [--room ROOM] [--output OUTPUT] [--keep]
-                   [--all] [--json] [--session SESSION]
+usage: collab file [-h] [--to TO] [--room ROOM] [--output OUTPUT] [--keep |
+                   --temporary] [--source SOURCE] [--all] [--json]
+                   [--session SESSION]
                    {send,get,list,rm} [target]
 
 positional arguments:
@@ -680,7 +681,10 @@ options:
   --to TO              share privately with one participant
   --room ROOM
   --output, -o OUTPUT  directory to save into (default: here)
-  --keep               do not confirm receipt, so the host keeps its copy
+  --keep               send: retain until withdrawal; get: do not confirm
+                       receipt, so the host keeps its copy
+  --temporary          send: expire/delete on receipt even for documents
+  --source SOURCE      send: HTTPS URL of the durable original (never fetched)
   --all                list: include files that already ended (collected,
                        expired, withdrawn)
   --json
