@@ -239,9 +239,14 @@ def test_silent_descendant_retaining_stdout_is_killed_with_its_owned_group(helpe
         helper.capture([sys.executable, '-c', program, str(marker)], cwd=repo, timeout=.5)
     pid = int(marker.read_text())
     def alive():
-        status = Path(f'/proc/{pid}/stat')
-        if status.exists():
-            return status.read_text().split(') ', 1)[1].split()[0] != 'Z'
+        # READ, DON'T ASK FIRST. `exists()` then `read_text()` is two looks:
+        # a descendant reaped between them makes the read raise
+        # ProcessLookupError — the very outcome this test is waiting for,
+        # reported as a failure (merge queue for #205, at load 11.7).
+        try:
+            return Path(f'/proc/{pid}/stat').read_text().split(') ', 1)[1].split()[0] != 'Z'
+        except (FileNotFoundError, ProcessLookupError):
+            pass
         try:
             os.kill(pid, 0)
             return True
