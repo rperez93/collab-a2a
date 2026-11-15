@@ -10,8 +10,10 @@ arrival event and every roster after it. A hostname names the person's
 laptop, an account name is very often their own name, and a home path is both.
 
 The same answer as #154 gave the display name: a stable label that says
-«same machine as before» and nothing else, derived from the already hashed
-`machine_id`; or the field is dropped. The hub refuses these keys too
+«same machine as before» and nothing else, taken from `machine_id` — a random
+identity generated once per machine and account, never derived from the
+hostname (a hostname is guessable, and a short hash of it reversible); or the
+field is dropped. The hub refuses these keys too
 (`protocol.PRIVATE_KEYS`), so an older client sending them does not get them
 stored or relayed.
 """
@@ -29,7 +31,8 @@ def machine_label(machine_id: str) -> str:
     """`machine-3f2a91` for a `machine_id`; "" for anything that is not one.
 
     Stable across sessions (the id is), distinct per machine and account, and
-    carries nothing the id did not already: six hex digits of a hash."""
+    carries nothing the id did not already: six of its random hex digits —
+    never anything derived from the hostname (`peers.machine_id`)."""
     match = _MACHINE_ID.fullmatch(machine_id or "")
     return f"machine-{match.group(1)[:6]}" if match else ""
 
