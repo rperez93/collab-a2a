@@ -980,21 +980,29 @@ def test_the_burst_through_the_worker_writer_never_passes_the_budget(tmp_path,
 
 def test_a_sustained_ten_megabytes_a_second_never_passes_the_budget(tmp_path,
                                                                     monkeypatch):
-    """Ten megabytes a second for three seconds, 10 KB a write, every write
-    sampled. A generation is 3 MiB, so this rotates ten times over."""
+    """Thirty megabytes at up to ten a second, 10 KB a write, every write
+    sampled. A generation is 3 MiB, so this rotates ten times over.
+
+    A FIXED VOLUME, NOT A FIXED TIME. It used to write for three seconds and
+    then require 2,000 samples, so a loaded machine that only managed 1,250
+    writes failed it without the cap ever being passed (lead seq 5798). The
+    cap is the property under test; how fast the machine wrote is not, and it
+    is reported, not asserted."""
     peaks = _sampling(monkeypatch)
     path = tmp_path / "hub.log"
     out = logcap.CappedFile(path)
     block = (("z" * 99 + "\n") * 100).encode()           # 10 KB
-    end = time.monotonic() + 3
-    while time.monotonic() < end:
+    started = time.monotonic()
+    for _ in range(300):                                  # 300 x 10 writes = 30 MB
         began = time.monotonic()
         for _ in range(10):
             out.write(block)
         time.sleep(max(0, 0.01 - (time.monotonic() - began)))
     out.close()
-    assert len(peaks) > 2000
-    assert max(peaks) <= logcap.BUDGET, f"peak {max(peaks) / 1e6:.2f} MB"
+    took = time.monotonic() - started
+    assert len(peaks) == 3000, "every write sampled"
+    assert max(peaks) <= logcap.BUDGET, (f"peak {max(peaks) / 1e6:.2f} MB "
+                                         f"({30 / took:.1f} MB/s on this machine)")
     assert logcap.rotated(path).exists()
 
 
