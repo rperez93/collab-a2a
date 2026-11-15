@@ -2882,7 +2882,11 @@ class Daemon:
         # Never `except OSError` around `kill(pid, 0)`: EPERM is a hub that is
         # alive and not ours to signal, and restarting on top of it would put
         # a second hub on the session.
-        if lockfile.process_alive(cfg.pid):
+        # BY STAMP, NOT BY NUMBER: a pid reused by another process looked
+        # alive, so a dead hub was never revived. The stamp also refuses one
+        # written on another boot. (The hub itself refuses to run twice on a
+        # session: hub.lock, in hub_main.)
+        if cfg.hub_stamp().alive():
             return  # still alive; this is a network problem, not a dead hub
 
         logger.warning("hub process %s is gone; restarting it", cfg.pid)
