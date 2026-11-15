@@ -206,3 +206,24 @@ def test_observation_time_from_a_malformed_host_cannot_control_the_terminal(caps
     out = capsys.readouterr().out
     assert '\x1b' not in out and '\x07' not in out
     assert '\nFAKE SUCCESS' not in out
+
+
+def test_a_board_read_after_new_evidence_is_not_served_from_the_task_cache(tmp_path):
+    """Main caches task rows per change and invalidates on TASK writes; a PR
+    link's evidence lives in its own table. Without a bump on PR writes, the
+    board read just before `task pr --head-sha` kept serving the old head —
+    the warning that the head moved past the review would never show."""
+    store = Store(tmp_path / 'hub.db')
+    try:
+        task(store)
+        first, second = A, B
+        store.add_task_pr('T_sha', url=URL, number=12, added_by='alice',
+                          evidence={'reviewed_sha': first, 'head_sha': first})
+        assert store.tasks()[0]['prs'][0]['head_sha'] == first  # cached now
+        store.add_task_pr('T_sha', url=URL, number=12, added_by='alice',
+                          evidence={'head_sha': second})
+        assert store.tasks()[0]['prs'][0]['head_sha'] == second
+        store.remove_task_pr('T_sha', URL)
+        assert store.tasks()[0]['prs'] == []
+    finally:
+        store.close()
