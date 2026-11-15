@@ -9,9 +9,10 @@ capability exposes registration. The separate human-started service is
 adoption remains an integration gate. This module does not provide a hub
 approval API, register a real credential by itself, or turn a terminal receipt
 into cryptographic approval. With no adapter it reports «unsupported» and
-submits no decision. The authenticated adapter checks capability discovery: the current
-core reports «operation_integration_pending» and refuses production
-availability. No local flag overrides it. Real human enrolment and approval
+submits no decision. The authenticated adapter checks capability discovery: from 2.2.0
+the hub reports Windows Hello available (passkey is not yet advertised); an
+older hub reports «operation_integration_pending», and nothing is offered. No
+local flag overrides the hub's answer. Real human enrolment and approval
 remain integration gates.
 
 The asynchronous adapter entrypoint awaits `passkey.open(request_id, adapter=adapter)` on its existing

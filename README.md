@@ -120,9 +120,10 @@ Merged on `main` after the 2.1.2 release; the next release carries them.
   consent is the asked side's: on a terminal its human answers y/N, and an
   agent may accept only with `--human-approved`, its statement that its human
   agreed (`collab skills accept|decline ID`). A request asked with `--strong`
-  needs more: a Windows Hello gesture in collab's approval window, verified by
-  the hub against a key the human enrolled themselves (`collab consent enrol`);
-  no flag or typed answer accepts it. It holds only between clients that have
+  needs more, and is live in 2.2.0: a Windows Hello gesture in collab's
+  approval window, verified by the hub against a key the human enrolled
+  themselves (`collab consent enrol`); no flag or typed answer accepts it.
+  Passkey approval on other systems is not in this release. It holds only between clients that have
   it (#164 or later): an older asked side can still accept the ordinary way,
   which the asking side never counts as accepted.
 - **A quota and model route for every coding agent collab recognises.** Claude

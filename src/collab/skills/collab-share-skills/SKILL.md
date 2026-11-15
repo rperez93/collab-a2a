@@ -76,9 +76,10 @@ and the terminal y/N never accept a strong request, and a chat reply saying
 enrols a key first, themselves, in a terminal: `collab consent enrol` (two
 Hello prompts; the key is usable after a 10-minute cooling-off, and everyone in
 the session is told). `collab consent keys` lists it. Passkeys on other
-platforms need the passkey page, which is not in this build; and while the
-hub reports strong approval unavailable, a strong request cannot be accepted
-at all — nothing weaker is offered instead.
+platforms are not available yet (passkey enrolment is not in this build), so
+a strong request can be accepted only with Windows Hello; against a hub that
+reports strong approval unavailable (older than 2.2.0) it cannot be accepted at
+all — nothing weaker is offered instead.
 
 **Only between clients that have it.** Strong approval holds only when the
 asked side runs a collab with this client half (#164 or later). An older
