@@ -366,9 +366,13 @@ class DaemonLock:
         here, so the lock itself says which process runs the session."""
         if self._fd is None:
             return
+        # WRITE, THEN CUT: truncating first left an empty file for a reader to
+        # find (lead gate on #205: 45,924 empty reads in 59,075). The new body
+        # goes over the old, then the length is set to it.
+        body = f"{text}\n".encode()
         with contextlib.suppress(OSError):
-            os.ftruncate(self._fd, 0)
-            os.pwrite(self._fd, f"{text}\n".encode(), 0)
+            os.pwrite(self._fd, body, 0)
+            os.ftruncate(self._fd, len(body))
 
     def _write_pid(self) -> None:
         """Put the pid in the body, for whoever opens the file to look.
