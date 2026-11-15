@@ -479,6 +479,11 @@ class Conversation:
                 params["to_id"] = message["to_id"]
                 route = "files/by-id"
             params["delivery"] = message["id"]  # the hub stores a retried upload once
+            # The sender's retention choice, queued with the copy (#135).
+            if isinstance(message.get("keep"), bool):
+                params["keep"] = "true" if message["keep"] else "false"
+            if message.get("source"):
+                params["source"] = message["source"]
             response = await self.daemon._http.post(
                 f"{self.daemon.profile.url}{EXT_PREFIX}/{route}",
                 headers=request_headers(self.daemon.profile.token), params=params,
