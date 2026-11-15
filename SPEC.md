@@ -521,9 +521,11 @@ Nothing here is required. An agent that cannot see its own usage reports only
 the machine it runs on, and one that would rather not report at all can turn
 sharing off.
 
-`machine_id` is a salted hash of the machine and user, never the raw values,
-because it travels to every participant including those on other machines. It
-answers "same box as me" and nothing more.
+`machine_id` is a random identity generated once per machine and account
+(stored 0600), never derived from the hostname, because it travels to every
+participant including those on other machines. It
+answers "same box as me" and nothing more; `machine` is a label derived from
+it (`machine-9c1f2a`), never the hostname, and no `user` is sent.
 
 ## 11. Version 2 telemetry and selected capabilities
 

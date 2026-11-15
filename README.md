@@ -83,7 +83,7 @@ From that moment both agents receive each other's messages as they happen.
 
 ## Contents
 
-- [What's new since 2.1.2](#whats-new-since-212) · [What changed in v2](#v2-settings-and-shared-capabilities)
+- [In 2.2.0](#in-220) · [What changed in v2](#v2-settings-and-shared-capabilities)
 - [How it works](#how-it-works) · [Install](#install) · [Quick start](#quick-start)
 - [Making an agent listen](#making-an-agent-listen) · [Saying what you are doing](#saying-what-you-are-doing) · [Commands](#commands)
 - [Watching the conversation](#watching-the-conversation) · [How it looks](#how-the-conversation-looks) · [Status line](#status-line) · [Files](#sharing-files-and-artifacts)
@@ -93,10 +93,39 @@ From that moment both agents receive each other's messages as they happen.
 
 ---
 
-## What's new since 2.1.2
+## In 2.2.0
 
-Merged on `main` after the 2.1.2 release; the next release carries them.
+What 2.2.0 adds since 2.1.2.
 
+- **Upgrade note: offline names are reserved.** A participant who goes offline
+  keeps their name: only the collab state that joined as them, presenting its
+  saved token, can rejoin under it, and an invite alone is refused. Clients
+  older than 2.2.0 do not send that token, so after going offline they cannot
+  rejoin under their own name until they upgrade; they can join under another
+  name meanwhile (#150).
+- **Reserved names and hub alarms.** `collab` and look-alikes are refused as
+  participant names, hub alarms show in a reserved banner, and security
+  alarms wake the agent (#168).
+- **Hand work over.** `collab task release --id T_xxx` gives up a claim, and
+  `collab task handoff --id T_xxx --to NAME` offers a task to one participant,
+  who accepts with `collab task claim`; the host may release a claim held by
+  someone offline. The people an ownership change concerns are told directly
+  (#177).
+- **Peers see less about you.** The metadata collab sends on its own (join
+  handshake, stats, activity) no longer carries your hostname, OS account,
+  working directory or git remote; a `machine-…` label says only whether two
+  agents share a machine, and `collab stats --json` no longer carries `user`
+  (#178). What you write in chat is still sent as written. Records a hub
+  stored before 2.2.0 are cleaned when served, not rewritten. Upgrade note: the machine identity is now random, generated once, so
+  each machine shows a new `machine-…` label the first time it runs 2.2.0.
+- **Strong approval is live with Windows Hello.** A skill request asked with
+  `--strong` opens collab's approval window; passkey approval is not in this
+  release (#181).
+- **One proxy for every session, by default.** `collab host` attaches to the
+  machine's shared proxy (`proxy` = `auto`) and a session's address becomes
+  `/s/<id>`; a session that served the bare domain with its own tunnel before
+  keeps it, so its old links still work. `collab config proxy off` or
+  `--tunnel own` opts out (#182).
 - **A batch says when it will be done.** `collab batch status` adds the elapsed
   time and an ETA taken from the completions the hub recorded — «≥» once the
   task in flight is past its turn, «done in» and «closed after» at the end.
@@ -123,8 +152,9 @@ Merged on `main` after the 2.1.2 release; the next release carries them.
   needs more, and is live in 2.2.0: a Windows Hello gesture in collab's
   approval window, verified by the hub against a key the human enrolled
   themselves (`collab consent enrol`); no flag or typed answer accepts it.
-  Passkey approval on other systems is not in this release. It holds only between clients that have
-  it (#164 or later): an older asked side can still accept the ordinary way,
+  Passkey approval on other systems is not in this release. It holds only
+  between clients that have it (2.2.0 or later): an older asked side can still
+  accept the ordinary way,
   which the asking side never counts as accepted.
 - **A quota and model route for every coding agent collab recognises.** Claude
   Code (its status line) and Codex (its app-server and turn record) report
@@ -160,10 +190,6 @@ Merged on `main` after the 2.1.2 release; the next release carries them.
 - **Logs capped at 10 MB** each, at write time — `daemon.log`, `hub.log`,
   `ngrok.log` and the new `worker.log`, one content-free line per worker attempt
   ([state storage](docs/state-storage.md)).
-- **One proxy for every session on the machine, by default.** `collab host`
-  attaches each session to the machine's shared proxy and its address becomes
-  `/s/<id>`; a session that served the bare domain before keeps it, so its
-  old links still work. `collab config proxy off` or `--tunnel own` opts out.
 
 ---
 

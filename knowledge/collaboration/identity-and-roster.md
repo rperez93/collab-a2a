@@ -54,6 +54,11 @@ needs in order to say something useful at once.[^hub-src] Per participant:
 `id`, `name`, `is_host`, `connected`, `focus`, `repo`, `branch`, `machine`,
 `machine_id`, `user`, `color`, `stats`, `activity`, `last_seen`, `joined_at`.
 
+(Later than the pin, #178, v2.2.0: `machine` is a `machine-…` label derived
+from `machine_id`, never the hostname, and `user` is no longer sent: the hub
+neither relays nor stores the OS account in new writes; rows stored before
+2.2.0 are left at rest and cleaned when served.)
+
 And at the top level: `session_id`, `title`, `host`, `you`, `you_id`, `rooms`,
 `participants`, `tasks` (open only), `batch`, `recent` history, `seq` and
 `server_time`.
