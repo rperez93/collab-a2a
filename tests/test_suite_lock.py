@@ -34,7 +34,9 @@ def test_a_second_holder_waits_and_is_told_who_holds_it(tmp_path, monkeypatch):
             print('GOT', flush=True)
         """)], stdout=subprocess.PIPE, text=True)
         assert _line(waiter) == f"WAIT {os.getpid()}"
-        assert waiter.poll() is None, "it waits while the first run holds the lock"
+        # The lock must actually hold it back: nothing more for half a second.
+        held_back, _, _ = select.select([waiter.stdout], [], [], 0.5)
+        assert not held_back and waiter.poll() is None, "it got the lock while the first run held it"
         first.close()
         assert _line(waiter) == "GOT"
         assert waiter.wait(10) == 0
@@ -81,3 +83,30 @@ def test_two_pytest_sessions_in_one_process_each_take_and_release_the_lock(tmp_p
                           capture_output=True, text=True, timeout=60)
     assert "CODES [0, 0] HELD None" in done.stdout, done.stdout + done.stderr
     assert lock.read_text().strip().isdigit(), "each session took the lock and stamped its pid"
+
+
+@pytest.mark.parametrize("count,collect_only,full", [
+    (999, False, False), (1000, False, True), (5000, True, False)])
+def test_only_a_full_run_that_runs_tests_takes_the_lock(count, collect_only, full, monkeypatch):
+    monkeypatch.setattr(suite_lock, "FULL_RUN", 1000)
+    assert suite_lock.is_full_run(count, collect_only) is full
+
+
+def test_an_unopenable_lock_file_lets_the_run_go_ahead(tmp_path, monkeypatch):
+    """Another account can own the path on a shared machine: no lock, no error."""
+    monkeypatch.delenv("COLLAB_TEST_LOCK", raising=False)
+    assert suite_lock.acquire(tmp_path / "missing-dir" / "x.lock") is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="no fcntl: the lock is off on Windows")
+def test_the_wait_has_a_ceiling(tmp_path, monkeypatch):
+    monkeypatch.delenv("COLLAB_TEST_LOCK", raising=False)
+    path = tmp_path / "suite.lock"
+    first = suite_lock.acquire(path)
+    try:
+        told = []
+        assert suite_lock.acquire(path, on_wait=told.append, max_wait=0.5) is None
+        assert told == [str(os.getpid())]
+    finally:
+        first.close()
+
