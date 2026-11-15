@@ -109,3 +109,41 @@ def test_a_roster_poll_never_rescans_the_history(client, session, host_headers, 
     for _ in range(5):
         client.get("/ext/collab/v1/snapshot", headers=host_headers)
     assert len(calls) <= 1
+
+
+def test_a_status_written_during_the_check_is_never_overwritten(client, session, host_headers):
+    """friday's P2 on #192: the predicate and the write are one locked edit, so
+    a newer status written in between lands after it and is kept."""
+    import threading
+    bob = _join(client, session)
+    one = _task(client, host_headers, "propose", title="one").json()["task"]
+    two = _task(client, host_headers, "propose", title="two").json()["task"]
+    _task(client, _headers(bob), "claim", id=one["id"])
+    hub = client.app.state.hub
+    bob_id = next(p.id for p in hub.store.participants() if p.name == "bob")
+    writer = threading.Thread(target=hub.set_activity, args=(bob_id, {
+        "state": "working", "what": "two", "task": two["id"]}))
+
+    def allowed(current):
+        writer.start()          # tries to write while the edit is open
+        time.sleep(0.2)
+        return current.get("task") == one["id"]
+    hub._set_activity_if(bob_id, {"state": "idle"}, allowed)
+    writer.join(5)
+    stored = hub.store.participant_by_id(bob_id).meta.get("activity") or {}
+    assert stored.get("task") == two["id"], "the newer status survives"
+
+
+def test_a_pr_on_a_closed_task_leaves_the_status_alone(client, session, host_headers):
+    """friday's LOW on #192: the PR is still recorded, but a finished task
+    does not put its owner back to work."""
+    bob = _join(client, session)
+    task = _task(client, host_headers, "propose", title="done").json()["task"]
+    _task(client, _headers(bob), "claim", id=task["id"])
+    _task(client, _headers(bob), "complete", id=task["id"])
+    client.post("/ext/collab/v1/activity", headers=_headers(bob), json={"state": "idle", "what": "waiting on review"})
+    r = client.post("/ext/collab/v1/task-prs", headers=_headers(bob),
+                    json={"id": task["id"], "url": "https://github.com/o/r/pull/9"})
+    assert r.status_code == 200
+    shown = _status(client, host_headers, "bob")
+    assert (shown["state"], shown.get("what")) == ("idle", "waiting on review")
