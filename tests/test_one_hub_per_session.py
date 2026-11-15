@@ -38,7 +38,9 @@ def test_a_second_hub_on_a_session_exits_and_leaves_the_first_ones_record(tmp_pa
         second.communicate()
         raise AssertionError("a second hub kept running on a session that already has one")
     assert second.returncode == 0
-    assert "another hub already runs session" in out and "4242" in out, out
+    # The log names the hub that HOLDS the lock (this test process), not
+    # whatever hub.json says.
+    assert "another hub already runs session" in out and f"pid {os.getpid()}" in out, out
     assert HubConfig.load(cfg.session_id, cfg.home).pid == 4242, "the first hub's pid is untouched"
 
 
@@ -85,7 +87,8 @@ def test_a_losing_hub_spawned_for_real_never_takes_over_the_record(tmp_path, mon
     holder = subprocess.Popen([sys.executable, "-c", (
         "import sys, time; from collab.client import exclusive; "
         f"lock = exclusive.DaemonLock({str(cfg.dir)!r}, name=exclusive.HUB_LOCK_FILE); "
-        "assert lock.acquire(); print('HELD', flush=True); time.sleep(60)")],
+        "assert lock.acquire(); lock.note(exclusive.stamp_for().encode()); "
+        "print('HELD', flush=True); time.sleep(60)")],
         stdout=subprocess.PIPE, text=True, env={**os.environ})
     try:
         assert holder.stdout.readline().strip() == "HELD"
@@ -125,15 +128,49 @@ def test_stop_session_stops_the_lock_holder_even_when_the_record_names_the_loser
     holder = subprocess.Popen([sys.executable, "-c", (
         "import time; from collab.client import exclusive; "
         f"lock = exclusive.DaemonLock({str(cfg.dir)!r}, name=exclusive.HUB_LOCK_FILE); "
-        "assert lock.acquire(); print('HELD', flush=True); time.sleep(60)")],
+        "assert lock.acquire(); lock.note(exclusive.stamp_for().encode()); "
+        "print('HELD', flush=True); time.sleep(60)")],
         stdout=subprocess.PIPE, text=True, env={**os.environ})
     try:
         assert holder.stdout.readline().strip() == "HELD"
-        assert exclusive.holder(cfg.dir, name=exclusive.HUB_LOCK_FILE) == holder.pid
+        from collab.server.session import lock_holder
+        assert lock_holder(cfg).pid == holder.pid
         assert stop_session(HubConfig.load(cfg.session_id, cfg.home))["hub_stopped"]
         assert holder.wait(10) is not None
     finally:
         if holder.poll() is None:
             holder.kill()
             holder.wait()
-    assert exclusive.holder(cfg.dir, name=exclusive.HUB_LOCK_FILE) == 0, "a released lock names nobody"
+    from collab.server.session import lock_holder
+    assert lock_holder(cfg) is None, "a released lock names nobody"
+
+
+def test_the_daemon_does_not_revive_while_another_hub_holds_the_lock(tmp_path, monkeypatch):
+    """The record names a dead hub, but a live one holds hub.lock (it won a
+    race and has not saved yet): reviving would start a third."""
+    import os
+    from types import SimpleNamespace
+    from collab.client import daemon as daemon_mod
+    from collab.server import session as session_mod
+    cfg = _session(tmp_path, monkeypatch)
+    dead = subprocess.Popen([sys.executable, "-c", "pass"]); dead.wait()
+    cfg.pid, cfg.pid_stamp = dead.pid, ""
+    cfg.save()
+    holder = subprocess.Popen([sys.executable, "-c", (
+        "import time; from collab.client import exclusive; "
+        f"lock = exclusive.DaemonLock({str(cfg.dir)!r}, name=exclusive.HUB_LOCK_FILE); "
+        "assert lock.acquire(); lock.note(exclusive.stamp_for().encode()); "
+        "print('HELD', flush=True); time.sleep(60)")],
+        stdout=subprocess.PIPE, text=True, env={**os.environ})
+    try:
+        assert holder.stdout.readline().strip() == "HELD"
+        spawned = []
+        monkeypatch.setattr(session_mod, "spawn_hub", lambda *a, **k: spawned.append(a) or 0)
+        fake = SimpleNamespace(profile=SimpleNamespace(is_host=True, session_id=cfg.session_id, home=cfg.home),
+                               paths=SimpleNamespace(root=cfg.dir))
+        daemon_mod.Daemon._revive_hub_if_host(fake)
+        assert spawned == []
+    finally:
+        holder.kill()
+        holder.wait()
+
