@@ -2392,8 +2392,11 @@ already ended; `collab file list --all` adds those, each marked collected,
 expired or withdrawn, so a file that left the list is never mistaken for one
 that was lost.
 
-Documents and reviews (`.md`, `.rst`, `.txt`, `.pdf`, `.docx`, `.odt`, `.html`,
-`.json`, case-insensitive) are **kept until explicit withdrawal** by default.
+Design and review documents (`.md`, `.rst`, `.pdf`, case-insensitive) are
+**kept until explicit withdrawal** by default; anything else, `.json` and
+`.txt` reports included, is temporary unless sent with `--keep`. Kept files are
+capped at 50 MiB per sender and 250 MiB per session: over either, an upload is
+stored as temporary and `collab file send` says why.
 Receipts still record who collected them, but do not delete them. This policy
 is enforced by the host even when an older client acknowledges the download.
 Existing uploads retain their old temporary policy; updating does not restore

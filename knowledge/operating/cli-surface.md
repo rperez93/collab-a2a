@@ -306,7 +306,8 @@ list.
   R22b, v2.2.0 and after.)
 - `collab file list --all` shows every file, including those that ended, with
   why — collected, expired or withdrawn; without it the list counts them.
-- `collab file send` keeps documents (`.md`, `.pdf`, `.docx` and the like) on the host
+- `collab file send` keeps documents (`.md`, `.rst`, `.pdf`; capped at 50 MiB per
+  sender and 250 MiB per session, over which it stores temporary and says so) on the host
   until withdrawn; `--temporary` restores receipt/expiry deletion, `--keep`
   keeps any file, and `--source URL` records an HTTPS original that collab never
   fetches. The choice travels with a file the worker queues. (Later than the
