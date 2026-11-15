@@ -172,9 +172,9 @@ The following routes are implemented in the draft; production readiness is
 reported separately by capability discovery.
 
 * `GET /capabilities` returns `{api_version:1, available:true,
-  methods:["hello"], supported_methods:["hello","passkey"],
+  methods:["hello","passkey"], supported_methods:["hello","passkey"],
   algorithms:{hello:[-257],passkey:[-7,-257]}, attestation_verification:false}`
-  from 2.2.0. An older hub reports `available:false` with
+  after 2.2.0 (2.2.0 itself returned `methods:["hello"]`). An older hub reports `available:false` with
   `reason:"operation_integration_pending"`; its 404 also means unavailable.
 * `GET /keys` returns the authenticated participant's credential metadata:
   `credential_id`, `method`, `algorithm`, `fingerprint`, `created_at`,

@@ -350,8 +350,9 @@ the TPM, and Windows asks for a fingerprint, a face or a PIN before every
 signature. An agent can ask for a signature; it cannot complete one.
 
 `collab.consent_hello` is the adapter for that. From 2.2.0 the hub-side
-registry, challenges and verification are live for Windows Hello (passkey is
-not yet), and a strong request goes through it:
+registry, challenges and verification are live for Windows Hello, and after
+2.2.0 for passkeys on other systems (Windows and WSL always use Hello), and a
+strong request goes through it:
 
 - **Approvals start in collab's own window**, not from a command the agent could
   type. The window shows who is asking — the participant id the hub assigned
