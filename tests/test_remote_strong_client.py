@@ -43,6 +43,9 @@ def accept(r):
 def test_strong_remote_acceptance_delivers_exactly_once(remote, monkeypatch):
     assert accept(remote) == 0
     assert remote.inbox.list()[0]['state'] == 'accepted'
+    window = remote.world.hello.windows[-1]
+    canonical = json.loads(window['review_text'])
+    assert all(window[k] == canonical[k] for k in ('subject', 'destination', 'authority'))
     attempts = []
     async def exchange(command, prompt, cwd, env, timeout, callback):
         attempts.append((command, prompt, cwd))

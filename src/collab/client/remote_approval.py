@@ -25,6 +25,7 @@ def verify_review(answer, prepared, row, binding, profile):
     expected = {'api_version': 1, 'session_id': profile.session_id,
                 'requester_id': offer['sender_id'], 'target_id': profile.participant_id,
                 'operation': 'remote-deliver', 'source_seq': source_seq,
+                'subject': 'Remote ' + offer['kind'], 'destination': binding['target'],
                 'offer': offer, 'offer_digest': digest(offer), 'binding': binding,
                 'binding_digest': binding_digest(binding['target'], binding['command'], binding['cwd']),
                 'authority': AUTHORITY}
@@ -65,8 +66,8 @@ def accept(hub, profile, inbox, row, binding, ensure_current):
     prepared = api._call('POST', '/remote/prepare', {'source_seq': source_seq, 'binding': binding})
     reviewed = verify_review(api.review(prepared.get('request_id')), prepared, row, binding, profile)
     request = {'request_id': reviewed.request_id, 'requester_id': row['sender_id'],
-        'requester_name': row['sender_id'], 'subject': 'Remote ' + row['kind'],
-        'destination': binding['target'], 'authority': AUTHORITY,
+        'requester_name': row['sender_id'], 'subject': reviewed.review['subject'],
+        'destination': reviewed.review['destination'], 'authority': reviewed.review['authority'],
         'digest': reviewed.digest, 'credential_id': key['credential_id'],
         'review_text': json.dumps(reviewed.review, indent=2, ensure_ascii=False, sort_keys=True),
         'canonical_review': strong._b64url(reviewed.canonical), 'expires_at': reviewed.expires_at}
