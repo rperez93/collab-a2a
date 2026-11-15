@@ -15,7 +15,6 @@ import shutil
 import socket as socket_module
 import stat
 import subprocess
-import tempfile
 import time
 
 from ..source_command import run
@@ -210,10 +209,17 @@ def _ancestor_socket(tty, deadline):
         return None, (), False
 
 
+def _socket_directory():
+    # tmux uses TMUX_TMPDIR or /tmp, not the application's temporary folder.
+    # macOS commonly sets TMPDIR to a per-user directory; tempfile.gettempdir()
+    # selected that unrelated directory and hid a live default tmux server.
+    return Path(os.environ.get("TMUX_TMPDIR") or "/tmp") / f"tmux-{os.getuid()}"
+
+
 def sockets(*, deadline=None):
     if not hasattr(os, "getuid"):
         return []
-    directory = Path(os.environ.get("TMUX_TMPDIR") or tempfile.gettempdir()) / f"tmux-{os.getuid()}"
+    directory = _socket_directory()
     try:
         details = directory.lstat()
         if not stat.S_ISDIR(details.st_mode) or details.st_uid != os.getuid() or details.st_mode & 0o077:

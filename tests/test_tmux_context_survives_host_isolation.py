@@ -31,6 +31,40 @@ def test_inherited_socket_paths_with_commas_keep_the_exact_pane(monkeypatch):
     assert context.detect() == context.Target("/private/a,b/socket", "%9")
 
 
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="tmux ownership uses POSIX user ids")
+def test_tmux_socket_root_does_not_follow_the_applications_tmpdir(tmp_path, monkeypatch):
+    """macOS TMPDIR names application scratch space, not tmux's default socket root."""
+    import tempfile
+
+    application_cache = tmp_path / "application-cache"
+    application_cache.mkdir()
+    monkeypatch.delenv("TMUX_TMPDIR", raising=False)
+    monkeypatch.setenv("TMPDIR", str(application_cache))
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    assert context._socket_directory() == Path("/tmp") / f"tmux-{os.getuid()}"
+    monkeypatch.setenv("TMUX_TMPDIR", str(tmp_path / "tmux-override"))
+    assert context._socket_directory() == tmp_path / "tmux-override" / f"tmux-{os.getuid()}"
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="owned Unix sockets require POSIX user ids")
+def test_a_directory_over_256_entries_refuses_even_a_live_socket(monkeypatch):
+    """Do not choose a server from a silently truncated directory (gate mutant M6)."""
+    import socket
+    import tempfile
+
+    # Keep the actual Unix address short, independently of pytest's test-name path.
+    with tempfile.TemporaryDirectory(prefix="owned-tmux-cap-") as root:
+        directory = Path(root) / f"tmux-{os.getuid()}"
+        directory.mkdir(mode=0o700)
+        with socket.socket(socket.AF_UNIX) as server:
+            server.bind(str(directory / "live"))
+            server.listen(2)
+            for index in range(256):
+                (directory / f"stale-{index}").touch()
+            monkeypatch.setenv("TMUX_TMPDIR", root)
+            assert context.sockets() == []
+
+
 def test_matching_terminal_wins_over_an_unrelated_active_pane(monkeypatch):
     monkeypatch.setattr(context.shutil, "which", lambda _: "/usr/bin/tmux")
     monkeypatch.setattr(context, "own_tty", lambda **kwargs: "/dev/pts/7")

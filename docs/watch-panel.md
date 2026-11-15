@@ -35,6 +35,8 @@ ambiguous or incomplete evidence leaves the terminal untouched and reports
 that the pane could not be identified; open `collab watch` in a separate pane
 when the sandbox hides both the tty and socket. Lookup and split commands have
 output caps and deadlines, and an uncertain split timeout is not retried.
+Socket discovery uses tmux's `TMUX_TMPDIR` override or `/tmp`; an application's
+`TMPDIR` does not redirect it to an unrelated cache directory.
 
 The opt-in native-host checks live in `tests/test_tmux_native_host.py`. Run
 them from the actual Claude Code or Codex tool command, with an absolute branch
@@ -69,8 +71,8 @@ env PYTHONPATH="$PWD/src" python3 -m pytest -q \
 Without the native-host opt-in, the checks skip. A missing requested CLI or
 tmux also skips; an opted-in context mismatch fails. A default skip or an
 isolated synthetic tmux fixture does not satisfy native-host acceptance.
-An optional absolute `COLLAB_NATIVE_TMUX_REPORT` path retains metadata and
-frame hashes with a separate filename for each test. Reports remain incomplete
+An optional absolute `COLLAB_NATIVE_TMUX_REPORT` file path retains metadata and
+frame recognition with a separate filename for each test. Reports remain incomplete
 until that test and its required cleanup have succeeded.
 
 Participant colours are dealt randomly without reuse while colours remain, and
