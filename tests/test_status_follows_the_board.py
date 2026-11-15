@@ -187,3 +187,24 @@ def test_a_pr_on_a_closed_task_leaves_the_status_alone(client, session, host_hea
     assert r.status_code == 200
     shown = _status(client, host_headers, "bob")
     assert (shown["state"], shown.get("what")) == ("idle", "waiting on review")
+
+
+def test_a_refused_conditional_update_writes_nothing(client, session, host_headers, monkeypatch):
+    """Lead gate on #192: when the predicate refuses, no UPDATE is issued."""
+    bob = _join(client, session)
+    hub = client.app.state.hub
+    bob_id = next(p.id for p in hub.store.participants() if p.name == "bob")
+    writes = []
+    class Spy:
+        def __getattr__(self, name):
+            return getattr(hub.store.__dict__["_real_db"], name)
+        def execute(self, sql, *a):
+            if sql.startswith("UPDATE participants"):
+                writes.append(sql)
+            return hub.store.__dict__["_real_db"].execute(sql, *a)
+    hub.store.__dict__["_real_db"] = hub.store._db
+    monkeypatch.setattr(hub.store, "_db", Spy())
+    hub._set_activity_if(bob_id, {"state": "idle"}, lambda current: False)
+    assert writes == []
+    hub._set_activity_if(bob_id, {"state": "idle"}, lambda current: True)
+    assert len(writes) == 1
