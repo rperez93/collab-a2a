@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from ..batch import DONE_STATE as COMPLETED_STATE
-from ..protocol import Envelope
+from ..protocol import Envelope, public_stats
 from ..names import validate_participant_name
 from . import skill_approval_policy
 
@@ -633,7 +633,14 @@ class Store:
                     ).fetchone()
                     if row:
                         self._db.commit()
-                        return Envelope.from_dict(json.loads(row[0])), False
+                        # The ORIGINAL as stored — perhaps by a hub before this
+                        # release, with the sender's machine in its stats. The
+                        # acknowledgements send only seq and ts, but whatever a
+                        # caller does with this object, it is the clean copy
+                        # (review of #178, friday).
+                        stored = Envelope.from_dict(json.loads(row[0]))
+                        stored.stats = public_stats(stored.stats)
+                        return stored, False
                 skill_approval_policy.check(self._db, env)
                 cur = self._db.execute(
                     "INSERT INTO events (kind, room, sender, recipient, sender_id,"
