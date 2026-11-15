@@ -332,14 +332,18 @@ def _request(**extra):
     return base
 
 
+_ABSENT = object()
+
+
 def _issued(**extra):
-    """The hub's `POST /requests/{id}/challenge` response, as v1 shapes it."""
+    """The hub's `POST /requests/{id}/challenge` response, as v1 shapes it.
+    A field given as _ABSENT is left out entirely."""
     base = {"api_version": 1, "request_id": "q_1", "challenge_id": "c_1",
             "credential_id": "collab-alice", "method": "hello",
             "challenge": CHALLENGE_URL, "expires_at": int(time.time()) + 120,
             "digest": DIGEST}
     base.update(extra)
-    return base
+    return {key: value for key, value in base.items() if value is not _ABSENT}
 
 
 class Fetch:
@@ -649,6 +653,11 @@ def test_the_window_signs_a_url_safe_challenge_and_answers_unpadded(fake):
     {"challenge": hello.b64url(CHALLENGE[:31])},  # not a hub challenge's size
     {"challenge": hello.b64url(CHALLENGE + b"!")},
     {"challenge_id": ""}, {"expires_at": "soon"}, {"expires_at": 1.5e9},
+    {"request_id": "q_other"},                   # same key and digest, another request
+    {"method": _ABSENT},                         # method left out
+    {"request_id": _ABSENT},                     # request left out
+    {"expires_at": 10 ** 400},                   # would overflow float()
+    {"expires_at": int(time.time()) + 3600},     # beyond any hub challenge
 ])
 def test_a_challenge_that_is_not_for_the_reviewed_operation_is_never_signed(fake, bad):
     """The human approved ONE review. A challenge whose digest, credential,

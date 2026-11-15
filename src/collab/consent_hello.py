@@ -669,9 +669,12 @@ def open_window(request: dict, fetch_challenge: Callable[[], dict]) -> dict:
     # VALIDATED BEFORE THE WINDOW: a request that could not be signed must not
     # ask a human to read and approve it first.
     cred = request.get("credential_id")
+    request_id = request.get("request_id")
     try:
         _name(cred)
         digest = _digest(request.get("digest"))
+        if not isinstance(request_id, str) or not request_id:
+            raise ValueError("no request id")
     except (ValueError, TypeError):
         return {"choice": "unavailable", "reason": "BadRequest"}
     review = _visible(request.get("review_text"), lines=True)
@@ -702,8 +705,8 @@ def open_window(request: dict, fetch_challenge: Callable[[], dict]) -> dict:
         # nothing is approved or declined on the human's behalf.
         return {"choice": "unavailable", "reason": "ChallengeFailed"}
     try:
-        challenge, challenge_id, expires_at = _issued(issued, cred, digest)
-    except (ValueError, TypeError, KeyError):
+        challenge, challenge_id, expires_at = _issued(issued, cred, digest, request_id)
+    except (ValueError, TypeError, KeyError, OverflowError):
         return {"choice": "unavailable", "reason": "BadChallenge"}
     left = expires_at - time.time()
     if left < SIGN_FLOOR:
@@ -734,15 +737,26 @@ def open_window(request: dict, fetch_challenge: Callable[[], dict]) -> dict:
             "proof": {"type": "hello", "signature": b64url(signature)}}
 
 
-def _issued(issued: Any, cred: str, digest: str) -> tuple[bytes, str, float]:
+# The hub issues a challenge for 120 s; 30 s more absorbs clock skew between
+# this machine and the hub. Anything further out is not a hub challenge, and
+# an unbounded integer would overflow float() (arma's review of #151: 10**400
+# raised OverflowError out of the adapter instead of refusing).
+CHALLENGE_HORIZON = 120 + 30
+
+
+def _issued(issued: Any, cred: str, digest: str, request_id: str) -> tuple[bytes, str, float]:
     """The hub's `/challenge` answer, checked against what the human reviewed:
-    the same credential and the SAME DIGEST — a challenge for any other
-    operation is never signed under this review."""
+    the SAME REQUEST, the same credential, the SAME DIGEST and an explicit
+    Hello method — a challenge for any other request is never signed under this
+    review, even one whose operation hashes the same (arma's review of #151:
+    another request_id with this key and digest still signed, and so did an
+    answer that left the method out)."""
     if not isinstance(issued, dict):
         raise ValueError("not a challenge")
-    if issued.get("credential_id") != cred or issued.get("digest") != digest:
+    if (issued.get("request_id") != request_id or issued.get("credential_id") != cred
+            or issued.get("digest") != digest):
         raise ValueError("a challenge for something else")
-    if issued.get("method", "hello") != "hello":
+    if issued.get("method") != "hello":
         raise ValueError("not a Hello challenge")
     challenge_id = issued["challenge_id"]
     expires_at = issued["expires_at"]
@@ -750,6 +764,8 @@ def _issued(issued: Any, cred: str, digest: str) -> tuple[bytes, str, float]:
         raise ValueError("no challenge id")
     if type(expires_at) is not int:
         raise ValueError("expiry is an integer Unix second")
+    if not 0 < expires_at - time.time() <= CHALLENGE_HORIZON:
+        raise ValueError("expiry is not a hub challenge's")
     return _challenge32(issued["challenge"]), challenge_id, float(expires_at)
 
 

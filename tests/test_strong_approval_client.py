@@ -21,6 +21,8 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+
+from collab.client.hub_client import HubError
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
@@ -89,9 +91,10 @@ class FakeHello:
         if self.choice != "approve":
             return {"choice": self.choice}
         issued = fetch_challenge()
-        # The adapter's own checks, unchanged: digest, credential, shape.
+        # The adapter's own checks, unchanged: request, digest, credential,
+        # method, shape and a hub challenge's expiry.
         raw, challenge_id, _ = consent_hello._issued(issued, request["credential_id"],
-                                                     request["digest"])
+                                                     request["digest"], request["request_id"])
         signature = self._sign(request["credential_id"], raw)
         return {"choice": "approve", "method": "hello", "challenge_id": challenge_id,
                 "credential_id": request["credential_id"],
@@ -234,10 +237,14 @@ def test_a_chat_saying_accepted_never_marks_a_strong_request_accepted(world, mon
     """The legacy reply — a `skill_response` chat, from the receiver itself or
     anyone copying it — carries no verified gesture."""
     seq = _ask(world)
-    world.bob_hub.send(Envelope(kind=KIND_CHAT, sender="bob", to="alice",
-                                text="accepted your request",
-                                body={"skill_response": {"id": "sr_abcdef012345",
-                                                         "state": "accepted", "text": ""}}))
+    # Two layers. The hub now refuses the legacy reply to a strong request
+    # outright (arma's 4e9e3bd: strong skill policy enforced across
+    # transports); and even had it arrived, the client would not count it.
+    with pytest.raises(HubError, match="strong approval endpoint"):
+        world.bob_hub.send(Envelope(kind=KIND_CHAT, sender="bob", to="alice",
+                                    text="accepted your request",
+                                    body={"skill_response": {"id": "sr_abcdef012345",
+                                                             "state": "accepted", "text": ""}}))
     [match] = _requests(world)
     assert match["state"] == "pending"
     forged = SimpleNamespace(kind=KIND_CHAT, sender_id=world.bob.id, to_id="p_x", body={
@@ -482,13 +489,14 @@ def test_the_requester_sees_a_strong_acceptance_only_from_the_hubs_event(world, 
     """The requester reads its own requests back (`skills sent`): strong ones
     are accepted only by the hub's system event from the asked participant's
     id to its own, for exactly the sequence and request id it sent. The digest
-    is RECORDED and said to be so: it cannot be recomputed here until the hub
-    makes the review recomputable (asked of the core owner)."""
+    is RECOMPUTED: the hub's event now carries the reviewed bytes
+    (`canonical_review`, the core's must-fix 2), so the requester checks that
+    what was approved is exactly what it asked for."""
     seq = _accepted(world, monkeypatch)
     [item] = cli._skill_requests_sent(world.alice_hub, _alice(world))
     assert item["strength"] == "strong" and item["state"] == "accepted"
     assert item["seq"] == seq and len(item["digest"]) == 64
-    assert item["digest_checked"] is False
+    assert item["digest_checked"] is True
 
 
 def test_a_digest_the_requester_can_compute_is_compared(world, monkeypatch):
@@ -507,11 +515,14 @@ def test_a_digest_the_requester_can_compute_is_compared(world, monkeypatch):
 
 def test_a_peers_chat_saying_accepted_leaves_the_requesters_strong_request_pending(world):
     _ask(world)
-    world.bob_hub.send(Envelope(kind=KIND_CHAT, sender="bob", to="alice",
-                                text="accepted",
-                                body={"skill_response": {"id": "sr_abcdef012345",
-                                                         "state": "accepted", "text": ""},
-                                      "strong_skill_response": {"state": "accepted"}}))
+    # The hub refuses a peer's strong_skill_response outright (server-owned
+    # since arma's 4e9e3bd); the requester's own reading stays pending either way.
+    with pytest.raises(HubError, match="server-owned"):
+        world.bob_hub.send(Envelope(kind=KIND_CHAT, sender="bob", to="alice",
+                                    text="accepted",
+                                    body={"skill_response": {"id": "sr_abcdef012345",
+                                                             "state": "accepted", "text": ""},
+                                          "strong_skill_response": {"state": "accepted"}}))
     [item] = cli._skill_requests_sent(world.alice_hub, _alice(world))
     assert item["state"] == "pending"
 
