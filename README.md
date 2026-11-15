@@ -111,7 +111,7 @@ What 2.3.0 adds since 2.2.0.
   runs until its human accepts it with a strong approval (Windows Hello or a
   passkey) on the reviewed offer, one delivery at a time. Remote delivery is
   on by default and is the host's switch: `collab config remote_delivery off`
-  turns it off for the session. The receiver's command and working directory
+  turns it off for every hub this machine hosts. The receiver's command and working directory
   are held on the hub only while a request is open (#213).
 - **Strong approval off Windows.** `collab consent enrol` enrols a passkey
   from the terminal on Linux and macOS, and the hub advertises passkey beside
@@ -137,7 +137,9 @@ What 2.3.0 adds since 2.2.0.
   20 PR links; `collab task pr-remove` frees one (#207).
 - **Shared documents are kept** until their sender withdraws them, within a
   per-sender and per-session bound. Only `.md`, `.rst` and `.pdf` files are
-  kept by default; others need `--keep` (#209).
+  kept by default; others need `--keep`. A `--keep` that the hub never
+  confirms is flagged, also when the file goes through the worker (#209,
+  #214).
 - **Process resources in the telemetry**: bounded per-role figures (daemon,
   hub, worker, proxy, agent, work and watch), and peers now see the machine's
   memory, load and CPU count (#193).
