@@ -437,3 +437,26 @@ def test_slow_sampler_initialization_is_also_off_loop(tmp_path, monkeypatch):
             release.set()
             await instance._resource_task
     asyncio.run(run())
+
+
+def test_machine_figures_reach_peers_through_the_hub_and_nothing_else_does():
+    """The hub's stats filter (#178) drops any key named `machine`, meant for
+    the hostname. A resource sample keeps its machine-wide memory, load and
+    warnings under that name, so peers saw none of them. The sample now passes
+    through its own numeric schema instead — which still refuses a hostname
+    or any other text smuggled into it."""
+    import json
+    from pathlib import Path
+    from collab.protocol import public_stats
+    from collab.resources import sanitise
+    fixture = json.loads((Path(__file__).parent.parent / 'docs' / 'resources-fixture.json').read_text())
+    sample = fixture.get('resources', fixture)
+    sample['machine']['hostname'] = 'build-box.example.internal'
+    sample['machine']['load1'] = 3.2
+    shown = public_stats({'resources': sample})['resources']
+    assert shown == sanitise(sample)
+    assert shown['machine']['memory_available_bytes'] == sample['machine']['memory_available_bytes']
+    assert shown['machine']['load1'] == 3.2
+    assert 'build-box' not in json.dumps(shown)
+    # Anywhere else, `machine` is still the hostname key and still dropped.
+    assert 'build-box' not in json.dumps(public_stats({'nested': {'machine': 'build-box'}}))

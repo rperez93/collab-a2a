@@ -353,6 +353,16 @@ def public_stats(stats: Any, _depth: int = 0) -> dict[str, Any]:
     for key, value in stats.items():
         if not isinstance(key, str) or key.lower() in PRIVATE_KEYS:
             continue
+        if key == "resources" and _depth == 0:
+            # A RESOURCE SAMPLE HAS ITS OWN, STRICTER SCHEMA (R16): numbers and
+            # fixed enums only, no free text at all. Its machine-wide figures
+            # sit under `machine`, which the generic filter reads as the
+            # hostname key and drops — every peer lost memory, load and the
+            # low-memory warning (found replaying #110 onto #178). The fixed
+            # schema admits no hostname, so it replaces the generic filter here.
+            from .resources import sanitise as sanitise_resources
+            out[key] = sanitise_resources(value)
+            continue
         if isinstance(value, dict):
             # AN EMPTY MAP THAT ARRIVED EMPTY IS A STATEMENT: `quotas: {}` is
             # «I have no quota», and the hub clears the stored one on it. Only

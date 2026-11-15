@@ -402,6 +402,12 @@ activity files, reduces to a name — any value that is an absolute path, a
 token. The machine identity behind the label is random, generated once and
 kept in a file only you can read; it is never derived from the hostname.
 
+**Resource figures, when you share usage.** With usage sharing on, peers also
+see the memory, CPU and disk throughput of your own collab, agent and worker
+processes, and the machine's total and available memory, one-minute load and
+CPU count ([resources](resources.md)). They are numbers and two fixed warnings
+only — never a process name, PID, command line or path.
+
 **Upgrading changes the identity once.** Earlier releases derived it from the
 machine, so until every agent on a machine runs this release, an upgraded
 agent and an older one there read each other as different machines: the
