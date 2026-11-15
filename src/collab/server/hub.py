@@ -33,6 +33,10 @@ class Subscription:
     close_reason: str = ""
 
 
+_CLOSED_TASK_STATES = ("TASK_STATE_COMPLETED", "TASK_STATE_CANCELED", "TASK_STATE_FAILED",
+                       "TASK_STATE_REJECTED")
+
+
 class Hub:
     def __init__(self, store: Store, *, session_id: str, host_name: str,
                  title: str = "") -> None:
@@ -267,26 +271,37 @@ class Hub:
         elif previous_id and previous_id != owner:  # released, handed off, or taken over
             self._idle_if_on(previous_id, task_id)
 
+    def _set_activity_if(self, participant_id: str, reported: dict[str, Any], allowed) -> None:
+        """Set a status only if `allowed(current)` holds, checked inside the same
+        edit as the write, so a newer status written in between is never
+        overwritten (friday's review of #192)."""
+        from ..activity import sanitise
+        with self.store.edit_meta(participant_id) as meta:
+            if meta is None or not allowed(meta.get("activity") or {}):
+                return
+            if clean := sanitise(reported, previous=meta.get("activity")):
+                meta["activity"] = clean
+
     def _idle_if_on(self, participant_id: str, task_id: str) -> None:
         from ..activity import IDLE
-        person = self.store.participant_by_id(participant_id) if participant_id else None
-        if person and (person.meta.get("activity") or {}).get("task") == task_id:
-            self.set_activity(participant_id, {"state": IDLE})
+        if participant_id:
+            self._set_activity_if(participant_id, {"state": IDLE},
+                                  lambda current: current.get("task") == task_id)
 
     def follow_pr(self, record: dict[str, Any], number: int | None, attached_by: str) -> None:
         """The task's owner attached a PR to it: show the number on their status,
         if that status is about this task or they are idle. Never when someone
-        else attached it, and never over `quiet` or other work (lead gate on #192)."""
+        else attached it, never over `quiet` or other work (lead gate on #192),
+        and never for a task that is already closed."""
         from ..activity import IDLE, WORKING
         owner = record.get("owner_id") or ""
-        person = self.store.participant_by_id(owner) if owner and owner == attached_by else None
-        if person is None:
+        if not owner or owner != attached_by or record.get("state") in _CLOSED_TASK_STATES:
             return
-        current = person.meta.get("activity") or {}
-        if current.get("task") == record.get("id") or current.get("state") in (None, IDLE):
-            title = record.get("title", "")
-            self.set_activity(owner, {"state": WORKING, "task": record.get("id", ""),
-                                      "what": f"{title} (PR #{number})" if number else title})
+        title = record.get("title", "")
+        self._set_activity_if(
+            owner, {"state": WORKING, "task": record.get("id", ""),
+                    "what": f"{title} (PR #{number})" if number else title},
+            lambda current: current.get("task") == record.get("id") or current.get("state") in (None, IDLE))
 
     def merge_stats(self, participant_id: str, stats: dict[str, Any]) -> None:
         """Fold what an agent says about itself into what everyone sees.
