@@ -77,8 +77,17 @@ def accept(hub, profile, inbox, row, binding, ensure_current):
         api.decline(reviewed.request_id)
         inbox.decline(row['id'])
         return False
+    # SAID APART (live Hello test): nobody choosing in time and a window that
+    # could not be shown called for different actions, and both read 'not
+    # approved'. Either way the request stays pending.
+    if outcome.get('choice') == 'expired':
+        raise strong.Mismatch('expired: nobody chose within the approval window; '
+                              'the request is still pending, accept it again')
     if outcome.get('choice') != 'approve':
-        raise strong.Mismatch('the remote operation was not approved')
+        from ..protocol import scrub
+        reason = scrub(str(outcome.get('reason') or outcome.get('choice') or 'unknown'))[:120]
+        raise strong.Mismatch(f'unavailable: the approval window could not be shown ({reason}); '
+                              'the request is still pending')
     if outcome.get('credential_id') != key['credential_id'] or outcome.get('method') != key['method']:
         raise strong.Mismatch('the approval window returned another credential or method')
     ensure_current()
