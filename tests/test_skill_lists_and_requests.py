@@ -331,3 +331,33 @@ def test_a_peer_keeps_only_a_few_requests_open_and_the_rest_wait(monkeypatch):
     run(monkeypatch, hub, 'ask', 'review', to='bob', name='alice')
     assert run(monkeypatch, hub, 'decline', hub.sent[-1].body['skill_request']['id'], name='bob') == 0, \
         'a throttled request can still be declined'
+
+
+def _ask(seq, sender, sender_id, request_id, strong=False):
+    from datetime import datetime, timezone
+    ask = {'id': request_id, 'skill': 'review', 'args': ''}
+    if strong:
+        ask['required_strength'] = 'strong'
+    return Envelope(kind='chat', sender=sender, sender_id=sender_id, to='bob', to_id='p_bob', seq=seq,
+                    text='x', ts=datetime.now(timezone.utc).isoformat(), body={'skill_request': ask})
+
+
+def test_a_strong_request_counts_toward_the_cap_and_is_throttled_too(monkeypatch):
+    """Lead gate on #187: three ordinary requests then a strong one from the
+    same peer leave the strong one throttled, and it cannot be accepted."""
+    hub = Hub([_ask(1, 'alice', 'p_alice', 'sr_00000000000a'), _ask(2, 'alice', 'p_alice', 'sr_00000000000b'),
+               _ask(3, 'alice', 'p_alice', 'sr_00000000000c'),
+               _ask(4, 'alice', 'p_alice', 'sr_00000000000d', strong=True)])
+    found = {r['id']: r for r in cli._skill_requests(hub, SimpleNamespace(name='bob', participant_id='p_bob'))}
+    assert found['sr_00000000000d']['strength'] == 'strong'
+    assert found['sr_00000000000d']['state'] == 'throttled'
+    assert run(monkeypatch, hub, 'accept', 'sr_00000000000d', name='bob') == 1
+
+
+def test_a_renamed_peer_is_still_one_peer_for_the_cap(monkeypatch):
+    """Lead gate on #187: requests are counted by participant id, so a peer
+    who renames between requests does not get a fresh allowance."""
+    hub = Hub([_ask(1, 'alice', 'p_alice', 'sr_00000000000a'), _ask(2, 'alice', 'p_alice', 'sr_00000000000b'),
+               _ask(3, 'alicia', 'p_alice', 'sr_00000000000c'), _ask(4, 'al', 'p_alice', 'sr_00000000000d')])
+    states = [r['state'] for r in cli._skill_requests(hub, SimpleNamespace(name='bob', participant_id='p_bob'))]
+    assert states == ['pending', 'pending', 'pending', 'throttled']
