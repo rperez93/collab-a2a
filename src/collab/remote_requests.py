@@ -155,6 +155,9 @@ class Inbox:
             for name, kind in (('source_seq', 'INTEGER'), ('consumption_id', 'TEXT')):
                 if name not in columns:
                     db.execute(f'ALTER TABLE offers ADD COLUMN {name} {kind}')
+            if 'delivery_started' not in columns:
+                # Existing in-flight rows may already have reached an adapter.
+                db.execute('ALTER TABLE offers ADD COLUMN delivery_started INTEGER NOT NULL DEFAULT 1')
             db.execute('CREATE UNIQUE INDEX IF NOT EXISTS offers_consumption ON offers(consumption_id) WHERE consumption_id IS NOT NULL')
             # Earlier local terminal grants are not strong hub approval.
             self._revoke(db, db.execute("SELECT * FROM offers WHERE state='accepted' AND approval_version<3"),
@@ -234,14 +237,14 @@ class Inbox:
             old = db.execute('SELECT target,digest FROM local_binding WHERE singleton=1').fetchone()
             if old and (old['target'], old['digest']) == (target, fingerprint):
                 return
-            self._revoke(db, db.execute("SELECT * FROM offers WHERE state IN ('accepted','approving')"),
+            self._revoke(db, db.execute("SELECT * FROM offers WHERE (state IN ('accepted','approving') OR (state='dispatching' AND delivery_started=0))"),
                          now=time.time(), reason='local_binding_changed')
             db.execute('INSERT OR REPLACE INTO local_binding VALUES (1,?,?)',
                        (target, fingerprint))
 
     def invalidate(self, reason):
         with self._db() as db:
-            self._revoke(db, db.execute("SELECT * FROM offers WHERE state IN ('accepted','approving')"),
+            self._revoke(db, db.execute("SELECT * FROM offers WHERE (state IN ('accepted','approving') OR (state='dispatching' AND delivery_started=0))"),
                          now=time.time(), reason=reason)
 
     def bound_target(self, command, cwd=None):
@@ -256,7 +259,7 @@ class Inbox:
                 matches = False
             if matches:
                 return row['target']
-            self._revoke(db, db.execute("SELECT * FROM offers WHERE state IN ('accepted','approving')"),
+            self._revoke(db, db.execute("SELECT * FROM offers WHERE (state IN ('accepted','approving') OR (state='dispatching' AND delivery_started=0))"),
                          now=time.time(), reason='local_binding_changed')
         raise ValueError('local delivery command changed; bind and review again')
 
@@ -355,7 +358,7 @@ class Inbox:
             self._expire(db, now)
             selected = db.execute('SELECT target,digest FROM local_binding WHERE singleton=1').fetchone()
             if not selected or (selected['target'], selected['digest']) != (target, binding):
-                self._revoke(db, db.execute("SELECT * FROM offers WHERE state IN ('accepted','approving')"),
+                self._revoke(db, db.execute("SELECT * FROM offers WHERE (state IN ('accepted','approving') OR (state='dispatching' AND delivery_started=0))"),
                              now=now, reason='local_binding_changed')
                 return None
             for row in db.execute("SELECT * FROM offers WHERE state='accepted' AND approval_version=3 AND consumption_id IS NOT NULL ORDER BY updated,id"):
@@ -369,9 +372,33 @@ class Inbox:
                     continue
                 receipt = uuid.uuid4().hex
                 self._audit('dispatch_requested', offer, binding=binding)
-                db.execute("UPDATE offers SET state='dispatching',receipt=?,updated=? WHERE id=?", (receipt, now, row['id']))
+                db.execute("UPDATE offers SET state='dispatching',receipt=?,updated=?,delivery_started=0 WHERE id=?", (receipt, now, row['id']))
                 return {**offer, 'receipt': receipt, 'sha256': row['digest'], 'delivery_target': target}
         return None
+
+    def start_delivery(self, request_id, receipt, *, target, command, cwd=None):
+        """One durable launch permit for a claimed tuple, even across processes.
+
+        Read the prompt from durable state rather than a mutable prepared tuple.
+        Existing in-flight rows from before this marker are never relaunched.
+        """
+        with self._db() as db:
+            row = db.execute("SELECT * FROM offers WHERE id=? AND receipt=? AND state='dispatching' AND delivery_started=0",
+                             (request_id, receipt)).fetchone()
+            if row is None:
+                return None
+            selected = db.execute('SELECT target,digest FROM local_binding WHERE singleton=1').fetchone()
+            binding = binding_digest(target, command, cwd)
+            if not selected or (selected['target'], selected['digest']) != (target, binding) or row['binding'] != binding:
+                self._revoke(db, [row], now=time.time(), reason='delivery_binding_changed')
+                return None
+            offer = validate(json.loads(row['payload']))
+            if digest(offer) != row['digest']:
+                self._revoke(db, [row], now=time.time(), reason='delivery_content_changed')
+                return None
+            self._audit('delivery_started', offer, binding=binding)
+            db.execute('UPDATE offers SET delivery_started=1,updated=? WHERE id=?', (time.time(), request_id))
+            return {**offer, 'receipt': receipt, 'sha256': row['digest'], 'delivery_target': target}
 
     def finish(self, request_id, receipt, *, delivered, now=None):
         now = time.time() if now is None else now

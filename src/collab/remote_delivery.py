@@ -91,7 +91,14 @@ async def deliver(profile, prepared):
     inbox = Inbox(profile.dir)
     delivered = False
     prompt_path = None
+    started = False
     try:
+        recorded = await asyncio.to_thread(inbox.start_delivery, offer['id'], offer['receipt'],
+                                           target=offer['delivery_target'], command=command, cwd=cwd)
+        if recorded is None:
+            return False
+        started = True
+        offer = recorded
         # Both the stdin adapter and existing wake adapters receive precisely
         # the same approved content. Neither argv nor environment comes from
         # the remote envelope. An exit status confirms delivery, not success
@@ -123,7 +130,8 @@ async def deliver(profile, prepared):
     finally:
         # Cancellation or daemon interruption must never recreate an accepted
         # grant. If finishing itself fails, dispatching remains non-replayable.
-        await asyncio.shield(asyncio.to_thread(
-            inbox.finish, offer['id'], offer['receipt'], delivered=delivered))
+        if started:
+            await asyncio.shield(asyncio.to_thread(
+                inbox.finish, offer['id'], offer['receipt'], delivered=delivered))
         # Keep the private prompt file: notice-based adapters hand its path to
         # an existing session, which may open it only after the adapter exits.

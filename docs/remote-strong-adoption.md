@@ -38,6 +38,15 @@ contract evidence, not a browser or native passkey ceremony. After the fix,
 31 server/remote-client tests passed8.73s; the preceding strict Hello v1 update
 passed70 adapter/remote-client tests14.69s (one native-script test deselected).
 
+A durable launch permit now prevents reuse of a prepared delivery tuple, including
+concurrent callers. The winner reloads the offer from the inbox; losing callers
+cannot execute or finish its attempt. Binding changes permanently revoke permits
+that have not launched, even if the old binding is later restored. Migration
+conservatively treats older in-flight rows as already launched. Focused validation
+passed 113 tests in 13.99s; independent cancellation and binding-restoration
+probes confirmed that interrupted attempts cannot be replayed. The complete
+15-case strong-client suite also passed on Python 3.10 in 9.76s.
+
 ## Preserve the R7 transport
 
 Keep authenticated sender and recipient IDs, immutable offer bytes and digest,
