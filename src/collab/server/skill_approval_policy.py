@@ -89,7 +89,49 @@ def check(db, env):
             or not env.sender_id or not env.to_id):
         raise SkillApprovalRefused("skill responses require immutable participant identities")
     if _known(db, env.to_id, env.sender_id, request_id):
+        if (reply["state"] == "done" and env.kind == KIND_CHAT and not env.room
+                and _accepted_source(db, env.to_id, env.sender_id, request_id)):
+            return  # An execution report after approval, never an approval.
         raise SkillApprovalRefused("this skill request requires the strong approval endpoint")
+
+
+def _accepted_source(db, requester, recipient, request_id):
+    # Store can run without the optional approval service. Missing durable
+    # approval state is never permission to accept a completion as consent.
+    if db.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('approval_skill_bindings','approval_requests')").fetchone()[0] != 2:
+        return False
+    # Compare the newest exact source, not just its reusable short ID. A
+    # later request must not inherit a previous request's accepted state.
+    accepted = db.execute("""SELECT s.source_seq FROM strong_skill_sources s
+        JOIN approval_skill_bindings b ON b.source_seq=s.source_seq
+            AND b.owner_id=s.recipient_id AND b.requester_id=s.requester_id
+            AND b.source_id=s.request_id
+        JOIN approval_requests r ON r.id=b.request_id AND r.session_id=b.session_id
+        WHERE s.requester_id=? AND s.recipient_id=? AND s.request_id=?
+          AND b.state='accepted' AND b.event_id IS NOT NULL AND r.state='consumed'
+        LIMIT 1""", (requester, recipient, request_id)).fetchone()
+    if accepted is None:
+        return False
+    # Old clients key completion by the short ID, not source sequence. Even
+    # a genuine acceptance of the newest source cannot mark an earlier weak
+    # request done. The pair's newest 500 chats include every such source the
+    # legacy reader could see in its newest 500 total events.
+    seen = []
+    rows = db.execute("SELECT seq,substr(payload,1,?) AS payload FROM events WHERE sender_id=? AND recipient_id=? AND kind=? ORDER BY seq DESC LIMIT ?",
+                      (MAX_SOURCE + 1, requester, recipient, KIND_CHAT, MAX_LEGACY_SCAN))
+    for row in rows:
+        raw = row["payload"]
+        if len(raw) > MAX_SOURCE:
+            return False
+        try:
+            ask = json.loads(raw).get("body", {}).get("skill_request")
+        except (ValueError, RecursionError, AttributeError):
+            return False
+        if isinstance(ask, dict) and ask.get("id") == request_id:
+            seen.append(row["seq"])
+            if len(seen) > 1:
+                return False
+    return seen == [accepted["source_seq"]]
 
 
 def record(db, env):
