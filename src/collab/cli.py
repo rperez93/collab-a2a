@@ -3953,7 +3953,7 @@ def cmd_file(args: argparse.Namespace) -> int:
                          f"{MAX_FILE_BYTES // 1024 // 1024}MB")
                     return 1
                 keep = (False if getattr(args, 'temporary', False) else
-                        bool(args.keep or keep_document(path.name)))
+                        bool(getattr(args, 'keep', False) or keep_document(path.name)))
                 try:
                     source = durable_source(getattr(args, 'source', '') or '')
                 except ValueError as exc:
@@ -3962,16 +3962,20 @@ def cmd_file(args: argparse.Namespace) -> int:
                 from .worker import Store
                 if getattr(profile, "dir", None) and Store(profile.dir).enabled():
                     # R3: the worker is this participant's one voice while it is on.
+                    # The retention choice travels with the queued copy (#135):
+                    # without it, --temporary or --source would be dropped
+                    # silently whenever the worker is on.
                     record_id = Store(profile.dir).queue_file(
                         path, to=args.to or "", to_id=client.resolve_recipient(args.to) if args.to else "",
-                        room="" if args.to else (args.room or profile.room or "general"))
+                        room="" if args.to else (args.room or profile.room or "general"),
+                        keep=keep, source=source)
                     try:
                         onboard.ensure_daemon(profile, wait=False)
                     except (OSError, RuntimeError, HubError):
                         pass
                     if args.json:
                         print(json.dumps({"queued": True, "outbox_id": record_id, "name": path.name,
-                                          "size": size}, indent=2))
+                                          "size": size, "kept": keep, "source": source}, indent=2))
                         return 0
                     ok(f"{said(path.name)} queued for delivery by your worker: {record_id}")
                     print(dim("  `collab worker status` shows it until it is delivered"))
@@ -6660,7 +6664,9 @@ def cmd_worker(args: argparse.Namespace) -> int:
                                                    "was queued; not sending different bytes")
                                 client.upload_file(stash, to=record.get("to") or None,
                                                    to_id=record.get("to_id") or None, room=None if record.get("to") else (record.get("room") or None),
-                                                   delivery=record["id"])
+                                                   delivery=record["id"],
+                                                   keep=record.get("keep") if isinstance(record.get("keep"), bool) else None,
+                                                   source=record.get("source") or "")
                                 store.acknowledge(record["id"])
                                 continue
                             if record.get("kind") == "comment":

@@ -406,15 +406,21 @@ class Store:
             self._save(db, state)
             return record_id
 
-    def queue_file(self, path: Path, *, to: str = "", to_id: str = "", room: str = "") -> str:
+    def queue_file(self, path: Path, *, to: str = "", to_id: str = "", room: str = "",
+                   keep: bool | None = None, source: str = "") -> str:
         """A file the main agent shares, delivered by the worker in order (R3).
 
         The bytes are copied now, so what is delivered is what was sent even if
-        the file changes or disappears before the listener gets to it.
+        the file changes or disappears before the listener gets to it. The
+        sender's retention choice and durable source (#135) are queued with
+        them: the hub otherwise decides by file name alone, and an explicit
+        `--temporary` or `--source` would be lost whenever the worker is on.
         """
         import hashlib
         import shutil
         to_id = _bound_recipient(to, to_id)
+        from .file_retention import durable_source
+        durable = durable_source(source or "")  # refused now, not at delivery
         source = Path(path)
         if not source.is_file():
             raise ValueError(f"no such file: {source}")
@@ -430,9 +436,14 @@ class Store:
             with self._db() as db:
                 if not (self._state(db)["config"] or {}).get("enabled"):
                     raise ValueError("start the worker before queueing a file")
-                return self._add(db, "outbox", {"kind": "file", "stash": str(stash), "name": source.name,
-                                                "to": to, "to_id": to_id, "room": room, "sha256": digest, "routing_version": 1,
-                                                "text": f"file {source.name}"})
+                record = {"kind": "file", "stash": str(stash), "name": source.name,
+                          "to": to, "to_id": to_id, "room": room, "sha256": digest, "routing_version": 1,
+                          "text": f"file {source.name}"}
+                if keep is not None:
+                    record["keep"] = bool(keep)
+                if durable:
+                    record["source"] = durable
+                return self._add(db, "outbox", record)
         except BaseException:
             stash.unlink(missing_ok=True)
             raise

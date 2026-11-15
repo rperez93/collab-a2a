@@ -305,6 +305,11 @@ list.
   R22b, v2.2.0.)
 - `collab file list --all` shows every file, including those that ended, with
   why — collected, expired or withdrawn; without it the list counts them.
+- `collab file send` keeps documents (`.md`, `.pdf`, `.docx` and the like) on the host
+  until withdrawn; `--temporary` restores receipt/expiry deletion, `--keep`
+  keeps any file, and `--source URL` records an HTTPS original that collab never
+  fetches. The choice travels with a file the worker queues. (Later than the
+  pin, #135.)
 - The shared-machine proxy (`python -m collab.proxy_main`) is started by
   `collab host` when the `proxy` machine setting is `on`/`auto` or the host
   passes `--tunnel proxy`; the setting defaults to `auto` from 2.2.0, and a
