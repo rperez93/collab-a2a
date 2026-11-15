@@ -36,3 +36,27 @@ def test_off_never_locks_and_a_path_override_is_used(tmp_path, monkeypatch):
     assert suite_lock.acquire(tmp_path / "x.lock") is None
     monkeypatch.setenv("COLLAB_TEST_LOCK", str(tmp_path / "mine.lock"))
     assert suite_lock.lock_path() == tmp_path / "mine.lock"
+
+
+def test_two_pytest_sessions_in_one_process_each_take_and_release_the_lock(tmp_path):
+    """The lock belongs to a pytest session, not the process: a second
+    pytest.main in the same process used to wait forever on its own lock."""
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "conftest.py").write_text(
+        "import sys\n"
+        f"sys.path.insert(0, {os.path.dirname(suite_lock.__file__)!r})\n"
+        "from suite_lock import pytest_collection_finish, pytest_unconfigure\n")
+    (project / "test_x.py").write_text("def test_one():\n    pass\n\ndef test_two():\n    pass\n")
+    script = textwrap.dedent(f"""
+        import sys, pytest
+        codes = [pytest.main([{str(project)!r}, '-q', '-p', 'no:cacheprovider']) for _ in range(2)]
+        import suite_lock
+        print('CODES', [int(c) for c in codes], 'HELD', suite_lock._held, flush=True)
+    """)
+    lock = tmp_path / "suite.lock"
+    env = dict(os.environ, COLLAB_TEST_LOCK=str(lock), COLLAB_TEST_LOCK_MIN="1")
+    done = subprocess.run([sys.executable, "-c", script], cwd=project, env=env,
+                          capture_output=True, text=True, timeout=60)
+    assert "CODES [0, 0] HELD None" in done.stdout, done.stdout + done.stderr
+    assert lock.read_text().strip().isdigit(), "each session took the lock and stamped its pid"

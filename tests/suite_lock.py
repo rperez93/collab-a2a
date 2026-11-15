@@ -14,7 +14,10 @@ import tempfile
 from pathlib import Path
 
 #: Collected tests at or above which a run counts as a full suite.
-FULL_RUN = 1000
+FULL_RUN = int(os.environ.get("COLLAB_TEST_LOCK_MIN", "1000"))
+
+#: The handle this pytest session holds, released when the session ends.
+_held = None
 
 
 def lock_path() -> Path:
@@ -55,3 +58,32 @@ def acquire(path: Path, on_wait=None, blocking: bool = True):
     handle.write(str(os.getpid()))
     handle.flush()
     return handle
+
+
+def pytest_collection_finish(session):
+    """A full run waits for any other full run on this machine."""
+    global _held
+    if _held is not None or len(session.items) < FULL_RUN or session.config.option.collectonly:
+        return
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+
+    def say(holder):
+        if reporter is not None:
+            reporter.write_line(f"waiting for another full test run on this machine "
+                                f"(pid {holder}) to finish; COLLAB_TEST_LOCK=off skips the wait")
+            reporter.flush()  # said now, not when the wait is over
+    _held = acquire(lock_path(), on_wait=say)
+
+
+def pytest_unconfigure(config):
+    """Released when the session ends, however it ends (pass, fail or Ctrl-C):
+    a second pytest.main in the same process opened the file again and waited
+    on its own process's lock forever."""
+    global _held
+    handle, _held = _held, None
+    if handle is not None:
+        try:
+            handle.close()  # closing the descriptor drops the flock
+        except OSError:
+            pass
+
