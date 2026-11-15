@@ -105,7 +105,20 @@ def sanitise(reported: Any, *, previous: dict[str, Any] | None = None) -> dict[s
 
     task = str(reported.get("task") or "").strip()[:32]
 
-    out: dict[str, Any] = {"state": state, "since": since, "updated_at": now}
+    # STATED, NOT RENEWED. `updated_at` moves on every daemon renewal (a
+    # heartbeat), so a three-hour-old statement looked fresh and never went
+    # stale (lead review of #192). `stated_at` moves only when what is said
+    # changes, or when its owner says it again on purpose (`restate`).
+    same = (before.get("state") == state and str(before.get("what") or "") == what
+            and str(before.get("task") or "") == task and list(before.get("files") or []) == files)
+    try:
+        stated = float(before.get("stated_at") or before.get("updated_at") or now)
+    except (TypeError, ValueError):
+        stated = now
+    if not same or reported.get("restate"):
+        stated = now
+
+    out: dict[str, Any] = {"state": state, "since": since, "updated_at": now, "stated_at": stated}
     if state == QUIET:
         # WHO SAID IT, AND WHAT IT REPLACED. A `quiet` with nothing behind it
         # is indistinguishable from an agent that chose to say `quiet`, and
@@ -195,7 +208,7 @@ def describe(activity: Any, *, width: int = 0) -> str:
     if is_stale(activity):
         # Said, and not renewed since. Reported as what it is — a last word —
         # rather than as what it claims, which is a present tense.
-        stamp = elapsed({"since": activity.get("updated_at")})
+        stamp = elapsed({"since": activity.get("stated_at") or activity.get("updated_at")})
         said = f"working on {what}" if state == WORKING and what else state
         line = f"last said {said}"
         return f"{line} ({stamp} ago, not since)" if stamp else line
@@ -289,7 +302,7 @@ def as_seen(activity: Any, *, owner_id: str, open_tasks: dict[str, dict],
         if live is None or (live.get("owner_id") or "") != owner_id:
             return {}
     try:
-        said = float(activity.get("updated_at") or 0)
+        said = float(activity.get("stated_at") or activity.get("updated_at") or 0)
     except (TypeError, ValueError):
         said = 0.0
     if said and last_spoke - said > STALE_AFTER:

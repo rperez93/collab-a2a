@@ -2256,7 +2256,9 @@ def _publish_activity(profile: SessionProfile, state: str, *, what: str = "",
     from .privacy import shareable_path
     root = repo_for_home(profile.home) if getattr(profile, "home", "") else None
     files = [p for p in (shareable_path(f, root) for f in (files or [])) if p]
-    payload = {"state": state, "what": what, "files": files, "task": task}
+    # `restate`: said by its owner just now, so its age starts again even when
+    # the words are the same. The daemon's renewals never send it.
+    payload = {"state": state, "what": what, "files": files, "task": task, "restate": True}
     stored = act.sanitise(payload, previous=act.read_local(profile))
     act.write_local(profile, stored)
     try:

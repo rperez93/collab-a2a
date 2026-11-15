@@ -208,3 +208,20 @@ def test_a_refused_conditional_update_writes_nothing(client, session, host_heade
     assert writes == []
     hub._set_activity_if(bob_id, {"state": "idle"}, lambda current: True)
     assert len(writes) == 1
+
+
+def test_a_renewing_daemon_does_not_keep_an_old_statement_fresh():
+    """Lead review of #192: renewals moved updated_at, so a statement three
+    hours old never went stale. Staleness is judged on stated_at, which only
+    a change of what is said, or the owner restating it, moves."""
+    now = time.time()
+    said = activity.sanitise({"state": "working", "what": "the migration", "restate": True})
+    said = {**said, "stated_at": now - 3 * 3600, "updated_at": now - 3 * 3600}
+    renewed = activity.sanitise(dict(said), previous=said)           # the daemon, re-sending it
+    assert renewed["updated_at"] >= now - 5 and renewed["stated_at"] == now - 3 * 3600
+    shown = activity.as_seen(renewed, owner_id="p_b", open_tasks={}, last_spoke=now)
+    assert shown.get("stale") and "3h ago" in activity.describe(shown)
+    restated = activity.sanitise({**said, "restate": True}, previous=said)  # the owner, saying it again
+    assert restated["stated_at"] >= now - 5
+    changed = activity.sanitise({**said, "what": "the next thing"}, previous=said)
+    assert changed["stated_at"] >= now - 5
