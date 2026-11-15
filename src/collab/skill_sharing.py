@@ -90,10 +90,14 @@ def validate_files(files: Any) -> list[dict[str, Any]]:
             raise ValueError('each supporting file needs a path and content')
         path, content = item.get('path'), item.get('content')
         if (not isinstance(path, str) or not FILE_PATH_RE.fullmatch(path)
-                or any(part in ('.', '..') for part in path.split('/')) or path == 'SKILL.md'):
+                or any(part in ('.', '..') for part in path.split('/'))
+                or path.casefold() == 'skill.md'):
+            # Casefolded: on a case-insensitive disk (macOS, Windows) skill.md
+            # IS the entrypoint, and writing it after SKILL.md replaced the
+            # reviewed text (friday's P2 on #189).
             raise ValueError(f'invalid supporting file path {path!r}')
-        if path in seen:
-            raise ValueError(f'duplicate supporting file {path!r}')
+        if path.casefold() in seen:
+            raise ValueError(f'duplicate supporting file {path!r} (paths differing only in case collide on some disks)')
         if not isinstance(content, str):
             raise ValueError(f'{path}: supporting files must be UTF-8 text')
         raw = content.encode('utf-8')
@@ -103,7 +107,7 @@ def validate_files(files: Any) -> list[dict[str, Any]]:
         digest = hashlib.sha256(raw).hexdigest()
         if item.get('sha256') not in (None, digest):
             raise ValueError(f'{path}: SHA-256 does not match its content')
-        seen.add(path)
+        seen.add(path.casefold())
         clean.append({'path': path, 'content': content, 'sha256': digest, 'size_bytes': len(raw)})
     return sorted(clean, key=lambda f: f['path'])
 

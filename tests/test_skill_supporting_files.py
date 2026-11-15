@@ -202,3 +202,16 @@ def test_skill_md_and_its_files_come_from_one_anchored_directory(skill_dir, tmp_
     monkeypatch.setattr(skill_sharing, "read_supporting", swap_then_read)
     pub = read_selected(skill_dir, files=["checklist.md"])
     assert pub["files"][0]["content"] == "- tests\n- docs\n"
+
+
+@pytest.mark.parametrize("files", [
+    [{"path": "skill.md", "content": "x"}],
+    [{"path": "SKILL.MD", "content": "x"}],
+    [{"path": "Skill.md", "content": "x"}],
+    [{"path": "lib/a.md", "content": "x"}, {"path": "LIB/A.md", "content": "y"}],
+])
+def test_paths_that_collide_on_a_case_insensitive_disk_are_refused(files):
+    """friday's P2 on #189: an alias of SKILL.md, or two paths that differ only
+    in case, would overwrite each other on macOS or Windows after review."""
+    with pytest.raises(ValueError):
+        record_with_files(files)
