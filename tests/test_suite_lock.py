@@ -82,6 +82,10 @@ def test_two_pytest_sessions_in_one_process_each_take_and_release_the_lock(tmp_p
     done = subprocess.run([sys.executable, "-c", script], cwd=project, env=env,
                           capture_output=True, text=True, timeout=60)
     assert "CODES [0, 0] HELD None" in done.stdout, done.stdout + done.stderr
+    try:
+        import fcntl  # noqa: F401
+    except ImportError:
+        return  # no lock on this platform: both sessions finishing is the whole check
     assert lock.read_text().strip().isdigit(), "each session took the lock and stamped its pid"
 
 
