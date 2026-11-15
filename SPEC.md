@@ -402,7 +402,9 @@ Usage travels two ways, both optional:
 
 What travels is a label taken from `machine_id` — a random identity generated
 once per machine and account, never derived from the hostname — and never the
-OS account. The hub stores only `machine_id` and shows the
+OS account. (It changes once on upgrade: agents of mixed versions on one
+machine read as different machines until all run the release that made it
+random.) The hub stores only `machine_id` and shows the
 label; a raw `machine` or `user`, or a figure that names a local path (`cwd`,
 `transcript_path`, any absolute path), is dropped on the way in.
 
