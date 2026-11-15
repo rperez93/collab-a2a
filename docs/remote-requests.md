@@ -18,12 +18,12 @@ Guarded messages use a dedicated endpoint, so older hubs refuse them instead
 of silently ignoring the identity check. A failed send remains visible in the
 worker outbox; it never falls back to ordinary unguarded sending.
 
-The recipient must advertise `remote_consent_version: 1`. The sender checks
+The recipient must advertise `remote_consent_version: 2`. Version1 advertised terminal receipts and is refused. The sender checks
 before queueing and the hub checks again before persisting or forwarding, so
 an old or unknown receiver cannot receive an offer through this feature. An
 older client rejoining clears its previous capability. The server does not
 offer connection goals to clients without this capability.
-Every current client request also carries `Collab-Remote-Consent: 1`.
+Every current client request also carries `Collab-Remote-Consent: 2`.
 Without that header, remote offers are excluded from history, replay,
 snapshot and both replayed and live SSE events. This protects a saved session
 resumed by older software even if its stored capability is stale; replay
@@ -51,33 +51,32 @@ collab remote accept REQUEST_ID
 collab remote decline REQUEST_ID
 ```
 
-Binding does not approve an offer. Acceptance must run from a standalone
-foreground terminal opened by the human outside the coding agent, daemon and
-terminal multiplexer. The review shows the escaped offer, local command,
-working directory and adapter authority. A fresh one-time code appears only
-on the controlling terminal; type it there to approve. Stdin, a content hash,
-and an agent-provided approval flag cannot authorize execution.
-The review states that the existing session retains its configured permissions:
-it may modify files or run commands, and this feature adds no further sandbox.
-The receiver must configure the coding session's permissions before approving.
+Binding does not approve an offer. Acceptance opens the enrolled-key approval
+window and shows the exact hub-canonical offer and receiver-selected command,
+working directory and authority. The challenge is fetched only after Approve;
+the hub verifies the original proof and issues a single-use receipt. There is
+no terminal-code, stdin, hash or approval-flag fallback. The existing coding
+session retains its permissions, and no additional sandbox is applied.
 
-The resulting receipt binds this exact operation and local configuration,
-expires after 120 seconds and is consumed once before acceptance. See
-[the consent channel contract](consent-channel.md) for its audit and threat
-boundary: this channel restricts supported CLI paths but does not prove human
-identity or isolate hostile programs with the same OS privileges.
+Before consuming the receipt, the receiver durably records an `approving`
+attempt. A lost response or crash leaves that attempt non-dispatchable; it is
+never automatically retried. Only a matching consumption answer containing the
+exact reviewed canonical bytes can make it accepted. The hub never sends the
+receiver's private argv or cwd back to the requester. See the
+[strong-approval contract](remote-strong-adoption.md).
 
-Saved approvals created by the former flag/hash channel or before explicit
-destination-scope review are invalidated when the queue is opened. Pending
-offers can be reviewed through the new channel;
-failed legacy approvals require a fresh offer. An observed command change
-during review also invalidates earlier approvals, even if that command is
-subsequently restored.
+Old accepted flag/hash/terminal-receipt grants are invalidated when the queue
+opens. Pending offers need their authenticated hub sequence before review;
+legacy offers can acquire it from matching authenticated replay. Failed legacy
+grants require a fresh offer. A changed command invalidates earlier grants
+even if the command is subsequently restored. An expired unconsumed hub review
+can be explicitly reviewed again; a consumed or ambiguous local attempt cannot.
 
 Acceptance is for one delivery only. The daemon atomically changes an accepted
 request to dispatching before launching the frozen local command. Changing the
-binding invalidates outstanding approvals; an observed command change requires
-binding and review again. Decline can revoke a request until it is claimed.
+binding invalidates outstanding approvals; command, cwd, adapter identity and
+expiry are checked again immediately before launch. An observed command change
+requires binding and review again. Decline can revoke a request until it is claimed.
 An in-flight delivery cannot be retroactively revoked through decline.
 
 A successful adapter exit means delivered, not that the requested work was
@@ -106,12 +105,12 @@ limits persist. Ordinary chat is unaffected. REST refusal returns HTTP 429
 with `Retry-After: 60`; the worker keeps the offer queued, reports the throttle,
 and waits at least a minute. A throttled or full-queue connection goal is
 reported without aborting the connection.
-Expired records are compacted after another hour, except ambiguous dispatching
+Expired records are compacted after another hour, except ambiguous in-flight
 records, which remain non-replayable. Pending/show expose current states and
 hashes without terminal control sequences from peer content.
 
 The private shared consent audit records offer receipt and quota refusal,
-operator approval or decline, receipt consumption, requested acceptance and
+local decline, strong attempt and consumption, requested acceptance and
 dispatch, observed adapter results, and revocation reasons (expiry, changed
 configuration, legacy approval or local decline). It stores IDs and digests,
 not raw prompt text, challenge codes or delivery tokens. Audit records survive
@@ -148,11 +147,10 @@ Clearing the template stops future offers; existing pending offers can still
 be declined locally or expire. An already accepted delivery is not revoked by
 changing the host's template.
 
-## Strong-approval integration gate
+## Release validation gate
 
-This branch's terminal receipts are an earlier local-operator mechanism, not
-R22b enrolled-key proof. Remote execution must adopt the operation-specific
-[strong-approval contract](remote-strong-adoption.md) before release under R22b.
-That contract preserves transport isolation and at-most-once attempt semantics;
-its hub adapter is implemented, while frontend integration and local grant
-migration remain pending. See that document for the precise checkpoint scope.
+The strong hub and receiver paths are implemented and tested with isolated HTTP
+hubs and synthetic signing keys. Capabilities remain unavailable until actual
+native human ceremonies, passkey adoption and the shared installed-version
+validation are complete. Automated tests do not prove human presence or
+end-to-end readiness of a deployed session.
