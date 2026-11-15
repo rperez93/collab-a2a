@@ -6630,6 +6630,16 @@ def cmd_worker(args: argparse.Namespace) -> int:
                             if record.get("decision_delivery") and not (record.get("to_id") or (
                                     record.get("decision_public") and not record.get("to") and record.get("room"))):
                                 raise HubError("decision reply has no bound participant ID; queued text was not sent")
+                            if record.get("recipient_id"):
+                                client._request("POST", f"{protocol_prefix}/remote-messages", json={
+                                    "kind": KIND_CHAT, "text": record["text"],
+                                    "to": record.get("to") or None, "to_id": record["to_id"],
+                                    "room": None, "thread": record.get("thread") or None,
+                                    "body": {**(record.get("body") or {}),
+                                             "collab_worker_delivery": record["id"],
+                                             "collab_expected_recipient_id": record["recipient_id"]}})
+                                store.acknowledge(record["id"])
+                                continue
                             client.send(Envelope(kind=KIND_CHAT, text=record["text"], sender=profile.name,
                                                  to=record.get("to") or None, to_id=record.get("to_id") or None,
                                                  room=None if record.get("to") else (record.get("room") or None),
