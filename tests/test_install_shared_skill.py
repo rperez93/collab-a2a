@@ -53,14 +53,15 @@ class Hub:
     def shared_skill(self, skill_id): return {"skill": self.rec}
 
 
-def run(monkeypatch, target, rec, approved, sha=None):
+def run(monkeypatch, target, rec, approved, sha=None, strong=False):
     monkeypatch.setattr(cli, "_require_profile",
                         lambda a: SimpleNamespace(session_id="s_1", dir=target.path.parent / "profile"))
     monkeypatch.setattr(cli, "_client", lambda p: Hub(rec))
     monkeypatch.setattr(skills, "skills_target", lambda agent=None: target)
     return cli.cmd_skills(argparse.Namespace(action="install-shared", target="sk_1", agent=None,
                                              force=False, human_approved=approved,
-                                             sha256=rec.get("sha256") if sha is None else sha))
+                                             sha256=rec.get("sha256") if sha is None else sha,
+                                             strong=strong))
 
 
 def test_without_a_terminal_the_text_goes_to_a_review_file_not_the_agent(monkeypatch, target, capsys):
@@ -199,3 +200,12 @@ def test_a_symlinked_destination_is_refused_and_scratch_is_never_listed(target, 
     (target.path / ".collab-install-x").mkdir()
     (target.path / "shared-y.collab-old").mkdir()
     assert skills.shared_installs(target) == []
+
+
+def test_asking_for_strong_approval_is_refused_not_downgraded(monkeypatch, target):
+    """No install adopter on the hub yet: --strong must refuse, never fall back
+    to the weaker consent a human asked to go beyond."""
+    rec = record()
+    assert run(monkeypatch, target, rec, approved=True, strong=True) == 1
+    assert not any(target.path.iterdir()) if target.path.exists() else True
+

@@ -8202,6 +8202,11 @@ def cmd_skills_install_shared(args: argparse.Namespace) -> int:
             return 0
         if not args.target:
             raise ValueError("skills install-shared needs a publication ID from `collab skills shared`")
+        if getattr(args, "strong", False):
+            # Refused, never ignored: a human who asked for the stronger gesture
+            # must not get the weaker one silently.
+            raise ValueError("strong approval for installs is not available yet; install without "
+                             "--strong (your human reviews and agrees) or wait for it")
         if os.environ.get("COLLAB_WORKER") == "1":
             raise ValueError("a conversation worker cannot install skills")
         profile = _require_profile(args)
