@@ -32,7 +32,7 @@ def gather(focus: str = "", cwd: Path | None = None) -> dict[str, Any]:
     # `remote_consent_version` tells a host this receiver understands remote
     # offers, so it never sends one to a legacy receiver that would run it.
     hello: dict[str, Any] = {"focus": focus.strip(),
-                             "remote_consent_version": 1}
+                             "remote_consent_version": 2}
 
     if repo_root:
         hello["repo"] = Path(repo_root).name

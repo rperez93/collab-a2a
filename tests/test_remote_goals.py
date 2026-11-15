@@ -1,12 +1,12 @@
-from remote_consent_helpers import receipt
 from test_chat_is_the_only_kind_a_client_sends import _join as legacy_join
-from collab.remote_requests import Inbox, RECEIVER_TARGET, digest
+from collab.remote_requests import Inbox, RECEIVER_TARGET
+import pytest
 
 
 def _join(client, session, name):
     response = client.post('/ext/collab/v1/join', json={
         'protocol_major': 2, 'version': '2.0.0', 'invite': session['invite'],
-        'name': name, 'hello': {'remote_consent_version': 1}})
+        'name': name, 'hello': {'remote_consent_version': 2}})
     assert response.status_code == 200
     joined = response.json()
     return {'Collab-Protocol-Major': '2', 'Collab-Version': '2.0.0',
@@ -23,17 +23,25 @@ def test_host_goal_is_offered_at_connection_but_never_accepted(client, session, 
     assert offer['kind'] == 'goal'
     assert offer['recipient_id'] == joined['id']
     assert offer['session_id'] == joined['session_id']
+    sequence = joined['remote_goal_source_seq']
+    assert type(sequence) is int and sequence > 0
+    from collab.remote_requests import wire_text
+    stored = [event for event in session['store'].since(0) if event.text == wire_text(offer)]
+    assert len(stored) == 1
+    assert stored[0].seq == sequence
+    assert stored[0].sender_id == joined['remote_goal_sender_id']
+    assert stored[0].to_id == joined['id'] and stored[0].room is None
     inbox = Inbox(tmp_path / 'receiver')
-    inbox.receive(offer, session_id=joined['session_id'], sender_id=offer['sender_id'], recipient_id=joined['id'])
+    inbox.receive(offer, session_id=joined['session_id'], sender_id=joined['remote_goal_sender_id'],
+                  recipient_id=joined['id'], source_seq=sequence)
     command = ['local-adapter', '--session', 'chosen-by-human']
     inbox.bind('chosen-by-human', command)
     route = dict(session_id=joined['session_id'], recipient_id=joined['id'],
                  target='chosen-by-human', command=command)
     assert inbox.claim(**route) is None
-    inbox.accept(offer['id'], reviewed_digest=digest(offer), approval=receipt(inbox, offer, 'chosen-by-human', command), **route)
-    claimed = inbox.claim(**route)
-    assert claimed['delivery_target'] == 'chosen-by-human'
-    assert claimed['target'] == RECEIVER_TARGET
+    pending = inbox.list()
+    assert len(pending) == 1 and pending[0]['state'] == 'pending'
+    assert pending[0]['source_seq'] == sequence
 
 
 def test_guest_cannot_set_goal_and_host_can_clear(client, session, host_headers):
@@ -65,6 +73,8 @@ def test_join_goal_uses_server_issuer_not_offer_sender(client, session, host_hea
     assert joined['remote_goal_sender_id'] == joined['remote_goal']['sender_id']
     for altered in (
         {**joined, 'remote_goal_sender_id': None},
+        {key: value for key, value in joined.items() if key != 'remote_goal_source_seq'},
+        *({**joined, 'remote_goal_source_seq': value} for value in (None, True, 0, -1, 1.0, '1', 2**63)),
         {**joined, 'remote_goal': {**joined['remote_goal'], 'sender_id': 'p_forged'}},
         {**joined, 'remote_goal': {**joined['remote_goal'], 'kind': 'prompt'}},
         {**joined, 'remote_goal': {**joined['remote_goal'], 'recipient_id': 'p_other'}},
@@ -75,6 +85,7 @@ def test_join_goal_uses_server_issuer_not_offer_sender(client, session, host_hea
         assert Inbox(tmp_path).list() == []
     assert receive_connection_goal(profile, joined) == joined['remote_goal']['id']
     assert Inbox(tmp_path).list()[0]['state'] == 'pending'
+    assert Inbox(tmp_path).list()[0]['source_seq'] == joined['remote_goal_source_seq']
 
 
 def test_legacy_join_never_receives_goal_text(client, session, host_headers):
@@ -82,6 +93,7 @@ def test_legacy_join_never_receives_goal_text(client, session, host_headers):
     _, joined = legacy_join(client, session, 'old-client')
     assert joined['remote_goal'] is None
     assert joined['remote_goal_sender_id'] is None
+    assert joined['remote_goal_source_seq'] is None
     assert all('not for legacy model' not in event.text for event in session['store'].since(0))
 
 
@@ -91,11 +103,13 @@ def test_goal_rate_limit_preserves_join_and_reports_refusal(client, session, hos
     _, joined = _join(client, session, 'throttled-goal')
     assert joined['remote_goal'] is None
     assert joined['remote_goal_sender_id'] is None
+    assert joined['remote_goal_source_seq'] is None
     assert 'rate exceeded' in joined['remote_goal_refusal']
     assert not any(e.kind == 'chat' and 'host goal' in e.text for e in session['store'].since(0))
 
 
-def test_local_goal_queue_refusal_does_not_abort_onboarding(tmp_path, monkeypatch):
+@pytest.mark.parametrize('bad_source', [False, True])
+def test_local_goal_intake_refusal_does_not_abort_onboarding(tmp_path, monkeypatch, bad_source):
     from types import SimpleNamespace
     from collab.client import onboard
     from collab import remote_requests, telemetry_setup, worker
@@ -105,7 +119,9 @@ def test_local_goal_queue_refusal_does_not_abort_onboarding(tmp_path, monkeypatc
     goal = remote_requests.make_offer(session_id='s_test', sender_id='p_host',
                                      recipient_id='p_receiver', target=RECEIVER_TARGET,
                                      kind='goal', text='pending goal')
-    result.update(remote_goal=goal, remote_goal_sender_id='p_host')
+    result.update(remote_goal=goal, remote_goal_sender_id='p_host', remote_goal_source_seq=1)
+    if bad_source:
+        result.pop('remote_goal_source_seq')
     class Client:
         def __init__(self, *args): pass
         def __enter__(self): return self
@@ -119,7 +135,8 @@ def test_local_goal_queue_refusal_does_not_abort_onboarding(tmp_path, monkeypatc
     monkeypatch.setattr(onboard, 'ensure_daemon', lambda profile, **kw: started.append(profile) or {})
     profile, _, status = onboard.join_session('http://test.invalid#invite', name='receiver')
     assert started == [profile]
-    assert 'local receiver queue' in status['remote_goal_refusal']
+    expected = 'invalid authenticated offer or source binding' if bad_source else 'local receiver queue'
+    assert expected in status['remote_goal_refusal']
     assert 'remote_goal_pending' not in status
     assert Inbox(profile.dir).list() == []
 

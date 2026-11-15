@@ -164,7 +164,8 @@ an exact, identity-checked offer through the worker. It does not authorize
 execution. The receiver reviews with `collab remote pending` and
 `collab remote show REQUEST_ID`, binds its own local target, and accepts or
 declines locally. An agent cannot approve an offer through a flag, a supplied
-hash or stdin. Only the local operator-terminal challenge issues a receipt.
+hash or stdin. Only a proof verified by the hub for the enrolled key issues a
+single-use receipt; there is no terminal-code fallback.
 A goal offered at connection is also pending, never acceptance by joining.
 Uncertain or dispatching deliveries are not automatically repeated.
 
@@ -176,10 +177,10 @@ collab remote accept REQUEST_ID
 collab remote decline REQUEST_ID
 ```
 
-The human runs acceptance from a standalone foreground terminal outside the
-coding agent and terminal multiplexer. It shows the offer and local authority,
-then asks for a fresh code visible only on that controlling terminal. Decline
-is the alternative; receiving text is never approval.
+Acceptance opens the enrolled-key window showing the exact canonical offer and
+local delivery authority. The human approves or declines there. A missing
+adapter or unavailable hub refuses; receiving text is never approval. Lost
+consumption answers leave a non-replayable local attempt.
 
 The host may configure or clear a proposed goal for future connections:
 

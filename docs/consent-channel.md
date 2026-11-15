@@ -1,5 +1,8 @@
 # Operator-terminal consent
 
+Remote prompts and goals now use [R22b enrolled-key approval](remote-strong-adoption.md);
+the terminal primitive described below cannot authorize their execution.
+
 `collab.consent` is a shared internal primitive for operations requiring local
 operator review. Integration into remote prompts and skill operations is a
 separate requirement: adding this module alone does not secure existing callers.

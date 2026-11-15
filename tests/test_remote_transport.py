@@ -19,7 +19,7 @@ def test_name_reuse_cannot_retarget_remote_offer(client, session):
     assert 'error' in _rpc(client, headers, {'collab': 'v1', 'kind': 'chat', **body})
     assert len(store.since(0)) == before
     with store.edit_meta(first_id) as meta:
-        meta['remote_consent_version'] = 1
+        meta['remote_consent_version'] = 2
     body['to'] = 'renamed'
     assert client.post('/ext/collab/v1/remote-messages', headers=headers, json=body).status_code == 200
     assert store.since(0)[-1].to_id == first_id
@@ -81,7 +81,7 @@ def test_hub_refuses_legacy_recipient_before_persisting(client, session):
 def test_rejoining_legacy_client_clears_prior_capability(client, session):
     _, first = _join(client, session, 'returning')
     with session['store'].edit_meta(first['id']) as meta:
-        meta['remote_consent_version'] = 1
+        meta['remote_consent_version'] = 2
     response = client.post('/ext/collab/v1/join', json={
         'protocol_major': 2, 'version': '2.0.0', 'invite': session['invite'],
         'name': 'returning', 'hello': {}, 'resume_token': first['token']})
@@ -104,7 +104,7 @@ def test_saved_offer_is_hidden_from_legacy_history_reads(client, session):
         assert old.status_code == 200
         assert all(row['seq'] != event.seq for row in old.json()[field])
         current = client.get('/ext/collab/v1/' + route,
-                             headers={**headers, 'Collab-Remote-Consent': '1'})
+                             headers={**headers, 'Collab-Remote-Consent': '2'})
         assert any(row['seq'] == event.seq for row in current.json()[field])
     replay = client.get('/ext/collab/v1/replay', headers=headers).json()
     assert replay['cursor'] >= event.seq
@@ -115,7 +115,7 @@ def test_legacy_host_hello_clears_capability(session):
     store = session['store']
     host = next(p for p in store.participants() if p.is_host)
     hub = Hub(store, session_id='s_test', host_name=host.name)
-    hub.merge_hello(host.id, {'remote_consent_version': 1})
+    hub.merge_hello(host.id, {'remote_consent_version': 2})
     hub.merge_hello(host.id, {'focus': 'old host'})
     assert store.participant_by_id(host.id).meta['remote_consent_version'] == 0
 
@@ -155,9 +155,9 @@ def test_legacy_stream_hides_replayed_and_live_remote_offers(session):
 def test_a2a_host_hello_preserves_numeric_capability_and_clears_legacy(client, session, host_headers):
     host = next(p for p in session['store'].participants() if p.is_host)
     answer = _rpc(client, host_headers, {'collab': 'v1', 'kind': 'hello',
-                                        'body': {'remote_consent_version': 1}})
+                                        'body': {'remote_consent_version': 2}})
     assert 'error' not in answer
-    assert session['store'].participant_by_id(host.id).meta['remote_consent_version'] == 1
+    assert session['store'].participant_by_id(host.id).meta['remote_consent_version'] == 2
     answer = _rpc(client, host_headers, {'collab': 'v1', 'kind': 'hello', 'body': {}})
     assert 'error' not in answer
     assert session['store'].participant_by_id(host.id).meta['remote_consent_version'] == 0
@@ -170,7 +170,7 @@ def test_remote_rate_limit_covers_rest_and_a2a_without_persistence(client, sessi
     headers, _ = _join(client, session, 'limited-sender')
     _, receiver = _join(client, session, 'limited-receiver')
     with session['store'].edit_meta(receiver['id']) as meta:
-        meta['remote_consent_version'] = 1
+        meta['remote_consent_version'] = 2
     hub = session['app'].state.hub
     hub._remote_senders.limit = 1
     body = {'to': 'limited-receiver', 'text': 'guarded payload',
@@ -192,7 +192,7 @@ def test_receiver_rate_budget_is_shared_across_senders(client, session):
     second, _ = _join(client, session, 'second-sender')
     _, receiver = _join(client, session, 'shared-receiver')
     with session['store'].edit_meta(receiver['id']) as meta:
-        meta['remote_consent_version'] = 1
+        meta['remote_consent_version'] = 2
     session['app'].state.hub._remote_receivers.limit = 1
     body = {'to': 'shared-receiver', 'text': 'guarded payload',
             'body': {'collab_expected_recipient_id': receiver['id']}}
@@ -274,3 +274,14 @@ def test_worker_off_preserves_remote_guard_and_failed_queue(tmp_path, monkeypatc
     assert payload['to_id'] == payload['body']['collab_expected_recipient_id'] == 'p_peer'
     assert payload['body']['collab_worker_delivery'] == identity
     assert bool(store.outbox()) is refuse
+
+
+def test_terminal_receipt_capability_is_not_a_strong_receiver(client, session, host_headers):
+    from collab.remote_requests import supports_remote_consent
+    assert supports_remote_consent({'remote_consent_version': 2.0})
+    assert not supports_remote_consent({'remote_consent_version': 1})
+    host = next(p for p in session['store'].participants() if p.is_host)
+    answer = _rpc(client, host_headers, {'collab': 'v1', 'kind': 'hello',
+                                        'body': {'remote_consent_version': 1}})
+    assert 'error' not in answer
+    assert session['store'].participant_by_id(host.id).meta['remote_consent_version'] == 0

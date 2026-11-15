@@ -9,7 +9,7 @@ import json
 from pathlib import PurePosixPath, PureWindowsPath
 
 from ..protocol import KIND_CHAT
-from ..remote_requests import OFFER_PREFIX, RECEIVER_TARGET, validate, digest, _identifier
+from ..remote_requests import OFFER_PREFIX, RECEIVER_TARGET, validate, digest, _identifier, REMOTE_AUTHORITY
 from . import approval_challenge as canonical
 from . import approval_crypto as crypto
 from .approval_store import Rejected
@@ -17,8 +17,7 @@ from .approval_store import Rejected
 MAX_SOURCE = 32768
 MAX_BINDINGS = 4096
 MAX_OWNER_BINDINGS = 256
-AUTHORITY = ('Uses the existing coding session permissions; may modify files and run commands. '
-             'No additional sandbox is applied.')
+AUTHORITY = REMOTE_AUTHORITY
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS approval_remote_bindings (
  session_id TEXT NOT NULL, source_seq INTEGER NOT NULL, owner_id TEXT NOT NULL,
