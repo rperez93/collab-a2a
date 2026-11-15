@@ -13,7 +13,11 @@ license = { text = "MIT" }
 dependencies = [
     # Hub-side Hello/WebAuthn signature verification (R22b).
     "cryptography>=46",
-    "a2a-sdk[fastapi]>=1.1.2",
+    # <1.2: the hub closes each answered A2A task through one internal hook,
+    # DefaultRequestHandler._setup_active_task (#175); without it 1.1.2 kept a
+    # task per message, ~36 KiB each, for the hub's life. A minor bump may
+    # rename it — the leak test would then fail — so take one deliberately.
+    "a2a-sdk[fastapi]>=1.1.2,<1.2",
     "uvicorn>=0.30",
     "httpx>=0.28.1",
     "httpx-sse>=0.4",
