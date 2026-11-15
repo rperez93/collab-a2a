@@ -189,3 +189,12 @@ policy with `collab host --tunnel own` or `--tunnel proxy`; `--tunnel auto` retu
 the setting. `--no-tunnel` wins over all modes. The selected explicit mode is
 saved with the session. Changes apply when the hub starts, not to running hubs.
 See [shared proxy hosting](proxy-hosting.md) for legacy links and recovery.
+
+`collab config remote_delivery on` lets a hub you host carry strong remote
+delivery: a peer's prompt or connection goal reaching a receiver's coding agent
+after that receiver approves the exact operation with a Hello or passkey
+gesture ([receiver consent](remote-requests.md)). It is **off by default**, and
+off is enforced: the hub advertises no remote delivery and refuses to prepare
+or consume a remote review. It is a machine setting of the hub's host, and an
+availability switch, not consent — what authorises each delivery is still the
+receiver's own gesture.

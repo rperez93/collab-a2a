@@ -70,11 +70,16 @@ reviewed, approved, declined, delivered or left uncertain. A sender that needs
 to know must ask in an ordinary message, and the receiver's answer is only its
 own word.
 
-**Hubs do not yet advertise strong remote delivery.** `collab remote accept`
-asks the hub for `remote_delivery` and refuses («this hub has not enabled
-strong remote delivery») until it is advertised, which waits on native human
-validation of the operation and its adapter. Offers are still received, held
-and listed. See the [strong-approval contract](remote-strong-adoption.md).
+**Remote delivery is off until the hub's host turns it on:**
+`collab config remote_delivery on`, on the machine that hosts the session.
+Off — the default — the hub advertises no remote delivery and refuses to
+prepare or consume a remote review, and `collab remote accept` refuses («this
+hub has not enabled strong remote delivery»). Offers are still received, held
+and listed. The setting is an availability switch, not consent: each delivery
+still needs the receiver's own gesture on the reviewed operation. It stays off
+by default because its release gate is a native human ceremony on the
+installed adapter, which automated tests do not perform. See the
+[strong-approval contract](remote-strong-adoption.md).
 
 Old accepted flag/hash/terminal-receipt grants are invalidated when the queue
 opens. Pending offers need their authenticated hub sequence before review;
@@ -161,7 +166,7 @@ changing the host's template.
 ## Release validation gate
 
 The strong hub and receiver paths are implemented and tested with isolated HTTP
-hubs and synthetic signing keys. Capabilities remain unavailable until actual
-native human ceremonies, passkey adoption and the shared installed-version
-validation are complete. Automated tests do not prove human presence or
+hubs and synthetic signing keys. The host's `remote_delivery` setting stays off
+by default until actual native human ceremonies, passkey adoption and the
+shared installed-version validation are complete. Automated tests do not prove human presence or
 end-to-end readiness of a deployed session.
