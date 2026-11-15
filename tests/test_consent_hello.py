@@ -656,6 +656,7 @@ def test_the_window_signs_a_url_safe_challenge_and_answers_unpadded(fake):
     {"request_id": "q_other"},                   # same key and digest, another request
     {"method": _ABSENT},                         # method left out
     {"request_id": _ABSENT},                     # request left out
+    {"api_version": 2}, {"api_version": _ABSENT},
     {"expires_at": 10 ** 400},                   # would overflow float()
     {"expires_at": int(time.time()) + 3600},     # beyond any hub challenge
 ])
