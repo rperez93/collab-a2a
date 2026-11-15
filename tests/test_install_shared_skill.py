@@ -314,3 +314,14 @@ def test_the_install_directory_follows_the_publisher_id_not_its_name(target):
     with pytest.raises(ValueError, match="no publisher id"):
         skills.check_installable({**record(), "owner_id": ""}, target=target, force=False)
 
+
+def test_uninstall_never_reaches_a_provenance_dir_outside_the_target(target):
+    """From the lead gate on #188: this one pins the name regex, because the
+    directory it aims at really carries provenance."""
+    skills.install_shared(record(), target=target, session_id='s_1', force=False)
+    outside = target.path.parent / 'elsewhere' / 'shared-x'
+    outside.mkdir(parents=True)
+    (outside / skills.PROVENANCE).write_text('{}')
+    with pytest.raises(ValueError):
+        skills.uninstall_shared('../elsewhere/shared-x', target=target)
+    assert outside.exists()
