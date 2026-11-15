@@ -619,12 +619,13 @@ async def test_a_queued_file_the_hub_did_not_keep_is_told_to_the_main_agent(conv
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("answer,blockers", [
-    ({"id": "f_1"}, 1),                    # an older hub: no 'kept' at all
-    ({"id": "f_1", "kept": False}, 1),     # asked to keep, not kept, no reason given
-    ({"id": "f_1", "kept": True}, 0),      # confirmed kept
+@pytest.mark.parametrize("keep,answer,blockers", [
+    (True, {"id": "f_1"}, 1),                    # asked to keep; an older hub: no 'kept' at all
+    (True, {"id": "f_1", "kept": False}, 1),     # asked to keep, not kept, no reason given
+    (True, {"id": "f_1", "kept": True}, 0),      # confirmed kept
+    (False, {"id": "f_1"}, 0),                   # --temporary to an older hub: nothing was asked
 ])
-async def test_a_queued_file_the_hub_never_confirmed_keeping_is_told_too(conversation, tmp_path, answer, blockers):
+async def test_a_queued_file_the_hub_never_confirmed_keeping_is_told_too(conversation, tmp_path, keep, answer, blockers):
     """friday's review of #209: the worker surfaced only an explicit
     retention_note, so a --keep sent through the worker to a hub that never
     confirms 'kept' was acknowledged with no warning. It now makes the same
@@ -633,7 +634,7 @@ async def test_a_queued_file_the_hub_never_confirmed_keeping_is_told_too(convers
     store = worker.Store(conversation.root)
     path = tmp_path / "evidence.zip"
     path.write_text("data")
-    store.queue_file(path, to="bob", to_id="p_b", keep=True)
+    store.queue_file(path, to="bob", to_id="p_b", keep=keep)
     async def transport(request):
         return httpx.Response(200, json=answer)
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:

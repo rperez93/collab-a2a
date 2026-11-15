@@ -52,7 +52,19 @@ def unconfirmed_retention(answer, keep, source) -> str:
     counts as unconfirmed (friday's review of #209)."""
     if isinstance(answer, dict) and isinstance(answer.get("retention_note"), str) and answer["retention_note"]:
         return answer["retention_note"][:300]
+    if not checks_retention(answer, keep, source):
+        return ""
     return retention_warning(answer, keep if isinstance(keep, bool) else None, source or "")
+
+
+def checks_retention(answer, keep, source) -> bool:
+    """Whether a hub's answer is held to the retention it was asked for.
+
+    Only what was ASKED can go unconfirmed: an older hub never answers 'kept',
+    so checking a file nobody asked to keep flagged every queued file (lead
+    gate on #214). A hub that DOES answer 'kept' is always checked, so a
+    --temporary file it kept anyway, or a malformed answer, is still flagged."""
+    return keep is True or bool(source) or (isinstance(answer, dict) and "kept" in answer)
 
 
 def retention_warning(record, keep, source):

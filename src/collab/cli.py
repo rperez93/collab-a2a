@@ -4003,7 +4003,7 @@ def _file_retention_status(record: dict[str, Any]) -> str:
 
 
 def cmd_file(args: argparse.Namespace) -> int:
-    from .file_retention import durable_source, keep_document, retention_warning
+    from .file_retention import checks_retention, durable_source, keep_document, retention_warning
     if args.action != 'send' and (getattr(args, 'temporary', False) or getattr(args, 'source', '')):
         fail('--temporary and --source apply to file send')
         return 2
@@ -4058,7 +4058,7 @@ def cmd_file(args: argparse.Namespace) -> int:
                     # The hub said why it did not keep the file (its kept-bytes
                     # cap): its reason, not a guess that it may be too old.
                     print('Warning: ' + scrub(record['retention_note'])[:300], file=sys.stderr)
-                elif warning := retention_warning(record, keep, source):
+                elif checks_retention(record, keep, source) and (warning := retention_warning(record, keep, source)):
                     print('Warning: host did not confirm requested retention/source. ' + warning,
                           file=sys.stderr)
                 if args.json:
