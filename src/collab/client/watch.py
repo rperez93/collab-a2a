@@ -240,12 +240,12 @@ def open_tmux_pane(argv: list[str], *, env: dict[str, str] | None = None,
 
     from .tmux_context import detect
     target = detect()
-    base = ["tmux"]
-    if target is not None and target.socket:
-        base.extend(["-S", target.socket])
-    base.extend(["split-window", direction])
-    if target is not None and target.pane:
-        base.extend(["-t", target.pane])
+    # The context can disappear after in_tmux() above. Falling through without
+    # -S/-t would split the server's active pane instead of this caller's pane.
+    if target is None or not target.socket or not target.pane:
+        raise RuntimeError("could not identify this terminal's tmux pane")
+    base = ["tmux", "-S", target.socket, "split-window", direction,
+            "-t", target.pane]
     if before:
         base.append("-b")  # put the new pane above/left of this one
     if not focus:

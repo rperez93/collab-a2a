@@ -27,7 +27,10 @@ and is hidden when the roster is too short. Unknown activity is never called idl
 `collab watch --tmux` targets the exact socket and pane, rather than whichever
 window currently has focus. If a coding host strips tmux variables on Linux,
 the launcher can match its nearest ancestor terminal to a pane on an owned
-private tmux server. A partial environment still requires a pane match. Missing,
+private tmux server. A terminal-matched coding ancestor can identify the exact
+server even when old test sockets exceed the bounded directory scan. Its pane
+ID is still resolved by a live terminal match, not copied from the ancestor.
+A partial environment still requires a pane match. Missing,
 ambiguous or incomplete evidence leaves the terminal untouched and reports
 that the pane could not be identified; open `collab watch` in a separate pane
 when the sandbox hides both the tty and socket. Lookup and split commands have

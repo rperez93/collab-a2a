@@ -27,6 +27,10 @@ MAX_SOCKETS = 8
 MAX_DIRECTORY_ENTRIES = 256
 MAX_OUTPUT = 64 * 1024
 LOOKUP_SECONDS = 1.0
+MAX_ANCESTOR_HOPS = 12
+MAX_ENVIRONMENT_BYTES = 64 * 1024
+MAX_PROC_BYTES = 256 * 1024
+_PROC = Path("/proc")
 _CACHE = {}
 
 
@@ -40,7 +44,34 @@ def _terminal(value):
     return bool(re.fullmatch(r"/dev/(?:pts/[0-9]+|tty[A-Za-z0-9]+)", value or ""))
 
 
-def own_tty():
+def _proc_read(pid, name, limit, budget):
+    """Bound selected own-ancestry metadata, including damaged fixture files."""
+    maximum = min(limit, budget[0])
+    if maximum <= 0:
+        raise OSError("terminal ancestry metadata budget exhausted")
+    descriptor = os.open(_PROC / str(pid) / name,
+                         os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(descriptor, "rb") as stream:
+        details = os.fstat(stream.fileno())
+        if not stat.S_ISREG(details.st_mode) or details.st_uid != os.getuid():
+            raise OSError("terminal ancestry metadata is not owned regular data")
+        raw = stream.read(maximum + 1)
+    budget[0] -= len(raw)
+    if len(raw) > maximum:
+        raise OSError("terminal ancestry metadata exceeds budget")
+    return raw
+
+
+def _proc_identity(pid, budget):
+    raw = _proc_read(pid, "stat", 8192, budget)
+    fields = raw[raw.rindex(b")") + 2:].split()
+    parent, started = int(fields[1]), int(fields[19])
+    if parent < 0 or started <= 0:
+        raise ValueError("invalid terminal ancestry identity")
+    return parent, started
+
+
+def _direct_tty():
     for descriptor in (0, 1, 2):
         try:
             name = os.ttyname(descriptor)
@@ -48,32 +79,135 @@ def own_tty():
                 return name
         except OSError:
             pass
+    return ""
+
+
+def own_tty(*, deadline=None):
+    deadline = deadline if deadline is not None else time.monotonic() + LOOKUP_SECONDS
+    direct = _direct_tty()
+    if direct:
+        return direct
     # Only a coding host can supply a useful ancestor tty for a detached tool
     # invocation. Ordinary redirected scripts do not inherit terminal authority
     # merely because a shell far above them once had a tty.
     from ..hosttool import detect
-    if not detect() or not Path("/proc/self").exists():
+    if not detect() or not _PROC.exists():
         return ""
     pid = os.getpid()
-    for _ in range(12):
+    budget = [MAX_PROC_BYTES]
+    for _ in range(MAX_ANCESTOR_HOPS):
+        if time.monotonic() >= deadline:
+            return ""
         try:
-            name = os.readlink(f"/proc/{pid}/fd/0")
+            before = _proc_identity(pid, budget)
+            name = os.readlink(_PROC / str(pid) / "fd/0")
+            after = _proc_identity(pid, budget)
+            if before != after:
+                return ""
             if _terminal(name):
                 return name
-        except OSError:
-            pass
-        try:
-            # Linux proc records are small kernel data. Do not use the general
-            # ancestry helper's repeated two-second ps fallbacks here: a pane
-            # lookup must stay bounded when the sandbox hides its parents.
-            with open(f"/proc/{pid}/stat", "rb") as record:
-                raw = record.read(8192).decode()
-            pid = int(raw[raw.rindex(")") + 2:].split()[1])
+            pid = before[0]
             if pid <= 1:
                 break
         except (OSError, ValueError, IndexError):
             break
     return ""
+
+
+def _tmux_metadata(raw):
+    if raw and not raw.endswith(b"\0"):
+        raise ValueError("incomplete ancestor environment")
+    selected = {}
+    for entry in raw.split(b"\0"):
+        key, separator, value = entry.partition(b"=")
+        if key not in (b"TMUX", b"TMUX_PANE"):
+            continue
+        if not separator or key in selected or len(value) > 4096:
+            raise ValueError("incomplete terminal context")
+        selected[key] = value.decode("utf-8")
+    tmux, pane = selected.get(b"TMUX") or None, selected.get(b"TMUX_PANE") or None
+    if pane is not None and re.fullmatch(r"%[0-9]+", pane) is None:
+        raise ValueError("invalid ancestor pane hint")
+    return tmux, pane
+
+
+def _owned_socket(path):
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        raise ValueError("ancestor socket is not absolute")
+    directory, details = candidate.parent.lstat(), candidate.lstat()
+    if (not stat.S_ISDIR(directory.st_mode) or directory.st_uid != os.getuid()
+            or directory.st_mode & 0o077 or not stat.S_ISSOCK(details.st_mode)
+            or details.st_uid != os.getuid()):
+        raise ValueError("ancestor socket is not private and owned")
+    return details.st_dev, details.st_ino, directory.st_dev, directory.st_ino
+
+
+def _ancestor_socket(tty, deadline):
+    """Recover a server hint only; actual live pane selection still uses its tty.
+
+    A Codex command with stripped TMUX missed its live server among 493 stale
+    entries because the deliberate directory cap is 256. The native host's
+    terminal-matched ancestors still held the exact server. Querying that one
+    hint avoids both a larger scan and an unrelated active/default pane.
+    """
+    from ..hosttool import detect
+    if not detect() or not _PROC.exists():
+        return None, (), True
+    pid, budget, seen = os.getpid(), [MAX_PROC_BYTES], set()
+    contexts, panes, evidence = set(), set(), []
+    complete = False
+    try:
+        for _ in range(MAX_ANCESTOR_HOPS):
+            if pid in seen or time.monotonic() >= deadline:
+                return None, (), False
+            seen.add(pid)
+            before = _proc_identity(pid, budget)
+            terminal = os.readlink(_PROC / str(pid) / "fd/0")
+            if _terminal(terminal) and terminal != tty:
+                # Crossing a nested terminal boundary must not combine the
+                # nearest inner tty with the outer tmux server's environment.
+                if ((not evidence and _direct_tty() != tty)
+                        or _proc_identity(pid, budget) != before
+                        or os.readlink(_PROC / str(pid) / "fd/0") != terminal):
+                    return None, (), False
+                complete = True
+                break
+            if terminal == tty:
+                context = _tmux_metadata(_proc_read(pid, "environ", MAX_ENVIRONMENT_BYTES, budget))
+                again = _tmux_metadata(_proc_read(pid, "environ", MAX_ENVIRONMENT_BYTES, budget))
+                if context != again or os.readlink(_PROC / str(pid) / "fd/0") != terminal:
+                    return None, (), False
+                tmux, pane = context
+                if tmux:
+                    parts = tmux.rsplit(",", 2)
+                    if (len(parts) != 3 or not parts[0] or not parts[1].isascii()
+                            or not parts[1].isdecimal() or int(parts[1]) <= 0
+                            or not parts[2].isascii() or not parts[2].isdecimal()):
+                        return None, (), False
+                    contexts.add(tuple(parts))
+                if pane:
+                    panes.add(pane)
+                evidence.append((pid, before, context))
+            if _proc_identity(pid, budget) != before:
+                return None, (), False
+            pid = before[0]
+            if pid <= 1:
+                complete = True
+                break
+        if not complete or len(contexts) > 1 or len(panes) > 1:
+            return None, (), False
+        if not evidence and _direct_tty() != tty:
+            # own_tty may have observed an ancestor just before it switched
+            # terminals. Never use that stale tty for a global server scan.
+            return None, (), False
+        if not contexts:
+            return None, tuple(evidence), True
+        socket, _server_pid, _session = next(iter(contexts))
+        ownership = _owned_socket(socket)
+        return socket, (tuple(evidence), ownership), True
+    except (OSError, ValueError, IndexError, UnicodeError):
+        return None, (), False
 
 
 def sockets(*, deadline=None):
@@ -123,15 +257,23 @@ def detect():
             return Target(inherited_socket, pane)
     if not shutil.which("tmux"):
         return None
-    tty = own_tty()
+    now = time.monotonic()
+    deadline = now + LOOKUP_SECONDS
+    tty = own_tty(deadline=deadline)
     if not tty:
         return None
-    key = (os.getpid(), tty, inherited_socket, os.environ.get("TMUX_TMPDIR"))
+    ancestry = ()
+    if inherited_socket is None:
+        inherited_socket, ancestry, complete = _ancestor_socket(tty, deadline)
+        if not complete:
+            return None
+    key = (os.getpid(), tty, inherited_socket, ancestry, os.environ.get("TMUX_TMPDIR"))
     now = time.monotonic()
+    if now >= deadline:
+        return None
     if _CACHE.get("key") == key and now < _CACHE.get("until", 0):
         return _CACHE.get("target")
     matches = set()
-    deadline = now + LOOKUP_SECONDS
     complete = True
     candidates = [inherited_socket] if inherited_socket else sockets(deadline=deadline)
     for socket in candidates:

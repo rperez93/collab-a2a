@@ -219,3 +219,9 @@ opposite case.
 [^daemon-src]: collab.client.daemon — the listener
 [^inbox-src]: collab.client.inbox — JSONL and SQLite from one write
 [^check-cmd]: collab check, run against a live session with no listener
+
+Later than the pin: terminal lookup can use a coding host ancestor's
+terminal-matched tmux socket metadata before bounded socket discovery. This
+recovers stripped variables in a crowded socket directory. A live pane-tty
+match remains required; missing, changed or ambiguous evidence does not choose
+a default/active pane. This is terminal routing, never participant identity.

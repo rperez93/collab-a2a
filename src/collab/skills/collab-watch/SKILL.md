@@ -61,7 +61,9 @@ not interrupted.
 
 `--tmux` targets an exact socket and pane. On Linux it can recover stripped
 variables by matching the coding host's ancestor tty to an owned private
-server. It never guesses from the active window. Missing/ambiguous evidence
+server. Terminal-matched ancestor metadata can select the server without a
+global socket scan; a live pane-tty match still selects the pane. It never
+guesses from the active window. Missing/ambiguous evidence
 leaves panes untouched; use the second-terminal instructions below when the
 sandbox hides the context. The launcher passes `COLLAB_HOME` explicitly because
 a new pane inherits the tmux server's environment, not the agent's shell.

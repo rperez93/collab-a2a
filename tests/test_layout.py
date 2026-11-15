@@ -84,6 +84,11 @@ def test_the_pane_command_carries_the_environment(monkeypatch):
 
     monkeypatch.setattr(watch, "tmux_available", lambda: True)
     monkeypatch.setattr(watch, "in_tmux", lambda: True)
+    # Environment transport requires a concrete target; never borrow the host
+    # running this test or let a missing target select tmux's active pane.
+    from collab.client import tmux_context
+    monkeypatch.setattr(tmux_context, "detect", lambda: tmux_context.Target(
+        socket="/tmp/test-tmux/socket", pane="%7"))
     monkeypatch.setattr(watch, "_tmux_command", fake_run)
 
     watch.open_tmux_pane(["collab", "watch"], env={"COLLAB_HOME": "/repo/.collab"},
