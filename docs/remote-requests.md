@@ -154,4 +154,5 @@ This branch's terminal receipts are an earlier local-operator mechanism, not
 R22b enrolled-key proof. Remote execution must adopt the operation-specific
 [strong-approval contract](remote-strong-adoption.md) before release under R22b.
 That contract preserves transport isolation and at-most-once attempt semantics;
-its hub adapter and frontend integration are not implemented by this document.
+its hub adapter is implemented, while frontend integration and local grant
+migration remain pending. See that document for the precise checkpoint scope.
