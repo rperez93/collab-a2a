@@ -496,6 +496,11 @@ def test_a_legacy_hub_json_that_served_the_root_loads_as_root_published(tmp_path
     write("s_sub", **required, tunnel="proxy", domain="team.example.app",
           public_url="https://team.example.app/s/s_sub")
     assert HubConfig.load("s_old", tmp_path).root_published is True
+    # hub_main loads the record exactly this way (HubConfig.load) before it
+    # decides the attach, so the revived legacy session asks for its root.
+    from collab.hub_main import asks_for_primary
+    assert asks_for_primary(HubConfig.load("s_old", tmp_path))
+    assert not asks_for_primary(HubConfig.load("s_sub", tmp_path))
     assert HubConfig.load("s_new", tmp_path).root_published is False, "a recorded value wins"
     assert HubConfig.load("s_sub", tmp_path).root_published is False
 
