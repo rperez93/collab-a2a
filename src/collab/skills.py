@@ -269,8 +269,9 @@ def front_description(content: str) -> str:
                     if more.strip() and not more[:1].isspace():
                         break
                     block.append(more.strip())
-                joiner = " " if value[0] == ">" else "\n"
-                return joiner.join(b for b in block if b) if value[0] == ">" else "\n".join(block).strip()
+                if value[0] == ">":
+                    return " ".join(b for b in block if b)
+                return "\n".join(block).strip()
             if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
                 try:
                     value = _json.loads(value) if value[0] == '"' else value[1:-1]
