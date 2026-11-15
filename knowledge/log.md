@@ -6,6 +6,9 @@
 ## 2026-11-15 (shared proxy state)
 * **Update (later than the pin)**: Recorded in [the state directory](architecture/state-directory.md) where the shared machine proxy keeps its state, lock and logs (the peer registry, not a participant home), that an attached hub owns no proxy or tunnel pid, and how the bare-domain primary is claimed, kept and released. Ported from #129 and matched to #182. The pin and verification stamps are unchanged.
 
+## 2026-11-15 (review evidence pinned to commits)
+* **Update (later than the pin)**: Recorded in [the command surface](operating/cli-surface.md) that `collab task pr` pins review and test evidence to full commits and warns when the observed head differs (#137). The pin and verification stamps are unchanged.
+
 ## 2026-11-14 (no host identity)
 * **Update (later than the pin)**: Peers no longer receive the hostname, the OS account or the working directory: `machine` is a label taken from `machine_id`, a random identity generated once per machine and account (not a hash), `user`, `cwd` and `remote` are neither sent nor stored by the hub in new writes, while rows stored earlier stay at rest and are cleaned on output (recorded in `docs/security.md` and SPEC.md, not re-verified against the pinned pages). The pin and verification stamps are unchanged.
 
