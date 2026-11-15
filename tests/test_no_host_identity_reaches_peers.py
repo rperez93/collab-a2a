@@ -594,3 +594,47 @@ def test_a_duplicate_retry_of_an_old_leaked_row_acknowledges_nothing_of_it(
         kind="chat", text="again", sender=me.name, sender_id=me.id, room="general",
         body={"collab_worker_delivery": key}))
     assert not created and duplicate.stats == LEGIT
+
+
+@pytest.mark.parametrize("cleared", [{"quotas": {}}, {"worker": {"quotas": {}}}])
+def test_an_empty_quota_map_still_says_there_is_no_quota(tmp_path, cleared):
+    """`quotas: {}` is the agent's statement «I have no quota», and the hub
+    clears the stored quota on it. Sanitising dropped every empty map — the
+    statement never left the client (`data: env.to_dict()`), and a cleared
+    quota went on showing 97% (review of #178). A map that ARRIVED empty is
+    kept; only one emptied by the sanitising is dropped."""
+    import asyncio
+
+    from collab.protocol import Envelope, public_stats
+    from collab.server.hub import Hub
+    from collab.server.store import Store
+
+    assert public_stats(cleared) == cleared
+    assert public_stats({"tool": {"dir": "/home/SENTACCOUNT/x"}}) == {}
+
+    async def run():
+        store = Store(tmp_path / "hub.db")
+        try:
+            alice = store.add_participant("alice", "token-a")
+            hub = Hub(store, session_id="s_t", host_name="alice")
+
+            def roundtrip(stats):
+                # Exactly what a client sends: the envelope's JSON.
+                return Envelope.from_dict(Envelope(kind="chat", text="t", sender="alice",
+                                                   sender_id=alice.id, stats=stats).to_dict())
+
+            full = ({"quotas": {"five_hour": {"used_pct": 97}}} if "quotas" in cleared
+                    else {"worker": {"quotas": {"five_hour": {"used_pct": 97}}}})
+            await hub.publish(roundtrip(full))
+            before = store.participant_by_id(alice.id).meta.get("stats", {})
+            await hub.publish(roundtrip(cleared))
+            after = store.participant_by_id(alice.id).meta.get("stats", {})
+            return before, after
+        finally:
+            store.close()
+
+    before, after = asyncio.run(run())
+    shown = (lambda s: s.get("quotas") if "quotas" in cleared
+             else (s.get("worker") or {}).get("quotas"))
+    assert shown(before), f"the quota was never stored: {before}"
+    assert not shown(after), f"the cleared quota still shows: {after}"

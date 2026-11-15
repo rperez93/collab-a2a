@@ -354,7 +354,12 @@ def public_stats(stats: Any, _depth: int = 0) -> dict[str, Any]:
         if not isinstance(key, str) or key.lower() in PRIVATE_KEYS:
             continue
         if isinstance(value, dict):
-            if kept := public_stats(value, _depth + 1):
+            # AN EMPTY MAP THAT ARRIVED EMPTY IS A STATEMENT: `quotas: {}` is
+            # «I have no quota», and the hub clears the stored one on it. Only
+            # a map the sanitising emptied is dropped (review of #178: dropping
+            # both left a cleared quota showing 97% on every roster).
+            kept = public_stats(value, _depth + 1)
+            if kept or not value:
                 out[key] = kept
         elif isinstance(value, list):
             out[key] = [v for v in value if not exposes_the_machine(v)
