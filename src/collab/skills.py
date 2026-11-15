@@ -265,6 +265,11 @@ def check_installable(record: dict, *, target: Target, force: bool) -> Path:
     """
     import json as _json
     content = str(record.get("content") or "")
+    if "\r" in content:
+        # Said plainly: CRLF is the common case, and the generic message below
+        # sent people looking for hidden characters.
+        raise ValueError("the text has Windows (CRLF) line endings, which are not accepted; "
+                         "ask the publisher to republish it with LF line endings")
     if hidden := hidden_characters(content + str(record.get("description") or "")):
         raise ValueError("the text contains invisible or control characters ("
                          + ", ".join(hidden[:6]) + ") that can make the review differ from "
