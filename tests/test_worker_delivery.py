@@ -195,3 +195,46 @@ def test_a_retry_of_a_delivery_already_collected_is_acknowledged_not_recreated(c
     again = client.post("/ext/collab/v1/files", headers=host_headers, files=other, params=params)
     assert again.status_code == 200 and again.json()["duplicate"]
     assert not blob.exists(), "an ended delivery is never recreated"
+
+
+import pytest
+
+
+@pytest.mark.parametrize("answer,unconfirmed", [
+    ({"id": "f_1"}, True),                                    # an older hub: no 'kept'
+    ({"id": "f_1", "kept": True, "source": "https://example.org/original"}, False),
+])
+def test_the_manual_drain_tells_a_keep_the_hub_never_confirmed(tmp_path, monkeypatch, answer, unconfirmed):
+    """friday's review of #209: the manual drain (worker off) passed on only an
+    explicit retention_note, so a --keep to a hub that never confirms 'kept'
+    was acknowledged in silence. It makes the direct send's check now."""
+    import argparse
+    import hashlib
+    from types import SimpleNamespace
+    from collab import cli, worker
+    stash = tmp_path / "stash.bin"
+    stash.write_bytes(b"abc")
+    store = worker.Store(tmp_path)
+    store.configure({"agent": "claude", "scope": "Coordinate"})
+    monkeypatch.setattr(store.__class__, "outbox", lambda self: [{
+        "id": "o_1", "kind": "file", "stash": str(stash), "name": "stash.bin",
+        "sha256": hashlib.sha256(b"abc").hexdigest(), "to": "bob", "to_id": "p_b", "routing_version": 1,
+        "keep": True, "source": "https://example.org/original"}])
+    class Hub:
+        def __enter__(self): return self
+        def __exit__(self, *e): return False
+        def upload_file(self, path, **kw):
+            return answer
+    monkeypatch.setattr(cli, "_client", lambda p: Hub())
+    acknowledged = []
+    monkeypatch.setattr(store.__class__, "acknowledge",
+                        lambda self, i, retention_note="": acknowledged.append((i, retention_note)))
+    monkeypatch.setattr(cli, "_require_profile", lambda a: SimpleNamespace(dir=tmp_path, name="me", session_id="s"))
+    try:
+        cli.cmd_worker(argparse.Namespace(worker_action="off"))
+    except Exception:
+        pass  # what follows the flush is not under test
+    assert len(acknowledged) == 1
+    assert ("unconfirmed" in acknowledged[0][1]) is unconfirmed
+    if not unconfirmed:
+        assert acknowledged[0][1] == ""

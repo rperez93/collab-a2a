@@ -619,6 +619,34 @@ async def test_a_queued_file_the_hub_did_not_keep_is_told_to_the_main_agent(conv
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("answer,blockers", [
+    ({"id": "f_1"}, 1),                    # an older hub: no 'kept' at all
+    ({"id": "f_1", "kept": False}, 1),     # asked to keep, not kept, no reason given
+    ({"id": "f_1", "kept": True}, 0),      # confirmed kept
+])
+async def test_a_queued_file_the_hub_never_confirmed_keeping_is_told_too(conversation, tmp_path, answer, blockers):
+    """friday's review of #209: the worker surfaced only an explicit
+    retention_note, so a --keep sent through the worker to a hub that never
+    confirms 'kept' was acknowledged with no warning. It now makes the same
+    check as the direct `collab file send`."""
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    path = tmp_path / "evidence.zip"
+    path.write_text("data")
+    store.queue_file(path, to="bob", to_id="p_b", keep=True)
+    async def transport(request):
+        return httpx.Response(200, json=answer)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        conversation.daemon._http = client
+        await conversation._flush(store, store.snapshot()["generation"])
+    assert not store.outbox()
+    told = [p for p in store.pending() if "evidence.zip" in p["question"]]
+    assert len(told) == blockers
+    if blockers:
+        assert told[0]["reason"] == "blocker" and "unconfirmed" in told[0]["question"]
+
+
+@pytest.mark.asyncio
 async def test_an_endless_upload_answer_is_read_only_to_its_cap_and_counts_as_delivered(conversation, tmp_path):
     """The upload's answer is one small record. `post` buffered any size before
     a check could run; it is now streamed and abandoned past 64 KiB. An answer
@@ -642,7 +670,11 @@ async def test_an_endless_upload_answer_is_read_only_to_its_cap_and_counts_as_de
         conversation.daemon._http = client
         await asyncio.wait_for(conversation._flush(store, store.snapshot()["generation"]), timeout=10)
     assert not store.outbox()
-    assert [p for p in store.pending() if "evidence.zip" in p["question"]] == []
+    # Unreadable, so the hub never confirmed keeping it: one blocker, worded
+    # as unconfirmed (friday's review of #209), never the cut-off note.
+    told = [p for p in store.pending() if "evidence.zip" in p["question"]]
+    assert len(told) == 1 and "unconfirmed" in told[0]["question"]
+    assert "stored as temporary" not in told[0]["question"]
     cap = conversation.MAX_UPLOAD_ANSWER
     assert len(pulled) * 4096 <= cap + 2 * 4096, "read past the cap"
 
