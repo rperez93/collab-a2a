@@ -1,7 +1,7 @@
 # R7 adoption of R22b strong approval
 
 Status: server and receiver strong paths implemented; release validation remains incomplete.
-The branch combines current main2fa3a3a, PR172 c4f810d and PR173 d90bf86.
+The branch combines current main2fa3a3a, PR172 c4f810d and PR173 d90bf86 plus its strict Hello v1 fixes from15d6fa5.
 `approval_remote.RemoteApprovals` now prepares exact private event-backed offers
 and consumes receipts via `/approval/remote/prepare` and
 `/approval/remote/{request_id}/consume`. Remote review reads are target-only;
@@ -28,6 +28,15 @@ review checked source/binding privacy, concurrency, pruning, no-retry behavior
 and capability2 gating. These are synthetic-key tests, not native human or
 shared-live evidence. The new inbox/client/server cases also passed 71 tests
 in10.90s on the actual Python3.10 interpreter.
+
+The request summary (`subject`, `destination`, `authority`) is included in the
+hub-canonical review and the window reads those exact fields. Independent pure
+validation against PR145d839f8e's proof-only dispatcher accepted this real review;
+removing either subject or destination, even with a recomputed digest, refused
+it. Origin callback and unchanged proof handoff shapes also matched. This is
+contract evidence, not a browser or native passkey ceremony. After the fix,
+31 server/remote-client tests passed8.73s; the preceding strict Hello v1 update
+passed70 adapter/remote-client tests14.69s (one native-script test deselected).
 
 ## Preserve the R7 transport
 

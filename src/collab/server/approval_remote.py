@@ -122,6 +122,7 @@ class RemoteApprovals:
                 raise Rejected('remote_target_mismatch', 409)
             review = self._review({'api_version': 1, 'session_id': core.session_id,
                 'requester_id': offer['sender_id'], 'target_id': owner, 'operation': 'remote-deliver',
+                'subject': 'Remote ' + offer['kind'], 'destination': binding['target'],
                 'source_seq': source_seq, 'source_hash': source_hash, 'offer': offer,
                 'offer_digest': digest(offer), 'binding': binding, 'binding_digest': fingerprint,
                 'authority': AUTHORITY})
