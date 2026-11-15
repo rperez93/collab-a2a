@@ -361,7 +361,7 @@ strong request goes through it:
   text, with control and invisible characters shown as `\u{XXXX}` rather than
   obeyed. Its buttons are **Approve with Windows Hello**, **Decline** and **Use
   a passkey instead** (on Windows and WSL this approves nothing: those
-  platforms always use Hello; passkeys are for other systems, after 2.2.0); Enter and Esc decline. Approve is followed by the Hello
+  platforms always use Hello; passkeys are for other systems, from 2.3.0); Enter and Esc decline. Approve is followed by the Hello
   prompt; a cancelled prompt is a decline, and a window nobody answers within
   ten minutes lets the request expire. The hub's challenge is asked for only
   after Approve — it lives 120 s, which reading a review can outlast — and is

@@ -100,10 +100,12 @@ What 2.3.0 adds since 2.2.0.
 - **Upgrade note: one hub per session, enforced by the hub.** A hub now takes
   `hub.lock` in its session directory and writes its identity there; a second
   hub started on the same session (a resume racing a revive) exits at once
-  and says which hub runs it. `collab host --resume` refuses a session whose
-  hub is still running, after giving one that is just stopping a few seconds,
-  and `collab kill` always finds the hub, even one that has not recorded its
-  pid yet (#202, #204, #205).
+  and says which hub runs it. On the shared proxy (the default), `collab host
+  --resume` stops a session's old hub and then resumes it; on its own tunnel
+  or local only, it refuses while the hub still runs (`collab kill` first),
+  after giving one that is just stopping a few seconds. `collab kill` always
+  finds the hub, even one that has not recorded its pid yet (#202, #204,
+  #205).
 - **Strong approval off Windows.** `collab consent enrol` enrols a passkey
   from the terminal on Linux and macOS, and the hub advertises passkey beside
   Windows Hello (#185).
@@ -117,23 +119,28 @@ What 2.3.0 adds since 2.2.0.
   open; later ones wait as `throttled` and can be declined, not accepted
   (#187).
 - **The panel status keeps itself current.** Claiming, completing, handing
-  off or releasing a task, or attaching a PR to it, moves the owner's status,
-  whoever moved the board. A status about a closed task or someone else's is
-  not shown. One its owner has talked past for 15 minutes shows as `last
-  said …` with its age, judged by when it was said, not by the daemon's
-  renewals (#192, #208).
+  off or releasing a task moves the owner's status, whoever moved the board.
+  Attaching a PR adds its number only when the task's owner attaches it, and
+  never over `quiet`. A status about a closed task or someone else's is not
+  shown. One its owner has talked past for 15 minutes shows as `last said …`
+  with its age, judged by when it was said, not by the daemon's renewals;
+  saying it again with `collab working` refreshes it (#192, #208).
 - **Task evidence pinned to commits.** A task's review and test evidence names
-  the exact commit and the participant who reported it (#207).
+  the exact commit and the participant who reported it. A task holds at most
+  20 PR links; `collab task pr-remove` frees one (#207).
 - **Shared documents are kept** until their sender withdraws them, within a
-  per-sender and per-session bound (#209).
-- **Process resources in the telemetry**: bounded per-role figures for the
-  daemon, worker and collector (#193).
+  per-sender and per-session bound. Only `.md`, `.rst` and `.pdf` files are
+  kept by default; others need `--keep` (#209).
+- **Process resources in the telemetry**: bounded per-role figures (daemon,
+  hub, worker, proxy, agent, work and watch), and peers now see the machine's
+  memory, load and CPU count (#193).
 - **Worker events in batches**: the worker batches adjacent conversation
   events in a short, fixed window; urgent events bypass the batching delay
   (#149). The worker's budget and
   terminal outcomes can be audited (#200).
-- **tmux viewer**: collab locates the caller's own pane, and participant cards
-  show pending worker decisions (#115).
+- **tmux viewer**: collab locates the caller's own pane (#115).
+- **Pending decisions in the roster**: participant cards show pending worker
+  decisions as a warning row in the watch roster, in any layout (#115).
 - **Shared proxy**: operation and coordinated host upgrades are documented,
   and released clients are verified through routed and previous-owner root
   links (#194, #199).
@@ -200,7 +207,7 @@ What 2.2.0 adds since 2.1.2.
   needs more, and is live in 2.2.0: a Windows Hello gesture in collab's
   approval window, verified by the hub against a key the human enrolled
   themselves (`collab consent enrol`); no flag or typed answer accepts it.
-  Passkey approval on other systems is not in this release. It holds only
+  Passkey approval on other systems is not in this release (added in 2.3.0). It holds only
   between clients that have it (2.2.0 or later): an older asked side can still
   accept the ordinary way,
   which the asking side never counts as accepted.
