@@ -53,8 +53,8 @@ def test_proxy_tunnel_recovery_updates_prefixed_url(monkeypatch):
 
 
 def test_proxy_config_is_validated_and_persisted():
-    """OFF by default this release: an upgrade must not move every host onto
-    the shared proxy and a new address. Opting in persists; junk is refused."""
+    """AUTO by default from 2.2.0: the shared proxy is the way to connect, and a
+    pre-proxy session keeps its root. Changing it persists; junk is refused."""
     assert config.proxy_mode() == 'auto'  # the default from 2.2.0
     assert config.set_proxy_mode('on') == 'on'
     assert config.proxy_mode() == 'on'
@@ -427,19 +427,52 @@ def test_a_file_transfer_never_follows_a_redirect_with_the_bearer(tmp_path, whic
     assert asked[0][0].startswith('/s/s_mine/')
 
 
-def test_the_first_attach_claims_the_bare_domain_and_later_ones_never_ask_again():
-    """2.2.0: the proxy is the default, and pre-proxy root links must keep
-    reaching the session that owned the domain, without `--primary`."""
+def test_only_a_session_that_published_the_root_claims_it_automatically():
+    """2.2.0: a pre-proxy session's root links must keep reaching it, but a new
+    or test session hosted first after the upgrade must not take the root."""
     from types import SimpleNamespace
     from collab.hub_main import asks_for_primary, record_attach
-    first = SimpleNamespace(proxy_primary=False, proxy_seen=False)
-    assert asks_for_primary(first), "a session's first attach asks"
-    record_attach(first, won=True)
-    assert (first.proxy_primary, first.proxy_seen) == (True, True)
-    assert asks_for_primary(first), "a revive keeps asking for the primary it won"
-    second = SimpleNamespace(proxy_primary=False, proxy_seen=False)
-    assert asks_for_primary(second)
-    record_attach(second, won=False)                   # someone already holds it
-    assert not asks_for_primary(second), "not primary, and never asks again"
-    asked = SimpleNamespace(proxy_primary=True, proxy_seen=True)
+    born_on_proxy = SimpleNamespace(proxy_primary=False, proxy_seen=False, root_published=False)
+    assert not asks_for_primary(born_on_proxy), "a session born on the proxy never claims"
+    owner = SimpleNamespace(proxy_primary=False, proxy_seen=False, root_published=True)
+    assert asks_for_primary(owner), "the session that served the root asks once"
+    record_attach(owner, won=True)
+    assert asks_for_primary(owner), "a won primary is asked for again on revive"
+    late = SimpleNamespace(proxy_primary=False, proxy_seen=False, root_published=True)
+    record_attach(late, won=False, refused_by="s_owner")
+    assert not asks_for_primary(late) and late.proxy_claim_refused == "s_owner", "refused once, never again"
+    asked = SimpleNamespace(proxy_primary=True, proxy_seen=True, root_published=False)
     assert asks_for_primary(asked), "an explicit --primary still asks"
+
+
+def test_resume_remembers_that_a_session_served_the_root_before_clearing_its_address(monkeypatch):
+    from collab.server import session
+    from collab.server.session import HubConfig, published_root
+    cfg = HubConfig.__new__(HubConfig)
+    for field, value in (("tunnel", "ngrok"), ("domain", "team.example.app"),
+                         ("public_url", "https://team.example.app"), ("root_published", False)):
+        setattr(cfg, field, value)
+    assert published_root(cfg)
+    cfg.public_url = "https://team.example.app/s/s_abc"
+    assert not published_root(cfg), "a /s/ address is not the root"
+    cfg.public_url, cfg.tunnel = "https://other.example.app", "ngrok"
+    assert not published_root(cfg), "another domain is not this domain's root"
+    cfg.public_url = "https://team.example.app"
+    monkeypatch.setattr(session, "rotate_invite", lambda c: "code")
+    session.resume_session(cfg, 0)
+    assert (cfg.public_url, cfg.tunnel, cfg.root_published) == ("", "none", True)
+
+
+def test_a_session_on_another_domain_does_not_claim_this_proxys_root(monkeypatch):
+    from types import SimpleNamespace
+    from collab import proxy
+    from collab.proxy_host import SharedProxy
+    claimed = []
+    monkeypatch.setattr(proxy, "claim_primary", lambda sid: claimed.append(sid) or sid)
+    monkeypatch.setattr(proxy.ProxyState, "load", classmethod(lambda cls: SimpleNamespace(
+        public_url="https://theirs.example.app", error="", pid=0, stamp="")))
+    shared = SharedProxy("s_mine", domain="mine.example.app", primary=True)
+    monkeypatch.setattr(SharedProxy, "_alive", staticmethod(lambda state: True))
+    shared.start()
+    assert claimed == [], "domain checked before the claim"
+

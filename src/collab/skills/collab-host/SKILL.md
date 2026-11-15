@@ -97,7 +97,7 @@ are protected. `collab sessions` marks the current and most recent saved records
 
 The shared proxy is the default (`proxy` defaults to `auto`): one machine
 tunnel serves every session. Each session advertises a `/s/<session_id>` URL;
-the domain's first session keeps the bare-domain route automatically (so its
+a session that served the bare domain before keeps it automatically (so its
 pre-proxy links keep working), `--primary` asks for it explicitly, and a
 second session asking for it is refused. `collab config proxy off` or
 `--tunnel own` keeps a hub on its own tunnel.

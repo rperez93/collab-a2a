@@ -28,6 +28,14 @@ INVITE_TTL = 24 * 3600
 INVITE_MAX_USES = 0  # unlimited; the host can always mint another
 
 
+def published_root(cfg) -> bool:
+    """Whether cfg's own tunnel is serving the bare domain root right now."""
+    from urllib.parse import urlsplit
+    parts = urlsplit(cfg.public_url or "")
+    return (cfg.tunnel == "ngrok" and bool(cfg.domain) and parts.hostname == cfg.domain
+            and not parts.path.strip("/").startswith("s/"))
+
+
 @dataclass
 class HubConfig:
     """What the detached hub process needs in order to come up."""
@@ -78,6 +86,13 @@ class HubConfig:
     #: attach claims the bare domain when nobody holds it, so links handed out
     #: before the proxy keep reaching it (see hub_main).
     proxy_seen: bool = False
+    #: This session once published the bare domain root with its own tunnel
+    #: (a pre-proxy link). Only such a session claims the root automatically.
+    #: Survives resume, which clears public_url and tunnel.
+    root_published: bool = False
+    #: The holder that refused this session's automatic claim, for the host to
+    #: hear; empty when there was no refusal.
+    proxy_claim_refused: str = ""
     pid: int = 0
     home: str = ""
     #: The hub and the tunnel again, STAMPED — the pid with the start time and
@@ -360,6 +375,10 @@ def resume_session(cfg: HubConfig, port: int, bind: str = "127.0.0.1",
     cfg.bind = bind
     if domain:
         cfg.domain = domain
+    # Kept before the address is cleared: a session that served the bare domain
+    # with its own tunnel is the one its pre-proxy links still name.
+    if published_root(cfg):
+        cfg.root_published = True
     cfg.public_url = ""
     cfg.tunnel = "none"
 

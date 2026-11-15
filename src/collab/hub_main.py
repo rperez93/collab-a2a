@@ -171,16 +171,19 @@ class RegistryHeartbeat:
 
 
 def asks_for_primary(cfg) -> bool:
-    """Whether this attach asks for the bare domain: when asked, or on a
-    session's very first attach (so its pre-proxy root links keep working)."""
-    return bool(cfg.proxy_primary or not cfg.proxy_seen)
+    """Whether this attach asks for the bare domain: when asked (--primary,
+    or a primary it already holds), or on the first attach of a session that
+    published the root before, so its pre-proxy links keep reaching it. A
+    session born on the proxy never claims it automatically."""
+    return bool(cfg.proxy_primary or (not cfg.proxy_seen and cfg.root_published))
 
 
-def record_attach(cfg, won: bool) -> None:
+def record_attach(cfg, won: bool, refused_by: str = "") -> None:
     """Remembered either way: the automatic claim is a first-attach rule, and
     a primary we won is recorded so a revived hub asks for it again."""
     cfg.proxy_primary = won
     cfg.proxy_seen = True
+    cfg.proxy_claim_refused = refused_by
 
 
 def main() -> int:
@@ -243,10 +246,13 @@ def main() -> int:
         supervisor.start()
 
     if getattr(supervisor, 'shared', False):
-        record_attach(cfg, bool(supervisor.primary))
+        record_attach(cfg, bool(supervisor.primary), getattr(supervisor, 'primary_holder', '') or '')
     if supervisor is not None and supervisor.public_url:
         cfg.public_url = supervisor.public_url
         cfg.tunnel = "proxy" if getattr(supervisor, 'shared', False) else "ngrok"
+        from .server.session import published_root
+        if published_root(cfg):
+            cfg.root_published = True  # its own tunnel serves the root: remembered
         # Only what we started: a tunnel we merely reused belongs to whoever
         # launched it, and stopping it would be taking something that is not
         # ours.
