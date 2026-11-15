@@ -1134,7 +1134,10 @@ def test_the_typed_line_is_one_line(tmp_path):
 
 def test_the_fresh_run_recipes_say_so():
     assert wake.recipe("codex-exec").delivers == wake.FRESH_RUN
-    assert wake.recipe("claude").delivers == wake.FRESH_RUN
+    assert wake.recipe("claude-exec").delivers == wake.FRESH_RUN
+    # `--agent claude` reaches the open session through its own monitor.
+    assert wake.recipe("claude").delivers == wake.OPEN_SESSION
+    assert not wake.recipe("claude").needs_target
 
 
 def test_a_recipe_is_found_by_its_binary_too():

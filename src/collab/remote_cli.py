@@ -91,6 +91,9 @@ def run(args, profile):
         return 0
     command = list(wake.read_config(profile.dir).command)
     if action == 'bind':
+        # The listen stream has one session, so binding to it needs no id.
+        if not args.target and len(command) == 7 and command[3:5] == ['--to', 'listen']:
+            args.target = wake.LISTEN_TARGET
         if not args.target:
             raise ValueError('--target must name the local coding session')
         actual = destination(command)

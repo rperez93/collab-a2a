@@ -189,6 +189,10 @@ FRESH_RUN = "fresh run"
 _PLACEHOLDER = re.compile(r"\{([a-z]+)\}")
 
 
+#: The one session `--to listen` names: this participant's own listen stream.
+LISTEN_TARGET = "listen-stream"
+
+
 @dataclass(frozen=True)
 class Recipe:
     """A known way to put a message in front of an agent."""
@@ -274,6 +278,15 @@ RECIPES: tuple[Recipe, ...] = (
         "run `collab wake set --agent codex` from inside the Codex session,"
         " or pass --target <thread-id>"),
     Recipe(
+        "claude", ["{collab}", "wake", "deliver", "--to", "listen",
+                   "--target", LISTEN_TARGET], False,
+        "FOR AN AGENT THAT HOLDS `collab listen --follow` IN A MONITOR, Claude"
+        " Code first. Nothing is typed anywhere: a human-approved remote prompt"
+        " is printed ONCE on that monitor's own stream, as its own labelled"
+        " line, and counts as delivered when it is written there. Ordinary"
+        " messages already reach the monitor, so a wake for them is a no-op.",
+        "https://docs.claude.com/en/docs/claude-code/cli-reference", OPEN_SESSION),
+    Recipe(
         "tmux", ["{collab}", "wake", "deliver", "--to", "tmux",
                  "--target", "{target}", "--expect-pid", "{pid}",
                  "--expect-command", "{command}"], False,
@@ -295,9 +308,9 @@ RECIPES: tuple[Recipe, ...] = (
         " no session to reach; prefer `--agent codex` when there is.",
         "https://developers.openai.com/codex/noninteractive"),
     Recipe(
-        "claude", ["claude", "-p", "--permission-mode", "acceptEdits"], True,
-        "Claude Code holds its own monitor across turns and should not need"
-        " this at all — set it only for a Claude that cannot.",
+        "claude-exec", ["claude", "-p", "--permission-mode", "acceptEdits"], True,
+        "A NEW Claude Code run each time. Claude Code holds its own monitor"
+        " across turns and should not need this; prefer `--agent claude`.",
         "https://docs.claude.com/en/docs/claude-code/cli-reference"),
     Recipe(
         "gemini", ["gemini", "--yolo"], True,

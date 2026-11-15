@@ -2126,6 +2126,13 @@ def cmd_listen(args: argparse.Namespace) -> int:
             # this file once per line for something that changes every ten
             # minutes. A second's lateness on a ten-minute reminder is nothing.
             if (time.time() - looked) >= REMINDER_POLL:
+                # A human-approved remote prompt addressed to this stream
+                # (`wake set --agent claude`): printed once, then marked, and
+                # only the mark counts as delivered (remote_delivery).
+                from . import remote_delivery
+                for record in remote_delivery.claim_for_stream(profile.dir):
+                    print(remote_delivery.stream_line(record, args.json), flush=True)
+                    remote_delivery.mark_printed(profile.dir, record["request_id"])
                 looked = time.time()
                 fresh = wake.reminder_waiting(root)
                 if fresh is not None and fresh["at"] > reminded_at:
@@ -4838,6 +4845,11 @@ def _wake_deliver(args: argparse.Namespace, wk) -> int:
             expect_command=args.expect_command or "", about=about)
     elif args.to == "codex":
         code, detail = wk.deliver_to_codex(target, prompt)
+    elif args.to == "listen":
+        # The monitor already prints every message as it arrives; there is
+        # nothing to put in front of it. A human-approved remote prompt goes
+        # to the stream through the daemon (remote_delivery), never here.
+        code, detail = 0, "your monitor already has these messages on its stream"
     else:
         fail(f"no delivery called {args.to!r}")
         return 1
@@ -4938,7 +4950,7 @@ def cmd_wake(args: argparse.Namespace) -> int:
             args.run = known.command(target=target, pid=pid, running=what,
                                      collab=str(Path(sys.argv[0]).resolve()))
             if known.delivers == wk.OPEN_SESSION:
-                ok(f"this reaches your open session ({target})")
+                ok(f"this reaches your open session ({target or 'through your monitor'})")
             else:
                 warn("this starts a NEW run, not your open session —"
                      " it will read the room to catch up")

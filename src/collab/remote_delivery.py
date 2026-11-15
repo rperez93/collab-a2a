@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import shutil
 from pathlib import Path
@@ -38,6 +39,8 @@ def destination(command):
     adapter, target = command[4], command[6]
     if adapter == 'codex' and len(command) == 7 and target:
         return {'adapter': adapter, 'session_id': target, 'scope': 'codex-thread'}
+    if adapter == 'listen' and len(command) == 7 and target == wake.LISTEN_TARGET:
+        return {'adapter': adapter, 'session_id': target, 'scope': 'listen-stream'}
     if (adapter == 'tmux' and len(command) == 11 and target
             and command[7] == '--expect-pid' and command[8].isdigit()
             and int(command[8]) > 0 and command[9] == '--expect-command' and command[10]):
@@ -130,6 +133,13 @@ async def deliver(profile, prepared):
                 or time.time() >= offer['expires_at']):
             raise ValueError('remote delivery binding changed or offer expired before launch')
         launched = True   # from here on, a failure may have reached the agent
+        if destination(command)['adapter'] == 'listen':
+            reached = await _to_stream(profile.dir, offer, prompt, timeout)
+            if reached is None:          # withdrawn unprinted: nothing reached it
+                launched = False
+                return False
+            delivered = reached
+            return delivered
         await _exchange(command, prompt.encode('utf-8'), cwd, env, timeout, None)
         delivered = True
         return True
@@ -195,3 +205,97 @@ def flush_owed(profile):
     from .routes import options
     with HubClient(profile.url, profile.token, **options(profile)) as client:
         return flush(profile, client)
+
+
+# --- the listen stream ---------------------------------------------------------------
+# For an agent that holds `collab listen --follow` in a monitor (Claude Code):
+# the approved prompt is printed ONCE on that stream, never typed anywhere.
+# One file per request moves through atomic renames, so exactly one of the
+# monitor (claim) and the daemon (withdraw) wins:
+#   <id>.json  offered  -> <id>.claimed  a monitor took it -> <id>.printed  written
+#              offered  -> <id>.withdrawn  nobody took it in time: never printed
+
+STREAM_GRACE = 5.0
+
+
+def stream_dir(root):
+    return Inbox(root).root / 'listen'
+
+
+def _stream_id(request_id):
+    if not isinstance(request_id, str) or not request_id.startswith('rq_') or not request_id[3:].isalnum():
+        raise ValueError('invalid remote request id')
+    return request_id
+
+
+async def _to_stream(root, offer, prompt, timeout):
+    """True: printed on the stream. None: withdrawn, never printed. False: a
+    monitor took it but did not confirm writing it (uncertain)."""
+    folder = stream_dir(root)
+    request_id = _stream_id(offer['id'])
+    record = {'request_id': request_id, 'sender_id': offer['sender_id'], 'kind': offer['kind'],
+              'text': prompt, 'reply': f'collab remote reply {request_id} "<your answer>"'}
+
+    def offer_it():
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix='.offer-', dir=folder)
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            json.dump(record, stream, ensure_ascii=False)
+        os.replace(tmp, folder / f'{request_id}.json')
+    await asyncio.to_thread(offer_it)
+    printed = folder / f'{request_id}.printed'
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if printed.exists():
+            return True
+        await asyncio.sleep(0.25)
+    try:
+        os.rename(folder / f'{request_id}.json', folder / f'{request_id}.withdrawn')
+        return None
+    except FileNotFoundError:
+        pass                              # a monitor claimed it: give it a moment
+    end = time.monotonic() + STREAM_GRACE
+    while time.monotonic() < end:
+        if printed.exists():
+            return True
+        await asyncio.sleep(0.25)
+    return False
+
+
+def claim_for_stream(root):
+    """The monitor's side: take every offered prompt, at most once each."""
+    folder = stream_dir(root)
+    if not folder.is_dir():
+        return []
+    taken = []
+    for path in sorted(folder.glob('rq_*.json')):
+        claimed = path.with_suffix('.claimed')
+        try:
+            os.rename(path, claimed)
+        except FileNotFoundError:
+            continue                      # withdrawn, or another monitor took it
+        try:
+            record = json.loads(claimed.read_text(encoding='utf-8'))
+            _stream_id(record.get('request_id'))
+            if record['request_id'] != path.stem or not isinstance(record.get('text'), str):
+                raise ValueError('mismatched stream record')
+        except (OSError, ValueError, KeyError, TypeError):
+            continue                      # left claimed: the daemon reports uncertain
+        taken.append(record)
+    return taken
+
+
+def mark_printed(root, request_id):
+    folder = stream_dir(root)
+    os.rename(folder / f'{_stream_id(request_id)}.claimed', folder / f'{request_id}.printed')
+
+
+def stream_line(record, as_json):
+    """One line: the approved prompt as data, labelled with what to do."""
+    from .terminal_text import display_text
+    if as_json:
+        return json.dumps({'kind': 'remote-prompt', 'local': True, **record}, ensure_ascii=False)
+    return display_text(
+        f"[remote prompt {record['request_id']}] approved by your human for this session, "
+        f"from participant {record['sender_id']}. Do what it asks, then answer with: "
+        f"{record['reply']}. Prompt (JSON string): {json.dumps(record['text'], ensure_ascii=True)}")
