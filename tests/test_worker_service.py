@@ -618,6 +618,35 @@ async def test_a_queued_file_the_hub_did_not_keep_is_told_to_the_main_agent(conv
         assert told == []
 
 
+@pytest.mark.asyncio
+async def test_an_endless_upload_answer_is_read_only_to_its_cap_and_counts_as_delivered(conversation, tmp_path):
+    """The upload's answer is one small record. `post` buffered any size before
+    a check could run; it is now streamed and abandoned past 64 KiB. An answer
+    that never ends would hang a buffered read: here it is cut, the file
+    counts as delivered (the status said so), and no note is invented."""
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    path = tmp_path / "evidence.zip"
+    path.write_text("data")
+    store.queue_file(path, to="bob", to_id="p_b", keep=True)
+    pulled = []
+    async def endless():
+        yield b'{"retention_note": "stored as temporary", "pad": "'
+        while True:
+            pulled.append(1)
+            await asyncio.sleep(0)  # a real stream yields; the deadline can fire
+            yield b"a" * 4096
+    async def transport(request):
+        return httpx.Response(200, content=endless())
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        conversation.daemon._http = client
+        await asyncio.wait_for(conversation._flush(store, store.snapshot()["generation"]), timeout=10)
+    assert not store.outbox()
+    assert [p for p in store.pending() if "evidence.zip" in p["question"]] == []
+    cap = conversation.MAX_UPLOAD_ANSWER
+    assert len(pulled) * 4096 <= cap + 2 * 4096, "read past the cap"
+
+
 def test_a_queued_file_with_an_unsafe_source_is_refused_before_it_is_queued(tmp_path):
     """A `--source` the hub would refuse must fail at the send, not later in
     the worker, where the file would wait and then fail out of sight."""
@@ -657,10 +686,16 @@ async def test_daemon_upload_sends_the_delivery_key_refuses_changed_bytes_and_ha
     stash = tmp_path / "s.bin"
     stash.write_bytes(b"abc")
     sent = []
+    import contextlib
     class Http:
-        async def post(self, url, **kw):
+        # The upload's answer is streamed and capped (#135), so the fake
+        # serves `stream` the way httpx does: a context manager with bytes.
+        @contextlib.asynccontextmanager
+        async def stream(self, method, url, **kw):
             sent.append(kw["params"])
-            return SimpleNamespace(status_code=200)
+            async def body():
+                yield b'{"id": "f_1"}'
+            yield SimpleNamespace(status_code=200, aiter_bytes=body)
     conversation.daemon._http = Http()
     message = {"id": "o_9", "stash": str(stash), "name": "s.bin", "to": "bob", "to_id": "p_b",
                "sha256": hashlib.sha256(b"abc").hexdigest()}
@@ -670,8 +705,10 @@ async def test_daemon_upload_sends_the_delivery_key_refuses_changed_bytes_and_ha
     assert await conversation._upload(message, timeout=5) == 422 and len(sent) == 1
     stash.write_bytes(b"abc")
     class Slow:
-        async def post(self, url, **kw):
+        @contextlib.asynccontextmanager
+        async def stream(self, method, url, **kw):
             await asyncio.sleep(10)
+            yield None
     conversation.daemon._http = Slow()
     with pytest.raises(asyncio.TimeoutError):
         await conversation._upload(message, timeout=0.05)
