@@ -341,6 +341,7 @@ class Daemon:
         self.connected_since: float | None = None
         self.snapshot: dict[str, Any] = {}
         self._http: httpx.AsyncClient | None = None
+        self._remote_flushed = 0.0
         self._last_stats: dict[str, Any] = {}
         self._last_activity: dict[str, Any] = {}
         self._activity_sent_at = 0.0
@@ -1788,11 +1789,25 @@ class Daemon:
         messages should cost one turn, and the decision needs to be made once
         the burst has settled rather than on the first line of it.
         """
+        from .. import remote_delivery
+        # OWED REMOTE REPORTS AND REPLIES go out on every beat, whatever the
+        # wake is doing: the requester's outcome must not wait for a turn.
+        # Single flight, off the beat: a hanging hub must not stall it.
+        flushing = getattr(self, "_remote_flushing", None)
+        if ((flushing is None or flushing.done())
+                and time.monotonic() - getattr(self, "_remote_flushed", 0.0) >= 5.0):
+            self._remote_flushed = time.monotonic()
+
+            async def flush_once():
+                try:
+                    await asyncio.to_thread(remote_delivery.flush_owed, self.profile)
+                except Exception as exc:
+                    logger.warning('remote outcome flush failed (%s)', type(exc).__name__)
+            self._remote_flushing = asyncio.create_task(flush_once())
         if self._waking is not None and not self._waking.done():
             return                       # a turn is already in flight
         self._drain_wake_result(self._waking)
         self._waking = None
-        from .. import remote_delivery
         try:
             prepared = await asyncio.to_thread(remote_delivery.prepare, self.profile)
         except (ValueError, OSError, sqlite3.Error) as exc:

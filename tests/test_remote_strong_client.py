@@ -143,7 +143,9 @@ def test_change_after_prepare_never_launches_or_replays(remote, monkeypatch, cha
         pytest.fail('stale prepared attempt launched')
     monkeypatch.setattr(remote_delivery, '_exchange', forbidden)
     assert asyncio.run(remote_delivery.deliver(remote.profile, prepared)) is False
-    assert remote.inbox.list()[0]['state'] == 'uncertain'
+    # Refused before the adapter started: nothing reached the agent, so the
+    # requester is told `failed`, not `uncertain` — and it is never relaunched.
+    assert remote.inbox.list()[0]['state'] == 'failed'
     assert remote_delivery.prepare(remote.profile) is None
 
 

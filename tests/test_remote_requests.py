@@ -4,7 +4,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from collab.remote_requests import Inbox, binding_digest, digest, make_offer, validate
+from collab.remote_requests import (Inbox, REPLY_WINDOW, binding_digest, delivery_sha256, digest,
+                                    make_offer, validate)
 
 
 @pytest.fixture
@@ -25,6 +26,7 @@ def approve(inbox, offer, **changes):
     options.update(changes)
     # Explicit synthetic post-hub grant, not evidence of human approval.
     attempt = inbox.begin_strong_attempt(offer['id'], **options)
+    options.setdefault('delivery_digest', delivery_sha256(offer, options['target']))
     inbox.finish_strong_attempt(offer['id'], attempt, 'rc_' + offer['id'], **options)
 
 
@@ -302,7 +304,9 @@ def test_lifecycle_audit_links_delivery_without_prompt_or_receipt_secrets(offere
     encoded = json.dumps(rows)
     assert offer['text'] not in encoded and delivery['receipt'] not in encoded
     # Queue compaction cannot erase the separate lifecycle record.
-    assert inbox.list(now=10000) == []
+    # A consumed request is kept for the reply window, then compacted.
+    assert inbox.list(now=10000) != []
+    assert inbox.list(now=1000 + REPLY_WINDOW) == []
     with sqlite3.connect(inbox.root.parent / 'consent' / 'audit.sqlite') as db:
         assert db.execute('SELECT COUNT(*) FROM events').fetchone()[0] == len(rows)
 
@@ -347,6 +351,10 @@ def test_revocation_and_refusal_audit_explain_non_delivery(offered, monkeypatch)
     inbox.bound_target(['local-adapter', '--session', 'coding-session'])
     inbox.decline(offer['id'], now=102)
     monkeypatch.setattr(requests, 'MAX_SENDER_RECORDS', 1)
+    # A request the hub consumed no longer counts against the sender; one
+    # pending offer fills the quota.
+    inbox.receive(make_offer(**route, target='coding-session', kind='prompt', text='filler', now=103),
+                  **route, now=103)
     other = make_offer(**route, target='coding-session', kind='prompt', text='no capacity', now=103)
     with pytest.raises(requests.RemoteQueueFull):
         inbox.receive(other, **route, now=103)

@@ -806,7 +806,9 @@ def _alarm_line(line: str) -> bool:
         event = json.loads(line)
     except (ValueError, RecursionError):
         return False
-    return isinstance(event, dict) and attention.approval_security(event.get("kind"), event.get("body"))
+    # The security alarm and the agent's own remote outcome both take this
+    # route past the worker; see attention.for_main.
+    return isinstance(event, dict) and attention.for_main(event.get("kind"), event.get("body"))
 
 
 def _security_text(path: Path, limit: int = SECURITY_SCAN_BYTES) -> str:
@@ -909,7 +911,11 @@ class Waker:
             "kind": env.kind,
             # Keep only the routing marker, not arbitrary metadata. Persist it
             # so notice-mode/read filtering still admits the alarm after restart.
-            **({"body": {"event": "approval-security"}} if env.kind == "system" else {}),
+            # A remote outcome keeps an empty typed slot: attention.for_main
+            # requires it, and the answer itself is in `text`.
+            **({"body": {"event": env.body.get("event"),
+                         **({"remote_outcome": {}} if env.body.get("event") == "remote-outcome" else {})}}
+               if env.kind == "system" else {}),
             "from": env.sender,
             # WHOLE. This cut each message at two thousand characters with
             # «…[truncated; `collab recv` has it all]» appended, and a woken

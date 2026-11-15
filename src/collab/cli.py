@@ -2020,7 +2020,7 @@ def cmd_listen(args: argparse.Namespace) -> int:
             if args.room and env.room != args.room:
                 continue
             if (not args.mine_too and env.sender == profile.name
-                    and not attention.approval_security(env.kind, env.body)):
+                    and not attention.for_main(env.kind, env.body)):
                 continue
             if compact:
                 digest.add(env, time.monotonic())
@@ -2102,7 +2102,7 @@ def cmd_listen(args: argparse.Namespace) -> int:
                             exclude_sender_id="" if args.mine_too else profile.participant_id,
                             kinds=(("system",) if worker_enabled and (not kinds or "system" in kinds)
                                    else kinds)):
-                        if worker_enabled and not attention.approval_security(env.kind, env.body):
+                        if worker_enabled and not attention.for_main(env.kind, env.body):
                             continue
                         digest.add(env, now)
             # A busy transcript must not open SQLite and a lock for each line.
@@ -2146,11 +2146,11 @@ def cmd_listen(args: argparse.Namespace) -> int:
             if args.room and env.room != args.room:
                 continue
             if (args.mine_too is False and env.sender == profile.name
-                    and not attention.approval_security(env.kind, env.body)):
+                    and not attention.for_main(env.kind, env.body)):
                 continue
             # flush on every line: a Monitor only sees what is actually written.
             if compact:
-                if not worker_enabled or attention.approval_security(env.kind, env.body):
+                if not worker_enabled or attention.for_main(env.kind, env.body):
                     digest.add(env, time.monotonic())
             else:
                 print(_format(env, args.json), flush=True)
@@ -2182,7 +2182,7 @@ def _format_reminder(drop: dict[str, Any], as_json: bool) -> str:
 
 def cmd_recv(args: argparse.Namespace) -> int:
     """Drain unread messages; optionally wait for one to arrive."""
-    from .attention import approval_security
+    from .attention import for_main
     profile = _require_profile(args)
     if getattr(args, "repair", False):
         from .client.recovery import repair_inbox
@@ -2204,7 +2204,7 @@ def cmd_recv(args: argparse.Namespace) -> int:
     while True:
         events = inbox.take_unread(limit=args.limit, mark=not args.peek)
         events = [e for e in events if args.mine_too or e.sender != profile.name
-                  or approval_security(e.kind, e.body)]
+                  or for_main(e.kind, e.body)]
         if events:
             for env in events:
                 print(_format(env, args.json))
@@ -8975,8 +8975,11 @@ def build_parser() -> argparse.ArgumentParser:
     b.set_defaults(func=cmd_batch)
 
     remote = sub.add_parser("remote", help="review and accept remote prompt or goal offers locally")
-    remote.add_argument("action", choices=["pending", "show", "bind", "accept", "decline", "offer", "goal"])
+    remote.add_argument("action", choices=["pending", "show", "bind", "accept", "decline", "offer", "goal",
+                                           "reply", "sent", "result"])
     remote.add_argument("request_id", nargs="?")
+    remote.add_argument("answer", nargs="?",
+                        help="with reply: the receiving agent's answer, sent back to the requester")
     remote.add_argument("--to", help="with offer: recipient name or participant id")
     remote.add_argument("--clear", action="store_true", help="with goal: stop offering a connection goal")
     remote.add_argument("--text", help="with offer: prompt or goal for the human to review")

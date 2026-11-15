@@ -377,12 +377,14 @@ options:
 usage: collab remote [-h] [--to TO] [--clear] [--text TEXT]
                      [--kind {prompt,goal}] [--target TARGET]
                      [--session SESSION]
-                     {pending,show,bind,accept,decline,offer,goal}
-                     [request_id]
+                     {pending,show,bind,accept,decline,offer,goal,reply,sent,result}
+                     [request_id] [answer]
 
 positional arguments:
-  {pending,show,bind,accept,decline,offer,goal}
+  {pending,show,bind,accept,decline,offer,goal,reply,sent,result}
   request_id
+  answer                with reply: the receiving agent's answer, sent back to
+                        the requester
 
 options:
   -h, --help            show this help message and exit

@@ -389,7 +389,8 @@ class Inbox:
         # digest. Otherwise restart/backlog polling silently loses the alarm.
         query = ("SELECT payload FROM inbox WHERE read=0 AND (kind IN "
                  "('chat','task','project','request','response') OR "
-                 "(kind='system' AND json_extract(payload, '$.body.event')='approval-security'))")
+                 "(kind='system' AND json_extract(payload, '$.body.event') IN "
+                 "('approval-security','remote-outcome')))")
         params: list[Any] = []
         if kinds:
             query += " AND kind IN (" + ",".join("?" for _ in kinds) + ")"
@@ -408,6 +409,15 @@ class Inbox:
         with self._lock:
             rows = self._db.execute(query, params).fetchall()
         return [Envelope.from_dict(json.loads(row["payload"])) for row in rows]
+
+    def remote_outcome_events(self, limit: int = 2000) -> list[Envelope]:
+        """The hub's outcome events for remote requests, read or not."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT payload FROM inbox WHERE kind='system' AND "
+                "json_extract(payload, '$.body.event')='remote-outcome' ORDER BY seq DESC LIMIT ?",
+                (limit,)).fetchall()
+        return [Envelope.from_dict(json.loads(row["payload"])) for row in reversed(rows)]
 
     def take_unread(self, limit: int = 100, *, mark: bool = True) -> list[Envelope]:
         with self._lock:

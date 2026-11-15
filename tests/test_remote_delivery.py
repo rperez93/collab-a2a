@@ -6,13 +6,15 @@ from types import SimpleNamespace
 import pytest
 
 from collab import remote_delivery, wake
-from collab.remote_requests import Inbox, digest, make_offer
+from collab.remote_requests import Inbox, delivery_sha256, digest, make_offer
 
 
 def _grant(inbox, request_id, **options):
     """Explicit synthetic hub consumption for dispatch tests, never human evidence."""
     attempt = inbox.begin_strong_attempt(request_id, **options)
-    inbox.finish_strong_attempt(request_id, attempt, 'rc_' + request_id, **options)
+    offer = next(r for r in inbox.list() if r['id'] == request_id)
+    inbox.finish_strong_attempt(request_id, attempt, 'rc_' + request_id, **options,
+                                delivery_digest=delivery_sha256(offer, options['target']))
 
 
 @pytest.fixture
