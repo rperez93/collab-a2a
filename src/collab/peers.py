@@ -113,9 +113,9 @@ def machine_id() -> str:
     roster shows. It used to be a SHA-256 of the machine-id file or, failing
     that, of the hostname — and a hostname is low-entropy and guessable
     («DESKTOP-XXXXXXX», «<name>-laptop»), so a short unsalted hash of it can be
-    reversed with a dictionary. Now 64 random bits, generated once, kept in a
+    reversed with a dictionary. Now 128 random bits, generated once, kept in a
     file only this account can read (0600), never computed from anything the
-    machine is called.
+    machine is called; the id and its label use the first 64 and 24 of them.
     """
     path = machine_id_path()
     key = str(path)
@@ -142,7 +142,7 @@ def _create_machine_id(path: Path) -> str:
     identity is replaced whole, atomically."""
     import secrets
 
-    fresh = secrets.token_hex(8)
+    fresh = secrets.token_hex(16)
     try:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

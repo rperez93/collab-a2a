@@ -791,8 +791,8 @@ def sanitise(reported: dict[str, Any]) -> dict[str, Any]:
         # carries `cwd`, `workspace.current_dir` and `transcript_path`: an
         # unknown field naming the machine, the account or a path is not a
         # usage figure, and is never put on the roster (T_5b4dac18307e).
-        from .protocol import PRIVATE_KEYS, looks_like_a_local_path
-        if key.lower() in PRIVATE_KEYS or looks_like_a_local_path(value):
+        from .protocol import PRIVATE_KEYS, exposes_the_machine
+        if key.lower() in PRIVATE_KEYS or exposes_the_machine(value):
             continue
         if isinstance(value, bool) or isinstance(value, (int, float)):
             out[key[:MAX_STRING]] = value

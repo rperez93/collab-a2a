@@ -349,12 +349,11 @@ class Hub:
                                             merged["reported_at"]))
             if merged:
                 meta["stats"] = merged
-            # Only the hashed id: the hostname and the account an older client
-            # sends beside its figures are neither stored nor relayed.
+            # Only the id: the hostname and the account an older client sends
+            # beside its figures are never written here. (Removing what an
+            # older hub stored is `update_identity`'s, on every /stats post.)
             if stats.get("machine_id"):
                 meta["machine_id"] = stats["machine_id"]
-            meta.pop("machine", None)
-            meta.pop("user", None)
 
 
     # --- batches --------------------------------------------------------------

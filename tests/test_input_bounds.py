@@ -44,9 +44,11 @@ def test_bounded_meta_drops_nested_objects():
 
 
 def test_bounded_meta_keeps_scalars_of_the_right_shape():
-    """Booleans and numbers are legitimate hello values and survive intact."""
-    out = bounded_meta({"repo": "collab", "dirty": True, "ahead": 3})
-    assert out == {"repo": "collab", "dirty": True, "ahead": 3}
+    """Booleans and numbers are legitimate hello values and survive intact —
+    for the fields the hub keeps at all: hello is an allowlist (review of
+    #178), so a field no client sends and no roster reads is dropped."""
+    out = bounded_meta({"repo": "collab", "dirty": True, "version": 2, "ahead": 3})
+    assert out == {"repo": "collab", "dirty": True, "version": 2}
 
 
 def test_bounded_meta_ignores_a_non_dict():
