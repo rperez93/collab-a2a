@@ -8982,7 +8982,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="with reply: the receiving agent's answer, sent back to the requester")
     remote.add_argument("--to", help="with offer: recipient name or participant id")
     remote.add_argument("--clear", action="store_true", help="with goal: stop offering a connection goal")
-    remote.add_argument("--text", help="with offer: prompt or goal for the human to review")
+    remote.add_argument("--text", help="with offer: prompt or goal for the human to review;"
+                                       " with reply: the answer (same as the positional answer)")
     remote.add_argument("--kind", choices=["prompt", "goal"], default="prompt")
     remote.add_argument("--target", help="with bind: the receiver's local coding session id")
     add_session_flag(remote)

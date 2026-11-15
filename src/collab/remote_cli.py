@@ -68,9 +68,13 @@ def run(args, profile):
         return 0
     if action == 'reply':
         from .remote_delivery import flush_owed
-        if not args.request_id or not args.answer:
-            raise ValueError('reply requires the request id and the answer text')
-        inbox.record_reply(args.request_id, args.answer)
+        answer = args.answer if args.answer is not None else args.text
+        if args.answer is not None and args.text is not None:
+            raise ValueError('give the answer once: `collab remote reply ID "answer"` or --text "answer"')
+        if not args.request_id or not answer:
+            raise ValueError('reply needs the request id and the answer: '
+                             '`collab remote reply ID "answer"` (or --text "answer")')
+        inbox.record_reply(args.request_id, answer)
         try:
             flush_owed(profile)
         except Exception as exc:

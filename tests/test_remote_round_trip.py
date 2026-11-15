@@ -380,3 +380,15 @@ def test_flush_sends_no_answer_while_a_report_is_still_owed(tmp_path, monkeypatc
     monkeypatch.setattr(strong.ApprovalClient, '_call', report_down)
     remote_delivery.flush(SimpleNamespace(dir=tmp_path), object())
     assert paths == [f"/remote/offers/{offer['id']}/report"]
+
+
+def test_reply_takes_the_answer_as_text_too(tmp_path, monkeypatch, capsys):
+    from collab import cli
+    inbox, offer, _ = _delivered(tmp_path)
+    receiver = SimpleNamespace(dir=tmp_path, session_id='s_test', participant_id='p_local')
+    monkeypatch.setattr(cli, '_require_profile', lambda args: receiver)
+    monkeypatch.setattr(remote_delivery, 'flush_owed', lambda profile: 0)
+    assert cli.main(['remote', 'reply', offer['id'], '--text', 'via flag']) == 0
+    assert inbox.owed()[1][0]['answer'] == 'via flag'
+    assert cli.main(['remote', 'reply', offer['id'], 'one', '--text', 'two']) == 1
+    assert 'give the answer once' in capsys.readouterr().err
