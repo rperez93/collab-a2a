@@ -35,6 +35,44 @@ ambiguous or incomplete evidence leaves the terminal untouched and reports
 that the pane could not be identified; open `collab watch` in a separate pane
 when the sandbox hides both the tty and socket. Lookup and split commands have
 output caps and deadlines, and an uncertain split timeout is not retried.
+
+The opt-in native-host checks live in `tests/test_tmux_native_host.py`. Run
+them from the actual Claude Code or Codex tool command, with an absolute branch
+`PYTHONPATH`. Set `COLLAB_NATIVE_TMUX_HOST` to `claude` or `codex`, and supply
+`COLLAB_NATIVE_TMUX_SOCKET` and `COLLAB_NATIVE_TMUX_PANE` from independently
+verified context for that caller. The server's active pane is not evidence of
+the caller's identity. The check refuses a mismatch with the caller's terminal
+before any split; it launches no coding agent or model turn.
+
+Run the read-only selector first:
+
+```sh
+env PYTHONPATH="$PWD/src" python3 -m pytest -q \
+  tests/test_tmux_native_host.py::test_actual_native_host_resolves_its_exact_tmux_pane
+```
+
+The viewer selector additionally requires `COLLAB_NATIVE_TMUX_VIEWER=1`,
+`COLLAB_NATIVE_TMUX_HOME` naming this participant's own state directory, and
+`COLLAB_NATIVE_TMUX_SESSION` naming its joined session. It opens a temporary
+viewer through the real launcher, uses isolated viewer preferences, and checks
+only the new owned pane. A geometry preflight requires space for an 80-column,
+18-row viewer; it refuses before splitting when the caller's pane is too small.
+Its supervisor bounds the viewer lifetime; cleanup
+verifies recorded process and pane identities. Captured conversation text and
+profile credentials are not retained as test evidence.
+
+```sh
+env PYTHONPATH="$PWD/src" python3 -m pytest -q \
+  tests/test_tmux_native_host.py::test_actual_native_host_opens_and_cleans_its_own_viewer
+```
+
+Without the native-host opt-in, the checks skip. A missing requested CLI or
+tmux also skips; an opted-in context mismatch fails. A default skip or an
+isolated synthetic tmux fixture does not satisfy native-host acceptance.
+An optional absolute `COLLAB_NATIVE_TMUX_REPORT` path retains metadata and
+frame hashes with a separate filename for each test. Reports remain incomplete
+until that test and its required cleanup have succeeded.
+
 Participant colours are dealt randomly without reuse while colours remain, and
 stay stable while present. Automatic colours adapt for contrast on known theme
 backgrounds; a terminal default background without COLORFGBG cannot be measured.
