@@ -257,10 +257,20 @@ def front_description(content: str) -> str:
     alone), so it never reaches the installed text."""
     import json as _json
     head, _ = split_front_matter(content)
-    for line in head:
+    for i, line in enumerate(head):
         m = FRONT_KEY.match(line)
         if m and m.group(1) == "description":
             value = line.split(":", 1)[1].strip()
+            if value[:1] in (">", "|"):
+                # A YAML block: the indented lines that follow are the value,
+                # folded into one line (">") or kept as lines ("|").
+                block = []
+                for more in head[i + 1:]:
+                    if more.strip() and not more[:1].isspace():
+                        break
+                    block.append(more.strip())
+                joiner = " " if value[0] == ">" else "\n"
+                return joiner.join(b for b in block if b) if value[0] == ">" else "\n".join(block).strip()
             if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
                 try:
                     value = _json.loads(value) if value[0] == '"' else value[1:-1]

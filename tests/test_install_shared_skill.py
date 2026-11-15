@@ -281,6 +281,8 @@ def test_a_description_only_republish_cannot_change_what_is_installed(target):
     ('description: plain words', 'plain words'),
     ('description: "quoted \\"words\\""', 'quoted "words"'),
     ("description: 'single'", 'single'),
+    ("description: >\n  folded over\n  two lines", 'folded over two lines'),
+    ("description: |\n  kept\n  lines", 'kept\nlines'),
 ])
 def test_the_description_is_read_from_the_texts_front_matter(line, expected):
     assert skills.front_description(f"---\nname: x\n{line}\n---\nbody\n") == expected
