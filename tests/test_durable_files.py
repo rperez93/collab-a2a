@@ -10,7 +10,7 @@ from test_files import _join, _upload
 EXT = '/ext/collab/v1'
 
 
-@pytest.mark.parametrize('name', ['design.md', 'review.TXT', 'report.pdf', 'evidence.json'])
+@pytest.mark.parametrize('name', ['design.md', 'notes.RST', 'report.PDF'])
 @pytest.mark.parametrize('private', [False, True])
 def test_documents_survive_receipt_and_ttl(client, session, host_headers, monkeypatch, name, private):
     bob = _join(client, session, 'bob')
@@ -71,7 +71,11 @@ def test_keep_applies_to_binary_and_temporary_doc_still_deletes_on_receipt(clien
 
 @pytest.mark.parametrize('source', ['file:///home/private', 'https://user:pass@example.test/review',
                                     'http://example.test/review', 'https://example.test/\x1b',
-                                    'https://example.test/' + 'x' * 2048])
+                                    'https://example.test/' + 'x' * 2048,
+                                    # Invisible formatting and separators (Cf, Zl, Zp):
+                                    # U+202E would display the URL reversed.
+                                    'https://example.test/\u202emoc.live', 'https://example.test/\u200b',
+                                    'https://example.test/a\u2028b', 'https://example.test/a\u2029b'])
 def test_invalid_durable_source_is_refused_before_upload(client, host_headers, source):
     response = _upload(client, host_headers, b'doc', name='review.md', source=source)
     assert response.status_code == 422
@@ -194,3 +198,56 @@ def test_legacy_name_claim_after_upload_is_not_bound_to_private_file(tmp_path):
         assert file['kept'] == 0
     finally:
         migrated.close()
+
+
+@pytest.mark.parametrize('name', ['status.json', 'report.txt', 'notes.docx', 'page.html'])
+def test_routine_reports_are_temporary_unless_kept_on_purpose(client, host_headers, name):
+    """Only design and review documents (.md, .rst, .pdf) are kept by default.
+    `.json` and `.txt` are what agents' routine reports are, and keeping them
+    made every status dump permanent."""
+    assert _upload(client, host_headers, b'r', name=name).json()['kept'] is False
+    assert _upload(client, host_headers, b'r', name=name, keep='true').json()['kept'] is True
+
+
+def _kept_events(client, headers, file_id):
+    events = client.get(f'{EXT}/history', headers=headers).json()['events']
+    return [e for e in events if e['kind'] == 'file' and e['body'].get('id') == file_id
+            and e['body'].get('action') == 'received']
+
+
+@pytest.mark.parametrize('private,keep', [(False, 'true'), (True, 'true'), (False, 'false')])
+def test_the_same_participant_acknowledging_twice_is_announced_once(client, session, host_headers,
+                                                                      private, keep):
+    """A retried or repeated ack is not a second collection: the sender is
+    told once that bob has the file, whether it is kept or temporary."""
+    bob = _join(client, session, 'bob')
+    _join(client, session, 'carol')  # a room file then still awaits someone after bob
+    record = _upload(client, host_headers, b'doc', name='review.md', keep=keep,
+                     **({'to': 'bob'} if private else {})).json()
+    first = client.post(f"{EXT}/files/{record['id']}/ack", headers=bob)
+    second = client.post(f"{EXT}/files/{record['id']}/ack", headers=bob)
+    assert first.status_code == second.status_code == 200
+    assert len(_kept_events(client, host_headers, record['id'])) == 1
+
+
+def test_kept_bytes_are_capped_per_owner_and_per_session(client, session, host_headers, monkeypatch):
+    """Kept files are never deleted by receipt or age, so they are bounded:
+    over the owner's or the session's kept bytes an upload is stored as
+    temporary, and the answer says which limit and why."""
+    monkeypatch.setattr('collab.file_retention.MAX_KEPT_OWNER_BYTES', 10)
+    monkeypatch.setattr('collab.file_retention.MAX_KEPT_SESSION_BYTES', 20)
+    bob = _join(client, session, 'bob')
+    first = _upload(client, host_headers, b'x' * 8, name='a.md').json()
+    assert first['kept'] is True and 'retention_note' not in first
+    over_owner = _upload(client, host_headers, b'x' * 8, name='b.md').json()
+    assert over_owner['kept'] is False and 'your kept files' in over_owner['retention_note']
+    assert over_owner['expires_at'] is not None
+    assert _upload(client, bob, b'y' * 8, name='c.md').json()['kept'] is True  # 16 of 20
+    over_session = _upload(client, bob, b'y' * 2, name='d.md').json()
+    assert over_session['kept'] is True  # 18: bob 10 of 10, session 18 of 20
+    carol = _join(client, session, 'carol')  # holds nothing kept: only the session is full
+    full = _upload(client, carol, b'z' * 3, name='e.md').json()
+    assert full['kept'] is False and 'in this session' in full['retention_note']
+    # Withdrawing a kept file frees its room.
+    assert client.delete(f"{EXT}/files/{first['id']}", headers=host_headers).status_code == 200
+    assert _upload(client, carol, b'z' * 3, name='f.md').json()['kept'] is True
