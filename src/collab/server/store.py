@@ -915,9 +915,12 @@ class Store:
                 yield None
                 return
             meta = json.loads(row['meta'])
+            before = json.dumps(meta)
             yield meta
+            if (after := json.dumps(meta)) == before:
+                return  # nothing changed (a refused conditional update): no write
             self._db.execute('UPDATE participants SET meta=? WHERE id=?',
-                             (json.dumps(meta), participant_id))
+                             (after, participant_id))
             self._db.commit()
 
     def update_meta(self, participant_id: str, meta: dict[str, Any]) -> None:
