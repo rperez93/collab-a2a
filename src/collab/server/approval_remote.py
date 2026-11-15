@@ -160,6 +160,7 @@ class RemoteApprovals:
                     # Explicit re-review may renew an unconsumed operation;
                     # invalidate the previous receipt before replacing its link.
                     db.execute("UPDATE approval_requests SET state='declined',receipt_hash=NULL WHERE id=?", (old['request_id'],))
+                    core.forget_review(db, old['request_id'])
                 db.execute('DELETE FROM approval_remote_bindings WHERE request_id=?', (old['request_id'],))
             if (db.execute('SELECT COUNT(*) FROM approval_remote_bindings').fetchone()[0] >= MAX_BINDINGS
                     or db.execute('SELECT COUNT(*) FROM approval_remote_bindings WHERE owner_id=?', (owner,)).fetchone()[0] >= MAX_OWNER_BINDINGS):
@@ -190,6 +191,9 @@ class RemoteApprovals:
             from .approval_store import _id
             consumption_id = _id('rc_')
             db.execute("UPDATE approval_requests SET state='consumed',receipt_hash=NULL WHERE id=?", (request_id,))
+            # The answer below carries the reviewed bytes (read above); the hub
+            # keeps the state, not the receiver's argv and cwd.
+            core.forget_review(db, request_id)
             db.execute("UPDATE approval_remote_bindings SET state='consumed',consumption_id=? WHERE request_id=?", (consumption_id, request_id))
             core._audit(db, owner, 'remote_consumed', now, request_id, source_seq=row['source_seq'],
                         fingerprint=key['fingerprint'], digest=request['digest'])

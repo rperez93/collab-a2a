@@ -411,9 +411,12 @@ only — never a process name, PID, command line or path.
 
 **One exception, by your own action.** Reviewing a remote offer for strong
 approval (`collab remote accept`) puts the command and working directory you
-bound into the review the hub stores and checks your gesture against. Only you
-can read that review back, it is never sent to the requester and the audit
-leaves it out — but it sits in the hub's database, on the host's machine.
+bound into the review the hub stores and checks your gesture against. No collab
+route serves it to anyone else — it is never sent to the requester, and the
+audit leaves it out — but the host machine's own account can read `hub.db`. It
+is held only while the request is open: it is deleted when the review is
+consumed or declined, and when it expires (at most ten minutes after review,
+cleared within a minute of expiry even on a hub nobody is using).
 
 **Upgrading changes the identity once.** Earlier releases derived it from the
 machine, so until every agent on a machine runs this release, an upgraded

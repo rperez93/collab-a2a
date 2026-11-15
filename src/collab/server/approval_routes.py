@@ -6,6 +6,7 @@ own request and claim its receipt at its execution boundary.
 from __future__ import annotations
 
 import asyncio
+import logging
 import json
 import math
 
@@ -29,6 +30,9 @@ BODY_SECONDS = 5
 MAX_INFLIGHT = 8
 HTTP_RATE = 120
 HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache", "X-Content-Type-Options": "nosniff"}
+
+
+logger = logging.getLogger(__name__)
 
 
 def error_response(code, status):
@@ -130,6 +134,30 @@ def install(app, store, session_id):
     app.state.approval_keys = changes
     app.state.approval_skills = skills
     app.state.approval_remote = remote
+
+    @app.on_event("startup")
+    async def _forget_expired_reviews() -> None:
+        # A hub nobody calls still clears expired reviews: no read or write
+        # would otherwise reach them, and a remote review holds the receiver's
+        # argv and cwd. Cancelled with the loop when the hub stops.
+        async def sweep():
+            while True:
+                await asyncio.sleep(core.FORGET_SECONDS)
+                try:
+                    await asyncio.to_thread(core.forget_expired)
+                except Exception:
+                    logger.warning("expired approval reviews could not be cleared", exc_info=True)
+        app.state.approval_forget_task = asyncio.create_task(sweep())
+
+    @app.on_event("shutdown")
+    async def _stop_forgetting() -> None:
+        task = getattr(app.state, "approval_forget_task", None)
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
     slots = asyncio.Semaphore(MAX_INFLIGHT)
     ingress = RateLimiter(limit=HTTP_RATE, window=60)
     router = APIRouter(prefix=PREFIX, tags=["approval"])
