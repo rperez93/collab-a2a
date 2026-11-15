@@ -119,6 +119,18 @@ returns a choice for the dispatcher; local Cancel and unavailable/expired
 flows submit no hub decision. Actual human enrolment and final dispatcher
 adoption remain separate gates.
 
+If the synchronous collector rejects an assertion submitted through its
+authorized page for the current ceremony, it ends the local flow immediately
+with an unavailable choice and a bounded reason for its
+trusted caller. It clears the ceremony and accepts no replacement proof. This
+local refusal does not wait for the review deadline, send a hub decision or
+claim that a previously forwarded hub operation failed. The authenticated
+asynchronous adapter keeps its separate uncertain-forwarding rules.
+An exact current ceremony that has expired ends with an expired choice,
+rather than leaving the caller waiting for the longer review deadline.
+Unrelated requests with a wrong capability, origin or ceremony cannot end
+another local review.
+
 The synchronous mode admits one active foreground flow per process. Its
 callback/opening threads have a separate two-slot limit; a stuck callback
 retains its slot until it exits. Timeouts revoke local authority and stop the

@@ -500,18 +500,40 @@ class PasskeyPage:
                 if not bound or bound[0] != operation or data["ceremony_id"] != bound[1].ceremony_id:
                     return _reply("refused", "This ceremony is no longer current.", 409)
                 window.ceremony = None  # no retry after uncertain forwarding
+                reject = getattr(self.adapter, "reject_proof", None)
+                collector = review.local_cancel and callable(reject)
                 if time.time() >= bound[1].expires:
-                    return _reply("expired", "This ceremony has expired.", 410)
-                credential = _credential(data["credential"], operation)
-                if not still_current():
-                    return _reply("expired", "The window or review expired before forwarding.", 410)
-                forwarded = True
-                outcome = await asyncio.wait_for(self.adapter.complete(request_id, operation, bound[1].ceremony_id,
-                    credential, self.origin, review.digest), BACKEND_SECONDS)
+                    if not collector:
+                        return _reply("expired", "This ceremony has expired.", 410)
+                    if not still_current():
+                        return _reply("expired", "The window or review expired before forwarding.", 410)
+                    outcome = await asyncio.wait_for(reject(request_id, operation,
+                        bound[1].ceremony_id, self.origin, review.digest), BACKEND_SECONDS)
+                else:
+                    try:
+                        credential = _credential(data["credential"], operation)
+                    except (ValueError, UnicodeError, RecursionError):
+                        if not collector:
+                            raise  # Ordinary hub-forwarding adapters keep their policy.
+                        if not still_current():
+                            return _reply("expired", "The window or review expired before forwarding.", 410)
+                        # Only a recognized result for this exact bound ceremony
+                        # reaches the opt-in collector hook. Bad capabilities,
+                        # request JSON, Origins and ceremony IDs do not cancel it.
+                        outcome = await asyncio.wait_for(reject(request_id, operation,
+                            bound[1].ceremony_id, self.origin, review.digest), BACKEND_SECONDS)
+                    else:
+                        if not still_current():
+                            return _reply("expired", "The window or review expired before forwarding.", 410)
+                        forwarded = True
+                        outcome = await asyncio.wait_for(self.adapter.complete(request_id, operation, bound[1].ceremony_id,
+                            credential, self.origin, review.digest), BACKEND_SECONDS)
             if not isinstance(outcome, Outcome) or outcome.status not in ("approved", "proof-ready", "cancelled", "enrolled", "declined", "pending", "unknown", "refused"):
                 raise ValueError("invalid hub outcome")
             message = _text(outcome.message, 2048)
-            window.terminal = outcome.status in ("approved", "proof-ready", "cancelled", "declined")
+            local_refusal = (outcome.status == "refused" and review.local_cancel
+                             and callable(getattr(self.adapter, "reject_proof", None)))
+            window.terminal = local_refusal or outcome.status in ("approved", "proof-ready", "cancelled", "declined")
             window.uncertain = outcome.status in ("pending", "unknown")
             return _reply(outcome.status, message, 200)
         except NotReady:

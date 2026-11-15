@@ -267,3 +267,154 @@ async def test_a_cancelled_collector_cannot_be_turned_into_a_second_proof_choice
     with pytest.raises(ValueError):
         await adapter.complete(prepared['request_id'], 'approve', issued.ceremony_id, evidence, origin, digest)
     assert adapter.result == {'choice': 'unavailable'}
+
+
+@pytest.mark.parametrize('fault', ['signed-origin', 'credential-shape', 'signature-limit'])
+def test_a_rejected_current_browser_proof_finishes_the_synchronous_collector(prepared, monkeypatch, fault):
+    """A bound unusable assertion must not strand the CLI for its600-second review."""
+    monkeypatch.setattr(seam, 'MAX_WAIT_SECONDS', .75)
+    calls, responses = [], []
+    def fetch_challenge(*, origin):
+        calls.append(origin)
+        return challenge(prepared, origin)
+    def opener(url):
+        parsed = urlsplit(url)
+        origin = f'{parsed.scheme}://{parsed.netloc}'
+        headers = {'Origin': origin, 'X-Collab-Approval-Token': parsed.fragment}
+        with httpx.Client(trust_env=False, timeout=2) as client:
+            assert client.get(origin + parsed.path + '/review', headers=headers).status_code == 200
+            response = client.post(origin + parsed.path + '/approve/options', headers=headers, json={})
+            assert response.status_code == 200, response.text
+            issued = response.json()
+            evidence = assertion(prepared, origin, issued)
+            if fault == 'signed-origin':
+                data = {'type': 'webauthn.get', 'origin': 'http://localhost:1',
+                        'challenge': issued['publicKey']['challenge']}
+                evidence['response']['clientDataJSON'] = encoded(json.dumps(data).encode())
+            elif fault == 'credential-shape':
+                evidence['response'].pop('signature')
+            else:
+                evidence['response']['signature'] = encoded(b'x' * 4097)
+            response = client.post(origin + parsed.path + '/approve/result', headers=headers,
+                json={'ceremony_id': issued['ceremony_id'], 'credential': evidence})
+            # Record rather than assert here: on the old source a502/400 must
+            # leave the opener successful so the actual collector wait is tested.
+            responses.append((response.status_code, response.json()))
+        return True
+    monkeypatch.setattr(page.webbrowser, 'open_new', opener)
+    started = time.monotonic()
+    result = page.approve_with_passkey(prepared, fetch_challenge)
+    assert result == {'choice': 'unavailable', 'reason': 'browser_assertion_rejected'}
+    assert responses == [(200, {'status': 'refused',
+        'message': 'The browser assertion was rejected locally. No proof was handed to the dispatcher.'})]
+    assert len(calls) == 1 and time.monotonic() - started < 2
+    assert 'proof' not in result
+
+
+@pytest.mark.asyncio
+async def test_rejected_assertions_have_no_late_retry_or_replacement_choice(prepared):
+    """Once refused, complete/begin/cancel and the page hook cannot overwrite it."""
+    origin = 'http://localhost:12345'
+    digest = bytes.fromhex(prepared['digest'])
+    adapter = seam._ProofAdapter(seam._Prepared.parse(prepared), lambda **kwargs: challenge(prepared, kwargs['origin']))
+    issued = await adapter.begin(prepared['request_id'], 'approve', origin, digest)
+    valid = assertion(prepared, origin, {'publicKey': issued.public_key})
+    invalid = deepcopy(valid)
+    invalid['response']['clientDataJSON'] = encoded(b'{"type":"webauthn.get","origin":"http://localhost:1"}')
+    outcome = await adapter.complete(prepared['request_id'], 'approve', issued.ceremony_id, invalid, origin, digest)
+    assert outcome.status == 'refused' and adapter.finished.is_set() and adapter.ceremony is None
+    expected = {'choice': 'unavailable', 'reason': 'browser_assertion_rejected'}
+    for operation in (
+            lambda: adapter.complete(prepared['request_id'], 'approve', issued.ceremony_id, valid, origin, digest),
+            lambda: adapter.begin(prepared['request_id'], 'approve', origin, digest),
+            lambda: adapter.cancel(prepared['request_id'], origin, digest),
+            lambda: adapter.reject_proof(prepared['request_id'], 'approve', issued.ceremony_id, origin, digest)):
+        with pytest.raises(ValueError):await operation()
+        assert adapter.result == expected
+
+
+def test_unrelated_http_refusals_do_not_abort_a_valid_proof_collection(prepared, monkeypatch):
+    """No capability/Origin or unbound malformed request may cancel another action."""
+    evidence_sent = []
+    def opener(url):
+        parsed = urlsplit(url)
+        origin = f'{parsed.scheme}://{parsed.netloc}'
+        headers = {'Origin': origin, 'X-Collab-Approval-Token': parsed.fragment}
+        target = origin + parsed.path
+        with httpx.Client(trust_env=False, timeout=2) as client:
+            assert client.get(target + '/review', headers=headers).status_code == 200
+            issued = client.post(target + '/approve/options', headers=headers, json={}).json()
+            valid = assertion(prepared, origin, issued)
+            body = {'ceremony_id': issued['ceremony_id'], 'credential': valid}
+            assert client.post(target + '/approve/result', headers={**headers, 'Origin': 'null'}, json=body).status_code == 403
+            assert client.post(target + '/approve/result', headers={**headers, 'X-Collab-Approval-Token': 'x' * 43}, json=body).status_code == 403
+            assert client.post(target + '/approve/result', headers=headers,
+                json={'ceremony_id': 'other', 'credential': {}}).status_code == 409
+            assert client.post(target + '/approve/result', headers={**headers, 'Content-Type': 'application/json'}, content=b'{broken').status_code == 400
+            response = client.post(target + '/approve/result', headers=headers, json=body)
+            assert response.status_code == 200 and response.json()['status'] == 'proof-ready'
+            evidence_sent.append(valid)
+        return True
+    monkeypatch.setattr(page.webbrowser, 'open_new', opener)
+    result = page.approve_with_passkey(prepared, lambda **kwargs: challenge(prepared, kwargs['origin']))
+    assert result['choice'] == 'approve' and len(evidence_sent) == 1
+    assert result['proof']['client_data_json'] == evidence_sent[0]['response']['clientDataJSON']
+
+
+def test_an_expired_exact_browser_ceremony_finishes_without_waiting_for_review_expiry(prepared, monkeypatch):
+    """The shorter ceremony deadline cannot leave a current review waiting600seconds."""
+    monkeypatch.setattr(seam, 'MAX_WAIT_SECONDS', .75)
+    clock = [time.time()]
+    monkeypatch.setattr(seam.time, 'time', lambda: clock[0])
+    adapters, responses = [], []
+    original = seam._ProofAdapter
+    def adapter_factory(*args):
+        instance = original(*args)
+        adapters.append(instance)
+        return instance
+    monkeypatch.setattr(seam, '_ProofAdapter', adapter_factory)
+    def opener(url):
+        parsed = urlsplit(url)
+        origin = f'{parsed.scheme}://{parsed.netloc}'
+        headers = {'Origin': origin, 'X-Collab-Approval-Token': parsed.fragment}
+        target = origin + parsed.path
+        with httpx.Client(trust_env=False, timeout=2) as client:
+            assert client.get(target + '/review', headers=headers).status_code == 200
+            issued = client.post(target + '/approve/options', headers=headers, json={}).json()
+            clock[0] = issued['expires'] + 1
+            # A wrong expired ID is still unrelated and must not consume the
+            # actual collector or stop the current review.
+            response = client.post(target + '/approve/result', headers=headers,
+                json={'ceremony_id': 'unrelated-expired-id', 'credential': {}})
+            assert response.status_code == 409 and not adapters[0].finished.is_set()
+            response = client.post(target + '/approve/result', headers=headers,
+                json={'ceremony_id': issued['ceremony_id'], 'credential': {}})
+            responses.append((response.status_code, response.json()))
+        return True
+    monkeypatch.setattr(page.webbrowser, 'open_new', opener)
+    result = page.approve_with_passkey(prepared, lambda **kwargs: challenge(prepared, kwargs['origin']))
+    assert result == {'choice': 'expired'}
+    assert adapters[0].finished.is_set() and adapters[0].ceremony is None
+    assert responses == [(200, {'status': 'refused',
+        'message': 'The passkey ceremony expired locally. No proof was handed to the dispatcher.'})]
+
+
+@pytest.mark.asyncio
+async def test_direct_expired_proof_refusal_is_owned_one_shot_and_never_revives_authority(prepared, monkeypatch):
+    origin = 'http://localhost:12345'
+    digest = bytes.fromhex(prepared['digest'])
+    clock = [time.time()]
+    monkeypatch.setattr(seam.time, 'time', lambda: clock[0])
+    adapter = seam._ProofAdapter(seam._Prepared.parse(prepared), lambda **kwargs: challenge(prepared, kwargs['origin']))
+    issued = await adapter.begin(prepared['request_id'], 'approve', origin, digest)
+    clock[0] = issued.expires + 1
+    with pytest.raises(ValueError):
+        await adapter.reject_proof(prepared['request_id'], 'approve', 'unrelated', origin, digest)
+    assert not adapter.finished.is_set() and adapter.result is None
+    evidence = assertion(prepared, origin, {'publicKey': issued.public_key})
+    outcome = await adapter.complete(prepared['request_id'], 'approve', issued.ceremony_id, evidence, origin, digest)
+    assert outcome.status == 'refused' and adapter.result == {'choice': 'expired'}
+    assert adapter.finished.is_set() and adapter.ceremony is None
+    with pytest.raises(ValueError):
+        await adapter.cancel(prepared['request_id'], origin, digest)
+    assert adapter.result == {'choice': 'expired'}
