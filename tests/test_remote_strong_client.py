@@ -160,3 +160,71 @@ def test_receiver_selected_goal_uses_the_reviewed_local_target(remote):
     prepared = remote_delivery.prepare(remote.profile)
     assert prepared[0]['id'] == remote.offer['id']
     assert prepared[0]['delivery_target'] == 'thread-remote'
+
+
+def test_a_prepared_delivery_tuple_cannot_be_executed_twice(remote, monkeypatch):
+    assert accept(remote) == 0
+    prepared = remote_delivery.prepare(remote.profile)
+    attempts = []
+    async def exchange(*args):
+        attempts.append(args)
+    monkeypatch.setattr(remote_delivery, '_exchange', exchange)
+    assert asyncio.run(remote_delivery.deliver(remote.profile, prepared)) is True
+    try:
+        asyncio.run(remote_delivery.deliver(remote.profile, prepared))
+    except ValueError:
+        pass
+    assert len(attempts) == 1
+
+
+def test_concurrent_prepared_delivery_reuse_has_one_launch_owner(remote, monkeypatch):
+    assert accept(remote) == 0
+    prepared = remote_delivery.prepare(remote.profile)
+    attempts = []
+    async def exchange(*args):
+        attempts.append(args)
+        await asyncio.sleep(.02)
+    monkeypatch.setattr(remote_delivery, '_exchange', exchange)
+    async def race():
+        return await asyncio.gather(remote_delivery.deliver(remote.profile, prepared),
+                                    remote_delivery.deliver(remote.profile, prepared))
+    assert sorted(asyncio.run(race())) == [False, True]
+    assert len(attempts) == 1
+    assert remote.inbox.list()[0]['state'] == 'delivered'
+
+
+def test_old_inflight_record_is_not_relaunched_after_marker_migration(remote, monkeypatch):
+    assert accept(remote) == 0
+    prepared = remote_delivery.prepare(remote.profile)
+    import sqlite3
+    with sqlite3.connect(remote.inbox.path) as db:
+        db.execute('ALTER TABLE offers DROP COLUMN delivery_started')
+    async def forbidden(*a, **k):
+        pytest.fail('old in-flight record relaunched')
+    monkeypatch.setattr(remote_delivery, '_exchange', forbidden)
+    assert asyncio.run(remote_delivery.deliver(remote.profile, prepared)) is False
+    assert remote.inbox.list()[0]['state'] == 'dispatching'
+    assert remote_delivery.prepare(remote.profile) is None
+
+
+def test_rebinding_away_and_back_cannot_revive_prepared_delivery(remote, monkeypatch):
+    assert accept(remote) == 0
+    prepared = remote_delivery.prepare(remote.profile)
+    other = remote.command[:-1] + ['another-thread']
+    remote.inbox.bind('another-thread', other, remote.profile.working_path)
+    remote.inbox.bind('thread-remote', remote.command, remote.profile.working_path)
+    async def forbidden(*a, **k):
+        pytest.fail('revoked prepared delivery revived')
+    monkeypatch.setattr(remote_delivery, '_exchange', forbidden)
+    assert asyncio.run(remote_delivery.deliver(remote.profile, prepared)) is False
+    assert remote.inbox.list()[0]['state'] == 'failed'
+
+
+def test_failed_launch_binding_cannot_be_retried_with_restored_arguments(remote):
+    assert accept(remote) == 0
+    offer = remote_delivery.prepare(remote.profile)[0]
+    assert remote.inbox.start_delivery(offer['id'], offer['receipt'], target='thread-remote',
+        command=remote.command, cwd='/wrong') is None
+    assert remote.inbox.start_delivery(offer['id'], offer['receipt'], target='thread-remote',
+        command=remote.command, cwd=remote.profile.working_path) is None
+    assert remote.inbox.list()[0]['state'] == 'failed'
