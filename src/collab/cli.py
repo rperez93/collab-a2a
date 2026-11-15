@@ -8051,9 +8051,39 @@ def cmd_consent(args: argparse.Namespace) -> int:
                 return 1
             hello = strong._hello()
             if not hello.available():
-                fail("Windows Hello is not available here; passkey enrolment needs the "
-                     "passkey page, which is not part of this build")
-                return 1
+                # NOT WINDOWS: a passkey, through the local enrolment page. The
+                # human started this at a terminal; the browser's own user
+                # verification proves possession, and the hub announces the
+                # new key to the session (TOFU, with the cooling-off).
+                caps = api.capabilities()
+                if "passkey" not in (caps.get("supported_methods") or []):
+                    fail("this session's hub does not support passkeys")
+                    return 1
+                print(f"  Enrol a passkey for strong approvals as {said(profile.name)} "
+                      f"({said(me)}) in {said(profile.session_id)}.")
+                print(dim("  A local page opens in your browser; it asks your authenticator "
+                          "to create the key and to prove you hold it."))
+                try:
+                    answer = input("  Continue? [y/N] ")
+                except EOFError:
+                    answer = ""
+                if answer.strip().lower() not in ("y", "yes"):
+                    print("Nothing was enrolled.")
+                    return 1
+                from .client import passkey_enrol
+                outcome = passkey_enrol.enrol_with_passkey(profile)
+                if outcome["status"] == "exists":
+                    fail("you already have a key in this session; adding or replacing "
+                         "one is a signed key change")
+                    return 1
+                if outcome["status"] != "enrolled":
+                    fail(f"the passkey was not enrolled ({said(outcome['status'])}); "
+                         "check `collab consent keys`")
+                    return 1
+                credential = outcome.get("credential") or {}
+                ok(f"passkey enrolled ({said(str(credential.get('credential_id', ''))[:24])}…); "
+                   "usable after its cooling-off, and announced to the session")
+                return 0
             caps = api.capabilities()
             if "hello" not in (caps.get("supported_methods") or []):
                 fail("this session's hub does not support Windows Hello keys")

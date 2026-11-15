@@ -59,7 +59,7 @@ def test_capabilities_report_strong_approval_live(client, host_headers):
     response = client.get(P + "/capabilities", headers=host_headers)
     assert response.status_code == 200
     body = response.json()
-    assert body["available"] is True and body["methods"] == ["hello"] and "reason" not in body
+    assert body["available"] is True and body["methods"] == ["hello", "passkey"] and "reason" not in body
     assert response.json()["attestation_verification"] is False
     assert client.post(P + "/requests", headers=host_headers, json={}).status_code == 404
 

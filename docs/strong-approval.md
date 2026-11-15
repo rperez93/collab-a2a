@@ -10,7 +10,7 @@ adoption remains an integration gate. This module does not provide a hub
 approval API, register a real credential by itself, or turn a terminal receipt
 into cryptographic approval. With no adapter it reports «unsupported» and
 submits no decision. The authenticated adapter checks capability discovery: from 2.2.0
-the hub reports Windows Hello available (passkey is not yet advertised); an
+the hub reports Windows Hello available, and after 2.2.0 passkeys too; an
 older hub reports «operation_integration_pending», and nothing is offered. No
 local flag overrides the hub's answer. Real human enrolment and approval
 remain integration gates.
