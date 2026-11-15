@@ -1,6 +1,6 @@
 """Opt-in acceptance inside the operator's actual native coding-host command.
 
-See .claude/r5-native-host-test-report.md for invocation and evidence limits.
+See docs/watch-panel.md for invocation and evidence limits.
 No native coding agent is launched. The viewer needs a second explicit opt-in.
 """
 from __future__ import annotations
@@ -48,17 +48,17 @@ def _command_tokens(command):
     return tokens
 
 def _frame(socket, pane):
-    # A separate child reduces captured private text to booleans/hash before
+    # A separate child reduces captured private text to a boolean before
     # pytest can retain it in assertion or --showlocals traceback frames.
     code = r"""
-import hashlib, json, shlex, sys
+import json, shlex, sys
 try:
     from collab.source_command import run
     result = run('exec ' + shlex.join(['tmux', '-S', sys.argv[1], 'capture-pane', '-p', '-t', sys.argv[2]]), timeout=2, max_bytes=65536)
     if result.returncode:
         raise ValueError('capture failed')
     text = result.stdout
-    print(json.dumps({'recognized': 'CONVERSATION' in text.upper() and 'PARTICIPANTS' in text.upper(), 'sha256': hashlib.sha256(text.encode()).hexdigest()}))
+    print(json.dumps({'recognized': 'CONVERSATION' in text.upper() and 'PARTICIPANTS' in text.upper()}))
 except BaseException:
     print('{"recognized": false, "error": "capture_failed"}')
 """
@@ -370,8 +370,8 @@ def test_actual_native_host_opens_and_cleans_its_own_viewer(native, monkeypatch,
             if frame:
                 break
             time.sleep(.1)
-        evidence["viewer"] = {"identity": identity, "admission_status": "verified", "frame_recognized": frame,
-                              "capture_sha256": captured.get("sha256")}
+        evidence["viewer"] = {"identity": identity, "admission_status": "verified",
+                              "frame_recognized": frame}
         assert frame, "owned viewer did not render the expected split frame"
     finally:
         if owned and identity is not None and identity.get("nonce") == nonce:
