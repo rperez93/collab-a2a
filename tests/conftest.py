@@ -12,6 +12,25 @@ from collab.server.auth import new_secret
 from collab.server.store import Store
 
 
+_SUITE_LOCK = None
+
+
+def pytest_collection_finish(session):
+    """A full run waits for any other full run on this machine (suite_lock)."""
+    global _SUITE_LOCK
+    from suite_lock import FULL_RUN, acquire, lock_path
+    if len(session.items) < FULL_RUN or session.config.option.collectonly:
+        return
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+
+    def say(holder):
+        if reporter is not None:
+            reporter.write_line(f"waiting for another full test run on this machine "
+                                f"(pid {holder}) to finish; COLLAB_TEST_LOCK=off skips the wait")
+            reporter.flush()  # said now, not when the wait is over
+    _SUITE_LOCK = acquire(lock_path(), on_wait=say)
+
+
 @pytest.fixture(autouse=True)
 def _never_the_machines_own_config(tmp_path, monkeypatch):
     """Every test gets a global config of its own. None of them gets the user's.
