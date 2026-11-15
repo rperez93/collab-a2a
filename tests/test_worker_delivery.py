@@ -128,9 +128,13 @@ def test_worker_off_sends_its_queue_with_the_delivery_key_and_checks_bytes(tmp_p
     class Hub:
         def __enter__(self): return self
         def __exit__(self, *e): return False
-        def upload_file(self, path, **kw): calls.append(kw)
+        def upload_file(self, path, **kw):
+            calls.append(kw)
+            return {"id": "f_1", "kept": False, "retention_note": "stored as temporary: cap"}
     monkeypatch.setattr(cli, "_client", lambda p: Hub())
-    monkeypatch.setattr(store.__class__, "acknowledge", lambda self, i: None)
+    acknowledged = []
+    monkeypatch.setattr(store.__class__, "acknowledge",
+                        lambda self, i, retention_note="": acknowledged.append((i, retention_note)))
     profile = SimpleNamespace(dir=tmp_path, name="me", session_id="s")
     monkeypatch.setattr(cli, "_require_profile", lambda a: profile)
     try:
@@ -141,6 +145,8 @@ def test_worker_off_sends_its_queue_with_the_delivery_key_and_checks_bytes(tmp_p
     assert calls[0]["to_id"] == "p_original", "manual drain preserves queue-time principal"
     # #135: the sender's retention choice, queued with the copy, is not lost here.
     assert calls[0]["keep"] is False and calls[0]["source"] == "https://example.org/original"
+    # The hub's retention note is not dropped on the manual drain either.
+    assert acknowledged == [("o_1", "stored as temporary: cap")]
     stash.write_bytes(b"changed")
     calls.clear()
     try:

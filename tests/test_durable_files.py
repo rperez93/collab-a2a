@@ -251,3 +251,46 @@ def test_kept_bytes_are_capped_per_owner_and_per_session(client, session, host_h
     # Withdrawing a kept file frees its room.
     assert client.delete(f"{EXT}/files/{first['id']}", headers=host_headers).status_code == 200
     assert _upload(client, carol, b'z' * 3, name='f.md').json()['kept'] is True
+
+
+def test_concurrent_uploads_on_separate_connections_never_exceed_the_kept_cap(tmp_path, monkeypatch):
+    """The cap's check and insert must be one write transaction. Without its
+    BEGIN IMMEDIATE, six connections released together each read the same
+    free room and all kept their file: the gate's race went over the cap 20
+    times in 20. Six senders, room for three, five fresh rounds (the race
+    without it fails in the first; each round costs about a second of busy
+    waiting between the six connections)."""
+    import threading
+    from collab.server.store import Store
+    monkeypatch.setattr('collab.file_retention.MAX_KEPT_OWNER_BYTES', 10 ** 9)
+    monkeypatch.setattr('collab.file_retention.MAX_KEPT_SESSION_BYTES', 12)
+    for round_ in range(5):
+        path = tmp_path / f'hub-{round_}.db'
+        Store(path).close()  # the schema exists before anyone races
+        stores = [Store(path) for _ in range(6)]
+        gate = threading.Barrier(len(stores))
+        errors = []
+
+        def upload(n, store):
+            try:
+                gate.wait(timeout=10)
+                store.add_file(f'f_{round_}_{n}', name='a.md', size=4, sha256='h', sender=f's{n}',
+                               recipient=None, room='general', kept=True, sender_id=f'p_{n}')
+            except Exception as exc:  # surfaced below, never swallowed
+                errors.append(exc)
+
+        threads = [threading.Thread(target=upload, args=(n, s)) for n, s in enumerate(stores)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+        try:
+            assert not errors, errors
+            kept = stores[0]._db.execute(
+                "SELECT COALESCE(SUM(size),0), COUNT(*) FROM files WHERE kept=1").fetchone()
+            total = stores[0]._db.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+            assert total == 6, 'every upload is stored, kept or temporary'
+            assert kept[0] <= 12 and kept[1] == 3, (round_, tuple(kept))
+        finally:
+            for s in stores:
+                s.close()

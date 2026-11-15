@@ -6729,12 +6729,16 @@ def cmd_worker(args: argparse.Namespace) -> int:
                                 if hashlib.sha256(stash.read_bytes()).hexdigest() != record.get("sha256"):
                                     raise HubError(f"queued file {record.get('name')!r} changed since it "
                                                    "was queued; not sending different bytes")
-                                client.upload_file(stash, to=record.get("to") or None,
+                                uploaded = client.upload_file(stash, to=record.get("to") or None,
                                                    to_id=record.get("to_id") or None, room=None if record.get("to") else (record.get("room") or None),
                                                    delivery=record["id"],
                                                    keep=record.get("keep") if isinstance(record.get("keep"), bool) else None,
                                                    source=record.get("source") or "")
-                                store.acknowledge(record["id"])
+                                note = (uploaded.get("retention_note") if isinstance(uploaded, dict) else None)
+                                note = note[:300] if isinstance(note, str) else ""
+                                if note:
+                                    warn(f"{said(str(record.get('name')))}: {scrub(note)}")
+                                store.acknowledge(record["id"], retention_note=note)
                                 continue
                             if record.get("kind") == "comment":
                                 client._request("POST", f"{protocol_prefix}/comments", json={
