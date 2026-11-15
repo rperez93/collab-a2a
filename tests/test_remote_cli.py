@@ -1,4 +1,3 @@
-from remote_consent_helpers import receipt
 import json
 import shutil
 from types import SimpleNamespace
@@ -50,19 +49,14 @@ def test_agent_accept_cannot_use_old_flag_or_hash(local, monkeypatch):
     assert inbox.list()[0]['state'] == 'pending'
 
 
-def test_receipt_acceptance_and_decline(local, monkeypatch):
+def test_legacy_offer_cannot_use_a_terminal_receipt(local, monkeypatch):
     from collab import consent
-    from collab.remote_delivery import working_directory
     inbox, offer = local
     cli.main(['remote', 'bind', '--target', 'coding'])
-    command = list(wake.read_config(inbox.root.parent).command)
-    def synthetic_review(root, **kwargs):
-        assert kwargs['review']['offer']['text'] == offer['text']
-        assert kwargs['review']['local_command'] == command
-        return receipt(inbox, offer, 'coding', command, kwargs['review']['local_cwd'])
-    monkeypatch.setattr(consent, 'request', synthetic_review)
-    assert cli.main(['remote', 'accept', offer['id']]) == 0
-    assert inbox.list()[0]['state'] == 'accepted'
+    monkeypatch.setattr(consent, 'request', lambda *a, **k: pytest.fail('terminal fallback'))
+    monkeypatch.setattr(cli, '_client', lambda *a, **k: pytest.fail('missing source must refuse locally'))
+    assert cli.main(['remote', 'accept', offer['id']]) == 1
+    assert inbox.list()[0]['state'] == 'pending'
     assert cli.main(['remote', 'decline', offer['id']]) == 0
     assert inbox.list()[0]['state'] == 'declined'
 
@@ -84,7 +78,7 @@ def test_offer_queues_exact_stable_identity_without_acceptance(local, monkeypatc
         def __enter__(self): return self
         def __exit__(self, *args): pass
         def snapshot(self):
-            return {'participants': [{'id': 'p_peer', 'name': 'peer', 'remote_consent_version': 1}]}
+            return {'participants': [{'id': 'p_peer', 'name': 'peer', 'remote_consent_version': 2}]}
     monkeypatch.setattr(cli, '_client', lambda profile: Client())
     assert cli.main(['remote', 'offer', '--to', 'peer', '--target', 'remote-coding',
                      '--text', 'Please review this.', '--kind', 'goal']) == 0
@@ -95,31 +89,7 @@ def test_offer_queues_exact_stable_identity_without_acceptance(local, monkeypatc
     assert inbox.list()[0]['state'] == 'pending'
 
 
-def test_review_observing_disarm_permanently_revokes_prior_acceptance(local, monkeypatch):
-    from collab import consent
-    inbox, first = local
-    cli.main(['remote', 'bind', '--target', 'coding'])
-    command = list(wake.read_config(inbox.root.parent).command)
-    def review(root, **kwargs):
-        selected = next(row for row in inbox.list() if row['id'] == kwargs['request_id'])
-        # The digest covers only the original offer fields.
-        selected = {k: v for k, v in selected.items() if k not in ('state', 'sha256')}
-        approval = receipt(inbox, selected, 'coding', command, kwargs['review']['local_cwd'])
-        if selected['id'] != first['id']:
-            wake.write_config(root, wake.WakeConfig(command=[]))
-        return approval
-    monkeypatch.setattr(consent, 'request', review)
-    assert cli.main(['remote', 'accept', first['id']]) == 0
-    second = make_offer(session_id='s_room', sender_id='p_peer', recipient_id='p_local',
-                        target='coding', kind='prompt', text='second review')
-    inbox.receive(second, session_id='s_room', sender_id='p_peer', recipient_id='p_local')
-    assert cli.main(['remote', 'accept', second['id']]) == 1
-    wake.write_config(inbox.root.parent, wake.WakeConfig(command=command))
-    assert {r['id']: r['state'] for r in inbox.list()} == {first['id']: 'failed', second['id']: 'pending'}
-    assert inbox.claim(session_id='s_room', recipient_id='p_local', target='coding', command=command) is None
-
-
-@pytest.mark.parametrize('capability', [None, 0, True, '1', 2])
+@pytest.mark.parametrize('capability', [None, 0, True, '1', 1, 3])
 def test_sender_refuses_unsupported_receiver_before_queueing(local, monkeypatch, capability):
     from collab.worker import Store
     inbox, _ = local

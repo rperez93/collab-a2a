@@ -13,6 +13,7 @@ import math
 import os
 from pathlib import Path
 import re
+import secrets
 import sqlite3
 import time
 import uuid
@@ -22,6 +23,8 @@ MAX_RECORDS = 128
 MAX_SENDER_RECORDS = 16
 MAX_TTL = 3600
 RECEIVER_TARGET = "receiver-selected"
+REMOTE_AUTHORITY = ("Uses the existing coding session permissions; may modify files and run commands. "
+                    "No additional sandbox is applied.")
 
 
 class RemoteQueueFull(ValueError):
@@ -149,9 +152,12 @@ class Inbox:
             columns = {row[1] for row in db.execute('PRAGMA table_info(offers)')}
             if 'approval_version' not in columns:
                 db.execute('ALTER TABLE offers ADD COLUMN approval_version INTEGER NOT NULL DEFAULT 0')
-            # Grants from before terminal receipts or explicit destination scope
-            # must be reviewed again, never silently gain a broader scope.
-            self._revoke(db, db.execute("SELECT * FROM offers WHERE state='accepted' AND approval_version<2"),
+            for name, kind in (('source_seq', 'INTEGER'), ('consumption_id', 'TEXT')):
+                if name not in columns:
+                    db.execute(f'ALTER TABLE offers ADD COLUMN {name} {kind}')
+            db.execute('CREATE UNIQUE INDEX IF NOT EXISTS offers_consumption ON offers(consumption_id) WHERE consumption_id IS NOT NULL')
+            # Earlier local terminal grants are not strong hub approval.
+            self._revoke(db, db.execute("SELECT * FROM offers WHERE state='accepted' AND approval_version<3"),
                          now=time.time(), reason='legacy_approval')
             yield db
             db.commit()
@@ -168,26 +174,33 @@ class Inbox:
             # independently rejects expired offers, so compaction cannot turn
             # the original content into a valid fresh approval. Never discard
             # an ambiguous in-flight dispatch as a side effect of intake.
-            if row['state'] in ('pending', 'accepted') and expires <= now:
+            if row['state'] in ('pending', 'accepted', 'approving') and expires <= now:
                 self._revoke(db, [row], now=now, reason='expired', state='expired')
             if row['state'] != 'dispatching' and expires + MAX_TTL <= now:
                 db.execute('DELETE FROM offers WHERE id=?', (row['id'],))
 
-    def receive(self, value, *, session_id, sender_id, recipient_id, now=None):
+    def receive(self, value, *, session_id, sender_id, recipient_id, now=None, source_seq=None):
         """IDs must come from authenticated transport, never the offer body."""
-        now = time.time() if now is None else now
         offer = validate(value)
         if (offer['session_id'], offer['sender_id'], offer['recipient_id']) != (session_id, sender_id, recipient_id):
             raise ValueError('offer does not match authenticated routing')
-        if offer['created_at'] > now + 30 or offer['expires_at'] <= now:
-            raise ValueError('offer is expired or from the future')
+        if source_seq is not None and (type(source_seq) is not int or not 0 < source_seq <= 2**63 - 1):
+            raise ValueError('invalid authenticated source sequence')
         fingerprint = digest(offer)
         with self._db() as db:
+            now = time.time() if now is None else now
+            if offer['created_at'] > now + 30 or offer['expires_at'] <= now:
+                raise ValueError('offer is expired or from the future')
             self._expire(db, now)
-            old = db.execute('SELECT digest FROM offers WHERE id=?', (offer['id'],)).fetchone()
+            old = db.execute('SELECT digest,source_seq FROM offers WHERE id=?', (offer['id'],)).fetchone()
             if old:
                 if old['digest'] != fingerprint:
                     raise ValueError('request id reused with different content')
+                if source_seq is not None:
+                    if old['source_seq'] is not None and old['source_seq'] != source_seq:
+                        raise ValueError('request id reused with different source sequence')
+                    if old['source_seq'] is None:
+                        db.execute('UPDATE offers SET source_seq=? WHERE id=?', (source_seq, offer['id']))
                 return False
             if db.execute('SELECT COUNT(*) FROM offers').fetchone()[0] >= MAX_RECORDS:
                 self._audit('offer_refused', offer, details={'reason': 'queue_full'})
@@ -198,8 +211,8 @@ class Inbox:
                 self._audit('offer_refused', offer, details={'reason': 'sender_queue_full'})
                 raise RemoteQueueFull('remote sender queue limit reached; wait for expiry and compaction')
             self._audit('offer_received', offer)
-            db.execute('INSERT INTO offers(id,digest,payload,state,binding,receipt,updated) VALUES (?,?,?,?,NULL,NULL,?)',
-                       (offer['id'], fingerprint, json.dumps(offer), 'pending', now))
+            db.execute('INSERT INTO offers(id,digest,payload,state,binding,receipt,updated,source_seq) VALUES (?,?,?,?,NULL,NULL,?,?)',
+                       (offer['id'], fingerprint, json.dumps(offer), 'pending', now, source_seq))
         return True
 
     def list(self, *, now=None):
@@ -207,7 +220,7 @@ class Inbox:
         with self._db() as db:
             self._expire(db, now)
             return [{**json.loads(row['payload']), 'sha256': row['digest'],
-                     'state': row['state']} for row in db.execute('SELECT * FROM offers ORDER BY updated,id')]
+                     'state': row['state'], 'source_seq': row['source_seq']} for row in db.execute('SELECT * FROM offers ORDER BY updated,id')]
 
     def bind(self, target, command, cwd=None):
         """Select a local target without authorizing any remote content.
@@ -221,14 +234,14 @@ class Inbox:
             old = db.execute('SELECT target,digest FROM local_binding WHERE singleton=1').fetchone()
             if old and (old['target'], old['digest']) == (target, fingerprint):
                 return
-            self._revoke(db, db.execute("SELECT * FROM offers WHERE state='accepted'"),
+            self._revoke(db, db.execute("SELECT * FROM offers WHERE state IN ('accepted','approving')"),
                          now=time.time(), reason='local_binding_changed')
             db.execute('INSERT OR REPLACE INTO local_binding VALUES (1,?,?)',
                        (target, fingerprint))
 
     def invalidate(self, reason):
         with self._db() as db:
-            self._revoke(db, db.execute("SELECT * FROM offers WHERE state='accepted'"),
+            self._revoke(db, db.execute("SELECT * FROM offers WHERE state IN ('accepted','approving')"),
                          now=time.time(), reason=reason)
 
     def bound_target(self, command, cwd=None):
@@ -243,40 +256,92 @@ class Inbox:
                 matches = False
             if matches:
                 return row['target']
-            self._revoke(db, db.execute("SELECT * FROM offers WHERE state='accepted'"),
+            self._revoke(db, db.execute("SELECT * FROM offers WHERE state IN ('accepted','approving')"),
                          now=time.time(), reason='local_binding_changed')
         raise ValueError('local delivery command changed; bind and review again')
 
     def accept(self, request_id, *, reviewed_digest, session_id, recipient_id,
                target, command, approval, now=None, cwd=None):
-        from . import consent
-        now = time.time() if now is None else now
+        """Legacy terminal receipts cannot authorize remote execution."""
+        raise ValueError('strong hub approval is required; terminal receipts are not accepted')
+
+    def _strong_review(self, db, row, *, reviewed_digest, session_id, recipient_id,
+                       target, command, cwd, now):
         binding = binding_digest(target, command, cwd)
+        selected = db.execute('SELECT target,digest FROM local_binding WHERE singleton=1').fetchone()
+        if not selected or (selected['target'], selected['digest']) != (target, binding):
+            raise ValueError('local destination is not bound to this command')
+        offer = validate(json.loads(row['payload']))
+        goal_choice = offer['kind'] == 'goal' and offer['target'] == RECEIVER_TARGET
+        if ((offer['session_id'], offer['recipient_id']) != (session_id, recipient_id)
+                or (offer['target'] != target and not goal_choice)):
+            raise ValueError('local destination does not match the reviewed offer')
+        if reviewed_digest != row['digest'] or digest(offer) != row['digest']:
+            raise ValueError('reviewed content changed')
+        if offer['expires_at'] <= now:
+            raise ValueError('offer is expired')
+        if type(row['source_seq']) is not int or row['source_seq'] <= 0:
+            raise ValueError('offer has no authenticated source sequence')
+        return offer, binding
+
+    def begin_strong_attempt(self, request_id, *, reviewed_digest, session_id,
+                             recipient_id, target, command, cwd=None, now=None):
+        """Persist an irreversible local attempt BEFORE consuming hub approval.
+
+        An interrupted or uncertain attempt is never returned to pending and
+        cannot be claimed. Only this attempt's caller may finish it after a
+        verified hub consumption response; there is no automatic retry path.
+        """
         with self._db() as db:
-            self._expire(db, now)
-            selected = db.execute('SELECT target,digest FROM local_binding WHERE singleton=1').fetchone()
-            if not selected or (selected['target'], selected['digest']) != (target, binding):
-                raise ValueError('local destination is not bound to this command')
+            moment = time.time() if now is None else now
+            self._expire(db, moment)
             row = db.execute('SELECT * FROM offers WHERE id=?', (request_id,)).fetchone()
             if not row or row['state'] != 'pending':
                 raise ValueError('request is not pending')
-            offer = json.loads(row['payload'])
-            goal_choice = offer['kind'] == 'goal' and offer['target'] == RECEIVER_TARGET
-            if ((offer['session_id'], offer['recipient_id']) != (session_id, recipient_id)
-                    or (offer['target'] != target and not goal_choice)):
-                raise ValueError('local destination does not match the reviewed offer')
-            if reviewed_digest != row['digest'] or digest(offer) != row['digest']:
-                raise ValueError('reviewed content changed')
-            consent.consume(self.root.parent, approval, subject='remote',
-                            request_id=request_id, digest=reviewed_digest, binding=binding)
-            self._audit('acceptance_requested', offer, binding=binding)
-            db.execute("UPDATE offers SET state='accepted',approval_version=2,binding=?,updated=? WHERE id=?",
-                       (binding, now, request_id))
+            offer, binding = self._strong_review(db, row, reviewed_digest=reviewed_digest,
+                session_id=session_id, recipient_id=recipient_id, target=target,
+                command=command, cwd=cwd, now=moment)
+            attempt = secrets.token_urlsafe(32)
+            self._audit('strong_attempt_requested', offer, binding=binding)
+            db.execute("UPDATE offers SET state='approving',receipt=?,binding=?,updated=? WHERE id=?",
+                       (attempt, binding, moment, request_id))
+        return attempt
+
+    def finish_strong_attempt(self, request_id, attempt, consumption_id, *, reviewed_digest,
+                              session_id, recipient_id, target, command, cwd=None, now=None):
+        """Record a verified strong hub consumption; never substitute a local receipt."""
+        failure = None
+        with self._db() as db:
+            moment = time.time() if now is None else now
+            row = db.execute("SELECT * FROM offers WHERE id=? AND state='approving'", (request_id,)).fetchone()
+            if (not row or type(attempt) is not str or len(attempt) > 128
+                    or re.fullmatch(r'[A-Za-z0-9_-]{43}', attempt) is None
+                    or not secrets.compare_digest(row['receipt'] or '', attempt)):
+                raise ValueError('no matching strong approval attempt')
+            try:
+                _identifier(consumption_id, 'consumption id')
+                offer, binding = self._strong_review(db, row, reviewed_digest=reviewed_digest,
+                    session_id=session_id, recipient_id=recipient_id, target=target,
+                    command=command, cwd=cwd, now=moment)
+                if row['binding'] != binding:
+                    raise ValueError('local delivery binding changed during approval')
+                if db.execute('SELECT 1 FROM offers WHERE consumption_id=?', (consumption_id,)).fetchone():
+                    raise ValueError('hub consumption was already recorded')
+            except ValueError as exc:
+                failure = exc
+                self._revoke(db, [row], now=moment, reason='strong_approval_binding_changed')
+            else:
+                self._audit('acceptance_requested', offer, binding=binding,
+                            details={'approval_version': 3})
+                db.execute("UPDATE offers SET state='accepted',approval_version=3,consumption_id=?,updated=? WHERE id=?",
+                           (consumption_id, moment, request_id))
+        if failure is not None:
+            raise failure
 
     def decline(self, request_id, *, now=None):
         now = time.time() if now is None else now
         with self._db() as db:
-            row = db.execute("SELECT * FROM offers WHERE id=? AND state IN ('pending','accepted')",
+            row = db.execute("SELECT * FROM offers WHERE id=? AND state IN ('pending','accepted','approving')",
                              (request_id,)).fetchone()
             if not row:
                 raise ValueError('request cannot be declined in its current state')
@@ -284,16 +349,16 @@ class Inbox:
 
     def claim(self, *, session_id, recipient_id, target, command, now=None, cwd=None):
         """Reserve at most one delivery; never reissue a dispatching request."""
-        now = time.time() if now is None else now
         binding = binding_digest(target, command, cwd)
         with self._db() as db:
+            now = time.time() if now is None else now
             self._expire(db, now)
             selected = db.execute('SELECT target,digest FROM local_binding WHERE singleton=1').fetchone()
             if not selected or (selected['target'], selected['digest']) != (target, binding):
-                self._revoke(db, db.execute("SELECT * FROM offers WHERE state='accepted'"),
+                self._revoke(db, db.execute("SELECT * FROM offers WHERE state IN ('accepted','approving')"),
                              now=now, reason='local_binding_changed')
                 return None
-            for row in db.execute("SELECT * FROM offers WHERE state='accepted' ORDER BY updated,id"):
+            for row in db.execute("SELECT * FROM offers WHERE state='accepted' AND approval_version=3 AND consumption_id IS NOT NULL ORDER BY updated,id"):
                 offer = json.loads(row['payload'])
                 goal_choice = offer['kind'] == 'goal' and offer['target'] == RECEIVER_TARGET
                 if ((offer['session_id'], offer['recipient_id']) != (session_id, recipient_id)
@@ -328,11 +393,11 @@ OFFER_PREFIX = 'Collab remote offer — pending human acceptance; do not execute
 
 
 def supports_remote_consent(metadata):
-    """Require an explicit supported receiver capability, never infer from age."""
+    """Require strong-receiver capability2; terminal-receipt capability1 is legacy."""
     value = metadata.get('remote_consent_version')
     # A2A protobuf Struct round-trips JSON numbers as floats. Exclude bool,
     # strings and every unsupported numeric value, including NaN/infinity.
-    return type(value) in (int, float) and value == 1
+    return type(value) in (int, float) and value == 2
 
 
 def event_visible_to_receiver(event, supports_consent):
@@ -369,4 +434,4 @@ def receive_envelope(profile, envelope, *, now=None):
         raise ValueError('invalid remote offer encoding') from exc
     return Inbox(profile.dir).receive(value, session_id=profile.session_id,
                                       sender_id=envelope.sender_id,
-                                      recipient_id=profile.participant_id, now=now)
+                                      recipient_id=profile.participant_id, now=now, source_seq=envelope.seq)

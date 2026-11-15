@@ -38,7 +38,7 @@ async def event_stream(request: Request, hub: Hub, participant: str,
         resume_from = None
 
     sub = await hub.subscribe(participant)
-    supports_consent = request.headers.get('Collab-Remote-Consent') == '1'
+    supports_consent = request.headers.get('Collab-Remote-Consent') == '2'
 
     async def generator():
         try:

@@ -170,7 +170,7 @@ def install(app, store, session_id):
         router.add_api_route(path, endpoint, methods=[method], name="approval_" + method.lower() + path.replace("/", "_"))
 
     route("/capabilities", "GET", lambda token, path, body: {
-        "api_version": 1, "available": False, "methods": [],
+        "api_version": 1, "available": False, "methods": [], "remote_delivery": False,
         "reason": "operation_integration_pending", "supported_methods": ["hello", "passkey"],
         "algorithms": {"hello": [-257], "passkey": [-7, -257]}, "attestation_verification": False})
     route("/keys", "GET", lambda token, path, body: {"api_version": 1, "credentials": core.keys(token)})

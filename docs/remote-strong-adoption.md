@@ -1,6 +1,6 @@
 # R7 adoption of R22b strong approval
 
-Status: server adapter implemented; end-to-end adoption remains incomplete.
+Status: server and receiver strong paths implemented; release validation remains incomplete.
 The branch combines current main2fa3a3a, PR172 c4f810d and PR173 d90bf86.
 `approval_remote.RemoteApprovals` now prepares exact private event-backed offers
 and consumes receipts via `/approval/remote/prepare` and
@@ -9,17 +9,25 @@ requesters cannot read receiver-local argv/cwd. Repeated source IDs, changed
 bindings and consumed operations are refused. Expired unconsumed reviews can
 be explicitly prepared again, invalidating the previous receipt.
 
-The R7 CLI/inbox still uses local terminal receipts. Those do not satisfy R22b;
-frontend adoption, grant migration, durable local attempts and authenticated
-connection-goal source persistence remain implementation and release gates.
-Capabilities remain unavailable. Do not treat this checkpoint as deployable
-strong remote execution.
+The R7 CLI verifies the canonical review against the authenticated local offer
+and delivery binding before opening the window. The inbox records a durable
+attempt before hub consumption; old terminal grants are invalidated. Matching
+consumption authorizes one dispatch, with binding and expiry rechecked just
+before launch. Connection goals retain their persisted private source sequence.
+Capabilities remain unavailable pending real native human/passkey and shared
+installed-version validation; synthetic tests are not those release gates.
 
-Validation: 127 combined remote transport, HTTP approval and skill-policy tests
-passed in11.15s. Before integration the rebased transport passed188 focused tests
-and276 route/TLS/docs/remote/wake tests; the new server adapter passed21 tests
-plus independent malformed-target/concurrent-consumption/pruned-state probes.
-These are isolated synthetic-key tests, not native human or shared-live evidence.
+Validation: 360 focused remote, HTTP approval, worker and documentation tests
+passed in44.86s. After raising the remote capability/header to2 to refuse legacy
+terminal-receipt receivers, 49 transport/goal/CLI/strong-client tests passed
+in10.33s. The ten real-HTTP client scenarios cover exact single delivery, lost
+consumption response, review mismatch, decline, configuration changes before
+and after claiming, expiry, and receiver-selected goals. Local inbox tests also
+exercise expiry while waiting on an actual second SQLite writer. Independent
+review checked source/binding privacy, concurrency, pruning, no-retry behavior
+and capability2 gating. These are synthetic-key tests, not native human or
+shared-live evidence. The new inbox/client/server cases also passed 71 tests
+in10.90s on the actual Python3.10 interpreter.
 
 ## Preserve the R7 transport
 

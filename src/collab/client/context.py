@@ -28,7 +28,7 @@ def gather(focus: str = "", cwd: Path | None = None) -> dict[str, Any]:
     repo_root = _git("rev-parse", "--show-toplevel", cwd=cwd)
     remote = _git("remote", "get-url", "origin", cwd=cwd)
     hello: dict[str, Any] = {"focus": focus.strip(), "cwd": str(cwd),
-                             "remote_consent_version": 1}
+                             "remote_consent_version": 2}
 
     if repo_root:
         hello["repo"] = Path(repo_root).name
