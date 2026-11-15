@@ -5,8 +5,12 @@ every session on the machine. The public link is
 `https://domain/s/<session_id>#<invite>`. The proxy preserves authentication,
 streams events and file bodies, and routes only to local live host records.
 
-It is opt-in this release: the `proxy` setting defaults to `off`, so an upgrade
-leaves every hub on its own tunnel and every address where it was.
+It is the default from 2.2.0 (`proxy` defaults to `auto`): after upgrading,
+`collab host` attaches to the machine's proxy and a session's address becomes
+`/s/<session_id>`, except for the domain's first session, which keeps the bare
+domain, so links handed out before the proxy (the root, with the invite in the
+fragment) still reach it. `collab config proxy off` or `collab host --tunnel
+own` keeps a hub on its own tunnel.
 
 ```bash
 collab config proxy on                 # every session on this machine

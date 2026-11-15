@@ -170,6 +170,19 @@ class RegistryHeartbeat:
             pass
 
 
+def asks_for_primary(cfg) -> bool:
+    """Whether this attach asks for the bare domain: when asked, or on a
+    session's very first attach (so its pre-proxy root links keep working)."""
+    return bool(cfg.proxy_primary or not cfg.proxy_seen)
+
+
+def record_attach(cfg, won: bool) -> None:
+    """Remembered either way: the automatic claim is a first-attach rule, and
+    a primary we won is recorded so a revived hub asks for it again."""
+    cfg.proxy_primary = won
+    cfg.proxy_seen = True
+
+
 def main() -> int:
     setup_logging()
     if len(sys.argv) < 2:
@@ -220,7 +233,7 @@ def main() -> int:
             # first-come and sticky), and asked once: a session that attached
             # before and is not primary stays so.
             supervisor = SharedProxy(cfg.session_id, domain=cfg.domain,
-                                     primary=cfg.proxy_primary or not cfg.proxy_seen)
+                                     primary=asks_for_primary(cfg))
         else:
             supervisor = TunnelSupervisor(
                 cfg.port,
@@ -230,10 +243,7 @@ def main() -> int:
         supervisor.start()
 
     if getattr(supervisor, 'shared', False):
-        # Remembered either way: the automatic claim is a first-attach rule,
-        # and a primary we won is recorded so a revived hub asks for it again.
-        cfg.proxy_primary = bool(supervisor.primary)
-        cfg.proxy_seen = True
+        record_attach(cfg, bool(supervisor.primary))
     if supervisor is not None and supervisor.public_url:
         cfg.public_url = supervisor.public_url
         cfg.tunnel = "proxy" if getattr(supervisor, 'shared', False) else "ngrok"
