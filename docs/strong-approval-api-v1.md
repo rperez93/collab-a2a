@@ -288,13 +288,26 @@ protection. Accepted events share the bounded durable approval-event outbox
 with security alarms and preserve private entitlement in live and replay feeds.
 The shared message persistence boundary now records explicit strong-request
 policy atomically with each source. Both REST and A2A reject subsequent legacy
-`accepted`/`done` responses for that routing pair and request ID, and refuse
+`accepted` responses and premature `done` responses for that routing pair and
+request ID, and refuse
 client attempts to mint `strong_skill_response` or `event:"skill-approval"`.
 Declining still needs only authenticated authority; ordinary weak requests
 retain their existing behavior. A strong request ID with a prior weak
 acceptance or completion is refused, preventing an acceptance sent in advance
 from being inherited by the old reader. Concurrent source/response publication
 cannot commit both: one transaction must refuse.
+
+After the exact latest source has a durable accepted binding and its strong
+receipt has been consumed, its authenticated receiver may send a private chat
+`skill_response` with state `done`. This is an execution report, not a human
+approval or independently verified execution. It does not replace the separate
+server-owned acceptance event. A later source reusing the short request ID
+cannot inherit this permission; a report sent before strong acceptance remains
+refused. Because legacy clients key completion by short ID, reporting is also
+refused if another same-ID source exists among the pair's latest 500 chat
+events (including weak requests), or that bounded history cannot be parsed.
+Clients must continue checking the exact source's server-owned strong
+acceptance before displaying a strong request as completed.
 
 The policy registry is bounded to 4096 entries. It preserves each routing
 pair/ID while its newest strong source remains in the event history, even
