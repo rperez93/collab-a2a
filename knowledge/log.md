@@ -216,5 +216,6 @@ polling is cancellable and bounded. The pin remains unchanged.
   (#189), the skill-request cap (#187), the self-maintaining panel status
   (#192, #208), commit-pinned task evidence (#207), retained shared documents
   (#209), process resource telemetry (#193), worker event batching and audit
-  (#149, #200), the tmux pane and pending decisions (#115), and proxy
-  operation docs (#194, #199). The pin is unchanged.
+  (#149, #200), the tmux pane and pending decisions (#115), proxy
+  operation docs (#194, #199), and receiver consent for remote prompts and
+  goals by strong approval (#213). The pin is unchanged.

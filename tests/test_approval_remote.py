@@ -363,3 +363,18 @@ def test_the_hub_overwrites_deleted_content_where_it_is_cheap(tmp_path):
         assert store._db.execute("PRAGMA secure_delete").fetchone()[0] == 2  # FAST
     finally:
         store.close()
+
+
+@pytest.mark.parametrize("end", ["consumed", "declined"])
+def test_reviewing_a_finished_remote_request_is_409_not_500(hub, signer, end):
+    """Lead gate LOW on #213: a consumed or declined remote request has its
+    review deleted with the receiver's argv and cwd, and reviewing it again
+    raised on json.loads(b''). It now says the request is unavailable."""
+    adapter, env, offer, request, approved = ready(hub, signer)
+    if end == "consumed":
+        adapter.consume('test-bob', request['request_id'], receipt=approved['receipt'])
+    else:
+        hub.api.decline('test-bob', request['request_id'])
+    with pytest.raises(Rejected) as refused:
+        hub.api.review('test-bob', request['request_id'])
+    assert (refused.value.code, refused.value.status) == ("request_unavailable", 409)

@@ -106,6 +106,13 @@ What 2.3.0 adds since 2.2.0.
   after giving one that is just stopping a few seconds. `collab kill` always
   finds the hub, even one that has not recorded its pid yet (#202, #204,
   #205).
+- **Remote prompts and goals need the receiver's consent.** A peer's
+  `collab remote offer` is held as pending on the receiving machine; nothing
+  runs until its human accepts it with a strong approval (Windows Hello or a
+  passkey) on the reviewed offer, one delivery at a time. Remote delivery is
+  on by default and is the host's switch: `collab config remote_delivery off`
+  turns it off for the session. The receiver's command and working directory
+  are held on the hub only while a request is open (#213).
 - **Strong approval off Windows.** `collab consent enrol` enrols a passkey
   from the terminal on Linux and macOS, and the hub advertises passkey beside
   Windows Hello (#185).
@@ -146,7 +153,7 @@ What 2.3.0 adds since 2.2.0.
   links (#194, #199).
 - **Test suite**: one full run per machine at a time (#186), fast author
   iteration outside that lock (#196), and the flaky and leaking tests fixed
-  (#184, #190, #201, #203, #210).
+  (#184, #190, #201, #203, #210, #211).
 
 ## In 2.2.0
 
