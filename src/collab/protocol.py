@@ -587,7 +587,10 @@ class Envelope:
         if self.thread:
             d["thread"] = self.thread
         if self.body:
-            d["body"] = self.body
+            # A hello row stored before the hub bounded it still holds the
+            # sender's `cwd` and `remote`: bounded on the way out too, so no
+            # history read, snapshot or replay relays it (review of #178).
+            d["body"] = bounded_meta(self.body) if self.kind == KIND_HELLO else self.body
         if self.seq is not None:
             d["seq"] = self.seq
         if self.sender_id:
