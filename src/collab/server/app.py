@@ -729,7 +729,7 @@ def create_app(
                 # The host may free a claim only from someone who is gone;
                 # it is announced to the room and kept in the task's history.
                 by_host = (not mine and action == "release" and user.is_host and bool(previous_id)
-                           and not hub.is_connected(owner or ""))
+                           and not hub.is_connected(previous_id))  # feeds are keyed by participant id
                 if not (mine or by_host):
                     raise HTTPException(
                         status_code=403,
@@ -738,7 +738,8 @@ def create_app(
             if action == "handoff":
                 target = str(body.get("to") or "")
                 target_id = store.resolve_name(target) if target else None
-                if not target_id or target_id == user.id:
+                person = store.participant_by_id(target_id) if target_id else None
+                if not target_id or target_id == user.id or person is None or getattr(person, "revoked", False):
                     raise HTTPException(status_code=400, detail=f"no other participant called {target!r} to hand {task_id} to")
             accepting = action == "claim" and bool(offered_to) and offered_to == user.id
             if action == "claim" and not accepting:
@@ -829,11 +830,14 @@ def create_app(
         ))
         # T_b079: the people an ownership change concerns hear it directly,
         # once, so nobody has to poll the board or the lead.
-        for who in {previous_id, target_id if action == "handoff" else None} - {None, "", user.id}:
+        # A repeated offer to the same participant is not news to them.
+        reoffer = action == "handoff" and offered_to == target_id
+        for who in {previous_id, target_id if action == "handoff" and not reoffer else None} - {None, "", user.id}:
             await hub.publish(Envelope(
                 kind=KIND_TASK, sender=user.name, sender_id=user.id, to_id=who,
                 to=store.participant_by_id(who).name if store.participant_by_id(who) else None,
-                text=f"{task_id} {'was offered to you' if who == target_id else 'is no longer yours'}: {title}",
+                # No participant-written title in a direct notice: the id says which task.
+                text=f"{task_id} {'was offered to you' if who == target_id else 'is no longer yours'}",
                 body={"action": "ownership", "id": task_id, "change": "accept" if accepting else action, **change},
             ))
         return {"task": record}

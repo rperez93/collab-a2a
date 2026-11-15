@@ -62,19 +62,44 @@ def test_a_handoff_needs_another_participant(client, session):
 
 
 def test_the_host_may_release_only_an_offline_participants_claim(client, session, host_headers):
+    """A real feed, subscribed by participant id: while bob is online the host is refused."""
     (bob, bob_id), = (_join(client, session, "bob"),)
     task_id = _claimed(client, session, bob)
-    import collab.server.hub as hub_module
-    online = hub_module.Hub.is_connected
+    hub = client.app.state.hub
+    sub = client.portal.call(hub.subscribe, bob_id)
     try:
-        hub_module.Hub.is_connected = lambda self, name: name == "bob"
         assert _act(client, host_headers, "release", task_id).status_code == 403, "bob is online"
-        hub_module.Hub.is_connected = lambda self, name: False
-        r = _act(client, host_headers, "release", task_id)
     finally:
-        hub_module.Hub.is_connected = online
+        client.portal.call(hub.unsubscribe, sub)
+    r = _act(client, host_headers, "release", task_id)
     assert r.status_code == 200 and r.json()["task"]["owner"] is None
     announced = [e for e in session["store"].history(viewer=bob_id)
                  if e.kind == "task" and (e.body or {}).get("action") == "release" and not e.to_id]
     assert announced and announced[-1].body["by_host"] is True and announced[-1].body["previous_owner_id"] == bob_id
     assert [n.body["change"] for n in _notices(session, bob_id)] == ["release"]
+
+
+def test_a_handoff_to_a_removed_participant_is_refused(client, session, host_headers):
+    (bob, _), (carol, _) = _join(client, session, "bob"), _join(client, session, "carol")
+    task_id = _claimed(client, session, bob)
+    assert client.post("/ext/collab/v1/revoke", json={"name": "carol"}, headers=host_headers).status_code == 200
+    assert _act(client, bob, "handoff", task_id, to="carol").status_code == 400
+
+
+def test_a_repeated_offer_is_not_news_and_notices_carry_no_title(client, session):
+    (bob, _), (carol, carol_id) = _join(client, session, "bob"), _join(client, session, "carol")
+    task_id = _claimed(client, session, bob)
+    _act(client, bob, "handoff", task_id, to="carol")
+    _act(client, bob, "handoff", task_id, to="carol")
+    notices = _notices(session, carol_id)
+    assert len(notices) == 1
+    assert "Ship the thing" not in (notices[0].text or ""), "no participant-written title in a direct notice"
+
+
+def test_releasing_clears_a_pending_offer(client, session):
+    (bob, _), (carol, _), (dave, _) = (_join(client, session, n) for n in ("bob", "carol", "dave"))
+    task_id = _claimed(client, session, bob)
+    _act(client, bob, "handoff", task_id, to="carol")
+    assert _act(client, bob, "release", task_id).status_code == 200
+    assert session["store"].get_task(task_id)["handoff_to"] is None
+    assert _act(client, dave, "claim", task_id).json()["task"]["owner"] == "dave", "open to anyone again"
