@@ -203,6 +203,15 @@ def main() -> int:
     # leaves the record of the first alone and simply goes.
     from .client import exclusive
     hub_lock = exclusive.DaemonLock(cfg.dir, name=exclusive.HUB_LOCK_FILE)
+    # A hub that was just stopped holds the lock until it has finished exiting:
+    # wait a bounded few seconds for the recorded one to go, then ask ONCE
+    # (acquire hands a refused descriptor to a wait of its own; never loop it).
+    import time
+    before = HubConfig.load(cfg.session_id, cfg.home)
+    settle = time.monotonic() + 5
+    while (before is not None and before.pid != os.getpid() and before.hub_stamp().alive()
+           and time.monotonic() < settle):
+        time.sleep(0.1)
     try:
         if not hub_lock.acquire():
             holder = HubConfig.load(cfg.session_id, cfg.home)

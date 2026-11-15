@@ -496,6 +496,12 @@ def spawn_hub(cfg: "HubConfig", env: dict[str, str], log_path: Path,
         )
     if not getattr(child, "pid", 0):
         return 0  # nothing we can name (a stand-in in tests)
+    # Never over a live hub: if one already runs, this child will lose
+    # hub.lock and exit, and the record must go on naming the one that runs
+    # (lead gate on #205). The winner re-records itself once it has the lock.
+    current = HubConfig.load(cfg.session_id, cfg.home)
+    if current is not None and current.hub_stamp().alive():
+        return child.pid
     fresh = stamp_for(child.pid)
     if fresh.started:
         update_fields(cfg.dir, pid=child.pid, pid_stamp=fresh.encode())
