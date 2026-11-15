@@ -464,6 +464,18 @@ def stop_session(cfg: HubConfig, *, purge: bool = False) -> dict[str, Any]:
         except (OSError, ProcessLookupError):
             pass
 
+    # AND WHOEVER HOLDS hub.lock. Two hubs spawned at once can each record
+    # themselves before either has the lock, so hub.json may name the one that
+    # lost and is exiting; the lock names the one that runs.
+    from ..client import exclusive
+    running = exclusive.holder(cfg.dir, name=exclusive.HUB_LOCK_FILE)
+    if running and running != os.getpid() and running != cfg.hub_stamp().pid:
+        try:
+            os.kill(running, signal.SIGTERM)
+            result["hub_stopped"] = True
+        except (OSError, ProcessLookupError):
+            pass
+
     if purge:
         shutil.rmtree(cfg.dir, ignore_errors=True)
         result["purged"] = True

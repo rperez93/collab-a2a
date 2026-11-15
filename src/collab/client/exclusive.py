@@ -373,7 +373,21 @@ class DaemonLock:
             os.pwrite(self._fd, f"{os.getpid()}\n".encode(), 0)
 
 
-def taken(root: Path | str) -> bool | None:
+def holder(root: Path | str, *, name: str = LOCK_FILE) -> int:
+    """The pid written into a lock file by whoever holds it RIGHT NOW, or 0.
+
+    Only while the kernel says it is held (`taken`): a file left by a holder
+    that has gone still says its pid, and that number may belong to someone
+    else by now."""
+    if taken(root, name=name) is not True:
+        return 0
+    try:
+        return int((Path(root) / name).read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
+def taken(root: Path | str, *, name: str = LOCK_FILE) -> bool | None:
     """Is a live daemon holding this session's slot?
 
     Asked by trying the lock and giving it straight back, never by reading
@@ -403,7 +417,7 @@ def taken(root: Path | str) -> bool | None:
     if fcntl is None:
         return None
     try:
-        fd = os.open(lock_path(root), os.O_RDONLY)
+        fd = os.open(Path(root) / name, os.O_RDONLY)
     except OSError:
         return None
     try:
