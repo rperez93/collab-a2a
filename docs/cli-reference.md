@@ -293,14 +293,14 @@ options:
 ## task
 
 ```text
-usage: collab task [-h] [--id ID] [--detail DETAIL] [--project ID] [--url URL]
-                   [--number NUMBER] [--files [PATH ...]] [--room ROOM]
-                   [--open] [--json] [--session SESSION]
-                   {propose,claim,update,complete,fail,cancel,list,show,comment,pr,pr-remove,move}
+usage: collab task [-h] [--id ID] [--detail DETAIL] [--project ID] [--to NAME]
+                   [--url URL] [--number NUMBER] [--files [PATH ...]]
+                   [--room ROOM] [--open] [--json] [--session SESSION]
+                   {propose,claim,update,complete,fail,cancel,list,show,comment,pr,pr-remove,move,release,handoff}
                    [title]
 
 positional arguments:
-  {propose,claim,update,complete,fail,cancel,list,show,comment,pr,pr-remove,move}
+  {propose,claim,update,complete,fail,cancel,list,show,comment,pr,pr-remove,move,release,handoff}
   title                 title when proposing, or the text when commenting
 
 options:
@@ -311,6 +311,8 @@ options:
                         where to file it — `--project ''` takes it out of the
                         one it is in. `move` changes nothing else: not the
                         state, not the owner, not the batch
+  --to NAME             with handoff: who to offer it to; they accept with
+                        `collab task claim`
   --url URL             with pr/pr-remove: the pull request's url
   --number NUMBER       with pr: its number, if the url does not end in one
   --files [PATH ...]    with claim: the files you are about to touch

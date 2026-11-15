@@ -41,7 +41,9 @@ from completion times, shows «≥» when the task in flight is overdue, and say
 there is no pace yet until a task completes. `collab batch close` stops adding new tasks
 without deleting history.
 
-Use `collab task update`, `collab task move`, `collab task pr-remove`,
+Give up a claim with `collab task release --id T_xxx`, or offer it to someone
+with `collab task handoff --id T_xxx --to NAME` (they accept with `collab task
+claim`). Use `collab task update`, `collab task move`, `collab task pr-remove`,
 `collab project update`, `collab project assign`, `collab project comment`,
 `collab project show`, `collab project archive` and `collab project unarchive`
 when ownership/scope changes; inspect each command's `--help` for its fields.

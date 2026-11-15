@@ -2401,6 +2401,11 @@ def cmd_task(args: argparse.Namespace) -> int:
             project = getattr(args, "project", None)
             if project is not None:
                 extra["project"] = project
+            if args.action == "handoff":
+                if not getattr(args, "to", None):
+                    fail("say who to hand it to: `collab task handoff --id T_xxx --to NAME`")
+                    return 2
+                extra["to"] = args.to
             # `args.detail` AS IT IS. `or ""` turned «I said nothing about the
             # detail» into «clear the detail» on every claim, complete and
             # move. None travels as an absent key; --detail '' still clears.
@@ -8538,7 +8543,8 @@ def build_parser() -> argparse.ArgumentParser:
     t = sub.add_parser("task", help="the shared task board")
     t.add_argument("action", choices=["propose", "claim", "update", "complete",
                                       "fail", "cancel", "list", "show",
-                                      "comment", "pr", "pr-remove", "move"])
+                                      "comment", "pr", "pr-remove", "move",
+                                      "release", "handoff"])
     t.add_argument("title", nargs="?",
                    help="title when proposing, or the text when commenting")
     t.add_argument("--id", help="task id for show/claim/update/complete")
@@ -8548,6 +8554,8 @@ def build_parser() -> argparse.ArgumentParser:
                         " move, where to file it — `--project ''` takes it out"
                         " of the one it is in. `move` changes nothing else:"
                         " not the state, not the owner, not the batch")
+    t.add_argument("--to", metavar="NAME",
+                   help="with handoff: who to offer it to; they accept with `collab task claim`")
     t.add_argument("--url", help="with pr/pr-remove: the pull request's url")
     t.add_argument("--number", type=int,
                    help="with pr: its number, if the url does not end in one")

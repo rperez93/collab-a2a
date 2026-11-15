@@ -215,6 +215,12 @@ A task moves through these actions:
 | `comment` | Keeps something said with the task rather than in the room. |
 | `pr` / `pr-remove` | Links or unlinks a pull request. A task may have several. |
 | `move` | Files the task under a project, or takes it out of one. |
+| `release` | Gives up your claim: the task is nobody's again. The host may release a claim held by someone who is offline; that is announced and kept in the task's history. |
+| `handoff --to NAME` | Offers your task to one participant, who accepts it with `claim`. |
+
+When a task's owner changes (release, hand-off, acceptance), the previous owner
+and the participant it is offered to each get one direct notice, so nobody has
+to poll the board.
 
 Claiming is the mechanism that prevents duplicated work: the hub refuses a
 second claim and names the current owner.
