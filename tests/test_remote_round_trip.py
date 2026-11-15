@@ -27,9 +27,11 @@ def _events(hub):
     return [e for e in found if e.body.get('event') == 'remote-outcome']
 
 
-def consumed(hub, signer):
+def consumed(hub, signer, *, delivered=True):
     adapter, env, offer, request, approved = ready(hub, signer)
     adapter.consume('test-bob', request['request_id'], receipt=approved['receipt'])
+    if delivered:
+        adapter.report('test-bob', offer['id'], state='delivered', key='d' * 24)
     return adapter, offer
 
 
@@ -48,7 +50,7 @@ def test_the_review_shows_and_binds_the_reply_path_and_the_exact_delivered_bytes
 # --- the hub's outcome trail -----------------------------------------------------------
 
 def test_consumption_tells_the_requester_approved_and_nothing_of_the_receivers_setup(hub, signer):
-    consumed(hub, signer)
+    consumed(hub, signer, delivered=False)
     [event] = _events(hub)
     outcome = event.body['remote_outcome']
     assert event.kind == KIND_SYSTEM and event.to_id == hub.people['alice'].id
@@ -59,7 +61,7 @@ def test_consumption_tells_the_requester_approved_and_nothing_of_the_receivers_s
 
 
 def test_a_report_counts_once_and_a_different_one_is_refused(hub, signer):
-    adapter, offer = consumed(hub, signer)
+    adapter, offer = consumed(hub, signer, delivered=False)
     key = 'k' * 24
     adapter.report('test-bob', offer['id'], state='delivered', key=key)
     adapter.report('test-bob', offer['id'], state='delivered', key=key)   # a lost ack, resent
@@ -104,6 +106,9 @@ def test_an_answer_is_bounded_and_needs_a_consumed_request_inside_its_window(hub
     with pytest.raises(Rejected, match='unknown_remote_approval'):
         adapter.reply('test-bob', offer['id'], answer='early', key='r' * 24)
     adapter.consume('test-bob', request['request_id'], receipt=approved['receipt'])
+    with pytest.raises(Rejected, match='remote_not_delivered'):
+        adapter.reply('test-bob', offer['id'], answer='before the report', key='r' * 24)
+    adapter.report('test-bob', offer['id'], state='delivered', key='d' * 24)
     with pytest.raises(Rejected) as big:
         adapter.reply('test-bob', offer['id'], answer='x' * (remote.REPLY_MAX_BYTES + 1), key='r' * 24)
     assert big.value.status == 413
@@ -255,9 +260,9 @@ def test_an_outcome_goes_to_the_main_agent_with_the_worker_on_or_off(tmp_path):
     from test_approval_security_wakes import waker
     subject = waker(tmp_path / 'wake')
     assert subject.note(event)
-    assert subject.security_pending()
+    assert subject.for_main_pending()
     [line] = subject.pending.read_text().splitlines()
-    assert wake._alarm_line(line)
+    assert wake._for_main_line(line)
 
 
 # --- the commands ----------------------------------------------------------------------
@@ -349,3 +354,29 @@ def test_an_older_hubs_404_keeps_the_answer_and_a_final_refusal_is_said(tmp_path
     monkeypatch.setattr(remote_delivery, 'flush_owed', lambda p: remote_delivery.flush(p, object()))
     assert cli.main(['remote', 'reply', offer['id'], 'done']) == 1
     assert 'refused: remote_reply_window_closed' in capsys.readouterr().out
+
+
+def test_a_burst_of_outcomes_leaves_the_security_alarm_its_reserve(hub):
+    from collab.server import approval_alarms as alarms
+    env = lambda event: Envelope(kind=KIND_SYSTEM, sender='collab', room=None, text='x', body={'event': event})
+    with hub.store._lock:
+        db = hub.store._db
+        for i in range(alarms.MAX_PENDING - alarms.SECURITY_RESERVE):
+            alarms.enqueue_event(db, 's_test', 0, f'ro_{i}', env('remote-outcome'))
+        with pytest.raises(Rejected, match='alarm_capacity'):
+            alarms.enqueue_event(db, 's_test', 0, 'ro_x', env('remote-outcome'))
+        alarms.enqueue_event(db, 's_test', 0, 'aa_1', env('approval-security'))
+        db.rollback()
+
+
+def test_flush_sends_no_answer_while_a_report_is_still_owed(tmp_path, monkeypatch):
+    inbox, offer, _ = _delivered(tmp_path)
+    inbox.record_reply(offer['id'], 'done')
+    paths = []
+
+    def report_down(self, method, path, body=None):
+        paths.append(path)
+        raise strong.Uncertain('down')
+    monkeypatch.setattr(strong.ApprovalClient, '_call', report_down)
+    remote_delivery.flush(SimpleNamespace(dir=tmp_path), object())
+    assert paths == [f"/remote/offers/{offer['id']}/report"]

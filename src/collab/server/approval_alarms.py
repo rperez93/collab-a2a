@@ -14,6 +14,7 @@ import secrets
 from ..protocol import DEFAULT_ROOM, Envelope, KIND_SYSTEM, scrub
 
 MAX_PENDING = 256
+SECURITY_RESERVE = 32
 BATCH_SIZE = 16
 RETRY_SECONDS = 1.0
 log = logging.getLogger(__name__)
@@ -74,7 +75,10 @@ def enqueue_event(db, session_id, now, identity, env):
     """Internal adoption boundary for server-created approval system events."""
     if env.kind != KIND_SYSTEM:
         raise ValueError("approval event must be server-owned")
-    if db.execute("SELECT COUNT(*) FROM approval_alarm_outbox").fetchone()[0] >= MAX_PENDING:
+    # The security alarm keeps a reserve: a burst of remote outcomes can
+    # fill the outbox only up to MAX_PENDING - SECURITY_RESERVE.
+    limit = MAX_PENDING if env.body.get("event") == "approval-security" else MAX_PENDING - SECURITY_RESERVE
+    if db.execute("SELECT COUNT(*) FROM approval_alarm_outbox").fetchone()[0] >= limit:
         from .approval_store import Rejected
         raise Rejected("alarm_capacity", 429)
     db.execute("INSERT INTO approval_alarm_outbox VALUES(?,?,?,?)",
