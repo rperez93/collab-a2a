@@ -10,7 +10,7 @@ from collab import cli, skills
 
 
 def record(content="---\nname: review\ndescription: Review a diff\n---\nDo it.\n", owner="Bob B"):
-    return {"id": "sk_1", "name": "review", "description": "Review a diff", "owner": owner,
+    return {"id": "sk_00000000000000000001", "name": "review", "description": "Review a diff", "owner": owner,
             "owner_id": "p_b", "content": content, "size_bytes": len(content.encode()),
             "sha256": hashlib.sha256(content.encode()).hexdigest()}
 
@@ -25,7 +25,7 @@ def test_install_is_namespaced_records_provenance_and_never_overwrites(target):
     assert dest.name == "shared-bob-b-review"
     assert (dest / "SKILL.md").read_text().endswith("Do it.\n")
     meta = json.loads((dest / skills.PROVENANCE).read_text())
-    assert meta["publisher"] == "Bob B" and meta["publication_id"] == "sk_1" and meta["session_id"] == "s_1"
+    assert meta["publisher"] == "Bob B" and meta["publication_id"] == "sk_00000000000000000001" and meta["session_id"] == "s_1"
     with pytest.raises(ValueError, match="--force"):
         skills.install_shared(record(), target=target, session_id="s_1")
     skills.install_shared(record(content="---\nname: review\ndescription: v2\n---\nv2\n"),
@@ -58,7 +58,7 @@ def run(monkeypatch, target, rec, approved, sha=None, strong=False):
                         lambda a: SimpleNamespace(session_id="s_1", dir=target.path.parent / "profile"))
     monkeypatch.setattr(cli, "_client", lambda p: Hub(rec))
     monkeypatch.setattr(skills, "skills_target", lambda agent=None: target)
-    return cli.cmd_skills(argparse.Namespace(action="install-shared", target="sk_1", agent=None,
+    return cli.cmd_skills(argparse.Namespace(action="install-shared", target="sk_00000000000000000001", agent=None,
                                              force=False, human_approved=approved,
                                              sha256=rec.get("sha256") if sha is None else sha,
                                              strong=strong))
@@ -209,3 +209,18 @@ def test_asking_for_strong_approval_is_refused_not_downgraded(monkeypatch, targe
     assert run(monkeypatch, target, rec, approved=True, strong=True) == 1
     assert not any(target.path.iterdir()) if target.path.exists() else True
 
+
+
+def test_a_hub_supplied_id_never_names_a_file(monkeypatch, target, tmp_path):
+    """The review file is named from the validated ID the user asked for. A
+    record whose id differs, such as a path, is refused before anything is
+    written (lead gate on #188)."""
+    rec = {**record(), "id": "../../rules/injected"}
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+    assert run(monkeypatch, target, rec, approved=False) == 1
+    profile = target.path.parent / "profile"
+    assert not (profile / "skill-reviews").exists()
+    assert not any(p.name.startswith("injected") for p in tmp_path.rglob("*"))
+    bad = argparse.Namespace(action="install-shared", target="../../x", agent=None, force=False,
+                             human_approved=False, sha256=None, strong=False)
+    assert cli.cmd_skills(bad) == 1
