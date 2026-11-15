@@ -323,7 +323,10 @@ async def test_a_cancelled_collector_cannot_be_turned_into_a_second_proof_choice
 @pytest.mark.parametrize('fault', ['signed-origin', 'credential-shape', 'signature-limit'])
 def test_a_rejected_current_browser_proof_finishes_the_synchronous_collector(prepared, monkeypatch, fault):
     """A bound unusable assertion must not strand the CLI for its600-second review."""
-    monkeypatch.setattr(seam, 'MAX_WAIT_SECONDS', .75)
+    # 5 s ceiling, not 0.75: three browser requests must fit inside it on a
+    # loaded machine. The refusal must still END the wait well before it —
+    # asserted below — which is the point of the test (gate review of #190).
+    monkeypatch.setattr(seam, 'MAX_WAIT_SECONDS', 5.0)
     calls, responses = [], []
     def fetch_challenge(*, origin):
         calls.append(origin)
@@ -360,7 +363,7 @@ def test_a_rejected_current_browser_proof_finishes_the_synchronous_collector(pre
     assert result == {'choice': 'unavailable', 'reason': 'browser_assertion_rejected'}
     assert responses == [(200, {'status': 'refused',
         'message': 'The browser assertion was rejected locally. No proof was handed to the dispatcher.'})]
-    assert len(calls) == 1 and elapsed < 2
+    assert len(calls) == 1 and elapsed < 4.5, "the refusal must end the wait, not the 5 s ceiling"
     assert 'proof' not in result
 
 
