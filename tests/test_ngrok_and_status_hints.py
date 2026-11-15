@@ -8,6 +8,8 @@ running on the machine took three more commands.
 
 from __future__ import annotations
 
+import os
+
 import contextlib
 import io
 
@@ -66,12 +68,37 @@ def test_an_installed_ngrok_that_fails_is_not_called_missing(isolated, monkeypat
     (isolated / ".git").mkdir()
     monkeypatch.setattr(config, "repo_root", lambda cwd=None: isolated)
 
+    # The hub this test starts, held by its process rather than looked up in
+    # hub.json: under a loaded suite `host` can stop waiting before the hub has
+    # recorded its pid, and a cleanup that reads pid 0 left it running for
+    # hours (T_cf1f2c12b363).
+    import signal
+    import subprocess
+    started = []
+    real_popen = subprocess.Popen
+
+    def popen(cmd, *a, **kw):
+        child = real_popen(cmd, *a, **kw)
+        if "collab.hub_main" in cmd:
+            started.append(child)
+        return child
+    monkeypatch.setattr(subprocess, "Popen", popen)
     try:
         code, out = _run("host", "--fresh", "--no-daemon", "--no-update-check",
                          "--name", "alice")
     finally:
         for cfg in hosted_sessions(home):
             stop_session(HubConfig.load(cfg.session_id, cfg.home) or cfg)
+        for child in started:
+            if child.poll() is None:
+                os.killpg(child.pid, signal.SIGTERM)  # its own session: the group is its own
+                try:
+                    child.wait(10)
+                except subprocess.TimeoutExpired:
+                    os.killpg(child.pid, signal.SIGKILL)
+                    child.wait(10)
+    assert started, "the test must see the hub it starts"
+    assert all(child.poll() is not None for child in started), "no hub outlives the test"
     assert code == 0, out
     assert "ngrok was not found" not in out
     assert "ngrok config add-authtoken" in out
