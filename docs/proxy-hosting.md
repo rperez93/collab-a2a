@@ -28,10 +28,12 @@ agent's own settings layer cannot choose it.
 
 A bare-domain link (no `/s/<id>`) reaches one session, the **primary**: every
 link handed out before the proxy existed is such a link, and it named the
-session that held the domain then. The primary is chosen explicitly, with
-`collab host --primary` (which implies `--tunnel proxy`), and is kept with the
-session so a hub its daemon revives asks again. Starting or restarting the
-proxy never chooses one. Once recorded, only that session may set it; a second
+session that held the domain then. That session claims the primary itself on
+its first attach — it published the root before, so its old links must keep
+reaching it — and any session can ask explicitly with `collab host --primary`
+(which implies `--tunnel proxy`). The choice is kept with the session, so a hub
+its daemon revives asks again. Starting or restarting the proxy never chooses
+one, and a session born on the proxy never claims it by itself. Once recorded, only that session may set it; a second
 session asking is refused, `collab host` says which session holds it, and the
 refused claim is not kept (ask again with `--primary` once the slot is free). The
 primary remains fixed when that session stops: the bare route returns 404,

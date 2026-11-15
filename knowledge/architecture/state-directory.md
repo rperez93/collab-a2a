@@ -31,6 +31,19 @@ tree, its own current pointer, lock and identity. An explicit `COLLAB_HOME`
 or `--home` still selects a legacy or custom directory; defaults do not adopt
 another agent's state. No new repo-local state directory is required.
 
+## Shared proxy state (later than the pin, 2.2.0)
+
+The machine proxy keeps its state, its lifetime lock and its log under
+`proxy/` in the peer registry (`COLLAB_PEERS_DIR` moves both), and its tunnel
+log as `proxy-ngrok.log` in the registry root. That state belongs to the
+machine, not to any participant home. A hub attached to the proxy records
+`tunnel: "proxy"` and its prefixed public URL, and no tunnel pid of its own,
+so stopping it never stops the proxy. The recorded primary — claimed on first
+attach by the session that published the bare domain before, or with
+`--primary` — survives proxy restarts, is not reassigned when its hub stops,
+and is released by `collab kill --purge` of that session. The measurements
+and verification pin below are unchanged.
+
 
 # Where it is
 
