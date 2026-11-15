@@ -8196,6 +8196,8 @@ def cmd_skills_install_shared(args: argparse.Namespace) -> int:
             if answer.strip().lower() not in ("y", "yes"):
                 return 1
         dest = sk.install_shared(record, target=target, session_id=profile.session_id, force=args.force)
+        for stale in (profile.dir / "skill-reviews").glob(f"{args.target}-*.md"):
+            stale.unlink(missing_ok=True)  # reviewed and installed: the copy has done its job
         ok(f"installed {dest}")
         print(dim(f"  provenance in {dest / sk.PROVENANCE}; remove with `collab skills uninstall-shared {dest.name}`"))
         return 0

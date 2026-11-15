@@ -57,7 +57,10 @@ namespaced name and the description, so it cannot shadow your own skills or
 pre-grant tools (`allowed-tools` is dropped), and invisible or control
 characters are refused. `.collab-provenance.json` (session, publisher,
 publication id, both hashes, time) sits beside it; `uninstall-shared` removes
-only directories carrying it. Only `SKILL.md` is installed; files it refers to
+only directories carrying it. `--strong` is refused for installs for now (no
+hub-verified gesture covers an install yet), never downgraded to the ordinary
+consent; the review file is deleted once its skill is installed. Only `SKILL.md`
+is installed; files it refers to
 are not.
 
 ## Skill lists and consented requests
