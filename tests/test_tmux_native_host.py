@@ -242,7 +242,7 @@ try:
     signal.signal(signal.SIGTERM, stopped)
     signal.signal(signal.SIGINT, stopped)
     env = dict(os.environ, PYTHONPATH=source, COLLAB_HOME=home, COLLAB_NO_WORKER='1')
-    child = subprocess.Popen([python, '-m', 'collab', 'watch', '--session', session,
+    child = subprocess.Popen([python, '-m', 'collab.cli', 'watch', '--session', session,
                               '--layout', 'split'], env=env, start_new_session=True)
     child_start = stamp(child.pid)
     identity = {'nonce': nonce, 'pane': os.environ['TMUX_PANE'], 'supervisor': os.getpid(),
