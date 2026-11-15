@@ -1,9 +1,25 @@
 # R7 adoption of R22b strong approval
 
-Status: implementation contract, not an implemented authorization path. PR118
-at 045605b uses local terminal receipts. Those receipts do not satisfy R22b.
-The reviewed reference is PR172 c4f810d (core) and PR173 d90bf86 (frontend).
-The remote-prompt and connection-goal operations remain release gates.
+Status: server adapter implemented; end-to-end adoption remains incomplete.
+The branch combines current main2fa3a3a, PR172 c4f810d and PR173 d90bf86.
+`approval_remote.RemoteApprovals` now prepares exact private event-backed offers
+and consumes receipts via `/approval/remote/prepare` and
+`/approval/remote/{request_id}/consume`. Remote review reads are target-only;
+requesters cannot read receiver-local argv/cwd. Repeated source IDs, changed
+bindings and consumed operations are refused. Expired unconsumed reviews can
+be explicitly prepared again, invalidating the previous receipt.
+
+The R7 CLI/inbox still uses local terminal receipts. Those do not satisfy R22b;
+frontend adoption, grant migration, durable local attempts and authenticated
+connection-goal source persistence remain implementation and release gates.
+Capabilities remain unavailable. Do not treat this checkpoint as deployable
+strong remote execution.
+
+Validation: 127 combined remote transport, HTTP approval and skill-policy tests
+passed in11.15s. Before integration the rebased transport passed188 focused tests
+and276 route/TLS/docs/remote/wake tests; the new server adapter passed21 tests
+plus independent malformed-target/concurrent-consumption/pruned-state probes.
+These are isolated synthetic-key tests, not native human or shared-live evidence.
 
 ## Preserve the R7 transport
 
