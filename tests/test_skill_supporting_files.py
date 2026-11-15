@@ -220,6 +220,8 @@ def test_paths_that_collide_on_a_case_insensitive_disk_are_refused(files):
 @pytest.mark.parametrize("files", [
     [{"path": "a", "content": "x"}, {"path": "a/b", "content": "y"}],
     [{"path": "A", "content": "x"}, {"path": "a/b/c", "content": "y"}],
+    [{"path": "SKILL.md/lib.md", "content": "x"}],
+    [{"path": "skill.MD/lib.md", "content": "x"}],
 ])
 def test_a_file_that_is_also_a_directory_is_refused(files):
     """friday's follow-up on #189: `a` beside `a/b` cannot both be written."""
