@@ -698,3 +698,31 @@ def test_a_model_naming_the_machine_never_reaches_the_roster(client, session, ho
     stored = "\n".join(session["store"]._db.iterdump())
     for needle in ("SENTACCOUNT", "SENTTOKEN", "opus.gguf"):
         assert needle not in seen and needle not in stored, (route, needle)
+
+
+def test_roster_stats_an_older_hub_stored_are_never_served(client, session, host_headers):
+    """An older hub kept the figures as sent: a `cwd`, a model that is a path,
+    `main_model` repeating it. Merging never removes a key no longer reported,
+    and a path model is now refused rather than replaced — so they stayed on
+    the roster. The roster's stats are cleaned on the way out (and the stored
+    copy as it is merged into)."""
+    h = _old_client(client, session, "legacy-stats", {"focus": "x"})
+    person = next(p for p in session["store"].participants() if p.name == "legacy-stats")
+    with session["store"].edit_meta(person.id) as meta:
+        meta["stats"] = {"cwd": "/home/SENTACCOUNT/api", "model": "/home/SENTACCOUNT/m.gguf",
+                         "main_model": "/home/SENTACCOUNT/m.gguf", "cost_usd": 1.0,
+                         "remote_url": LEAKED["remote_url"]}
+    seen = _peers_see(client, host_headers)
+    for needle in LEAK_NEEDLES:
+        assert needle not in seen, f"served {needle!r} before any new report"
+    client.post("/ext/collab/v1/stats", headers=h, json={"stats": {"cost_usd": 2.0}})
+    seen = _peers_see(client, host_headers)
+    for needle in LEAK_NEEDLES:
+        assert needle not in seen, f"served {needle!r} after a fresh report"
+    me = next(p for p in client.get("/ext/collab/v1/participants",
+                                     headers=host_headers).json()["participants"]
+              if p["name"] == "legacy-stats")
+    assert me["stats"]["cost_usd"] == 2.0
+    stored = json.dumps(next(p for p in session["store"].participants()
+                             if p.name == "legacy-stats").meta)
+    assert "SENTACCOUNT" not in stored, "the stored copy heals on the next report"

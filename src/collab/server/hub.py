@@ -270,7 +270,9 @@ class Hub:
         with self.store.edit_meta(participant_id) as meta:
             if meta is None:
                 return
-            merged = dict(meta.get("stats") or {})
+            # The stored figures are cleaned as they are merged into, so what
+            # an older hub kept heals on the next report as well.
+            merged = public_stats(dict(meta.get("stats") or {}))
             # Usage goes onto every participant's roster, so it is capped in size
             # and shape on the way in rather than trusted.
             from ..telemetry import stamp_observations
@@ -454,7 +456,11 @@ class Hub:
                 # thrown away by this loop, which meant `collab color` worked
                 # end to end except for the part where anybody saw it.
                 "color": p.meta.get("color", ""),
-                "stats": p.meta.get("stats", {}),
+                # ON THE WAY OUT TOO: figures an older hub stored — a `cwd`, a
+                # model that is a path, and `main_model` repeating it — are
+                # never cleared by merging, since a key no longer reported is
+                # not removed (review of #178).
+                "stats": public_stats(p.meta.get("stats", {})),
                 # The count only; the list itself is fetched on demand from
                 # /participant-skills, so the roster stays small.
                 "skills_count": len(p.meta.get("skills") or []),
