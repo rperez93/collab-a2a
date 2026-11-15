@@ -113,6 +113,18 @@ What 2.3.0 adds since 2.2.0.
   on by default and is the host's switch: `collab config remote_delivery off`
   turns it off for every hub this machine hosts. The receiver's command and working directory
   are held on the hub only while a request is open (#213).
+- **The answer comes back on its own.** One approval covers the delivery and
+  its answer. The prompt the receiving agent gets ends with a footer asking
+  for `collab remote reply ID "answer"`. The requesting agent is told
+  `approved`, `delivered`, `failed` or `uncertain`, and receives the answer,
+  in its own feed with no human relaying it, whether its worker is on or off.
+  The review shows and binds that return path, so nothing is added after
+  approval. `collab remote sent` and `collab remote result ID` show your
+  requests and their answers (#218).
+- **A clearer approval window.** The Windows Hello window has a terminal's
+  look and its own title bar. It shows the requester, the subject and what
+  is granted, row by row, with the prompt first. Enter, Esc and closing all
+  decline, and no key approves. The passkey page has the same look (#216).
 - **Strong approval off Windows.** `collab consent enrol` enrols a passkey
   from the terminal on Linux and macOS, and the hub advertises passkey beside
   Windows Hello (#185).
