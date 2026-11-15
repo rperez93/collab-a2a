@@ -312,8 +312,8 @@ or declines. A supplied hash or terminal code is not approval. Ordinary worker a
 exclude offer-protocol messages, including legacy queued wake batches.
 Approved delivery uses frozen local argv and cwd once; uncertain delivery is
 not retried. Nothing about the outcome is sent back to the requester — a
-bounded delivery status is planned, not built — and remote delivery is on by
-default, with `remote_delivery off` as the hub host's off switch (enforced at
-prepare and consume). See
+bounded delivery status is planned, not built — and remote delivery is off
+until the hub's host sets `remote_delivery on` (enforced at prepare and
+consume). See
 [receiver consent](../../docs/remote-requests.md) for commands,
 trust boundary, expiry and prompt retention. Historical pins remain unchanged.

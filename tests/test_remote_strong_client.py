@@ -304,18 +304,14 @@ def test_a_consumption_answer_for_other_bytes_authorizes_no_delivery(remote, mon
     assert remote_delivery.prepare(remote.profile) is None
 
 
-def test_remote_delivery_is_on_by_default_and_the_host_setting_turns_it_off(remote, capsys):
-    """Nothing patched. With the host's `remote_delivery` never set the hub
-    advertises remote delivery; `collab config remote_delivery off` is the
-    host's off switch, after which the receiver opens no window and the hub
-    prepares no review. On again, delivery still waits on the gesture."""
-    from collab.config import load_config, save_config, set_remote_delivery, settings, REMOTE_DELIVERY_DEFAULT
-    cfg = load_config()
-    cfg.pop("remote_delivery", None)  # never set: the default decides
-    save_config(cfg)
-    assert REMOTE_DELIVERY_DEFAULT is True
-    assert next(s for s in settings() if s.name == 'remote_delivery').default is True
-    assert strong.ApprovalClient(remote.world.bob_hub).capabilities()['remote_delivery'] is True
+def test_remote_delivery_is_off_by_default_and_on_only_by_the_host_setting(remote, capsys):
+    """Nothing patched: with the host's `remote_delivery` at its default (off)
+    the hub advertises no remote delivery, the receiver opens no window and
+    the hub prepares no review; `collab config remote_delivery on` is what
+    turns it on."""
+    from collab.config import set_remote_delivery, settings, REMOTE_DELIVERY_DEFAULT
+    assert REMOTE_DELIVERY_DEFAULT is False
+    assert next(s for s in settings() if s.name == 'remote_delivery').default is False
     set_remote_delivery(False)
     assert strong.ApprovalClient(remote.world.bob_hub).capabilities()['remote_delivery'] is False
     assert accept(remote) == 1
@@ -324,22 +320,9 @@ def test_remote_delivery_is_on_by_default_and_the_host_setting_turns_it_off(remo
     db = remote.world.store._db
     assert db.execute("SELECT COUNT(*) FROM approval_requests WHERE kind='remote-deliver'").fetchone()[0] == 0
     set_remote_delivery(True)
-    assert accept(remote) == 0 and len(remote.world.hello.windows) == 1
-
-
-def test_on_by_default_a_remote_offer_still_needs_the_receivers_gesture(remote):
-    """Default on is not consent. Without an approving gesture — the human
-    declines in the window — nothing is consumed and nothing is delivered."""
-    from collab.config import load_config, save_config
-    cfg = load_config()
-    cfg.pop("remote_delivery", None)
-    save_config(cfg)
-    remote.world.hello.choice = 'decline'
+    assert strong.ApprovalClient(remote.world.bob_hub).capabilities()['remote_delivery'] is True
     assert accept(remote) == 0
-    assert remote.inbox.list()[0]['state'] == 'declined'
-    assert remote_delivery.prepare(remote.profile) is None
-    db = remote.world.store._db
-    assert db.execute("SELECT COUNT(*) FROM approval_requests WHERE state IN ('approved','consumed')").fetchone()[0] == 0
+
 
 def test_a_passkey_receiver_is_shown_this_remote_operation_on_the_passkey_page(remote, monkeypatch):
     """Main now advertises passkeys, and remote acceptance dispatches on the

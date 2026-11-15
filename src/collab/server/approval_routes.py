@@ -175,10 +175,9 @@ def install(app, store, session_id):
         # `collab consent enrol` can enrol one through the local page off
         # Windows. On Windows/WSL the client still always uses Hello: the
         # passkey leg refuses there (`NativeHelloRequired`). Strong REMOTE
-        # delivery (R7) is the host's `remote_delivery` setting: on by default,
-        # the host's off switch. Off, the receiver refuses to review a remote
-        # offer and the hub refuses to prepare or consume one (approval_remote).
-        # On, every delivery still needs the receiver's strong gesture.
+        # delivery (R7) is the host's `remote_delivery` setting, off by
+        # default; off, the receiver refuses to review a remote offer and the
+        # hub refuses to prepare or consume one (approval_remote).
         "api_version": 1, "available": True, "methods": ["hello", "passkey"],
         "remote_delivery": remote_delivery_enabled(),
         "supported_methods": ["hello", "passkey"],
