@@ -261,3 +261,20 @@ def test_a_reviews_receiver_binding_lasts_past_expiry_until_the_next_approval_re
     env2, _ = source(hub, later)
     adapter.prepare('test-bob', source_seq=env2.seq, binding=binding())
     assert stored() == [], 'the next approval request prunes it'
+
+
+def test_on_by_default_consumption_still_needs_a_receipt_from_the_receivers_gesture(hub, signer):
+    """With the setting never set (on by default) the hub prepares a review,
+    but consumes nothing without the receipt only the receiver's verified
+    gesture issues: the setting is availability, never consent."""
+    from collab.config import load_config, save_config
+    cfg = load_config()
+    cfg.pop("remote_delivery", None)
+    save_config(cfg)
+    adapter = RemoteApprovals(hub.api)
+    env, _ = source(hub)
+    request = adapter.prepare('test-bob', source_seq=env.seq, binding=binding())
+    with pytest.raises(Rejected):
+        adapter.consume('test-bob', request['request_id'], receipt='not-a-receipt')
+    assert hub.store._db.execute("SELECT state FROM approval_requests WHERE id=?",
+                                 (request['request_id'],)).fetchone()[0] == 'pending'
