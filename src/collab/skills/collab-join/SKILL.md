@@ -20,6 +20,13 @@ a join failed. If several local sessions exist, use the intended ID from
 `discover`; preserve the state identity printed after joining with
 `COLLAB_HOME` when fresh tool executions need an explicit selection.
 
+A shared-proxy link has `/s/<session-id>` before `#<invite>`: keep that path.
+The bare domain reaches only the proxy's primary session and is a 404 while it
+is stopped. Direct hub and own-tunnel links stay valid. For a session on this
+machine, use local discovery rather than a guessed loopback address. A proxy
+404 means checking the session id and whether its host is running — never
+trying another session's invite.
+
 Both ends need stable Collab 2.x. An older host must be upgraded and restarted.
 Preserve the whole supplied join link, including any expected session-id hint
 and its invite fragment. Join through the original visible address or verified

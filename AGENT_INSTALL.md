@@ -552,9 +552,22 @@ restart anything long-lived, since it is still running the old code:
 .venv/bin/collab daemon stop && .venv/bin/collab daemon start
 ```
 
-If you are the host and the update touched the server, restart the hub too
-(`.venv/bin/collab host`). Tell the user their session link changes if they were
-on a free tunnel.
+If you are the host and the update touched the server, the hub needs a restart
+too. Agree the interruption with the session's participants first. From the
+host's own participant home, stop the hub with `.venv/bin/collab kill`, then
+bring the saved session back with `.venv/bin/collab host --resume <session-id>`.
+Resume alone does not stop a running hub — it would start a second one. Resume
+also mints a new invite, so share the newly printed link even on a reserved
+domain; participants already in the session keep their tokens. On a free tunnel
+the address itself may change too.
+
+Since 2.2.0 public hosting goes through one shared machine proxy, a separate
+long-lived process serving every hosted session on the machine at
+`https://<domain>/s/<session-id>`. Restarting one hub does not restart it, and
+the hubs of other sessions are not yours to stop: agree with the other hosts on
+the machine before restarting shared infrastructure. See
+[proxy hosting](docs/proxy-hosting.md) for links, the bare-domain primary and
+logs.
 
 ## 10. If something is wrong
 
