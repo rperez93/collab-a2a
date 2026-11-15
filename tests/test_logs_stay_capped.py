@@ -288,7 +288,8 @@ def test_the_daemons_hub_restart_opens_hub_log_without_trimming_on_the_loop(
     children = []
     monkeypatch.setattr(d.subprocess, "Popen", lambda *a, **k: children.append(k))
     monkeypatch.setattr(d.lockfile, "process_alive", lambda pid: False)
-    cfg = SimpleNamespace(pid=4242, session_id="s_x", home=str(tmp_path))
+    cfg = SimpleNamespace(pid=4242, session_id="s_x", home=str(tmp_path), dir=tmp_path,
+                          hub_stamp=lambda: SimpleNamespace(alive=lambda: False))  # a dead hub
     monkeypatch.setattr("collab.server.session.HubConfig.load",
                         staticmethod(lambda *a, **k: cfg))
     daemon = d.Daemon.__new__(d.Daemon)
@@ -1506,7 +1507,8 @@ def test_a_restarted_hub_keeps_the_agent_kind_and_goes_through_the_log_opener(
     monkeypatch.setattr(d.subprocess, "Popen", lambda *a, **k: children.append(k))
     monkeypatch.setattr(d.lockfile, "process_alive", lambda pid: False)
     monkeypatch.setattr(d, "current_kind", lambda: "codex")
-    cfg = SimpleNamespace(pid=4242, session_id="s_x", home=str(tmp_path))
+    cfg = SimpleNamespace(pid=4242, session_id="s_x", home=str(tmp_path), dir=tmp_path,
+                          hub_stamp=lambda: SimpleNamespace(alive=lambda: False))  # a dead hub
     monkeypatch.setattr("collab.server.session.HubConfig.load",
                         staticmethod(lambda *a, **k: cfg))
     daemon = d.Daemon.__new__(d.Daemon)

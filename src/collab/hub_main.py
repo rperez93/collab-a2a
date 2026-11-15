@@ -197,6 +197,22 @@ def main() -> int:
         print(f"no such session: {sys.argv[1]}", file=sys.stderr)
         return 1
 
+    # ONE HUB PER SESSION, enforced by the hub itself (T_60789ecd1e22). A
+    # resume and a daemon revive could each start one, and hub.json then named
+    # only the last. Taken before this process writes its pid, so a second hub
+    # leaves the record of the first alone and simply goes.
+    from .client import exclusive
+    hub_lock = exclusive.DaemonLock(cfg.dir, name=exclusive.HUB_LOCK_FILE)
+    try:
+        if not hub_lock.acquire():
+            holder = HubConfig.load(cfg.session_id, cfg.home)
+            logging.getLogger("collab.hub").warning(
+                "another hub already runs session %s (pid %s); this one exits",
+                cfg.session_id, holder.pid if holder else "unknown")
+            return 0
+    except exclusive.UnsupportedPlatform:
+        pass  # no lock to take here (native Windows): run as before
+
     cfg.pid = os.getpid()
     # BOTH of the files this process and its children write to, capped while
     # they run. `ngrok.log` had no cap at all — ngrok's stdout, appended to for

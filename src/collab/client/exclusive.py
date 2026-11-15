@@ -82,6 +82,7 @@ except ImportError:                         # pragma: no cover - POSIX only here
     fcntl = None                            # type: ignore[assignment]
 
 LOCK_FILE = "daemon.lock"
+HUB_LOCK_FILE = "hub.lock"
 
 #: flock's way of saying somebody else has it. Anything else it raises is a
 #: filesystem that cannot lock, which is a different answer entirely.
@@ -173,8 +174,10 @@ class DaemonLock:
     would drop the lock while the daemon carried on believing it held one.
     """
 
-    def __init__(self, root: Path | str) -> None:
-        self.path = lock_path(root)
+    def __init__(self, root: Path | str, *, name: str = LOCK_FILE) -> None:
+        # `name`: the same exclusion for another one-per-session process (the
+        # hub takes HUB_LOCK_FILE), in the same directory without colliding.
+        self.path = Path(root) / name
         self._fd: int | None = None
         #: Whether the kernel took the lock, or we merely asked and carried
         #: on. It does NOT mean the lock is being enforced: a filesystem
