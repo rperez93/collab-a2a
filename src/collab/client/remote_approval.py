@@ -81,8 +81,19 @@ def accept(hub, profile, inbox, row, binding, ensure_current):
     # could not be shown called for different actions, and both read 'not
     # approved'. Either way the request stays pending.
     if outcome.get('choice') == 'expired':
+        try:
+            offer_gone = float(row.get('expires_at') or 0) <= time.time()
+        except (TypeError, ValueError):
+            offer_gone = False
+        if offer_gone:
+            # Accepting again would only be refused (prepare answers 410).
+            raise strong.Mismatch('expired: the offer itself has expired; ask the sender to offer it again')
         raise strong.Mismatch('expired: nobody chose within the approval window; '
                               'the request is still pending, accept it again')
+    if outcome.get('choice') == 'unavailable' and outcome.get('reason') == 'ExplicitPasskeySelectionRequired':
+        # The window WAS shown and the human chose: not a failure to show it.
+        raise strong.Mismatch('you chose a passkey, but this approval uses your enrolled Windows Hello '
+                              'key; run collab remote accept again and approve with Hello')
     if outcome.get('choice') != 'approve':
         from ..protocol import scrub
         reason = scrub(str(outcome.get('reason') or outcome.get('choice') or 'unknown'))[:120]

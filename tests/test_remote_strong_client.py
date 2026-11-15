@@ -392,3 +392,41 @@ def test_a_window_that_could_not_be_shown_is_said_with_its_scrubbed_reason(remot
     assert 'unavailable' in said and 'NoHello' in said and 'still pending' in said
     assert '\x1b[31m' not in said, 'the reason is scrubbed before it is shown'
     assert remote.inbox.list()[0]['state'] == 'pending'
+
+
+def test_choosing_a_passkey_in_the_hello_window_is_said_as_that_choice(remote, monkeypatch, capsys):
+    """Lead gate on #215: 'use a passkey instead' is the human's choice in a
+    window that WAS shown, not a window that could not be shown."""
+    monkeypatch.setattr(remote.world.hello, 'open_window',
+                        lambda request, fetch: {'choice': 'unavailable', 'reason': 'ExplicitPasskeySelectionRequired'})
+    assert accept(remote) == 1
+    said = capsys.readouterr().err
+    assert 'you chose a passkey' in said and 'Windows Hello' in said and 'could not be shown' not in said
+    assert remote.inbox.list()[0]['state'] == 'pending'
+
+
+@pytest.mark.parametrize('reason', ['NoHello', 'NativeHelloRequired', strong.PASSKEY_SEAM])
+def test_a_window_that_really_could_not_be_shown_still_says_so(remote, monkeypatch, capsys, reason):
+    monkeypatch.setattr(remote.world.hello, 'open_window',
+                        lambda request, fetch: {'choice': 'unavailable', 'reason': reason})
+    assert accept(remote) == 1
+    said = capsys.readouterr().err
+    assert 'could not be shown' in said and 'you chose a passkey' not in said
+
+
+def test_an_offer_that_expired_during_the_window_says_to_ask_again(remote, monkeypatch, capsys):
+    """Lead LOW on #215: if the offer itself has expired, accepting again would
+    only be refused, so the message says to ask the sender for a new one."""
+    import time as real_time
+    from collab.client import remote_approval
+    later = {'now': None}
+    def window(request, fetch):
+        later['now'] = real_time.time() + 24 * 3600     # the window outlived the offer
+        return {'choice': 'expired'}
+    monkeypatch.setattr(remote.world.hello, 'open_window', window)
+    monkeypatch.setattr(remote_approval, 'time', type('T', (), {
+        'time': staticmethod(lambda: later['now'] or real_time.time()),
+        '__getattr__': lambda self, name: getattr(real_time, name)})())
+    assert accept(remote) == 1
+    said = capsys.readouterr().err
+    assert 'offer itself has expired' in said and 'ask the sender' in said and 'accept it again' not in said
