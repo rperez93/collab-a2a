@@ -2888,6 +2888,7 @@ def dashboard_rows(snapshot: dict[str, Any], skills: dict[str, Any] | None, *,
     `own_stats` fills this participant's row when it does not share stats.
     """
     from .stats import quota_summary
+    from .resources import format_lines
     lists = {p.get("id") or p.get("name"): p.get("skills") or []
              for p in (skills or {}).get("participants", []) if isinstance(p, dict)}
     rows = []
@@ -2946,7 +2947,8 @@ def dashboard_rows(snapshot: dict[str, Any], skills: dict[str, Any] | None, *,
                      "model_changed_at": stats.get("model_changed_at"),
                      "worker_budget": budget if isinstance(budget, (int, float)) else None,
                      "skills": listed if skill_state == "shared" else [],
-                     "skills_state": skill_state})
+                     "skills_state": skill_state,
+                     "resources": format_lines(stats.get("resources"), detailed=True)})
     return rows
 
 
@@ -2991,6 +2993,8 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
         print(f"  {mark} {c(said(row['name']), '1')}{you}  {quota}{budget}")
         print(dim(f"      models: main {said(row['main_model'])} ({said(row['model_age'])})"
                   f" · worker {said(row['worker_model'])}"))
+        for line in row["resources"]:
+            print(f"      {line}")
         if row["skills"]:
             names = ", ".join(said(s.get("name", "")) for s in row["skills"][:12] if isinstance(s, dict))
             more = f" +{len(row['skills']) - 12}" if len(row["skills"]) > 12 else ""
