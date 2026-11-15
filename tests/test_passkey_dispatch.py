@@ -41,6 +41,18 @@ def _in_a_browser(work):
     return opener
 
 
+def _browser_finished(timeout=10):
+    """Wait for every scripted browser and re-raise what it asserted, BEFORE a
+    test reads what the browser recorded: `approve_with_passkey` returns as soon
+    as the page records the outcome, which can be before the browser thread has
+    appended its last reply (gate review of #190)."""
+    for thread in _BROWSER_THREADS:
+        thread.join(timeout=timeout)
+    assert not any(t.is_alive() for t in _BROWSER_THREADS), "a scripted browser never finished"
+    if _BROWSER_ERRORS:
+        raise _BROWSER_ERRORS[0]
+
+
 @pytest.fixture(autouse=True)
 def _browser_errors_fail_the_test():
     _BROWSER_THREADS.clear()
@@ -123,6 +135,7 @@ def test_the_synchronous_seam_hosts_a_guarded_page_and_returns_the_choice_privat
         return True
     monkeypatch.setattr(page.webbrowser, 'open_new', _in_a_browser(opener))
     result = page.approve_with_passkey(prepared, fetch_challenge)
+    _browser_finished()
     expected = 'approve' if choice == 'approve' else 'decline' if choice == 'decline' else 'unavailable'
     assert result['choice'] == expected
     assert len(calls) == (1 if choice == 'approve' else 0)
@@ -342,10 +355,12 @@ def test_a_rejected_current_browser_proof_finishes_the_synchronous_collector(pre
     monkeypatch.setattr(page.webbrowser, 'open_new', _in_a_browser(opener))
     started = time.monotonic()
     result = page.approve_with_passkey(prepared, fetch_challenge)
+    elapsed = time.monotonic() - started      # the collector's own time, before the join
+    _browser_finished()
     assert result == {'choice': 'unavailable', 'reason': 'browser_assertion_rejected'}
     assert responses == [(200, {'status': 'refused',
         'message': 'The browser assertion was rejected locally. No proof was handed to the dispatcher.'})]
-    assert len(calls) == 1 and time.monotonic() - started < 2
+    assert len(calls) == 1 and elapsed < 2
     assert 'proof' not in result
 
 
@@ -395,13 +410,18 @@ def test_unrelated_http_refusals_do_not_abort_a_valid_proof_collection(prepared,
         return True
     monkeypatch.setattr(page.webbrowser, 'open_new', _in_a_browser(opener))
     result = page.approve_with_passkey(prepared, lambda **kwargs: challenge(prepared, kwargs['origin']))
+    _browser_finished()
     assert result['choice'] == 'approve' and len(evidence_sent) == 1
     assert result['proof']['client_data_json'] == evidence_sent[0]['response']['clientDataJSON']
 
 
 def test_an_expired_exact_browser_ceremony_finishes_without_waiting_for_review_expiry(prepared, monkeypatch):
     """The shorter ceremony deadline cannot leave a current review waiting600seconds."""
-    monkeypatch.setattr(seam, 'MAX_WAIT_SECONDS', .75)
+    # 5 s, not 0.75: the browser's four requests must fit inside this window,
+    # and on a loaded machine 0.75 s did not. What the test proves is that the
+    # expired ceremony ENDS the wait — asserted below as finishing well before
+    # this ceiling — not how fast the machine is (gate review of #190).
+    monkeypatch.setattr(seam, 'MAX_WAIT_SECONDS', 5.0)
     clock = [time.time()]
     monkeypatch.setattr(seam.time, 'time', lambda: clock[0])
     adapters, responses = [], []
@@ -430,8 +450,12 @@ def test_an_expired_exact_browser_ceremony_finishes_without_waiting_for_review_e
             responses.append((response.status_code, response.json()))
         return True
     monkeypatch.setattr(page.webbrowser, 'open_new', _in_a_browser(opener))
+    started = time.monotonic()
     result = page.approve_with_passkey(prepared, lambda **kwargs: challenge(prepared, kwargs['origin']))
+    elapsed = time.monotonic() - started
+    _browser_finished()
     assert result == {'choice': 'expired'}
+    assert elapsed < 4.5, "the expired ceremony must end the wait, not the 5 s ceiling"
     assert adapters[0].finished.is_set() and adapters[0].ceremony is None
     assert responses == [(200, {'status': 'refused',
         'message': 'The passkey ceremony expired locally. No proof was handed to the dispatcher.'})]
