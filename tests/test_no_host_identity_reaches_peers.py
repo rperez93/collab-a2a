@@ -542,3 +542,55 @@ def test_a_hello_sent_over_a2a_is_bounded_like_one_sent_at_join(client, session,
     hellos = [e for e in client.get("/ext/collab/v1/history", headers=host_headers).json()[
         "events"] if e.get("kind") == "hello" and e.get("from") == "alice"]
     assert hellos and hellos[-1]["body"].get("focus") == "x", "the hello itself still arrives"
+
+
+@pytest.mark.parametrize("route", ["messages", "a2a"])
+def test_a_duplicate_retry_of_an_old_leaked_row_acknowledges_nothing_of_it(
+        client, session, route):
+    """`append_once` answers a retried worker delivery with the envelope it
+    stored the first time — perhaps by a hub before this release, with the
+    sender's machine in its stats. Re-POSTed with the same delivery key, over
+    REST and over A2A, the acknowledgement must carry none of it (friday, #178)."""
+    import uuid
+
+    store = session["store"]
+    h = _old_client(client, session, "retry-" + route, {"focus": "x"})
+    me = next(p for p in store.participants() if p.name == "retry-" + route)
+    key = "outbox-" + route
+    payload = {"kind": "chat", "from": me.name, "fromId": me.id, "room": "general",
+               "text": "a delivered reply", "ts": "2026-11-01T00:00:00Z",
+               "body": {"collab_worker_delivery": key}, "stats": {**LEAKED, **LEGIT}}
+    with store._lock:
+        cur = store._db.execute(
+            "INSERT INTO events (kind, room, sender, recipient, sender_id, recipient_id, ts,"
+            " payload) VALUES (?,?,?,?,?,?,?,?)",
+            ("chat", "general", me.name, None, me.id, None, payload["ts"], json.dumps(payload)))
+        old_seq = int(cur.lastrowid)
+        # As `append_once` stores a row: the payload carries its own seq.
+        store._db.execute("UPDATE events SET payload=? WHERE seq=?",
+                          (json.dumps({**payload, "seq": old_seq}), old_seq))
+        store._db.execute("INSERT INTO worker_deliveries VALUES (?,?,?)", (me.id, key, old_seq))
+        store._db.commit()
+
+    retry = {"text": "a delivered reply", "room": "general",
+             "body": {"collab_worker_delivery": key}, "stats": {"model": "x"}}
+    if route == "messages":
+        r = client.post("/ext/collab/v1/messages", headers=h, json=retry)
+        ack = r.json()
+        assert ack["seq"] == old_seq, "the duplicate path was not taken"
+    else:
+        r = client.post("/a2a", headers={**h, "A2A-Version": "1.0"}, json={
+            "jsonrpc": "2.0", "id": "1", "method": "SendMessage", "params": {"message": {
+                "messageId": uuid.uuid4().hex, "role": "ROLE_USER", "parts": [{
+                    "data": {"collab": "v1", "kind": "chat", **retry},
+                    "mediaType": "application/json"}]}}})
+        ack = r.json()
+        data = ack["result"]["message"]["parts"][0]["data"]
+        assert int(data["seq"]) == old_seq, "the duplicate path was not taken"
+    assert r.status_code == 200, r.text
+    for needle in LEAK_NEEDLES:
+        assert needle not in r.text, f"the acknowledgement carried {needle!r}"
+    duplicate, created = store.append_once(__import__("collab.protocol", fromlist=["x"]).Envelope(
+        kind="chat", text="again", sender=me.name, sender_id=me.id, room="general",
+        body={"collab_worker_delivery": key}))
+    assert not created and duplicate.stats == LEGIT
