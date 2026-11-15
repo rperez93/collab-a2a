@@ -192,21 +192,52 @@ class _ProofAdapter:
                 self.finished.set()
             raise
 
-    async def complete(self, identity, operation, ceremony_id, credential, origin, digest):
+    def _submitted_ceremony(self, identity, operation, ceremony_id, origin, digest):
         self._current(identity, digest)
         bound = self.ceremony
-        if (operation != 'approve' or not bound or bound[0] != ceremony_id or bound[2] != origin
-                or time.time() >= bound[3]):
+        if operation != 'approve' or not bound or bound[0] != ceremony_id or bound[2] != origin:
             raise ValueError('The ceremony binding changed')
-        passkey._credential(credential, 'approve')
-        if credential['id'] != self.prepared.credential_id:
-            raise ValueError('The credential changed')
-        evidence = credential['response']
-        data = strict_json(passkey._binary(evidence['clientDataJSON'], 8192))
-        if (type(data) is not dict or data.get('type') != 'webauthn.get'
-                or data.get('origin') != origin or data.get('challenge') != bound[1]
-                or data.get('crossOrigin', False) is not False or 'topOrigin' in data):
-            raise ValueError('The signed browser context changed')
+        return bound
+
+    def _refuse_submitted_proof(self, *, expired=False):
+        # The assertion was submitted for this exact current ceremony, but is
+        # unusable. Leaving it bound made the synchronous caller wait out the
+        # entire 600-second review. End this collector, never refetch/retry or
+        # echo rejected signed material in its private diagnostic category.
+        self.ceremony = None
+        self.result = ({'choice': 'expired'} if expired else
+                       {'choice': 'unavailable', 'reason': 'browser_assertion_rejected'})
+        self.status = 'unknown'  # This local refusal did not query hub state.
+        self.finished.set()
+        message = ('The passkey ceremony expired locally. No proof was handed to the dispatcher.' if expired else
+                   'The browser assertion was rejected locally. No proof was handed to the dispatcher.')
+        return passkey.Outcome('refused', message)
+
+    async def reject_proof(self, identity, operation, ceremony_id, origin, digest):
+        """Opt in to terminal refusal after the page recognizes a bound result."""
+        bound = self._submitted_ceremony(identity, operation, ceremony_id, origin, digest)
+        return self._refuse_submitted_proof(expired=time.time() >= bound[3])
+
+    async def complete(self, identity, operation, ceremony_id, credential, origin, digest):
+        bound = self._submitted_ceremony(identity, operation, ceremony_id, origin, digest)
+        if time.time() >= bound[3]:
+            return self._refuse_submitted_proof(expired=True)
+        try:
+            passkey._credential(credential, 'approve')
+            if credential['id'] != self.prepared.credential_id:
+                raise ValueError('The credential changed')
+            evidence = credential['response']
+            data = strict_json(passkey._binary(evidence['clientDataJSON'], 8192))
+            if (type(data) is not dict or data.get('type') != 'webauthn.get'
+                    or data.get('origin') != origin or data.get('challenge') != bound[1]
+                    or data.get('crossOrigin', False) is not False or 'topOrigin' in data):
+                raise ValueError('The signed browser context changed')
+        except (ValueError, UnicodeError, RecursionError):
+            bound = self._submitted_ceremony(identity, operation, ceremony_id, origin, digest)
+            return self._refuse_submitted_proof(expired=time.time() >= bound[3])
+        bound = self._submitted_ceremony(identity, operation, ceremony_id, origin, digest)
+        if time.time() >= bound[3]:
+            return self._refuse_submitted_proof(expired=True)
         self.ceremony = None
         self.result = {'choice': 'approve', 'challenge_id': ceremony_id,
             'credential_id': credential['id'], 'proof': {'type': 'webauthn.get',

@@ -521,3 +521,39 @@ async def test_a_bad_bound_challenge_never_reaches_proof_submission(adapter_case
         assert not any(path.endswith("/approve") for _,path,_ in hub.calls)
     finally:
         await adapter.close()
+
+
+@pytest.mark.parametrize('algorithms', [[-8], [-35], [-7, -8], [-257, -35], [], ['-7'], [True]])
+async def test_advertised_passkey_algorithms_are_refused_before_any_ceremony(adapter_case, algorithms):
+    """Capability readiness must reject every unagreed algorithm, not only stored keys."""
+    hub, _, adapter = adapter_case
+    hub.overrides['capabilities'] = {'api_version': 1, 'available': True, 'methods': ['passkey'],
+                                    'algorithms': {'passkey': algorithms}}
+    try:
+        with pytest.raises(NotReady):
+            await adapter.review(hub.binding.request_id)
+        assert [path for _, path, _ in hub.calls] == ['capabilities']
+        assert adapter.states[hub.binding.request_id].ceremony is None
+        assert not adapter.states[hub.binding.request_id].canonical
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.parametrize('algorithms', [[-7], [-257], [-7, -257]])
+async def test_supported_advertised_algorithm_sets_still_allow_the_bound_ceremony(adapter_case, algorithms):
+    """The capability guard retains each negotiated supported positive case."""
+    hub, _, adapter = adapter_case
+    hub.overrides['capabilities'] = {'api_version': 1, 'available': True, 'methods': ['passkey'],
+                                    'algorithms': {'passkey': algorithms}}
+    hub.overrides['keys'] = {'api_version': 1, 'credentials': [{
+        'credential_id': hub.credential_id, 'method': 'passkey', 'algorithm': algorithms[0],
+        'fingerprint': 'f' * 64, 'usable_at': hub.now - 1, 'state': 'active', 'trust': 'tofu-unverified'}]}
+    try:
+        review = await adapter.review(hub.binding.request_id)
+        assert review.enrolled
+        ceremony = await adapter.begin(hub.binding.request_id, 'approve', hub.origin, review.digest)
+        assert ceremony.ceremony_id == 'ac_challenge'
+        assert any(path.endswith('/challenge') for _, path, _ in hub.calls)
+        assert not any(path.endswith('/approve') for _, path, _ in hub.calls)
+    finally:
+        await adapter.close()
