@@ -240,29 +240,6 @@ def test_with_remote_delivery_off_the_hub_prepares_and_consumes_nothing(hub, sig
     assert adapter.consume('test-bob', request['request_id'], receipt=approved['receipt'])['state'] == 'consumed'
 
 
-def test_a_reviews_receiver_binding_lasts_past_expiry_until_the_next_approval_request(hub, signer):
-    """What the hub keeps of a receiver's private configuration, and for how
-    long (stated in the PR for the storage decision). The canonical review
-    holds the bound argv and cwd. It expires within REQUEST_SECONDS (600 s) or
-    the offer's own expiry, but is deleted LAZILY: it is still in the
-    database after expiry, until the next enrolment, approval request or
-    challenge in the session prunes it."""
-    from collab.server.approval_store import REQUEST_SECONDS
-    adapter, env, offer, request, approved = ready(hub, signer)
-    def stored():
-        return [bytes(r[0]) for r in hub.store._db.execute(
-            "SELECT canonical FROM approval_requests WHERE id=?", (request['request_id'],))]
-    assert b'/private/work' in stored()[0] and b'/usr/bin/collab' in stored()[0]
-    hub.now[0] = request['expires_at'] + REQUEST_SECONDS  # long past its expiry
-    assert len(stored()) == 1, 'kept until something prunes'
-    later = make_offer(session_id='s_test', sender_id=hub.people['alice'].id,
-                       recipient_id=hub.people['bob'].id, target='thread-123', kind='prompt',
-                       text='a later offer', now=hub.now[0])
-    env2, _ = source(hub, later)
-    adapter.prepare('test-bob', source_seq=env2.seq, binding=binding())
-    assert stored() == [], 'the next approval request prunes it'
-
-
 def test_on_by_default_consumption_still_needs_a_receipt_from_the_receivers_gesture(hub, signer):
     """With the setting never set (on by default) the hub prepares a review,
     but consumes nothing without the receipt only the receiver's verified
@@ -278,3 +255,75 @@ def test_on_by_default_consumption_still_needs_a_receipt_from_the_receivers_gest
         adapter.consume('test-bob', request['request_id'], receipt='not-a-receipt')
     assert hub.store._db.execute("SELECT state FROM approval_requests WHERE id=?",
                                  (request['request_id'],)).fetchone()[0] == 'pending'
+
+
+def _canonical(hub, request_id):
+    row = hub.store._db.execute("SELECT canonical FROM approval_requests WHERE id=?", (request_id,)).fetchone()
+    return None if row is None else bytes(row[0])
+
+
+def test_a_consumed_remote_review_keeps_its_state_but_not_the_receivers_argv_and_cwd(hub, signer):
+    """At consume the hub hands the reviewed bytes back once, then keeps the
+    request's state and nothing of the receiver's private configuration."""
+    adapter, env, offer, request, approved = ready(hub, signer)
+    assert b'/private/work' in _canonical(hub, request['request_id'])
+    used = adapter.consume('test-bob', request['request_id'], receipt=approved['receipt'])
+    assert b'/private/work' in crypto.decode(used['canonical_review'], limit=65536)
+    assert _canonical(hub, request['request_id']) == b''
+    assert hub.store._db.execute("SELECT state FROM approval_requests WHERE id=?",
+                                 (request['request_id'],)).fetchone()[0] == 'consumed'
+
+
+def test_a_declined_remote_review_keeps_nothing_of_the_receivers_configuration(hub, signer):
+    adapter, env, offer, request, approved = ready(hub, signer)
+    hub.api.decline('test-bob', request['request_id'])
+    assert _canonical(hub, request['request_id']) == b''
+
+
+def test_an_expired_review_loses_its_bytes_at_the_next_approval_read(hub, signer):
+    """No write needed: any approval call, a plain read included, clears an
+    expired review's bytes first. The row stays, so a late read of it still
+    answers 410 rather than 404."""
+    adapter, env, offer, request, approved = ready(hub, signer)
+    hub.now[0] = request['expires_at'] + 1
+    hub.api.keys('test-carol')  # someone else's read, nothing about this request
+    assert _canonical(hub, request['request_id']) == b''
+    with pytest.raises(Rejected, match='request_expired'):
+        hub.api.review('test-bob', request['request_id'])
+
+
+def test_a_hub_restarted_after_expiry_holds_no_expired_review(hub, signer):
+    from collab.server.approval_store import ApprovalStore
+    adapter, env, offer, request, approved = ready(hub, signer)
+    hub.now[0] = request['expires_at'] + 1
+    ApprovalStore(hub.store, 's_test', clock=lambda: hub.now[0])  # the hub starting again
+    assert _canonical(hub, request['request_id']) is None
+
+
+def test_an_idle_hub_clears_an_expired_review_on_its_own(tmp_path, monkeypatch):
+    """No approval call at all: the hub's own timer still clears the bytes, so
+    a receiver's argv and cwd outlast expiry by at most FORGET_SECONDS."""
+    import time
+    from fastapi.testclient import TestClient
+    from collab.server.app import create_app
+    from collab.server.approval_store import ApprovalStore
+    from collab.server.store import Store
+    monkeypatch.setattr(ApprovalStore, 'FORGET_SECONDS', 0.05)
+    store = Store(tmp_path / 'hub.db')
+    store.add_participant('alice', 'host-token', is_host=True)
+    bob = store.add_participant('bob', 'bob-token')
+    app = create_app(store=store, session_id='s_test', host_name='alice', public_url='http://testserver')
+    with TestClient(app):
+        with store._lock, store._db:
+            store._db.execute(
+                "INSERT INTO approval_requests(id,session_id,requester_id,target_id,canonical,digest,subject,"
+                "created_at,expires_at,state,kind) VALUES('ar_idle','s_test',?,?,?,'d','Remote prompt',1,2,"
+                "'pending','remote-deliver')", (bob.id, bob.id, b'{"cwd": "/private/work"}'))
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            row = store._db.execute("SELECT canonical FROM approval_requests WHERE id='ar_idle'").fetchone()
+            if row is None or bytes(row[0]) == b'':
+                break
+            time.sleep(0.02)
+        assert row is None or bytes(row[0]) == b'', 'an idle hub kept an expired review'
+    store.close()

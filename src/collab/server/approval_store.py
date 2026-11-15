@@ -99,6 +99,10 @@ class ApprovalStore:
                 store._db.execute("INSERT OR IGNORE INTO approval_session VALUES(1,?)", (session_id,))
                 if store._db.execute("SELECT id FROM approval_session WHERE singleton=1").fetchone()[0] != session_id:
                     raise Rejected("wrong_session", 403)
+                # AT HUB START, nothing expired survives: a review holds the
+                # receiver's private argv and cwd (R7), and a hub restarted
+                # long after its last approval must not keep them.
+                self._prune(store._db, self._now())
 
     def _now(self):
         value = self.clock()
@@ -135,6 +139,10 @@ class ApprovalStore:
         # Quota commits separately so invalid proofs cannot roll it back.
         # The operation then reauthenticates in its own write transaction. A
         # revoke/rotation from another DB connection cannot race that check.
+        # Expired reviews lose their bytes before ANY approval call, a read or a
+        # refused one included: committed separately, so a rollback of the
+        # call itself cannot bring them back.
+        self.forget_expired()
         with self.store._lock:
             db = self.store._db
             now = self._now()
@@ -165,6 +173,38 @@ class ApprovalStore:
             except BaseException:
                 db.rollback()
                 raise
+
+    #: How often a running hub clears expired reviews even when nobody calls
+    #: it (approval_routes): a review lives at most REQUEST_SECONDS (600 s),
+    #: so a receiver's argv and cwd outlast its expiry by at most this.
+    FORGET_SECONDS = 60
+
+    def forget_expired(self):
+        """Clear the canonical review of every expired request, committed on
+        its own. The row stays, so a late read still answers 410 rather than
+        404; its bytes — for a remote review, the receiver's argv and cwd — do
+        not. Called at the start of every approval call, reads included, and
+        by the hub's timer; full deletion stays with `_prune`."""
+        now = self._now()
+        with self.store._lock:
+            db = self.store._db
+            # A read first, which WAL never blocks: only an expired review that
+            # still holds bytes takes a write lock. Writing unconditionally
+            # made every approval call wait on any other writer before its own
+            # admission, and cost a write per call for nothing.
+            if db.execute("SELECT 1 FROM approval_requests WHERE expires_at<=? AND length(canonical)>0 LIMIT 1",
+                          (now,)).fetchone() is None:
+                return
+            with db:
+                db.execute("UPDATE approval_requests SET canonical=X'' WHERE expires_at<=? AND length(canonical)>0",
+                           (now,))
+
+    @staticmethod
+    def forget_review(db, request_id):
+        """A remote review that has served its purpose — consumed, declined or
+        replaced — keeps its state but not the receiver's argv and cwd."""
+        db.execute("UPDATE approval_requests SET canonical=X'' WHERE id=? AND kind='remote-deliver'",
+                   (request_id,))
 
     def _prune(self, db, now):
         db.execute("DELETE FROM approval_challenges WHERE used=1 OR expires_at<=?", (now,))
@@ -409,6 +449,7 @@ class ApprovalStore:
             if row["state"] not in ("pending", "approved"):
                 raise Rejected("request_unavailable", 409)
             db.execute("UPDATE approval_requests SET state='declined',receipt_hash=NULL WHERE id=?", (request_id,))
+            self.forget_review(db, request_id)
             db.execute("DELETE FROM approval_challenges WHERE request_id=?", (request_id,))
             self._audit(db, owner, "declined", now, request_id, verified_human=False)
             return {"api_version": 1, "request_id": request_id, "state": "declined"}
