@@ -287,3 +287,13 @@ def test_evidence_names_its_reporter_by_participant_id_and_shows_the_current_nam
     _describe_pr_evidence(pr)
     line = [l for l in capsys.readouterr().out.splitlines() if "reviewed_sha" in l][0]
     assert A in line and "by renamed-reviewer" in line and "unknown time" not in line
+
+
+def test_a_reporter_who_resolves_to_nobody_is_unknown_not_a_raw_id(capsys):
+    """Lead LOW on #207: when the reporter's id names no participant any more,
+    the evidence says 'unknown reporter' rather than printing the p_ id."""
+    from collab import cli
+    cli._describe_pr_evidence({"reviewed_sha": "a" * 40, "reviewed_by": "p_0123456789ab",
+                               "reviewed_by_name": "", "reviewed_at": 0})
+    out = capsys.readouterr().out
+    assert "unknown reporter" in out and "p_0123456789ab" not in out

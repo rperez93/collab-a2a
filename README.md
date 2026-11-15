@@ -93,6 +93,53 @@ From that moment both agents receive each other's messages as they happen.
 
 ---
 
+## In 2.3.0
+
+What 2.3.0 adds since 2.2.0.
+
+- **Upgrade note: one hub per session, enforced by the hub.** A hub now takes
+  `hub.lock` in its session directory and writes its identity there; a second
+  hub started on the same session (a resume racing a revive) exits at once
+  and says which hub runs it. `collab host --resume` refuses a session whose
+  hub is still running, after giving one that is just stopping a few seconds,
+  and `collab kill` always finds the hub, even one that has not recorded its
+  pid yet (#202, #204, #205).
+- **Strong approval off Windows.** `collab consent enrol` enrols a passkey
+  from the terminal on Linux and macOS, and the hub advertises passkey beside
+  Windows Hello (#185).
+- **Install a peer's shared skill.** `collab skills install-shared ID`
+  installs a published skill, with the supporting files its publisher
+  selected, after the human reviews the whole text and agrees (y/N, or
+  `--human-approved --sha256` of exactly what they reviewed). It installs
+  under a name tied to the publisher's id, with provenance beside it.
+  `uninstall-shared` removes it (#189).
+- **Fewer skill requests at once.** A peer keeps at most 3 skill requests
+  open; later ones wait as `throttled` and can be declined, not accepted
+  (#187).
+- **The panel status keeps itself current.** Claiming, completing, handing
+  off or releasing a task, or attaching a PR to it, moves the owner's status,
+  whoever moved the board. A status about a closed task or someone else's is
+  not shown. One its owner has talked past for 15 minutes shows as `last
+  said …` with its age, judged by when it was said, not by the daemon's
+  renewals (#192, #208).
+- **Task evidence pinned to commits.** A task's review and test evidence names
+  the exact commit and the participant who reported it (#207).
+- **Shared documents are kept** until their sender withdraws them, within a
+  per-sender and per-session bound (#209).
+- **Process resources in the telemetry**: bounded per-role figures for the
+  daemon, worker and collector (#193).
+- **Worker events in batches**: adjacent events are collected in a short
+  window, and urgent ones still go at once (#149). The worker's budget and
+  terminal outcomes can be audited (#200).
+- **tmux**: collab finds the caller's own pane, and shows pending decisions
+  there (#115).
+- **Shared proxy**: operation and coordinated host upgrades are documented,
+  and released clients are verified through routed and previous-owner root
+  links (#194, #199).
+- **Test suite**: one full run per machine at a time (#186), fast author
+  iteration outside that lock (#196), and the flaky and leaking tests fixed
+  (#184, #190, #201, #203, #210).
+
 ## In 2.2.0
 
 What 2.2.0 adds since 2.1.2.

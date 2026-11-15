@@ -2368,7 +2368,8 @@ def _describe_pr_evidence(pr: dict) -> None:
         if not pr.get(field):
             continue
         prefix = PREFIX[field]
-        who = pr.get(f"{prefix}_by_name") or pr.get(f"{prefix}_by") or "unknown reporter"
+        # A raw participant id is not a name to show anyone (lead LOW on #207).
+        who = pr.get(f"{prefix}_by_name") or "unknown reporter"
         when = pr.get(f"{prefix}_at")
         try:
             stamp = datetime.fromtimestamp(float(when), reading_timezone()).isoformat(timespec="seconds")
