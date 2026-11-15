@@ -37,6 +37,16 @@ def _tmux(socket, *args):
 
 
 
+
+def _command_tokens(command):
+    """Normalize at most one tmux quoting layer, without interpreting shell code."""
+    if not isinstance(command, str) or len(command.encode("utf-8")) > 65536 or "\0" in command:
+        raise ValueError("pane command exceeded its representation budget")
+    tokens = shlex.split(command)
+    if len(tokens) == 1:
+        tokens = shlex.split(tokens[0])
+    return tokens
+
 def _frame(socket, pane):
     # A separate child reduces captured private text to booleans/hash before
     # pytest can retain it in assertion or --showlocals traceback frames.
@@ -185,7 +195,8 @@ def native(monkeypatch, request):
                 "original_context_present": {key: bool(value) for key, value in _CONTEXT.items()},
                 "complete_context": "inherited" if all(_CONTEXT.values()) else "restored-from-verified-live-context",
                 "tty": tty, "pane": pane, "window": fields[4],
-                "server_pid": int(fields[2]), "server_start": _stamp(int(fields[2]))}
+                "server_pid": int(fields[2]),
+                "server_start": _stamp(int(fields[2])) if sys.platform.startswith("linux") else None}
     yield socket, pane, complete, evidence
     # Only declared metadata is retained; no captured terminal text or profile.
     output = os.environ.get("COLLAB_NATIVE_TMUX_REPORT")
@@ -288,8 +299,11 @@ def test_actual_native_host_opens_and_cleans_its_own_viewer(native, monkeypatch,
     assert re.fullmatch(r"[A-Za-z0-9_-]{1,128}", session), "explicit own session ID required"
     directory = Path(home) / "sessions" / session
     assert _profile_matches(directory), "explicit participant profile is invalid or does not match home/session"
-    monkeypatch.setenv("TMUX", complete)
-    monkeypatch.setenv("TMUX_PANE", pane)
+    # Exercise the original coding-host failure through the real split, not
+    # only the read-only lookup: the launcher must recover this exact pane.
+    monkeypatch.delenv("TMUX", raising=False)
+    monkeypatch.delenv("TMUX_PANE", raising=False)
+    evidence["viewer_context"] = "both-stripped"
     supervisor = tmp_path / "supervisor.py"
     supervisor.write_text(_SUPERVISOR)
     marker = tmp_path / "owned-viewer.json"
@@ -320,12 +334,15 @@ def test_actual_native_host_opens_and_cleans_its_own_viewer(native, monkeypatch,
         identity = json.loads(marker.read_text())
         assert identity["nonce"] == nonce and identity["pane"] not in before
         assert re.fullmatch(r"%[0-9]+", identity["pane"])
+        evidence["viewer"] = {"identity": {key: identity[key] for key in
+                              ("nonce", "pane", "supervisor", "supervisor_start", "child", "child_start")},
+                              "admission_status": "unverified-pending", "frame_recognized": False}
         assert _stamp(identity["supervisor"]) == identity["supervisor_start"]
         assert _stamp(identity["child"]) == identity["child_start"]
         metadata = _tmux(socket, "display-message", "-p", "-t", identity["pane"],
                          "#{window_id}\t#{pane_pid}\t#{pane_start_command}").split("\t")
         assert metadata[0] == evidence["window"], "owned viewer appeared outside the verified window"
-        command_tokens = shlex.split(metadata[2])
+        command_tokens = _command_tokens(metadata[2])
         assert nonce in command_tokens and str(supervisor) in command_tokens and str(marker) in command_tokens
         assert _stamp(evidence["server_pid"]) == evidence["server_start"]
         pane_pid = metadata[1]
@@ -353,7 +370,7 @@ def test_actual_native_host_opens_and_cleans_its_own_viewer(native, monkeypatch,
             if frame:
                 break
             time.sleep(.1)
-        evidence["viewer"] = {"identity": identity, "frame_recognized": frame,
+        evidence["viewer"] = {"identity": identity, "admission_status": "verified", "frame_recognized": frame,
                               "capture_sha256": captured.get("sha256")}
         assert frame, "owned viewer did not render the expected split frame"
     finally:
@@ -363,3 +380,61 @@ def test_actual_native_host_opens_and_cleans_its_own_viewer(native, monkeypatch,
 
     assert cleanup["verified"], "owned viewer cleanup could not be verified; acceptance remains incomplete"
     evidence["acceptance_status"] = "passed"
+
+
+@pytest.mark.skipif(not shutil.which("tmux") or not sys.platform.startswith("linux"),
+                    reason="owned server identity regression requires tmux and Linux procfs")
+def test_the_owned_tmux_start_command_preserves_nonce_admission(tmp_path):
+    """Exercise the real split launcher and tmux's quoted command representation."""
+    socket = str(tmp_path / "owned.sock")
+    launch = tmp_path / "owned launcher.py"
+    completed = tmp_path / "launched.json"
+    nonce = "owned-native-quoting-nonce"
+    marker = tmp_path / "owned marker.json"
+    supervisor = tmp_path / "owned supervisor.py"
+    # This is a synthetic sleeper, never a Collab viewer or native agent. The
+    # production launcher still builds exactly the shell command under test.
+    argv = [sys.executable, "-c", "import time; time.sleep(10)",
+            str(supervisor), str(marker), nonce]
+    launch.write_text(
+        "import json,sys,time\nfrom pathlib import Path\n"
+        "from collab.client.watch import open_tmux_pane\n"
+        "open_tmux_pane(json.loads(sys.argv[1]),focus=False,horizontal=False,percent=50)\n"
+        "Path(sys.argv[2]).write_text('done')\ntime.sleep(10)\n")
+    command = shlex.join([sys.executable, str(launch), json.dumps(argv), str(completed)])
+    server_pid = None
+    server_start = None
+    try:
+        # A unique private socket names only this test's server, never default.
+        from collab.source_command import run
+        result = run("exec " + shlex.join(["tmux", "-S", socket, "new-session", "-d",
+                     "-s", "owned-native-quoting", "-x", "100", "-y", "40", command]),
+                     timeout=3, max_bytes=65536,
+                     env={**os.environ, "PYTHONPATH": str(_ROOT / "src")})
+        assert result.returncode == 0, "owned synthetic tmux server did not start"
+        server_pid = int(_tmux(socket, "display-message", "-p", "#{pid}"))
+        server_start = _stamp(server_pid)
+        end = time.monotonic() + 4
+        while not completed.exists() and time.monotonic() < end:
+            time.sleep(.02)
+        assert completed.exists(), "production split launcher did not complete"
+        panes = _tmux(socket, "list-panes", "-a", "-F", "#{pane_id}").splitlines()
+        assert len(panes) == 2
+        commands = [_pane_metadata(socket, pane)[3] for pane in panes]
+        admitted = [raw for raw in commands if nonce in _command_tokens(raw)]
+        assert len(admitted) == 1, "owned split command did not preserve its nonce"
+        tokens = _command_tokens(admitted[0])
+        assert str(supervisor) in tokens and str(marker) in tokens
+        assert tokens[:len(argv)] == argv
+        assert "||" in tokens
+    finally:
+        if server_pid is not None:
+            if (_tmux(socket, "display-message", "-p", "#{pid}") == str(server_pid)
+                    and _stamp(server_pid) == server_start):
+                _tmux(socket, "kill-server")
+
+
+@pytest.mark.parametrize("command", ["x" * 65537, "contains\0nul"])
+def test_a_pane_command_representation_has_a_finite_parse_budget(command):
+    with pytest.raises(ValueError):
+        _command_tokens(command)
