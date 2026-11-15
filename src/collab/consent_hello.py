@@ -751,7 +751,8 @@ def _issued(issued: Any, cred: str, digest: str, request_id: str) -> tuple[bytes
     review, even one whose operation hashes the same (arma's review of #151:
     another request_id with this key and digest still signed, and so did an
     answer that left the method out)."""
-    if not isinstance(issued, dict) or issued.get("api_version") != 1:
+    if (not isinstance(issued, dict) or type(issued.get("api_version")) is not int
+            or issued["api_version"] != 1):              # True == 1 in Python
         # v1 only, as the passkey dispatcher checks: another version's shape
         # is not read by this one's rules.
         raise ValueError("not a v1 challenge")
