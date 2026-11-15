@@ -638,3 +638,63 @@ def test_an_empty_quota_map_still_says_there_is_no_quota(tmp_path, cleared):
              else (s.get("worker") or {}).get("quotas"))
     assert shown(before), f"the quota was never stored: {before}"
     assert not shown(after), f"the cleared quota still shows: {after}"
+
+
+def test_a_hello_row_stored_before_this_release_is_never_relayed_raw(live_server):
+    """A kind=hello row an older hub stored keeps the sender's raw `cwd` and
+    `remote` in its body. Every way out bounds a hello body (`to_dict`), so
+    history, the snapshot and the replay show only the allowed fields."""
+    import time
+
+    store = live_server["store"]
+    base, token = live_server["base"], live_server["host_token"]
+    headers = {**COMPAT, "Authorization": f"Bearer {token}"}
+    alice = next(p for p in store.participants() if p.name == "alice")
+    payload = {"kind": "hello", "from": "alice", "fromId": alice.id, "room": "general",
+               "text": "an old hello", "ts": "2026-11-01T00:00:00Z",
+               "body": {"focus": "old work", "repo": "api", "cwd": "/home/SENTACCOUNT/api",
+                        "remote": LEAKED["remote_url"]}}
+    with store._lock:
+        cur = store._db.execute(
+            "INSERT INTO events (kind, room, sender, recipient, sender_id, recipient_id, ts,"
+            " payload) VALUES (?,?,?,?,?,?,?,?)",
+            ("hello", "general", "alice", None, alice.id, None, payload["ts"], "{}"))
+        seq = int(cur.lastrowid)
+        store._db.execute("UPDATE events SET payload=? WHERE seq=?",
+                          (json.dumps({**payload, "seq": seq}), seq))
+        store._db.commit()
+    assert "SENTACCOUNT" in "\n".join(store._db.iterdump()), "the old row is as it was"
+
+    seen = _everything_the_hub_relays(base, token)
+    replayed, deadline = [], time.monotonic() + 10
+    with httpx.stream("GET", base + "/ext/collab/v1/events?since=0", headers=headers,
+                      timeout=httpx.Timeout(10, read=5)) as feed:
+        for line in feed.iter_lines():
+            replayed.append(line)
+            if "an old hello" in line or time.monotonic() > deadline:
+                break
+    replayed = "\n".join(replayed)
+    assert "an old hello" in replayed and "old work" in seen
+    for needle in LEAK_NEEDLES:
+        assert needle not in seen, f"relayed {needle!r} from an old hello"
+        assert needle not in replayed, f"replayed {needle!r} from an old hello"
+
+
+@pytest.mark.parametrize("model", ["/home/SENTACCOUNT/models/opus.gguf",
+                                   "https://SENTACCOUNT:ghp_SENTTOKEN@models.example/opus"])
+@pytest.mark.parametrize("route", ["stats", "message"])
+def test_a_model_naming_the_machine_never_reaches_the_roster(client, session, host_headers,
+                                                             model, route):
+    """The roster's model was merged from the RAW figures, so a canonical
+    field kept a path or a token URL even though the event's stats were
+    clean. Sanitised first, merged after — on /stats and on a message."""
+    h = _old_client(client, session, f"model-{route}-{len(model)}", {"focus": "x"})
+    if route == "stats":
+        client.post("/ext/collab/v1/stats", headers=h, json={"stats": {"model": model}})
+    else:
+        client.post("/ext/collab/v1/messages", headers=h,
+                    json={"text": "on it", "stats": {"model": model}})
+    seen = _peers_see(client, host_headers)
+    stored = "\n".join(session["store"]._db.iterdump())
+    for needle in ("SENTACCOUNT", "SENTTOKEN", "opus.gguf"):
+        assert needle not in seen and needle not in stored, (route, needle)

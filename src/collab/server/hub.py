@@ -89,6 +89,12 @@ class Hub:
             # The host announces itself the same way a guest does, so its repo,
             # branch and focus show up in the roster like everyone else's.
             await asyncio.to_thread(self.merge_hello, env.sender_id, env.body)
+        if env.stats:
+            # SANITISED FIRST, THEN MERGED (review of #178): the roster's copy
+            # was folded in from the raw figures, and a canonical field such as
+            # `model` kept a path or a token URL there although the event's own
+            # stats were clean.
+            env.stats = public_stats(env.stats)
         if env.stats and env.sender_id:
             # Usage rides along with ordinary traffic; fold it into the sender's
             # profile so the next roster everyone reads is already current.
@@ -96,12 +102,10 @@ class Hub:
         # WHAT IS STORED AND FANNED OUT IS SANITISED HERE, for every route that
         # publishes a client's envelope — the message routes and A2A
         # SendMessage alike. The message's own stats were stored and delivered
-        # exactly as sent (found by friday on #178), and a hello sent straight
-        # over A2A kept its whole body; both now carry only what a peer may
-        # see. `Envelope.to_dict` applies the stats rule again on the way out,
-        # for rows stored before this.
-        if env.stats:
-            env.stats = public_stats(env.stats)
+        # exactly as sent (found by friday on #178) — they are cleaned above,
+        # before the roster merge — and a hello sent straight over A2A kept its
+        # whole body. `Envelope.to_dict` applies both rules again on the way
+        # out, for rows stored before this.
         if env.kind == KIND_HELLO and env.body:
             env.body = bounded_meta(env.body)
         # Thread completion order is not persistence order. A later seq must
@@ -258,6 +262,9 @@ class Hub:
           nothing about the quota and leaves it. See the comment below for
           the two wrong rules this replaced, and `stats.QUOTA_FIELDS`.
         """
+        # Every path in — /stats and a message's stats — is cleaned of what
+        # names the machine before anything is folded into the roster.
+        stats = public_stats(stats)
         from ..stats import QUOTA_FIELDS, sanitise
 
         with self.store.edit_meta(participant_id) as meta:
