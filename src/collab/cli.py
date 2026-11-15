@@ -2262,7 +2262,10 @@ def _publish_activity(profile: SessionProfile, state: str, *, what: str = "",
     act.write_local(profile, stored)
     try:
         with _client(profile) as client:
-            stored = client.report_activity(stored)
+            # `restate` on the wire: the local copy is already sanitised and
+            # has lost it, and without it the hub kept the old stated_at
+            # (lead review of #208). Renewals from the daemon never send it.
+            stored = client.report_activity({**stored, "restate": True})
             act.write_local(profile, stored)
     except HubError as exc:
         if not quiet:

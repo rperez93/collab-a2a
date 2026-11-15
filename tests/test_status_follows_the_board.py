@@ -225,3 +225,36 @@ def test_a_renewing_daemon_does_not_keep_an_old_statement_fresh():
     assert restated["stated_at"] >= now - 5
     changed = activity.sanitise({**said, "what": "the next thing"}, previous=said)
     assert changed["stated_at"] >= now - 5
+
+
+def test_restating_the_same_words_reaches_the_hub_and_a_renewal_does_not(client, session, host_headers):
+    """Lead review of #208, end to end over HTTP: an owner restating the same
+    text moves the hub's stated_at; the daemon's renewal (no restate) keeps it."""
+    bob = _join(client, session)
+    said = {"state": "working", "what": "the migration"}
+    client.post("/ext/collab/v1/activity", headers=_headers(bob), json={**said, "restate": True})
+    first = _status(client, host_headers, "bob")["stated_at"]
+    time.sleep(0.05)
+    client.post("/ext/collab/v1/activity", headers=_headers(bob), json=said)            # a renewal
+    assert _status(client, host_headers, "bob")["stated_at"] == first
+    time.sleep(0.05)
+    client.post("/ext/collab/v1/activity", headers=_headers(bob), json={**said, "restate": True})
+    assert _status(client, host_headers, "bob")["stated_at"] > first
+
+
+def test_collab_working_sends_restate_on_the_wire(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from collab import cli
+    sent = []
+    class Hub:
+        def __enter__(self): return self
+        def __exit__(self, *e): return False
+        def report_activity(self, payload):
+            sent.append(payload)
+            return payload
+    profile = SimpleNamespace(dir=tmp_path, home="", session_id="s")
+    monkeypatch.setattr(cli, "_client", lambda p: Hub())
+    monkeypatch.setattr(activity, "write_local", lambda profile, stored: None)
+    monkeypatch.setattr(activity, "read_local", lambda profile: {})
+    cli._publish_activity(profile, "working", what="x")
+    assert sent and sent[0].get("restate") is True
