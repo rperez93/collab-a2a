@@ -2397,12 +2397,15 @@ def _bare_host(value: Any) -> str:
     return host
 
 
-#: OFF THIS RELEASE. With `auto` every `collab host` after an upgrade would
-#: attach to the shared machine proxy and publish `/s/<id>` instead of its own
-#: tunnel — a change of address for every host, made by an upgrade. The proxy
-#: is opt-in (`collab config proxy on`, or `collab host --tunnel proxy`) until
-#: the live session has proven it (M1).
-PROXY_DEFAULT = "off"
+#: ON BY DEFAULT (`auto`): one shared machine proxy and one tunnel serve every
+#: session, so a second session no longer fails with ngrok's one-endpoint limit
+#: (ERR_NGROK_334). It was opt-in until a live session had proven it (M1); the
+#: session that ran this whole release did, behind the proxy, from 6baf6e6 on.
+#: Old links keep working: a pre-proxy link is the domain's root, and the
+#: session that owned the domain claims the root on its first attach
+#: (hub_main). `collab config proxy off` or `collab host --tunnel own` keeps a
+#: hub on its own tunnel.
+PROXY_DEFAULT = "auto"
 
 
 def proxy_mode() -> str:
@@ -2660,8 +2663,8 @@ def settings() -> tuple[Setting, ...]:
         # A MACHINE setting (not in AGENT_KEYS): one proxy and one tunnel serve
         # every session on the machine, so whether to use them is the machine's
         # choice, not one agent's. After `ngrok_domain`, which it reads.
-        Setting("proxy", "share one machine tunnel (on/auto), or use one per hub (off, "
-                         "the default this release)",
+        Setting("proxy", "share one machine tunnel (auto, the default, or on), or use "
+                         "one per hub (off)",
                 PROXY_DEFAULT, str, proxy_mode, set_proxy_mode),
         Setting("stats_command", "a command printing your usage as JSON, for "
                                  "an agent whose host tool cannot report it",
