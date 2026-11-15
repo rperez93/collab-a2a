@@ -13,8 +13,70 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
+import queue
 import sys
+import threading
 import time
+
+#: The whole input: one status snapshot is far smaller.
+MAX_INPUT = 2_000_000
+#: How long the WHOLE input may take to arrive, however it arrives. A byte cap
+#: alone left `read()` waiting for ever on a producer that opened the pipe and
+#: never wrote or closed it (friday's review of #191); a per-read timeout would
+#: still let a trickle run on indefinitely. `collab worker status --json`
+#: answers in well under a second.
+INPUT_DEADLINE = 10.0
+CHUNK = 65536
+
+
+def read_input(stream, *, limit=MAX_INPUT, deadline=INPUT_DEADLINE):
+    """All of `stream`, or ValueError: over `limit` bytes, or not complete
+    within `deadline` seconds of starting, whatever arrives in between.
+
+    A blocking read cannot enforce a deadline by itself, so it runs on a
+    daemon thread and the clock is watched here. A thread left blocked on a
+    silent pipe dies with the process, which exits on the refusal.
+    """
+    chunks: queue.Queue = queue.Queue(maxsize=4)  # bounded: the reader waits for us
+
+    # THE RAW DESCRIPTOR, NOT THE BUFFERED STREAM. A daemon thread blocked in
+    # `sys.stdin.buffer.read` holds that object's lock, and the interpreter
+    # aborts at exit trying to take it (SIGABRT, exit 134 — measured here on
+    # the first version of this fix). `os.read` holds no Python-level lock.
+    try:
+        fd = stream.fileno()
+    except (AttributeError, OSError, ValueError):
+        fd = None
+
+    def reader():
+        try:
+            while True:
+                chunk = os.read(fd, CHUNK) if fd is not None else stream.read(CHUNK)
+                chunks.put(chunk)
+                if not chunk:
+                    return
+        except Exception as exc:  # surfaced to the consumer, never swallowed
+            chunks.put(exc)
+
+    threading.Thread(target=reader, name="input-reader", daemon=True).start()
+    ends = time.monotonic() + deadline
+    data = bytearray()
+    while True:
+        left = ends - time.monotonic()
+        if left <= 0:
+            raise ValueError(f"no complete input within {deadline:g} s; pipe one status snapshot")
+        try:
+            chunk = chunks.get(timeout=left)
+        except queue.Empty:
+            continue  # the loop's own clock check refuses it
+        if isinstance(chunk, Exception):
+            raise ValueError(f"cannot read input: {type(chunk).__name__}")
+        if not chunk:
+            return bytes(data)
+        data += chunk
+        if len(data) > limit:
+            raise ValueError("input exceeds 2 MB; use one worker status snapshot")
 
 
 def number(value):
@@ -89,11 +151,13 @@ def main():
     parser.add_argument("--limit", type=int, required=True)
     parser.add_argument("--window", type=float, required=True)
     parser.add_argument("--at", type=float, help="capture time of a saved input, Unix seconds")
+    parser.add_argument("--input-deadline", type=float, default=INPUT_DEADLINE,
+                        help="seconds the whole input may take to arrive (default 10, at most 60)")
     args = parser.parse_args()
+    if not (math.isfinite(args.input_deadline) and 0 < args.input_deadline <= 60):
+        parser.exit(2, "--input-deadline must be more than 0 and at most 60 seconds\n")
     try:
-        data = sys.stdin.buffer.read(2_000_001)
-        if len(data) > 2_000_000:
-            raise ValueError("input exceeds 2 MB; use one worker status snapshot")
+        data = read_input(sys.stdin.buffer, deadline=args.input_deadline)
         result = summarize(json.loads(data), now=time.time() if args.at is None else args.at,
                            limit=args.limit, window=args.window)
     except (ValueError, TypeError, AttributeError, OverflowError, RecursionError) as exc:

@@ -190,6 +190,7 @@ def test_drop_marker_time_is_not_a_loss_interval(tmp_path,ts):
     assert out['diagnostics']['reported_dropped_lines']==3
 
 
+@pytest.mark.skipif(not Path('/proc/self/status').exists(), reason='VmHWM is read from Linux procfs')
 def test_large_ledger_has_bounded_cpu_and_memory_after_exec(tmp_path):
     code = '''import importlib.util,json,resource,sys,time
 from pathlib import Path
@@ -201,14 +202,18 @@ with p.open('w') as f:
 before=resource.getrusage(resource.RUSAGE_SELF);start=time.monotonic()
 out=m.summarize([p],since=m.timestamp('2026-11-14T04:00:00Z'),until=m.timestamp('2026-11-14T05:00:00Z'))
 after=resource.getrusage(resource.RUSAGE_SELF)
-rss=(after.ru_maxrss-before.ru_maxrss)/(1024 if sys.platform=='darwin' else 1)
-print(json.dumps({'records':out['terminal_records_observed'],'cpu':after.ru_utime+after.ru_stime-before.ru_utime-before.ru_stime,'rss_kib':rss,'wall':time.monotonic()-start}))
+hwm=next(int(l.split()[1]) for l in open('/proc/self/status') if l.startswith('VmHWM:'))
+print(json.dumps({'records':out['terminal_records_observed'],'cpu':after.ru_utime+after.ru_stime-before.ru_utime-before.ru_stime,'hwm_kib':hwm,'wall':time.monotonic()-start}))
 '''
     child=subprocess.run([sys.executable,'-c',code,str(SCRIPT),str(tmp_path/'large.log')],capture_output=True,text=True,timeout=15,check=True)
     metrics=json.loads(child.stdout)
     assert metrics['records']==20000
     assert metrics['cpu']<6 and metrics['wall']<8
-    assert metrics['rss_kib']<98304
+    # THE WHOLE PROCESS'S POST-EXEC PEAK (VmHWM): interpreter, the 5 MB write
+    # loop and the scan together. It was a ru_maxrss delta, and ru_maxrss in a
+    # child starts at the parent's peak at fork, so the delta hid real
+    # allocations (friday: VmHWM 34.7 MiB against a delta of 1.1 MiB).
+    assert metrics['hwm_kib']<98304, metrics
 
 
 @pytest.mark.parametrize('fields,known,unknown',[

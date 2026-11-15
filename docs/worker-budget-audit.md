@@ -107,7 +107,10 @@ collab worker status --json | python3 /path/to/checkout/scripts/audit-worker-bud
 Substitute the actual observed limit/window. The script consumes one status
 snapshot, emits only selected counters and model identifiers, and does not
 change settings, start a model, read peer state, or publish anything. It limits
-input to 2 MB. For an archived input, supply `--at <capture-unix-seconds>` so the
+input to 2 MB, and the whole input must arrive within 10 seconds
+(`--input-deadline`, at most 60) however it arrives: a producer that opens the
+pipe and never writes is refused at the deadline (measured: 1.05 s against a
+1 s deadline, 0.033 s CPU, 13 MiB peak) rather than waited on for ever. For an archived input, supply `--at <capture-unix-seconds>` so the
 rolling window is evaluated at capture time rather than today. Future reservation
 timestamps (for example after a backward wall-clock change) still count, matching
 the running limiter, and are flagged separately. Keep raw status
@@ -239,9 +242,12 @@ loss diagnostic, not a count attributed to that window. Safe nonblocking/no-foll
 file opens currently require POSIX/WSL; native Windows receives an explicit refusal.
 
 Synthetic resource check in a fresh interpreter: 20,000 terminal records (5.2 MB)
-took 0.222 seconds wall, 0.208 seconds CPU and 18,304 KiB peak-RSS growth on this
-machine. A regression checks that workload under 8 seconds wall, 6 seconds CPU
-and 96 MiB RSS growth. These are parser measurements, not worker efficiency,
+took about 0.38 seconds wall and 0.37 seconds CPU, with a whole-process
+post-exec peak (VmHWM) of 34 MiB on this machine — interpreter, writing the log
+and the scan together. An earlier figure here was a `ru_maxrss` delta, which
+hid real allocations: a child's `ru_maxrss` starts at its parent's peak. A
+regression checks that workload under 8 seconds wall, 6 seconds CPU and 96 MiB
+VmHWM. These are parser measurements, not worker efficiency,
 real call counts, or postdeployment evidence.
 
 ## Current-main and own-worker checkpoint
