@@ -353,6 +353,8 @@ class ApprovalStore:
     def review(self, token, request_id):
         with self._transaction(token, charge=False) as (db, owner, now):
             row = self._request(db, owner, request_id, now, allow_requester=True)
+            if row["kind"] == "remote-deliver" and row["target_id"] != owner:
+                raise Rejected("unknown_request", 404)
             return {"api_version": 1, "request_id": request_id, "review": json.loads(row["canonical"]),
                     "canonical_review": crypto.encode(row["canonical"]), "digest": row["digest"],
                     "state": row["state"], "required_strength": "strong"}

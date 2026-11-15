@@ -1,0 +1,168 @@
+"""Actual SQLite and signatures; no native prompts or coding-agent execution."""
+import json
+import pytest
+from collab.protocol import Envelope, KIND_CHAT
+from collab.remote_requests import make_offer, wire_text
+from collab.server.approval_remote import RemoteApprovals, delivery_binding
+from collab.server.approval_store import Rejected
+from collab.server import approval_crypto as crypto
+from test_approval_store import hub, signer, enrol, approve
+
+
+def binding():
+    return {'target': 'thread-123', 'command': ['/usr/bin/collab', 'wake', 'deliver', '--to', 'codex', '--target', 'thread-123'],
+            'cwd': '/private/work', 'destination': {'adapter': 'codex', 'session_id': 'thread-123', 'scope': 'codex-thread'}}
+
+
+def source(hub, offer=None):
+    offer = offer or make_offer(session_id='s_test', sender_id=hub.people['alice'].id,
+        recipient_id=hub.people['bob'].id, target='thread-123', kind='prompt', text='exact untrusted prompt', now=hub.now[0])
+    return hub.store.append(Envelope(kind=KIND_CHAT, sender='alice', sender_id=hub.people['alice'].id,
+        to='bob', to_id=hub.people['bob'].id, room=None, text=wire_text(offer))), offer
+
+
+def ready(hub, signer):
+    credential, _ = enrol(hub, signer)
+    adapter = RemoteApprovals(hub.api)
+    env, offer = source(hub)
+    request = adapter.prepare('test-bob', source_seq=env.seq, binding=binding())
+    challenge = hub.api.challenge('test-bob', request['request_id'], credential_id=credential)
+    approved = approve(hub, signer, request, challenge, credential)
+    return adapter, env, offer, request, approved
+
+
+def test_exact_consumption_is_target_only_private_and_single_use(hub, signer):
+    adapter, env, offer, request, approved = ready(hub, signer)
+    for token in ('test-alice', 'test-carol'):
+        with pytest.raises(Rejected):
+            hub.api.review(token, request['request_id'])
+        with pytest.raises(Rejected):
+            adapter.consume(token, request['request_id'], receipt=approved['receipt'])
+    reviewed = hub.api.review('test-bob', request['request_id'])
+    assert reviewed['review']['offer'] == offer
+    assert reviewed['review']['binding'] == binding()
+    used = adapter.consume('test-bob', request['request_id'], receipt=approved['receipt'])
+    assert used['canonical_review'] == reviewed['canonical_review']
+    assert used['execution'] == 'not_performed'
+    with pytest.raises(Rejected, match='remote_already_consumed'):
+        adapter.consume('test-bob', request['request_id'], receipt=approved['receipt'])
+    assert '/private/work' not in json.dumps(hub.api.audit('test-alice'))
+    assert '/private/work' not in json.dumps(hub.api.audit('test-bob'))
+
+
+def test_duplicate_offer_at_new_sequence_cannot_get_second_approval(hub, signer):
+    adapter, env, offer, request, approved = ready(hub, signer)
+    adapter.consume('test-bob', request['request_id'], receipt=approved['receipt'])
+    duplicate, _ = source(hub, offer)
+    with pytest.raises(Rejected, match='remote_offer_replayed'):
+        adapter.prepare('test-bob', source_seq=duplicate.seq, binding=binding())
+
+
+@pytest.mark.parametrize('change', ['source', 'expiry', 'credential'])
+def test_changes_between_review_and_consume_are_refused(hub, signer, change):
+    adapter, env, offer, request, approved = ready(hub, signer)
+    if change == 'source':
+        with hub.store._lock, hub.store._db:
+            hub.store._db.execute("UPDATE events SET payload=replace(payload,'exact untrusted prompt','different prompt') WHERE seq=?", (env.seq,))
+    elif change == 'expiry':
+        hub.now[0] += 901
+    else:
+        hub.api.report_key('test-bob', credential_id='collab.test.key')
+    with pytest.raises(Rejected):
+        adapter.consume('test-bob', request['request_id'], receipt=approved['receipt'])
+
+
+def test_preparation_cannot_change_bound_destination_or_borrow_other_source(hub, signer):
+    adapter, env, offer, request, approved = ready(hub, signer)
+    changed = binding()
+    changed['cwd'] = '/different'
+    with pytest.raises(Rejected, match='remote_binding_changed'):
+        adapter.prepare('test-bob', source_seq=env.seq, binding=changed)
+    with pytest.raises(Rejected):
+        adapter.prepare('test-carol', source_seq=env.seq, binding=binding())
+    with pytest.raises(Rejected):
+        hub.api.consume('test-bob', request['request_id'], receipt=approved['receipt'], digest=request['digest'])
+
+
+def test_prepare_is_idempotent_without_challenge_or_execution(hub):
+    adapter = RemoteApprovals(hub.api)
+    env, _ = source(hub)
+    a = adapter.prepare('test-bob', source_seq=env.seq, binding=binding())
+    assert adapter.prepare('test-bob', source_seq=env.seq, binding=binding()) == a
+    assert hub.store._db.execute('SELECT COUNT(*) FROM approval_challenges').fetchone()[0] == 0
+
+
+def test_windows_receiver_path_is_bound_without_server_normalization():
+    b = binding()
+    b['cwd'] = 'C:\\private\\work'
+    import hashlib
+    expected = hashlib.sha256(json.dumps([b['target'], b['command'], b['cwd']], ensure_ascii=False).encode()).hexdigest()
+    assert delivery_binding(b) == expected
+
+
+def test_http_prepare_prove_consume_keeps_receiver_binding_private(client, session, host_headers, signer):
+    from test_approval_routes import post, enrol as http_enrol, P
+    from test_approval_store import proof
+    core = session['app'].state.approvals
+    now = [1000]
+    core.clock = lambda: now[0]
+    http_enrol(client, session, host_headers, signer)
+    now[0] += 600
+    store = session['store']
+    receiver = store.participant_for_token(session['host_token'])
+    sender = store.add_participant('requester', 'requester-token')
+    offer = make_offer(session_id=core.session_id, sender_id=sender.id, recipient_id=receiver.id,
+                       target='thread-123', kind='prompt', text='exact payload', now=now[0])
+    env = store.append(Envelope(kind=KIND_CHAT, sender=sender.name, sender_id=sender.id,
+        to=receiver.name, to_id=receiver.id, room=None, text=wire_text(offer)))
+    prepared = post(client, host_headers, '/remote/prepare', {'source_seq': env.seq, 'binding': binding()})
+    path = '/requests/' + prepared['request_id']
+    peer = {**host_headers, 'Authorization': 'Bearer requester-token'}
+    denied = client.get(P + path + '/review', headers=peer)
+    assert denied.status_code == 404 and '/private/work' not in denied.text
+    challenge = post(client, host_headers, path + '/challenge', {'credential_id': 'http.key'})
+    signed = post(client, host_headers, path + '/approve', {'credential_id': 'http.key',
+        'challenge_id': challenge['challenge_id'], 'proof': proof(signer, challenge)})
+    consumed = post(client, host_headers, '/remote/' + prepared['request_id'] + '/consume', {'receipt': signed['receipt']})
+    decoded = json.loads(crypto.decode(consumed['canonical_review'], limit=65536))
+    assert decoded['binding'] == binding() and decoded['offer'] == offer
+    assert consumed['execution'] == 'not_performed'
+    replay = client.post(P + '/remote/' + prepared['request_id'] + '/consume', headers=host_headers, json={'receipt': signed['receipt']})
+    assert replay.status_code == 409
+
+
+@pytest.mark.parametrize('field,value', [('cwd', 'relative/path'), ('command', []), ('destination', {}), ('extra', True)])
+def test_invalid_local_binding_is_rejected(hub, field, value):
+    adapter = RemoteApprovals(hub.api)
+    env, _ = source(hub)
+    bad = binding()
+    bad[field] = value
+    with pytest.raises(Rejected, match='invalid_remote_binding'):
+        adapter.prepare('test-bob', source_seq=env.seq, binding=bad)
+
+
+@pytest.mark.parametrize('approved_first', [False, True])
+def test_expired_unconsumed_review_can_be_explicitly_reviewed_again(hub, signer, approved_first):
+    adapter, env, offer, request, approved = ready(hub, signer)
+    if not approved_first:
+        with hub.store._lock, hub.store._db:
+            hub.store._db.execute("UPDATE approval_requests SET state='pending',receipt_hash=NULL WHERE id=?", (request['request_id'],))
+    hub.now[0] += 601 if not approved_first else 121
+    renewed = adapter.prepare('test-bob', source_seq=env.seq, binding=binding())
+    assert renewed['request_id'] != request['request_id']
+    assert renewed['digest'] == request['digest']
+    with pytest.raises(Rejected):
+        adapter.consume('test-bob', request['request_id'], receipt=approved['receipt'])
+    assert hub.api.review('test-bob', renewed['request_id'])['state'] == 'pending'
+
+
+@pytest.mark.parametrize('target', [None, [], {}, 123, '', 'target\n'])
+def test_receiver_selected_goal_still_requires_valid_local_target(hub, target):
+    adapter = RemoteApprovals(hub.api)
+    offer = make_offer(session_id='s_test', sender_id=hub.people['alice'].id,
+        recipient_id=hub.people['bob'].id, target='receiver-selected', kind='goal', text='goal', now=hub.now[0])
+    env, _ = source(hub, offer)
+    bad = binding()
+    bad['target'] = bad['destination']['session_id'] = target
+    with pytest.raises(Rejected, match='invalid_remote_binding'):
+        adapter.prepare('test-bob', source_seq=env.seq, binding=bad)
