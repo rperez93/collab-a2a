@@ -97,13 +97,12 @@ _STORED_ID = re.compile(r"[0-9a-f]{16,64}")
 
 
 def machine_id_path() -> Path:
-    """Beside the machine-wide config (`COLLAB_CONFIG`'s directory, else
-    ~/.config/collab): every agent of this account on this machine reads the
-    same file, so they agree on «same machine» without any of them deriving it
-    from the host."""
-    from .config import global_config_path
-
-    return global_config_path().parent / "machine-id"
+    """In the machine registry (`peers_dir`), not an agent's config: «same
+    machine» is the registry's question — the records it holds, the proxy that
+    routes them — and every agent and the proxy read this one directory, so
+    they agree without any of them deriving it from the host. Not `*.json`, so
+    the registry's own scans never take it for a record."""
+    return peers_dir() / "machine-id"
 
 
 def machine_id() -> str:
@@ -145,7 +144,7 @@ def _create_machine_id(path: Path) -> str:
 
     fresh = secrets.token_hex(8)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
         existing = _read_machine_id(path)
