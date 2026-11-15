@@ -819,9 +819,9 @@ class Store:
                     # so nothing is claimed beyond it: not that it was dropped,
                     # deleted, or must be sent again (friday's review of #214).
                     self._add(db, "escalation", {"reason": "blocker", "seq": 0, "question": (
-                        f"Your file {str(data.get('name'))[:200]!r} reached {target}, but its "
-                        f"retention is not as asked: {str(retention_note)[:300]}. Keep your original "
-                        f"until `collab file list` shows the host kept it as you need.")})
+                        f"Your file {str(data.get('name'))[:200]!r} reached {target}; "
+                        f"retention/source note: {str(retention_note)[:300]}. Keep your original "
+                        f"until `collab file list` shows the host kept it.")})
         _drop_stash(row)
 
     def defer(self, record_id: str, *, retry_at: float, error: str) -> bool:
