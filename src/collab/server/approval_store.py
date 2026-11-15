@@ -395,6 +395,10 @@ class ApprovalStore:
             row = self._request(db, owner, request_id, now, allow_requester=True)
             if row["kind"] == "remote-deliver" and row["target_id"] != owner:
                 raise Rejected("unknown_request", 404)
+            if not row["canonical"]:
+                # Consumed or declined: the reviewed text is deleted with the
+                # receiver's argv and cwd, and there is nothing left to show.
+                raise Rejected("request_unavailable", 409)
             return {"api_version": 1, "request_id": request_id, "review": json.loads(row["canonical"]),
                     "canonical_review": crypto.encode(row["canonical"]), "digest": row["digest"],
                     "state": row["state"], "required_strength": "strong"}
