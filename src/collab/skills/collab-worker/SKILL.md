@@ -193,6 +193,11 @@ local delivery authority. The human approves or declines there. A missing
 adapter or unavailable hub refuses; receiving text is never approval. Lost
 consumption answers leave a non-replayable local attempt.
 
+For an agent that holds `collab listen --follow` (Claude Code), arm
+`collab wake set --agent claude` and run `collab remote bind`. The approved
+prompt then arrives once on your monitor as a `[remote prompt ID]` line,
+never typed into your terminal.
+
 A delivered prompt ends with a footer from collab asking the agent that receives
 it to answer once:
 

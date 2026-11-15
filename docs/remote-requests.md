@@ -141,6 +141,38 @@ new dispatch. Revocation is committed even if its audit write fails, so an
 unavailable audit cannot restore permission; that failure is reported to the
 caller. A crash after dispatch reservation remains non-replayable.
 
+## Delivery to an agent that holds a monitor
+
+An agent that keeps `collab listen --follow` running in a persistent monitor,
+Claude Code first, receives the approved prompt directly on that stream. Arm
+it from inside the agent's own session:
+
+```sh
+collab wake set --agent claude
+collab remote bind
+```
+
+`remote bind` needs no `--target` here, because the stream is this
+participant's own.
+
+After consumption, the daemon offers the exact reviewed bytes to the stream.
+The first monitor to pick them up prints them once, as one line labelled
+`[remote prompt <id>]`. That line carries the sender, the reply instruction,
+and the approved text as an escaped JSON string; with `--json`, it is a
+`remote-prompt` object marked `local`. Nothing is typed into a terminal.
+
+The prompt counts as **delivered** when the monitor marks it written. The
+other outcomes:
+
+- **failed:** no monitor picks it up within the wake timeout, so it is
+  withdrawn unprinted and never printed later;
+- **uncertain:** a monitor picked it up but never confirmed writing it.
+
+Neither is ever retried. Ordinary messages already reach the monitor, so a
+wake for them does nothing. `--agent claude-exec` keeps the old fresh
+`claude -p` run, and `--agent tmux` remains the answer for agents that
+cannot hold a monitor.
+
 ## The answer comes back automatically
 
 One approval covers the delivery and its answer; nobody relays anything by hand.

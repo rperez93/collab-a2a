@@ -63,6 +63,9 @@ def delivery_binding(value):
     if dest.get('adapter') == 'codex':
         if set(dest) != {'adapter', 'session_id', 'scope'} or dest['scope'] != 'codex-thread':
             raise Rejected('invalid_remote_binding', 400)
+    elif dest.get('adapter') == 'listen':
+        if set(dest) != {'adapter', 'session_id', 'scope'} or dest['scope'] != 'listen-stream':
+            raise Rejected('invalid_remote_binding', 400)
     elif dest.get('adapter') == 'tmux':
         if (set(dest) != {'adapter', 'session_id', 'scope', 'expected_pid', 'expected_command', 'scope_notice'}
                 or dest['scope'] != 'tmux-pane' or type(dest['expected_pid']) is not str
