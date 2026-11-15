@@ -170,10 +170,10 @@ A goal offered at connection is also pending, never acceptance by joining.
 Uncertain or dispatching deliveries are not automatically repeated.
 The sender is told nothing about the outcome: no delivery status comes back,
 so do not report an offer as delivered or declined unless the receiver says so.
-Remote delivery is off unless the hub's host ran `collab config
-remote_delivery on`; until then `collab remote accept` refuses, and offers are
-still held and listed. Never turn that setting on yourself: it is the host
-human's choice, and each delivery still needs the receiver's own gesture.
+Remote delivery is on unless the hub's host ran `collab config
+remote_delivery off`; then `collab remote accept` refuses, and offers are
+still held and listed. Never change that setting yourself: it is the host
+human's choice, and either way each delivery needs the receiver's own gesture.
 
 On the receiving machine, after the human selects the local coding session:
 
