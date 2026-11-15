@@ -7577,6 +7577,9 @@ def cmd_capacity(args: argparse.Namespace) -> int:
 SKILL_STATES = ("accepted", "declined", "done")
 REQUEST_ID_RE = re.compile(r"sr_[0-9a-f]{12}")
 SKILL_REQUEST_TTL = 24 * 3600
+#: Open requests one peer may have waiting on the human at once; later ones
+#: are «throttled» until those are answered, so one sender cannot flood them.
+MAX_OPEN_PER_PEER = 3
 SHOWN_ARGS = 500
 
 
@@ -7671,6 +7674,20 @@ def _skill_requests(client, profile) -> list[dict[str, Any]]:
             state = "expired"
         found.append({"id": request_id, "from": env.sender, "from_id": env.sender_id, "skill": skill,
                       "args": args[:4000], "seq": env.seq, "state": state})
+    return _throttle(found)
+
+
+def _throttle(found: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Past MAX_OPEN_PER_PEER pending requests from one requester (oldest
+    first), the rest read «throttled»: they can be declined, not accepted."""
+    waiting: dict[str, int] = {}
+    for item in found:
+        if item["state"] != "pending":
+            continue
+        who = item.get("from_id") or f"name:{item['from']}"
+        waiting[who] = waiting.get(who, 0) + 1
+        if waiting[who] > MAX_OPEN_PER_PEER:
+            item["state"] = "throttled"
     return found
 
 
@@ -7982,7 +7999,11 @@ def cmd_skills_remote(args: argparse.Namespace) -> int:
                 raise ValueError(f"no skill request {args.target} addressed to you")
             if args.action == "done" and match["state"] != "accepted":
                 raise ValueError("only an accepted request can be reported done")
-            if args.action in ("accept", "decline") and match["state"] != "pending":
+            if args.action == "accept" and match["state"] == "throttled":
+                raise ValueError(f"request {args.target} is throttled: {match['from']} already has "
+                                 f"{MAX_OPEN_PER_PEER} requests open; answer those first "
+                                 "(declining this one is allowed)")
+            if args.action in ("accept", "decline") and match["state"] not in ("pending", "throttled"):
                 raise ValueError(f"request {args.target} is already {match['state']}")
             if not match.get("from_id"):
                 raise ValueError("request has no verified requester identity; ask the peer to resend")
