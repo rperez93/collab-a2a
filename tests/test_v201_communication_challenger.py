@@ -267,16 +267,27 @@ async def test_delivery_does_not_buffer_a_flooding_acknowledgement(tmp_path, rec
         store = worker.Store(service.root)
         store.configure({"agent": "codex", "scope": "Coordinate"})
         store.send("handoff", to="bob", to_id="p_bob")
-        tracemalloc.start()
+        # ONLY THIS DELIVERY'S MEMORY. tracemalloc's peak is process-wide: in a
+        # full suite, threads earlier tests left alive (log writers, quota
+        # readers) allocate inside this window, and under load one run read
+        # 3.8 MB here with the flood never touched (flood.read stayed 0). The
+        # invariant is that the body is never read; the memory check counts
+        # what httpx and collab's client code hold once the turn is over.
+        tracemalloc.start(8)
         started = time.process_time()
         try:
             await service.turn()
             cpu = time.process_time() - started
             _, peak = tracemalloc.get_traced_memory()
+            ours = tracemalloc.take_snapshot().filter_traces([
+                tracemalloc.Filter(True, "*/httpx/*", all_frames=True),
+                tracemalloc.Filter(True, "*/collab/client/*", all_frames=True)])
+            held = sum(stat.size for stat in ours.statistics("filename"))
             record_property("delivery_cpu_seconds", cpu)
             record_property("delivery_peak_python_bytes", peak)
+            record_property("delivery_held_python_bytes", held)
             assert flood.read == 0 and flood.closed
-            assert peak < 1024 * 1024 and cpu < 0.5
+            assert held < 1024 * 1024 and cpu < 0.5
             assert not store.outbox()
         finally:
             tracemalloc.stop()
