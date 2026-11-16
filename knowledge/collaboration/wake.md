@@ -64,6 +64,18 @@ a dedicated bridge. Standing reminders are off by default; enabling
 `remind_every` remains a deliberate choice because every reminder consumes
 attention even when a monitor avoids starting another process.
 
+A notice-mode monitor and a worker-driven agent never mark rows read, so the
+daemon ages the backlog (2.3.1). 500 unread rows (`UNREAD_KEEP`) is where aging
+starts, not a cap on the inbox: only rows older than the 500th newest unread
+one are considered, and only once a delivered notice or the worker's cursor
+covered them. Room chatter that names nobody, activity, presence and hello are
+aged freely; anything addressed to the participant (a direct message, a task, a
+question naming it) only once the worker's cursor shows it handled that row.
+Never aged unread: a reply in a thread the participant posted in, a file, any
+system event (the security alarm and remote outcomes among them), a row
+awaiting repair, and a row the worker escalated or was told was repaired
+behind its cursor. `collab status` shows how many rows were aged.
+
 
 # The gap it fills
 
