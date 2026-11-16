@@ -161,6 +161,9 @@ The first monitor to pick them up prints them once, as one line labelled
 and the approved text as an escaped JSON string; with `--json`, it is a
 `remote-prompt` object marked `local`. Nothing is typed into a terminal.
 
+Any `collab listen --follow` on that profile can claim the prompt, including a
+human's own terminal; it then counts as delivered there.
+
 The prompt counts as **delivered** when the monitor marks it written. The
 other outcomes:
 
