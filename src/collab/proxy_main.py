@@ -282,13 +282,13 @@ def main(argv: list[str] | None = None) -> int:
         with contextlib.suppress(OSError):
             state.save()
         lock.release()
-        # ONE DEADLINE for the watcher and the flush together, not one each.
-        stop_at = time.monotonic() + logcap.FLUSH_WAIT
-        if watcher is not None:
-            watcher.stop()
         # The last lines — why it left — may still be queued for the capped
-        # writer. Bounded (`logcap.FLUSH_WAIT`), as the daemon does.
-        logcap.flush(max(0.0, stop_at - time.monotonic()))
+        # writer. Bounded (`logcap.FLUSH_WAIT`), as the daemon does; FIRST,
+        # since they matter more than the watcher, which shares what is left.
+        stop_at = time.monotonic() + logcap.FLUSH_WAIT
+        logcap.flush()
+        if watcher is not None:
+            watcher.stop(max(0.0, stop_at - time.monotonic()))
     return 0
 
 

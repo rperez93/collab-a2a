@@ -561,6 +561,14 @@ class LineWriter:
                 # «done» while the lines are still in this thread's hands.
                 self._written = upto
                 self._ready.notify_all()
+                # A FAILING DISK WHILE CLOSING ENDS THE THREAD. The gap line
+                # would otherwise be retried at once, for ever, burning a core
+                # for the whole close deadline. The drop stays counted, and the
+                # next `put` starts a writer that says it.
+                if lost and self._closing and not self._pending:
+                    if self._thread is threading.current_thread():
+                        self._thread = None
+                    return
 
 
 def _dropped_line(count: int) -> str:

@@ -34,6 +34,18 @@ import pytest
 
 from collab import quotas
 
+
+@pytest.fixture(autouse=True)
+def _the_pump_ends_with_the_test():
+    """A `collab-quota-read` thread a test here started is over when it ends."""
+    before = set(threading.enumerate())
+    yield
+    stop_at = time.monotonic() + 2.0
+    for thread in threading.enumerate():
+        if thread not in before and thread.name == "collab-quota-read":
+            thread.join(max(0.0, stop_at - time.monotonic()))
+            assert not thread.is_alive(), "the quota pump outlived its test"
+
 #: What `account/rateLimits/read` actually returned, measured. The account's
 #: own limit, plus one model bucket with a window of each length.
 MEASURED = {

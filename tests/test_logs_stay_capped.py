@@ -1577,3 +1577,22 @@ def test_stopping_the_watcher_ends_its_thread(tmp_path):
     watcher = logcap.watch(tmp_path / "a.log")
     watcher.stop()
     assert not watcher._thread.is_alive()
+
+
+def test_closing_on_a_failing_disk_ends_at_once_without_spinning(tmp_path, monkeypatch):
+    """A write that keeps failing while the writer closes must end the thread,
+    not retry its gap line in a tight loop for the whole deadline."""
+    def fail(*args, **kwargs):
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(logcap, "_write_lines", fail)
+    writer = logcap.LineWriter()
+    for n in range(10):
+        writer.put(tmp_path / "w.log", f"line {n}")
+    cpu = resource.getrusage(resource.RUSAGE_SELF)
+    began = time.monotonic()
+    assert writer.close(2.0) is True
+    used = resource.getrusage(resource.RUSAGE_SELF)
+    assert time.monotonic() - began < 1.0
+    assert (used.ru_utime + used.ru_stime) - (cpu.ru_utime + cpu.ru_stime) < 0.2
+    assert writer.dropped_total == 10
