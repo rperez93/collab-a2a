@@ -424,7 +424,7 @@ def test_an_outcome_only_wake_names_the_result_command_and_never_recv(tmp_path, 
 
 def test_a_mixed_wake_keeps_its_inbox_prompt_and_adds_the_result_command(tmp_path):
     offer, prompt = _outcome_wake(tmp_path, 'notice', with_chat=True)
-    assert '`collab recv`' in prompt
+    assert '`collab recv --notice`' in prompt
     assert f"`collab remote result {offer['id']}`" in prompt
 
 
