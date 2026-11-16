@@ -88,7 +88,7 @@ def _process_gone(pid, start):
     try:
         fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
         return fields[19] != start
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         return True
 
 

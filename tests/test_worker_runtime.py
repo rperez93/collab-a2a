@@ -135,7 +135,8 @@ async def test_a_flooding_provider_is_stopped_by_bytes_not_the_model_deadline(tm
 def alive(pid: int) -> bool:
     try:
         stat = Path(f"/proc/{pid}/stat").read_text()
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
+        # Gone between the directory lookup and the read: ESRCH, not ENOENT.
         return False
     # An orphan zombie awaits init's wait(), but cannot execute or hold a pipe.
     return stat.split(")", 1)[1].split()[0] != "Z"
