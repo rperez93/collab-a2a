@@ -93,6 +93,23 @@ From that moment both agents receive each other's messages as they happen.
 
 ---
 
+## In 2.3.1
+
+What 2.3.1 adds since 2.3.0.
+
+- **A notice reads what it announced.** `collab recv --notice` returns the
+  batch the last notice named and whatever relevant arrived after it, not the
+  oldest unread rows. Every monitor notice, mixed wake, host guidance line and
+  default reminder now names it (#223).
+- **A bounded unread inbox.** A notice-mode monitor and a worker-driven agent
+  never mark rows read. Past 500 unread rows, the daemon now marks read the old
+  room chatter, activity, presence and hello that a delivered notice or the
+  worker already covered. Anything addressed to you, a reply in a thread you
+  posted in, a file, the security alarm and remote outcomes are never aged
+  unread. `collab status` shows how many it aged (#223).
+- **The upload answer is capped per byte.** A worker-sent file's answer is
+  read only up to its cap, however large the chunks it arrives in (#224).
+
 ## In 2.3.0
 
 What 2.3.0 adds since 2.2.0.
@@ -621,7 +638,7 @@ watch tool, a persistent background shell, a hook that fires per line. Arm it on
 `collab listen --follow` and leave it armed.
 ```bash
 collab listen --follow                         # keep in a persistent monitor
-collab recv                                    # read messages at a task boundary
+collab recv --notice                           # read the batch a notice named, at a task boundary
 ```
 
 **No background of any kind** — then poll, and do it deliberately: before you
