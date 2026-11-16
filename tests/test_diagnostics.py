@@ -614,3 +614,18 @@ def test_two_writers_never_leave_a_half_line_in_the_file(recording):
     assert body.endswith("\n")
     for line in body.splitlines():
         json.loads(line)            # every line is a whole record, or this raises
+
+
+def test_closing_writes_the_tail_and_ends_the_thread_and_a_later_record_still_lands(
+        recording):
+    """`close` is how a test that logged in-process gives the writer thread
+    back: what was queued is on the disk, the thread has ended, and the next
+    record starts a new one rather than being lost."""
+    diag.log("before_close", n=1)
+    thread = diag._writer
+    assert diag.close() is True
+    assert not thread.is_alive()
+    assert [r["event"] for r in diag.records(recording)] == ["before_close"]
+    diag.log("after_close", n=2)
+    assert [r["event"] for r in _rows(recording)] == ["before_close", "after_close"]
+    assert diag.close() is True

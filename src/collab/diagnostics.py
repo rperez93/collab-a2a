@@ -143,6 +143,7 @@ _ready = threading.Condition()
 _writer: threading.Thread | None = None
 _writer_lock = threading.Lock()
 _registered = False
+_closing = False
 
 
 def begin(root: Path | str, proc: str) -> None:
@@ -381,12 +382,44 @@ def _register_the_final_flush() -> None:
     atexit.register(flush)
 
 
+def close(timeout: float = FLUSH_WAIT) -> bool:
+    """Write what is queued, then end the writer thread. True if it ended.
+
+    For a test that logged in-process: only the process's exit ever ended the
+    thread, so it ran on into every later test. ONE DEADLINE for the flush and
+    the join, as in `flush`. The next record starts a new writer.
+    """
+    global _closing, _writer
+    stop_at = time.monotonic() + timeout
+    flush(timeout)
+    with _writer_lock:
+        thread = _writer
+        with _ready:
+            _closing = True
+            _ready.notify_all()
+        if thread is not None:
+            thread.join(max(0.0, stop_at - time.monotonic()))
+        with _ready:
+            _closing = False
+        ended = thread is None or not thread.is_alive()
+        if ended and _writer is thread:
+            _writer = None
+        return ended
+
+
 def _writer_loop() -> None:
-    global _dropped, _written
+    global _dropped, _written, _writer
     while True:
         with _ready:
             if not _pending:
-                _ready.wait(FLUSH_EVERY)
+                if _closing and not _dropped:
+                    # Gone before the lock is let go, as in logcap's writer: a
+                    # record queued after this check starts a new thread.
+                    if _writer is threading.current_thread():
+                        _writer = None
+                    return
+                if not _closing:
+                    _ready.wait(FLUSH_EVERY)
             batch, dropped, upto = list(_pending), _dropped, _queued
             _pending.clear()
             _dropped = 0

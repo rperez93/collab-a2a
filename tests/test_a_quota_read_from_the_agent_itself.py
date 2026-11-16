@@ -368,12 +368,16 @@ def test_a_server_that_goes_quiet_is_timed_out_rather_than_waited_on():
         def lines(self):
             while self.q:
                 yield self.q.pop(0)
-            while True:          # blocks, exactly as `readline` does
+            while not self.closed:   # blocks, exactly as `readline` does
                 clock.sleep(0.05)
 
     server = Quiet()
+    server.closed = False
     began = clock.time()
-    result, why = quotas.speak(server.send, server.lines, timeout=1.0)
+    try:
+        result, why = quotas.speak(server.send, server.lines, timeout=1.0)
+    finally:
+        server.closed = True     # the pipe closing is what ends the pump
     assert result == {} and "in time" in why
     assert clock.time() - began < 10, "it did not give up on its own"
 

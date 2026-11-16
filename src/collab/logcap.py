@@ -423,6 +423,7 @@ class LineWriter:
         self._thread: threading.Thread | None = None
         self._registered = False
         self._gave_up = False
+        self._closing = False
         self._files: dict[Path, CappedFile] = {}     # the writer thread's own
 
     def put(self, path: Path | str, line: str) -> bool:
@@ -469,6 +470,30 @@ class LineWriter:
             self._gave_up = not done
             return done
 
+    def close(self, timeout: float = FLUSH_WAIT) -> bool:
+        """Write what is queued, then end the writer thread. True if it ended.
+
+        For an owner whose writer lives shorter than the process: the thread is
+        a daemon and only the process's exit ever ended it, so every writer a
+        test made kept a thread for the rest of the run. ONE DEADLINE for the
+        flush and the join together, as in `flush`. A later `put` starts a new
+        thread, so a closed writer still never loses a line.
+        """
+        stop_at = time.monotonic() + timeout
+        self.flush(timeout)
+        with self._ready:
+            thread = self._thread
+            self._closing = True
+            self._ready.notify_all()
+        if thread is not None:
+            thread.join(max(0.0, stop_at - time.monotonic()))
+        with self._ready:
+            self._closing = False
+            ended = thread is None or not thread.is_alive()
+            if ended and self._thread is thread:
+                self._thread = None
+            return ended
+
     def _start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
@@ -489,7 +514,15 @@ class LineWriter:
         while True:
             with self._ready:
                 if not self._pending:
-                    self._ready.wait(5.0)
+                    if not self._closing:
+                        self._ready.wait(5.0)
+                    elif not self._dropped:
+                        # GONE BEFORE THE LOCK IS LET GO: a `put` that came
+                        # after this check must start a new thread, not find
+                        # this one still alive and leave its line queued.
+                        if self._thread is threading.current_thread():
+                            self._thread = None
+                        return
                 batch = self._pending
                 self._pending = []
                 # THE QUEUE IS EMPTY NOW, which is the «space returned» a gap
@@ -712,8 +745,11 @@ class Watcher:
             self._thread.start()
         return self
 
-    def stop(self) -> None:
+    def stop(self, timeout: float = FLUSH_WAIT) -> None:
+        """Stop looking, and wait (bounded) for a pass in progress to end."""
         self._stop.set()
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(timeout)
 
 
 def _clear_stale_spares(paths: Iterable[Path]) -> None:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import curses
+import threading
+import time
 
 import pytest
 
@@ -14,6 +16,68 @@ from collab.server.store import Store
 
 # One full run per machine at a time; the hooks live in suite_lock.
 from suite_lock import pytest_collection_finish, pytest_unconfigure  # noqa: E402,F401
+
+
+# A THREAD A TEST STARTED MUST BE GONE WHEN IT ENDS. Collab's own threads
+# (a log writer, a pump, a proxy) left behind by one test kept running into the
+# next ones: they held files and memory a later test measured, and woke on
+# state that test owned. Checked after every fixture has been torn down, by
+# thread object, not name, so a thread of the same name from earlier is not
+# mistaken for this test's.
+LEFT_THREAD_DEADLINE = 2.0   # one deadline for the whole test, not one per thread
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "leaves_collab_thread(reason): this test leaves a collab "
+        "thread running on purpose; the leftover-thread check skips it")
+
+
+def _collab_threads_since(before):
+    """The collab threads alive now that were not alive before."""
+    left = []
+    for thread in threading.enumerate():
+        if thread in before or not thread.is_alive():
+            continue
+        target = getattr(thread, "_target", None)
+        module = getattr(target, "__module__", "") or ""
+        if thread.name.startswith("collab") or module.startswith("collab"):
+            left.append(thread)
+    return left
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_setup(item):
+    item.stash[_THREADS_BEFORE] = set(threading.enumerate())
+    return (yield)
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_teardown(item, nextitem):
+    result = yield
+    before = item.stash.get(_THREADS_BEFORE, None)
+    if before is None or item.get_closest_marker("leaves_collab_thread"):
+        return result
+    left = _collab_threads_since(before)
+    if left:
+        # THE PROCESS-WIDE WRITERS start on the first line anybody logs, so
+        # whichever test logs first would own them. Closed here; the next
+        # line starts them again.
+        from collab import diagnostics, logcap
+        logcap.WRITER.close()
+        diagnostics.close()
+        deadline = time.monotonic() + LEFT_THREAD_DEADLINE
+        for thread in left:
+            thread.join(max(0.0, deadline - time.monotonic()))
+        left = _collab_threads_since(before)
+    if left:
+        names = ", ".join(sorted(thread.name for thread in left))
+        pytest.fail(f"collab thread(s) still running after the test: {names}",
+                    pytrace=False)
+    return result
+
+
+_THREADS_BEFORE = pytest.StashKey[set]()
 
 
 @pytest.fixture(autouse=True)

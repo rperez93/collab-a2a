@@ -188,11 +188,13 @@ def main(argv: list[str] | None = None) -> int:
     # one; the watcher trims what still reaches raw stderr, and the tunnel's
     # own log, which its collector already writes under the cap.
     setup_logging()
-    logcap.watch(proxy.log_path(), proxy.state_dir() / "proxy-ngrok.log")
+    watcher = logcap.watch(proxy.log_path(), proxy.state_dir() / "proxy-ngrok.log")
     capture_logging_into(proxy.log_path())
 
     lock = exclusive.DaemonLock(lock_root())
     if not lock.acquire():
+        if watcher is not None:
+            watcher.stop()
         held = proxy.ProxyState.load()
         print(f"collab proxy already running (pid {held.pid}, port {held.port})")
         return 0
@@ -280,9 +282,13 @@ def main(argv: list[str] | None = None) -> int:
         with contextlib.suppress(OSError):
             state.save()
         lock.release()
+        # ONE DEADLINE for the watcher and the flush together, not one each.
+        stop_at = time.monotonic() + logcap.FLUSH_WAIT
+        if watcher is not None:
+            watcher.stop()
         # The last lines — why it left — may still be queued for the capped
         # writer. Bounded (`logcap.FLUSH_WAIT`), as the daemon does.
-        logcap.flush()
+        logcap.flush(max(0.0, stop_at - time.monotonic()))
     return 0
 
 

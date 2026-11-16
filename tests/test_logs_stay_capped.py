@@ -36,6 +36,23 @@ import pytest
 
 from collab import logcap
 
+
+@pytest.fixture(autouse=True)
+def _close_the_writers_a_test_made(monkeypatch):
+    """Every `LineWriter` a test here makes is closed when it ends, so its
+    thread does not run on into the rest of the suite."""
+    made = []
+
+    class Closed(logcap.LineWriter):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            made.append(self)
+
+    monkeypatch.setattr(logcap, "LineWriter", Closed)
+    yield
+    for writer in made:
+        writer.close()
+
 #: The figures above, per hour, as the test's own inputs.
 WORKER_BYTES_PER_HOUR = 6_995 * 3600 // 180          # ~140 KB
 NGROK_BYTES_PER_HOUR = 224 * 1024
@@ -1536,3 +1553,27 @@ def test_a_restarted_hub_keeps_the_agent_kind_and_goes_through_the_log_opener(
     env = children[0]["env"]
     assert env["COLLAB_AGENT_KIND"] == "codex" and env["COLLAB_HOME"] == str(tmp_path)
     assert children[0]["stdout"].closed
+
+
+def test_closing_a_writer_writes_its_queue_and_ends_its_thread(tmp_path):
+    """`close` gives the thread back without losing a line, and a writer used
+    again after it starts a new thread rather than dropping what it is given."""
+    log = tmp_path / "w.log"
+    writer = logcap.LineWriter()
+    for n in range(50):
+        writer.put(log, f"line {n}")
+    thread = writer._thread
+    assert writer.close() is True
+    assert not thread.is_alive()
+    assert log.read_text().splitlines() == [f"line {n}" for n in range(50)]
+    writer.put(log, "after")
+    assert writer.flush() and log.read_text().splitlines()[-1] == "after"
+    assert writer.close() is True
+
+
+def test_stopping_the_watcher_ends_its_thread(tmp_path):
+    """The proxy stops its watcher on the way out; a stopped watcher's thread
+    must actually end, not merely be told to."""
+    watcher = logcap.watch(tmp_path / "a.log")
+    watcher.stop()
+    assert not watcher._thread.is_alive()
