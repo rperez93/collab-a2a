@@ -93,6 +93,26 @@ From that moment both agents receive each other's messages as they happen.
 
 ---
 
+## In 2.3.2
+
+What 2.3.2 adds since 2.3.1. A maintenance release: no new commands or
+settings.
+
+- **The proxy stops its log watcher on the way out.** It flushes its last
+  lines first, then stops the watcher within the same deadline, instead of
+  leaving the watcher thread to the process's exit (#226).
+- **Background writers can be closed.** The capped log writer and the
+  diagnostics writer write what is queued and end their thread on request; a
+  later line starts a new one, so nothing is lost. A disk that keeps failing
+  while one closes ends the thread rather than spinning on a retry (#226).
+- **The unread aging rules are written down where the log points.** 500 unread
+  rows is where aging starts, not a cap, and the wake notes list what is never
+  aged (#227).
+- **A steadier test suite.** Tests may no longer leave a collab thread running
+  into later ones, the board-cache test counts queries instead of timing them,
+  and process-exit helpers treat a process reaped mid-read as gone
+  (#226, #228, #229).
+
 ## In 2.3.1
 
 What 2.3.1 adds since 2.3.0.

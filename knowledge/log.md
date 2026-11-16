@@ -1,5 +1,8 @@
 # Bundle Update Log
 
+## 2026-11-16 (2.3.2: maintenance)
+* **Update (later than the pin)**: No change to the documented behaviour beyond the 2.3.1 entry below; 2.3.2 closes background writer threads on request, stops the proxy's log watcher on exit and steadies the test suite (#226, #228, #229). The pin and verification stamps are unchanged.
+
 ## 2026-11-16 (2.3.1: notices read what they announced)
 * **Update (later than the pin)**: Recorded in [wake](collaboration/wake.md) that a notice is read with `collab recv --notice`, which returns the batch it named rather than the oldest unread rows, and how the daemon ages the unread backlog: 500 rows is where aging starts, not a cap, and what is never aged (#223). The pin and verification stamps are unchanged.
 
