@@ -2215,15 +2215,23 @@ def cmd_recv(args: argparse.Namespace) -> int:
         with contextlib.suppress(OSError, ValueError, TypeError):
             drop = json.loads((DaemonPaths(profile.dir).root / "attention.json").read_text())
             seqs = [int(s) for s in (drop.get("seqs") or [drop.get("seq")]) if s]
-        for env in inbox.notice_batch(seqs, limit=args.limit):
+        own = {} if args.mine_too else {"exclude_sender_id": profile.participant_id or "",
+                                        "exclude_sender": profile.name}
+        deadline = time.time() + args.wait
+        while True:
+            events = inbox.notice_batch(seqs, limit=args.limit, mark=not args.peek, **own)
+            if events or time.time() >= deadline:
+                break
+            time.sleep(0.3)
+        for env in events:
             print(_format(env, args.json))
         return 0
-    backlog = inbox.unread_count()
+    # ON STDERR, so `recv --json` stays one event per line; own rows not counted.
+    backlog = inbox.unread_count(exclude_sender=profile.name,
+                                 exclude_sender_id=profile.participant_id or None)
     if backlog > args.limit:
-        hint = (f"{backlog - args.limit} more unread than this page; `collab recv --notice`"
-                " reads the latest batch")
-        print(json.dumps({"kind": "recv-backlog", "local": True, "text": hint})
-              if args.json else dim(hint))
+        print(dim(f"{backlog - args.limit} more unread than this page; `collab recv --notice`"
+                  " reads the latest batch"), file=sys.stderr)
     deadline = time.time() + args.wait
     while True:
         events = inbox.take_unread(limit=args.limit, mark=not args.peek)

@@ -33,6 +33,11 @@ _AGEABLE_KINDS = ("activity", "presence", "hello")
 #: Hub events for the main agent itself, never aged before it reads them.
 _FOR_MAIN = ("approval-security", "remote-outcome")
 
+#: What the conversation worker actually consumes (worker_service.
+#: CONVERSATION_KINDS). Only these can be "handled" by its cursor: it skips
+#: files and system events, so its cursor passing them proves nothing.
+_WORKER_KINDS = ("chat", "task", "project", "request", "response")
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS inbox (
     seq     INTEGER PRIMARY KEY,
@@ -478,7 +483,8 @@ class Inbox:
                 time.sleep(0.1)
         return 0
 
-    def notice_batch(self, seqs: list[int], *, limit: int = 100) -> list[Envelope]:
+    def notice_batch(self, seqs: list[int], *, limit: int = 100, mark: bool = True,
+                     exclude_sender_id: str = "", exclude_sender: str = "") -> list[Envelope]:
         """`collab recv --notice`: exactly the events the last notice named,
         plus relevant unread events that arrived after it, oldest first and
         at most `limit`; those are marked read and nothing older is touched.
@@ -487,6 +493,13 @@ class Inbox:
                     "(kind='system' AND json_extract(payload, '$.body.event') IN "
                     "('approval-security','remote-outcome')))")
         clean = sorted({int(s) for s in seqs if isinstance(s, int) and s > 0})
+        # The agent's own words come back down the feed; not news to it.
+        mine, mine_args = "", []
+        if exclude_sender_id:
+            mine = " AND (kind='system' OR NOT (sender_id=? OR (sender_id='' AND sender=?)))"
+            mine_args = [exclude_sender_id, exclude_sender]
+        elif exclude_sender:
+            mine, mine_args = " AND (kind='system' OR sender!=?)", [exclude_sender]
         with self._lock:
             if clean:
                 # FROM THE FIRST NAMED SEQ ON, not only the named ones: a notice
@@ -494,13 +507,13 @@ class Inbox:
                 # burst of 100 named 41 and the rows between were never read.
                 rows = self._db.execute(
                     f"SELECT seq, payload FROM inbox WHERE read=0 AND seq >= ? AND "
-                    f"(seq IN ({','.join('?' * len(clean))}) OR {relevant}) ORDER BY seq LIMIT ?",
-                    (clean[0], *clean, limit)).fetchall()
+                    f"(seq IN ({','.join('?' * len(clean))}) OR {relevant}){mine} ORDER BY seq LIMIT ?",
+                    (clean[0], *clean, *mine_args, limit)).fetchall()
             else:
                 rows = list(reversed(self._db.execute(
-                    f"SELECT seq, payload FROM inbox WHERE read=0 AND {relevant} "
-                    "ORDER BY seq DESC LIMIT ?", (limit,)).fetchall()))
-            if rows:
+                    f"SELECT seq, payload FROM inbox WHERE read=0 AND {relevant}{mine} "
+                    "ORDER BY seq DESC LIMIT ?", (*mine_args, limit)).fetchall()))
+            if rows and mark:
                 self._mark_read([r["seq"] for r in rows])
         return [Envelope.from_dict(json.loads(r["payload"])) for r in rows]
 
@@ -539,17 +552,26 @@ class Inbox:
                                   for _ in names) or "0"
             not_main = ("NOT (kind='system' AND json_extract(payload, '$.body.event') IN "
                         f"({','.join('?' * len(_FOR_MAIN))}))")
+            # A thread this participant started: its first message is ours.
+            own_threads = ("(SELECT t FROM (SELECT json_extract(payload, '$.thread') AS t, sender_id, MIN(seq) "
+                           "FROM inbox WHERE json_extract(payload, '$.thread') IS NOT NULL GROUP BY t) "
+                           "WHERE sender_id = ?)")
             free = (f"(kind IN ({','.join('?' * len(_AGEABLE_KINDS))}) OR "
                     "(kind='chat' AND coalesce(json_extract(payload, '$.toId'), '') = '' "
                     "AND coalesce(json_extract(payload, '$.to'), '') = '' "
                     f"AND NOT ({mention})))")
+            handled = f"(seq <= ? AND kind IN ({','.join('?' * len(_WORKER_KINDS))}))"
             keep = sorted({int(s) for s in protected if isinstance(s, int) and s > 0})
             kept = f" AND seq NOT IN ({','.join('?' * len(keep))})" if keep else ""
             cur = self._db.execute(
                 f"UPDATE inbox SET read=1 WHERE read=0 AND seq <= ? AND {not_main} AND "
                 f"seq NOT IN (SELECT seq FROM repair_pending){kept} AND "
-                f"(({free} AND seq <= ?) OR seq <= ?)",
-                (below, *_FOR_MAIN, *keep, *_AGEABLE_KINDS, *names, covered, int(worker_cursor or 0)))
+                # A reply in a thread this participant started is its own
+                # business: never aged, whatever the worker's cursor says.
+                f"coalesce(json_extract(payload, '$.thread'), '') NOT IN {own_threads} AND "
+                f"(({free} AND seq <= ?) OR {handled})",
+                (below, *_FOR_MAIN, *keep, self_id or "\0", *_AGEABLE_KINDS, *names, covered,
+                 int(worker_cursor or 0), *_WORKER_KINDS))
             aged = int(cur.rowcount or 0)
             if aged:
                 self._db.execute("INSERT INTO meta (key, value) VALUES ('aged', ?) ON CONFLICT(key) "

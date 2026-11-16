@@ -94,8 +94,10 @@ def test_plain_recv_says_when_more_is_waiting_and_notice_reads_the_batch(tmp_pat
     assert cli.main(["recv", "--notice", "--json"]) == 0
     assert [json.loads(l)["seq"] for l in capsys.readouterr().out.splitlines()] == [149, 150]
     assert cli.main(["recv", "--peek", "--json", "--limit", "10"]) == 0
-    first = json.loads(capsys.readouterr().out.splitlines()[0])
-    assert first["kind"] == "recv-backlog" and first["local"] is True
+    out = capsys.readouterr()
+    # The hint goes to stderr: --json stays one event per line.
+    assert all(json.loads(l).get("seq") for l in out.out.splitlines())
+    assert "more unread than this page" in out.err
 
 
 def test_a_notice_over_41_events_reads_every_row_it_covered(tmp_path):
@@ -136,3 +138,77 @@ def test_the_worker_names_the_rows_it_did_not_handle(tmp_path):
     with store._db() as db:
         db.execute("INSERT INTO repaired VALUES (7)")
     assert 7 in store.protected_seqs()
+
+
+
+def _thread(seq, sender, thread):
+    return Envelope(kind="chat", sender="x", sender_id=sender, room="general", text="re", thread=thread, seq=seq)
+
+
+def test_replies_in_my_thread_file_dms_and_skill_approvals_are_never_aged_by_the_cursor(tmp_path):
+    """The gate's item 4: the worker skips files and system events, so its
+    cursor passing them proves nothing; replies in a thread I started are mine."""
+    box = Inbox(tmp_path)
+    box.record(_thread(1, ME, "t_mine"))                         # I started the thread
+    box.record(_thread(2, "p_other", "t_mine"))                  # a reply to me
+    box.record(Envelope(kind="file", sender="other", sender_id="p_other", to=MY_NAME, to_id=ME,
+                        room=None, text="", body={"name": "a.zip"}, seq=3))
+    box.record(Envelope(kind="system", sender="other", sender_id="p_other", to=MY_NAME, to_id=ME,
+                        room=None, text="accepted", body={"event": "skill-approval"}, seq=4))
+    box.record(_thread(5, "p_other", "t_theirs"))                # someone else's thread
+    _fill(box, 6, 1000)
+    box.age(notice_seq=1005, worker_cursor=1005, self_id=ME, self_name=MY_NAME)
+    left = set(_unread(box))
+    assert {2, 3, 4} <= left and 5 not in left
+
+
+def test_notice_batch_guards_hold(tmp_path):
+    """Pins the guards whose mutants survived: read=0, the relevant-kind
+    filter, own rows unless asked, and --peek."""
+    box = Inbox(tmp_path)
+    box.record(_room(1, "first"))
+    box.record(Envelope(kind="presence", sender="o", sender_id="p_other", room="general", text="", seq=2))
+    box.record(_room(3, "mine", sender=ME))
+    box.record(_room(4, "later"))
+    assert [e.seq for e in box.notice_batch([1], mark=False, exclude_sender_id=ME)] == [1, 4]
+    assert 1 in _unread(box)                                     # --peek marked nothing
+    assert [e.seq for e in box.notice_batch([1], exclude_sender_id=ME)] == [1, 4]
+    assert box.notice_batch([1], exclude_sender_id=ME) == []      # read rows are not returned again
+    assert [e.seq for e in box.notice_batch([3])] == [3]          # --mine-too includes own
+
+
+def test_a_directed_room_chat_is_not_freely_aged(tmp_path):
+    """Pins the $.to check: a chat with a recipient name but no id is addressed."""
+    box = Inbox(tmp_path)
+    box.record(Envelope(kind="chat", sender="o", sender_id="p_other", to=MY_NAME, room=None, text="hi", seq=1))
+    _fill(box, 2, 1000)
+    box.age(notice_seq=1001, self_id=ME, self_name=MY_NAME)
+    assert 1 in _unread(box)
+
+
+def test_the_daemon_ages_only_after_a_committed_notice_or_with_the_worker_on(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from collab.client.daemon import Daemon
+    from collab import worker_notices
+    box = Inbox(tmp_path / "inbox")
+    _fill(box, 1, 1000)
+    root = tmp_path / "daemon"
+    root.mkdir()
+    fake = SimpleNamespace(paths=SimpleNamespace(root=root), inbox=box,
+                           profile=SimpleNamespace(dir=tmp_path, participant_id=ME, name=MY_NAME))
+    monkeypatch.setattr(worker_notices, "enabled", lambda d: False)
+    (root / "attention.json").write_text(json.dumps({"seq": 1000, "seqs": [1000], "expires_at": 9e9}))
+    Daemon._age_unread(fake)
+    assert len(_unread(box)) == 1000                              # a lease, not a delivered notice
+    fake._aged_at = 0.0
+    (root / "attention.json").write_text(json.dumps({"seq": 1000, "seqs": [1000], "expires_at": 0}))
+    Daemon._age_unread(fake)
+    assert len(_unread(box)) == UNREAD_KEEP
+
+
+def test_a_capped_wake_names_the_oldest_first_read_for_its_earlier_rows():
+    import inspect
+    from collab import wake
+    src = inspect.getsource(wake)
+    assert "`collab recv`, oldest first, has them" in src
+    assert "`collab recv --notice` has the latest" not in src

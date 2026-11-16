@@ -996,7 +996,7 @@ class Waker:
         earlier = json.dumps({"at": oldest, "kind": "system",
                               "from": "collab", "dropped": dropped,
                               "text": f"[{dropped} earlier message(s) not shown"
-                                      " — `collab recv --notice` has the latest]"},
+                                      " — `collab recv`, oldest first, has them]"},
                              ensure_ascii=False)
         tmp = path.with_suffix(".capping")
         with contextlib.suppress(OSError):
@@ -1547,7 +1547,7 @@ class Waker:
             # where they are.
             kept = kept[kept.index("\n") + 1:] if "\n" in kept else ""
             body = ("[earlier messages in this batch were too large to carry —"
-                    " `collab recv --notice` has the latest]\n" + kept)
+                    " `collab recv`, oldest first, has them]\n" + kept)
         return head + body
 
     def write_prompt(self, batch: Batch | None, reminder: str = "") -> Path:
