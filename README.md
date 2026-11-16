@@ -2951,6 +2951,7 @@ Mostly for testing and for running two profiles against one repo.
 | `COLLAB_NAME` | display name, overriding the global setting |
 | `COLLAB_NO_UPDATE_CHECK=1` | never check for new releases |
 | `COLLAB_NO_TUNNEL=1` | never start a tunnel (same as `collab host --no-tunnel`) |
+| `COLLAB_NGROK_API_PORTS` | ngrok local API ports to look for an existing tunnel on (comma-separated; default 4040-4045; empty or invalid looks on none) |
 | `NO_COLOR` | plain output everywhere, including the status line |
 | `CLAUDE_CONFIG_DIR` | where `collab statusline`/`skills` install to |
 

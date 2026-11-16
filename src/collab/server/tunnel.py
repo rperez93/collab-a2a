@@ -21,6 +21,12 @@ from dataclasses import dataclass
 #: polling 4040 alone reads someone else's agent and concludes we have no
 #: tunnel while ours is up and serving.
 NGROK_API_PORTS = range(4040, 4046)
+
+#: Which local API ports to probe instead: a comma-separated list, and EMPTY
+#: means probe none. The test suite sets it empty so a hub it spawns never
+#: reuses a tunnel the machine's own ngrok still points at that port.
+API_PORTS_ENV = "COLLAB_NGROK_API_PORTS"
+_API_PORTS_MAX = 16
 START_TIMEOUT = 25.0
 
 #: ngrok prints this once the tunnel is live; our own log is the authoritative
@@ -129,6 +135,24 @@ class Tunnel:
             release_collector(self.process)
 
 
+def api_ports() -> tuple[int, ...]:
+    """The local ngrok API ports to probe: `NGROK_API_PORTS`, or the
+    `COLLAB_NGROK_API_PORTS` override when it is set.
+
+    FAILS CLOSED. An override that is empty, malformed, out of range or too
+    long probes nothing; it never falls back to the defaults, or a typo in a
+    variable set to keep the machine's agent out would let it straight in.
+    """
+    raw = os.environ.get(API_PORTS_ENV)
+    if raw is None:
+        return tuple(NGROK_API_PORTS)
+    parts = [part.strip() for part in raw.split(",")] if raw.strip() else []
+    if len(parts) > _API_PORTS_MAX or not all(part.isdigit() for part in parts):
+        return ()
+    ports = tuple(int(part) for part in parts)
+    return ports if all(1 <= port <= 65535 for port in ports) else ()
+
+
 def _all_tunnels() -> list[dict]:
     """Every tunnel from every ngrok agent running on this machine."""
     # Imported where it is used: cli.py imports this module for `free_port`
@@ -137,7 +161,7 @@ def _all_tunnels() -> list[dict]:
     import httpx
 
     found: list[dict] = []
-    for api_port in NGROK_API_PORTS:
+    for api_port in api_ports():
         try:
             r = httpx.get(f"http://127.0.0.1:{api_port}/api/tunnels", timeout=1.0)
             if r.status_code == 200:

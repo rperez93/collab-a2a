@@ -89,6 +89,7 @@ profile owns, so one repo can hold several:
 | `COLLAB_AGENT_ID` | explicit stable agent-session identity for isolation |
 | `COLLAB_CONFIG` | global settings (name, stats sharing, viewer layout) |
 | `COLLAB_PEERS_DIR` | the machine-wide session registry |
+| `COLLAB_NGROK_API_PORTS` | the machine's own ngrok agent: the suite sets it empty, so no hub a test starts reuses a real tunnel |
 
 Set all three when running more than one profile, or they will share a name and
 a peer registry and confuse each other:

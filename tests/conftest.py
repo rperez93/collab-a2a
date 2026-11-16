@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import curses
+import os
 import threading
 import time
 
@@ -13,6 +14,13 @@ from collab.server.app import create_app
 from collab.server.auth import new_secret
 from collab.server.store import Store
 
+
+# NO TEST READS THE MACHINE'S OWN NGROK. A hub a test spawns probes ngrok's
+# local API and reuses a tunnel already pointed at its port; on a machine with
+# a real agent, one left on a now-free port made a refused tunnel read as up.
+# Set at import, so every process a test starts inherits it; the tests of the
+# probe itself choose their ports explicitly.
+os.environ.setdefault("COLLAB_NGROK_API_PORTS", "")
 
 # One full run per machine at a time; the hooks live in suite_lock.
 from suite_lock import pytest_collection_finish, pytest_unconfigure  # noqa: E402,F401

@@ -151,6 +151,7 @@ def test_no_url_in_the_log_yet(tmp_path):
 
 def test_agents_on_other_api_ports_are_found(monkeypatch):
     """A tunnel published by an agent on 4041 still counts as ours."""
+    monkeypatch.delenv(t.API_PORTS_ENV, raising=False)   # the default ports
     class R:
         status_code = 200
 
@@ -451,3 +452,51 @@ def test_a_failed_write_leaves_no_scratch_file_behind(tmp_path, monkeypatch):
 
     left = sorted(p.name for p in cfg.dir.iterdir())
     assert left == ["hub.json"], f"scratch files accumulated: {left}"
+
+
+@pytest.mark.parametrize("raw, ports", [
+    (None, tuple(range(4040, 4046))),
+    ("", ()),
+    ("   ", ()),
+    ("4050", (4050,)),
+    (" 4050 , 4051 ", (4050, 4051)),
+    ("4050,abc", ()),
+    ("0", ()),
+    ("70000", ()),
+    ("4050,", ()),
+    (",".join(["4050"] * 17), ()),
+])
+def test_the_api_port_override_fails_closed(monkeypatch, raw, ports):
+    """Unset keeps the defaults; anything set but not a short list of valid
+    ports probes nothing rather than falling back to them."""
+    if raw is None:
+        monkeypatch.delenv(t.API_PORTS_ENV, raising=False)
+    else:
+        monkeypatch.setenv(t.API_PORTS_ENV, raw)
+    assert t.api_ports() == ports
+
+
+def test_an_empty_override_never_reaches_the_machines_agent(monkeypatch):
+    """Empty means no probe at all: an agent that would answer for our port is
+    never asked, so its stale tunnel cannot be taken for ours."""
+    asked = []
+
+    def fake_get(url, **kw):
+        asked.append(url)
+
+        class R:
+            status_code = 200
+
+            def json(self):
+                return {"tunnels": [{"public_url": "https://stale.ngrok-free.app",
+                                     "config": {"addr": "http://localhost:9000"}}]}
+        return R()
+
+    import httpx
+    monkeypatch.setattr(httpx, "get", fake_get)
+    monkeypatch.setenv(t.API_PORTS_ENV, "")
+    assert t._existing_tunnel(9000) is None
+    assert asked == []
+    monkeypatch.setenv(t.API_PORTS_ENV, "4050")
+    assert t._existing_tunnel(9000) == "https://stale.ngrok-free.app"
+    assert asked == ["http://127.0.0.1:4050/api/tunnels"]
