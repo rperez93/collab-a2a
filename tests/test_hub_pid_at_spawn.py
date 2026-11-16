@@ -29,8 +29,11 @@ def test_a_hub_that_never_records_its_pid_is_still_stopped(tmp_path, monkeypatch
                 os.kill(pid, 0)
             except ProcessLookupError:
                 break
-            if open(f"/proc/{pid}/stat").read().split()[2] == "Z":
-                break  # exited; only waiting to be reaped
+            try:
+                if open(f"/proc/{pid}/stat").read().split()[2] == "Z":
+                    break  # exited; only waiting to be reaped
+            except (FileNotFoundError, ProcessLookupError):
+                break  # reaped between the signal and the read
             time.sleep(0.1)
         else:
             raise AssertionError("the hub is still running after stop_session")

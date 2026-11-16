@@ -100,8 +100,8 @@ def test_a_losing_hub_spawned_for_real_never_takes_over_the_record(tmp_path, mon
                 os.kill(loser, 0)
                 if open(f"/proc/{loser}/stat").read().split()[2] == "Z":
                     break
-            except ProcessLookupError:
-                break
+            except (FileNotFoundError, ProcessLookupError):
+                break  # reaped between the signal and the read
             time.sleep(0.1)
         else:
             raise AssertionError("the losing hub is still running")
