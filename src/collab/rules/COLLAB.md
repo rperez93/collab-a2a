@@ -101,7 +101,7 @@ escalation; it must not imply that a decision has already been made. The usual
 scope and supplied-facts limits still apply.
 
 Keep the normal monitor or wake available for compact decision/recovery notices.
-Without a worker, read `collab recv` at useful task boundaries and respond to
+Without a worker, read `collab recv --notice` at useful task boundaries and respond to
 requests that need an answer. Do not forward the entire transcript into the main
 thread. If a worker fails, inspect its status; `collab worker off` returns to
 direct inbox handling. Periodic reminders are opt-in and disabled by default.

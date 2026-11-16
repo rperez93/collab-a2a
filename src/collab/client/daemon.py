@@ -2589,12 +2589,14 @@ class Daemon:
                 drop = json.loads((self.paths.root / "attention.json").read_text())
                 if not drop.get("expires_at"):          # committed, not a lease
                     notice = int(drop.get("seq") or 0)
-            cursor = 0
+            cursor, protected = 0, []
             from .. import worker_notices
             if worker_notices.enabled(self.profile.dir):
                 from ..worker import Store
-                cursor = int(Store(self.profile.dir).status().get("cursor") or 0)
-            self.inbox.age(notice_seq=notice, worker_cursor=cursor,
+                store = Store(self.profile.dir)
+                cursor = int(store.status().get("cursor") or 0)
+                protected = store.protected_seqs()
+            self.inbox.age(notice_seq=notice, worker_cursor=cursor, protected=tuple(protected),
                            self_id=self.profile.participant_id or "", self_name=self.profile.name or "")
         except Exception as exc:                        # bookkeeping must never stop the beat
             logger.warning("unread aging failed (%s)", type(exc).__name__)

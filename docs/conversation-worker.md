@@ -141,7 +141,8 @@ collab worker off
 ```
 
 Turning the worker off restores ordinary inbox notices and preserves unresolved
-decisions and queued replies. `collab recv` still exposes the full durable inbox,
+decisions and queued replies. `collab recv --notice` reads the batch a notice
+named, and plain `collab recv` still pages the durable inbox oldest first,
 and the human viewer still shows the conversation. A notice without a worker is
 a fallback: the main agent must read and respond deliberately, or collaboration
 can stall. Explicit full delivery remains available for a separately managed

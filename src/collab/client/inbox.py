@@ -489,10 +489,13 @@ class Inbox:
         clean = sorted({int(s) for s in seqs if isinstance(s, int) and s > 0})
         with self._lock:
             if clean:
+                # FROM THE FIRST NAMED SEQ ON, not only the named ones: a notice
+                # keeps at most 40 seqs plus the newest (attention.Digest), so a
+                # burst of 100 named 41 and the rows between were never read.
                 rows = self._db.execute(
-                    f"SELECT seq, payload FROM inbox WHERE read=0 AND (seq IN ({','.join('?' * len(clean))}) "
-                    f"OR (seq > ? AND {relevant})) ORDER BY seq LIMIT ?",
-                    (*clean, clean[-1], limit)).fetchall()
+                    f"SELECT seq, payload FROM inbox WHERE read=0 AND seq >= ? AND "
+                    f"(seq IN ({','.join('?' * len(clean))}) OR {relevant}) ORDER BY seq LIMIT ?",
+                    (clean[0], *clean, limit)).fetchall()
             else:
                 rows = list(reversed(self._db.execute(
                     f"SELECT seq, payload FROM inbox WHERE read=0 AND {relevant} "
@@ -507,7 +510,7 @@ class Inbox:
         return int(row["value"]) if row else 0
 
     def age(self, *, notice_seq: int = 0, worker_cursor: int = 0,
-            self_id: str = "", self_name: str = "") -> int:
+            self_id: str = "", self_name: str = "", protected: tuple[int, ...] = ()) -> int:
         """Bound the unread backlog: mark read what nobody will ever read, and
         count it. Says how many rows were aged.
 
@@ -517,7 +520,10 @@ class Inbox:
         that names neither this participant's id nor its name. Anything
         addressed to it (a direct message, a task, a question naming it) is
         aged only once the worker's cursor shows the worker handled it. The
-        hub's alarm and remote outcomes are never aged unread."""
+        hub's alarm and remote outcomes are never aged unread. Neither is a
+        row awaiting repair, nor one in `protected` (rows the worker escalated
+        or was told were repaired behind its cursor): a cursor past a row is
+        not proof the worker handled it."""
         with self._lock:
             edge = self._db.execute("SELECT seq FROM inbox WHERE read=0 ORDER BY seq DESC LIMIT 1 OFFSET ?",
                                     (UNREAD_KEEP - 1,)).fetchone()
@@ -537,10 +543,13 @@ class Inbox:
                     "(kind='chat' AND coalesce(json_extract(payload, '$.toId'), '') = '' "
                     "AND coalesce(json_extract(payload, '$.to'), '') = '' "
                     f"AND NOT ({mention})))")
+            keep = sorted({int(s) for s in protected if isinstance(s, int) and s > 0})
+            kept = f" AND seq NOT IN ({','.join('?' * len(keep))})" if keep else ""
             cur = self._db.execute(
                 f"UPDATE inbox SET read=1 WHERE read=0 AND seq <= ? AND {not_main} AND "
+                f"seq NOT IN (SELECT seq FROM repair_pending){kept} AND "
                 f"(({free} AND seq <= ?) OR seq <= ?)",
-                (below, *_FOR_MAIN, *_AGEABLE_KINDS, *names, covered, int(worker_cursor or 0)))
+                (below, *_FOR_MAIN, *keep, *_AGEABLE_KINDS, *names, covered, int(worker_cursor or 0)))
             aged = int(cur.rowcount or 0)
             if aged:
                 self._db.execute("INSERT INTO meta (key, value) VALUES ('aged', ?) ON CONFLICT(key) "

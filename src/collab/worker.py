@@ -848,6 +848,15 @@ class Store:
             state.update(error=bounded_error, retry_at=retry_at, running=running)
             self._save(db, state)
 
+    def protected_seqs(self) -> list[int]:
+        """Rows the worker was told about but did not handle: repaired rows
+        behind its cursor and the seqs of its open escalations. Inbox.age
+        never ages these, whatever the cursor says."""
+        with self._db() as db:
+            seqs = [int(r[0]) for r in db.execute("SELECT seq FROM repaired")]
+            seqs += [int(p.get("seq") or 0) for p in self._pending(db)]
+        return sorted({s for s in seqs if s > 0})
+
     def repaired(self, seq: int) -> None:
         """Deduplicate a recovered older message without rewinding reply history."""
         with self._db() as db:
