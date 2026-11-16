@@ -212,3 +212,43 @@ def test_a_capped_wake_names_the_oldest_first_read_for_its_earlier_rows():
     src = inspect.getsource(wake)
     assert "`collab recv`, oldest first, has them" in src
     assert "`collab recv --notice` has the latest" not in src
+
+
+
+def test_a_reply_in_any_thread_i_posted_in_is_never_aged(tmp_path):
+    """The gate: a peer may post first under a thread id; once I replied in
+    it, later replies are mine to read."""
+    box = Inbox(tmp_path)
+    box.record(_thread(1, "p_other", "t_shared"))                 # a peer starts it
+    box.record(_thread(2, ME, "t_shared"))                        # I reply
+    box.record(_thread(3, "p_other", "t_shared"))                 # a later peer reply
+    _fill(box, 4, 1000)
+    box.age(notice_seq=1003, worker_cursor=1003, self_id=ME, self_name=MY_NAME)
+    assert 3 in _unread(box)
+
+
+def test_an_escalated_row_behind_the_cursor_survives_aging_end_to_end(tmp_path, monkeypatch):
+    """The two surviving mutants: Store.protected_seqs must include the open
+    escalations' seqs, and Daemon._age_unread must pass them to Inbox.age."""
+    from types import SimpleNamespace
+    from collab import worker, worker_notices
+    from collab.client.daemon import Daemon
+    store = worker.Store(tmp_path)
+    store.configure({"agent": "claude", "scope": "Coordinate", "enabled": True})
+    with store._db() as db:
+        state = store._state(db)
+        state["cursor"] = 1001
+        store._save(db, state)
+        store._add(db, "escalation", {"reason": "blocker", "seq": 1,
+                                      "question": "an oversized DM could not be read"})
+    assert 1 in store.protected_seqs()
+    box = Inbox(tmp_path / "inbox")
+    box.record(_dm(1))
+    _fill(box, 2, 1000)
+    root = tmp_path / "daemon"
+    root.mkdir()
+    monkeypatch.setattr(worker_notices, "enabled", lambda d: True)
+    fake = SimpleNamespace(paths=SimpleNamespace(root=root), inbox=box,
+                           profile=SimpleNamespace(dir=tmp_path, participant_id=ME, name=MY_NAME))
+    Daemon._age_unread(fake)
+    assert 1 in _unread(box) and len(_unread(box)) < 1001     # aged around it, not it
