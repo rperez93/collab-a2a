@@ -39,6 +39,18 @@ from collab.client import daemon, statusbar as sb, tui
 from collab.config import SessionProfile
 from test_roster_rule import Screen, _split_geometry
 
+
+#: The one reference time every figure here is stamped with AND drawn at.
+#: The wall clock is not monotonic: on a loaded WSL2 host it was measured
+#: stepping back 1.36 s, which put a figure stamped "now" in the future by the
+#: time it was drawn, and a future stamp is stale by design (batch.is_stale).
+#: Frozen, the rows below are decided by the code under test and nothing else.
+@pytest.fixture(autouse=True)
+def frozen_clock(monkeypatch):
+    now = time.time()
+    monkeypatch.setattr(time, "time", lambda: now)
+    return now
+
 ROSTER = config.WATCH_ROSTER_SEGMENTS
 
 #: What a `collab watch --tmux` pane is: 35 % of an 80-, 100- and 120-column
@@ -181,6 +193,20 @@ def test_the_count_is_on_the_row_for_host_and_guest_at_every_pane_width(
     assert any("4/9" in r for r in foot), f"no batch anywhere at the foot: {foot!r}"
     assert any("2 message" in r or "2 msgs" in r for r in foot), \
         f"the count is missing from the whole foot: {foot!r}"
+
+
+def test_a_clock_stepping_back_between_stamp_and_draw_is_what_hid_the_count(
+        tmp_path, cfg, monkeypatch, frozen_clock):
+    """The one-off this module used to show under load, reproduced on purpose:
+    the same fixture, the clock stepped back 1.36 s (as measured) before the
+    draw, and both figures read as unknown rather than as counts."""
+    viewer = _viewer(tmp_path, "roster", moved=False, me="bob")
+    monkeypatch.setattr(time, "time", lambda: frozen_clock - 1.36)
+    win = Screen(30, 41)
+    _draw(viewer, win)
+    foot = [win.row(29 - n) for n in range(4)]
+    assert any("batch ?" in r for r in foot), foot
+    assert not any("4/9" in r for r in foot), foot
 
 
 # --- the other leads, ruled out and pinned -----------------------------------
