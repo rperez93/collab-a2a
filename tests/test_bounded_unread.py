@@ -96,3 +96,43 @@ def test_plain_recv_says_when_more_is_waiting_and_notice_reads_the_batch(tmp_pat
     assert cli.main(["recv", "--peek", "--json", "--limit", "10"]) == 0
     first = json.loads(capsys.readouterr().out.splitlines()[0])
     assert first["kind"] == "recv-backlog" and first["local"] is True
+
+
+def test_a_notice_over_41_events_reads_every_row_it_covered(tmp_path):
+    """The gate's repro: a notice keeps 40 seqs plus the newest, so a burst of
+    100 named 41; reading only the named rows skipped 59 for good."""
+    box = Inbox(tmp_path)
+    digest = attention.Digest()
+    for seq in range(1, 101):
+        env = _room(seq, f"news {seq}")
+        box.record(env)
+        digest.add(env, 0.0)
+    shown = box.notice_batch([*digest.seqs, digest.seq], limit=200)
+    assert [e.seq for e in shown] == list(range(1, 101))
+    assert _unread(box) == []
+
+
+def test_a_repaired_or_escalated_row_behind_the_cursor_is_never_aged(tmp_path):
+    """The gate's repro: a DM recovered with --repair lands behind the worker
+    cursor; the cursor is not proof the worker handled it."""
+    box = Inbox(tmp_path)
+    _fill(box, 2, 1198)
+    box.record(_dm(1), repaired=True)
+    box.age(notice_seq=1199, worker_cursor=1199, self_id=ME, self_name=MY_NAME)
+    assert 1 in _unread(box)                                    # awaiting repair: kept
+    with box._lock:
+        box._db.execute("DELETE FROM repair_pending")
+        box._db.commit()
+    box.age(notice_seq=1199, worker_cursor=1199, protected=(1,), self_id=ME, self_name=MY_NAME)
+    assert 1 in _unread(box)                                    # the worker escalated it: kept
+    box.age(notice_seq=1199, worker_cursor=1199, self_id=ME, self_name=MY_NAME)
+    assert 1 not in _unread(box)                                # handled: aged
+
+
+def test_the_worker_names_the_rows_it_did_not_handle(tmp_path):
+    from collab import worker
+    store = worker.Store(tmp_path)
+    store.configure({"agent": "claude", "scope": "Coordinate", "enabled": True})
+    with store._db() as db:
+        db.execute("INSERT INTO repaired VALUES (7)")
+    assert 7 in store.protected_seqs()

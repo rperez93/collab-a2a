@@ -588,7 +588,15 @@ Explicit off and provider choices survive reconnects.
 
 Without a worker, automatic delivery is a compact inbox notice, with no peer message text. One
 outstanding notice stays latched until the announced batch is read with
-`collab recv`; later chatter does not keep interrupting the task. Followed
+`collab recv --notice`, which reads exactly that batch and what came after it,
+not the oldest unread rows; later chatter does not keep interrupting the task.
+A monitor in notice mode and a worker-driven agent never mark rows read, so the
+daemon keeps the backlog bounded: past 500 unread rows it marks read the old
+room chatter, activity, presence and hello lines that a delivered notice or the
+worker already covered, and `collab status` shows how many it aged. Anything
+addressed to you (a direct message, a task, a question naming you) is aged only
+once the worker handled it, and the security alarm and remote outcomes never
+age unread. Followed
 monitors coalesce for 20 seconds and leave at least 90 seconds between notices.
 The full conversation remains available through `recv` and the human viewer.
 Use `collab listen --follow --delivery full` or
@@ -2348,7 +2356,8 @@ line. The narrow fallback for a cramped terminal keeps the same filter.
 The envelope counts **messages** — things somebody said — and not joins,
 presence or file notices, which the daemon counts separately. It counts the
 ones **not yet delivered to your agent**: a message is read once `collab recv`
-has drained it or the agent's `collab listen --follow` monitor has printed it,
+(or `collab recv --notice`) has drained it, the agent's `collab listen --follow`
+monitor has printed it, or the daemon aged it as covered room chatter,
 and nothing else clears it — a human scrolling past it in `collab watch` does
 not, and your own words never count. The daemon rewrites the figure on every
 arrival and every three seconds besides, so after a drain the envelope is gone

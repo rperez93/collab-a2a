@@ -64,7 +64,7 @@ For ongoing conversation, use the `collab-worker` skill. Give its bounded scope
 and verified facts; use `collab worker context` for progress and
 `collab worker send --to NAME 'exact authorized handoff'` for durable delivery.
 Resolve `collab worker pending` with `collab worker reply ID 'decision'` at safe
-boundaries. Without a worker, read `collab recv` and answer useful requests there.
+boundaries. Without a worker, read `collab recv --notice` and answer useful requests there.
 Acknowledge neither acknowledgements nor routine updates; settle disagreements
 with evidence, or escalate the one remaining decision.
 
