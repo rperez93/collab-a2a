@@ -112,6 +112,9 @@ settings.
   into later ones, the board-cache test counts queries instead of timing them,
   and process-exit helpers treat a process reaped mid-read as gone
   (#226, #228, #229).
+- **Validating a worker's turn no longer writes into it.** The empty subject
+  an older-schema escalation is given goes into the returned value, so the
+  data the caller passed in is left as it was (#230).
 
 ## In 2.3.1
 
