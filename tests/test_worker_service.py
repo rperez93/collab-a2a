@@ -680,6 +680,34 @@ async def test_an_endless_upload_answer_is_read_only_to_its_cap_and_counts_as_de
     assert len(pulled) * 4096 <= cap + 2 * 4096, "read past the cap"
 
 
+@pytest.mark.asyncio
+async def test_one_huge_upload_answer_chunk_is_never_copied_whole(conversation, tmp_path, monkeypatch):
+    """The cap is per byte, not per chunk: an answer arriving as ONE 64 MiB
+    chunk keeps at most cap + 1 bytes in the answer buffer."""
+    configure(conversation, tmp_path)
+    store = worker.Store(conversation.root)
+    path = tmp_path / "evidence.zip"
+    path.write_text("data")
+    store.queue_file(path, to="bob", to_id="p_b", keep=True)
+    huge = b"a" * (64 * 1024 * 1024)
+    kept = []
+    real = bytearray.__iadd__
+
+    class Watched(bytearray):
+        def __iadd__(self, other):
+            out = real(self, other)
+            kept.append(len(self))
+            return out
+    monkeypatch.setattr("collab.client.worker_service.bytearray", Watched, raising=False)
+    async def transport(request):
+        return httpx.Response(200, content=huge)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        conversation.daemon._http = client
+        await asyncio.wait_for(conversation._flush(store, store.snapshot()["generation"]), timeout=30)
+    assert not store.outbox()
+    assert kept and max(kept) <= conversation.MAX_UPLOAD_ANSWER + 1
+
+
 def test_a_queued_file_with_an_unsafe_source_is_refused_before_it_is_queued(tmp_path):
     """A `--source` the hub would refuse must fail at the send, not later in
     the worker, where the file would wait and then fail out of sight."""

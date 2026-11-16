@@ -520,7 +520,9 @@ class Conversation:
                 body = bytearray()
                 answer = None
                 async for chunk in response.aiter_bytes():
-                    body += chunk
+                    # PER BYTE, NOT PER CHUNK: keep at most one byte past the
+                    # cap, so one huge chunk is never copied into `body`.
+                    body += chunk[:self.MAX_UPLOAD_ANSWER + 1 - len(body)]
                     if len(body) > self.MAX_UPLOAD_ANSWER:
                         break  # delivered; an answer this large is unreadable, so unconfirmed
                 else:
