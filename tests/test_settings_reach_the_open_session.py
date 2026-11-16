@@ -389,7 +389,7 @@ def test_a_value_read_during_the_window_is_not_trusted_after_it(isolated,
     assert config.new_when() == "idle"          # a poll inside the window
 
     path.write_text(json.dumps({"new_when": "task"}))   # same second, same size
-    _settle()
+    _settle(path)
 
     assert config.new_when() == "task"
 
@@ -403,7 +403,7 @@ def test_the_same_holds_for_a_colour(isolated, coarse_clock):
     assert config.default_color() == "#00cccc"
 
     path.write_text(json.dumps({"color": "#ff8800"}))
-    _settle()
+    _settle(path)
 
     assert config.default_color() == "#ff8800"
 
@@ -415,7 +415,7 @@ def test_the_re_read_after_the_window_happens_once_and_not_again(isolated,
     path = isolated / "config.json"
     path.write_text(json.dumps({"theme": "classic"}))
     config.load_config()                        # filled inside the window
-    _settle()
+    _settle(path)
 
     reads = []
     real = Path.read_text
@@ -432,6 +432,54 @@ def test_the_re_read_after_the_window_happens_once_and_not_again(isolated,
     assert len(reads) == 1, "the first call after it settles, and no other"
 
 
-def _settle():
-    """Wait for the stamp to be old enough to believe."""
-    time.sleep(config.STAMP_SETTLES + 0.2)
+def _settle(path, *, ceiling=10.0, clock=time.time, sleep=time.sleep):
+    """Wait until the stamp is old enough to believe, BY THE CODE'S OWN TEST.
+
+    Not a fixed sleep: the wall clock is not monotonic, and on a loaded WSL2
+    host it was measured stepping back 1.36 s, so 1.7 s of sleep could still
+    leave `time.time() - mtime` inside `STAMP_SETTLES` and the next read
+    uncached. Polled with the same arithmetic `config._load_file` uses (and the
+    same `Path.stat`, so `coarse_clock` applies), with 0.2 s of margin and a
+    ceiling on the monotonic clock. A stamp that never settles is a failure
+    with its evidence, never a silent return.
+    """
+    began = time.monotonic()
+    while True:
+        mtime = path.stat().st_mtime
+        now = clock()
+        if now - mtime > config.STAMP_SETTLES + 0.2:
+            return
+        waited = time.monotonic() - began
+        if waited >= ceiling:
+            pytest.fail(f"the stamp never settled: clock {now:.3f}, mtime {mtime:.3f}, "
+                        f"age {now - mtime:.3f} s, waited {waited:.3f} s")
+        sleep(0.05)
+
+
+def test_settling_waits_through_a_clock_that_steps_back(isolated):
+    """A clock that steps back mid-wait keeps `_settle` waiting until the
+    stamp is settled by the code's arithmetic, not by elapsed sleep."""
+    path = isolated / "config.json"
+    path.write_text("{}")
+    mtime = path.stat().st_mtime
+    seen = iter([mtime + 1.0, mtime + 1.8])
+    calls = []
+
+    def clock():
+        calls.append(1)
+        return next(seen)
+
+    _settle(path, clock=clock, sleep=lambda _: None)
+    assert len(calls) == 2, "settled at the first reading past the window"
+    seen = iter([mtime + 1.0, mtime + 0.4, mtime + 1.8])   # stepped back 0.6 s
+    calls.clear()
+    _settle(path, clock=clock, sleep=lambda _: None)
+    assert len(calls) == 3, "a stepped-back reading is waited out, not believed"
+
+
+def test_a_stamp_that_never_settles_fails_with_its_evidence(isolated):
+    path = isolated / "config.json"
+    path.write_text("{}")
+    mtime = path.stat().st_mtime
+    with pytest.raises(pytest.fail.Exception, match="never settled.*mtime.*waited"):
+        _settle(path, ceiling=0.2, clock=lambda: mtime)
