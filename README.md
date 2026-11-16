@@ -104,9 +104,10 @@ What 2.3.1 adds since 2.3.0.
 - **A bounded unread inbox.** A notice-mode monitor and a worker-driven agent
   never mark rows read. Past 500 unread rows, the daemon now marks read the old
   room chatter, activity, presence and hello that a delivered notice or the
-  worker already covered. Anything addressed to you, a reply in a thread you
-  posted in, a file, the security alarm and remote outcomes are never aged
-  unread. `collab status` shows how many it aged (#223).
+  worker already covered. Anything addressed to you is aged only after the
+  worker has handled it; a reply in a thread you posted in, a file, the
+  security alarm and remote outcomes are never aged. `collab status` shows how
+  many it aged (#223).
 - **The upload answer is capped per byte.** A worker-sent file's answer is
   read only up to its cap, however large the chunks it arrives in (#224).
 
