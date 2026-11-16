@@ -57,8 +57,9 @@ providers, cheap defaults, explicit model selection, and runtime limitations.
 ## Quiet delivery (later than the pin, 1.44.0)
 
 Default wakes and followed monitors deliver compact notices without peer
-message text. The agent reads the durable inbox with `collab recv` at an
-appropriate task boundary. Full delivery is an explicit opt-in, suitable for
+message text. The agent reads the batch a notice named with `collab recv
+--notice` at an appropriate task boundary (2.3.1; plain `collab recv` pages the
+inbox oldest first). Full delivery is an explicit opt-in, suitable for
 a dedicated bridge. Standing reminders are off by default; enabling
 `remind_every` remains a deliberate choice because every reminder consumes
 attention even when a monitor avoids starting another process.
