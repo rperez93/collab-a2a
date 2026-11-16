@@ -18,6 +18,7 @@ figures, measured on this machine, and the correctness each cache must keep.
 
 from __future__ import annotations
 
+import re
 import resource
 import subprocess
 import time
@@ -49,21 +50,77 @@ def _per_read(store, n=200) -> float:
     return (time.process_time() - began) / n
 
 
-def test_reading_an_unchanged_board_costs_a_fraction_of_rebuilding_it(board, monkeypatch):
-    """Measured: 3.1 ms of CPU to rebuild the two task lists of a 500-task
-    board from SQLite, 0.12 ms to hand out copies of the rows read once —
-    twenty-six times less, on every roster read of every participant."""
-    board.tasks(), board.batch_tasks("B_1")
-    cached = _per_read(board)
+_TASK_READ = re.compile(r"^\s*SELECT\b.*?\bFROM\s+(tasks|task_prs)\b", re.I | re.S)
+
+
+def _task_tables_read(store, read) -> list[str]:
+    """The task tables `read()` actually queried on the store's connection,
+    one entry per SELECT statement SQLite ran."""
+    seen: list[str] = []
+
+    def trace(sql: str) -> None:
+        hit = _TASK_READ.match(sql)
+        if hit:
+            seen.append(hit.group(1).lower())
+
+    store._db.set_trace_callback(trace)
+    try:
+        read()
+    finally:
+        store._db.set_trace_callback(None)   # the Store sets none of its own
+    return seen
+
+
+def _read_board(store) -> tuple[list, list]:
+    return store.tasks(), store.batch_tasks("B_1")
+
+
+def test_reading_an_unchanged_board_costs_a_fraction_of_rebuilding_it(board):
+    """An unchanged board is read from the per-change cache: no SELECT on the
+    task tables at all, however often the roster asks. A write moves the cache,
+    the next read queries both tables and shows the change, and the read after
+    that is cached again.
+
+    COUNTED, NOT TIMED. The cost figures were a CPU ratio with a threshold of
+    5x; measured, a cached read is 7-8x cheaper than a rebuild in a plain
+    process but only ~4.8x under pytest (the garbage collector and warm-up add
+    ~0.15 ms to a 0.26 ms read: a cached read still copies the rows, decorates
+    the PRs and reads participant names), so it failed most runs on an
+    unchanged tree. What the cache exists to remove is the task-table queries,
+    and those can be counted exactly.
+    """
+    _read_board(board)                                     # warm
+    for _ in range(3):
+        assert _task_tables_read(board, lambda: _read_board(board)) == []
+
+    board.upsert_task("T_7", title="task 7", state="TASK_STATE_WORKING", owner="a",
+                      room="general", created_by="a")
+    changed = {}
+
+    def read_after_the_change():
+        changed["rows"] = _read_board(board)
+
+    tables = _task_tables_read(board, read_after_the_change)
+    assert "tasks" in tables and "task_prs" in tables, tables
+    tasks, batch = changed["rows"]
+    assert {t["id"]: t["state"] for t in tasks}["T_7"] == "TASK_STATE_WORKING"
+    assert {t["id"]: t["state"] for t in batch}["T_7"] == "TASK_STATE_WORKING"
+    assert _task_tables_read(board, lambda: _read_board(board)) == []
+
+    # A loose supporting figure only: the best of three rounds each way.
+    cached = min(_per_read(board, n=50) for _ in range(3))
     real = board._task_query
 
     def every_read_a_change(sql, args):
         board._task_rev += 1
         return real(sql, args)
 
-    monkeypatch.setattr(board, "_task_query", every_read_a_change)
-    rebuilt = _per_read(board, n=50)
-    assert cached * 5 < rebuilt, f"cached {cached * 1e3:.2f} ms, rebuilt {rebuilt * 1e3:.2f} ms"
+    board._task_query = every_read_a_change
+    try:
+        rebuilt = min(_per_read(board, n=20) for _ in range(3))
+    finally:
+        del board._task_query
+    assert cached < rebuilt, f"cached {cached * 1e3:.2f} ms, rebuilt {rebuilt * 1e3:.2f} ms"
 
 
 def test_a_task_written_here_is_read_at_once(board):
