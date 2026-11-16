@@ -49,12 +49,20 @@ def run(args, profile):
     if action in ('sent', 'result'):
         from .client.inbox import Inbox as Events
         from .remote_requests import outcomes
-        rows = outcomes(profile, Events(profile.dir).remote_outcome_events())
+        events = Events(profile.dir)
+        found = events.remote_outcome_events()
+        rows = outcomes(profile, found)
         if action == 'result':
             rows = [r for r in rows if r['request_id'] == args.request_id]
             if not rows:
                 raise ValueError('no remote request with this id was sent from here')
             row = rows[0]
+            # READ, AND ONLY THESE. The wake that named this request waits until
+            # its own rows are read; marking this request's outcome events read
+            # settles it without touching any other unread row — `collab recv`
+            # would have taken them all.
+            events.mark_read([e.seq for e in found if e.seq
+                              and ((e.body or {}).get('remote_outcome') or {}).get('offer_id') == args.request_id])
             if row['answer'] is None:
                 print(json.dumps({k: v for k, v in row.items() if k != 'answer'}, ensure_ascii=True))
                 return 1

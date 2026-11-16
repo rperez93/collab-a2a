@@ -392,3 +392,64 @@ def test_reply_takes_the_answer_as_text_too(tmp_path, monkeypatch, capsys):
     assert inbox.owed()[1][0]['answer'] == 'via flag'
     assert cli.main(['remote', 'reply', offer['id'], 'one', '--text', 'two']) == 1
     assert 'give the answer once' in capsys.readouterr().err
+
+
+# --- an outcome's wake reads the outcome, never drains the inbox ----------------------
+
+def _outcome_wake(tmp_path, delivery, *, with_chat=False):
+    from collab import wake
+    from test_approval_security_wakes import waker
+    offer = remote.make_offer(session_id='s', sender_id='p_me', recipient_id='p_peer',
+                              target='t', kind='prompt', text='do it')
+    subject = waker(tmp_path / 'wake', delivery=delivery)
+    event = _outcome(offer, 'answered', answer='42')
+    event.seq = 7
+    if with_chat:
+        assert subject.note(Envelope(seq=6, kind='chat', sender='bob', sender_id='p_bob',
+                                     to='me', to_id='p_me', text='hello'))
+    assert subject.note(event, own_name='collab')
+    return offer, subject.prompt(subject.take())
+
+
+@pytest.mark.parametrize('delivery', ['notice', 'full'])
+def test_an_outcome_only_wake_names_the_result_command_and_never_recv(tmp_path, delivery):
+    """`collab recv` returns every unread row, and an agent whose session a
+    worker or `listen --follow` follows never marks rows read: a live inbox
+    held 5,374, and one outcome's wake made an agent swallow 2,879 old events.
+    The wake names the request and the command that reads only it."""
+    offer, prompt = _outcome_wake(tmp_path, delivery)
+    assert f"`collab remote result {offer['id']}`" in prompt
+    assert 'recv' not in prompt
+
+
+def test_a_mixed_wake_keeps_its_inbox_prompt_and_adds_the_result_command(tmp_path):
+    offer, prompt = _outcome_wake(tmp_path, 'notice', with_chat=True)
+    assert '`collab recv`' in prompt
+    assert f"`collab remote result {offer['id']}`" in prompt
+
+
+def test_following_the_outcome_wake_returns_the_answer_and_leaves_other_unread_rows(tmp_path, monkeypatch, capsys):
+    """The outcome does not depend on draining: with 1,000 unread chat rows,
+    the command the wake names prints the answer, marks only this request's
+    outcome rows read (so the notice settles), and consumes none of the rest."""
+    import re
+    from collab import cli
+    from collab.client.inbox import Inbox as Events
+    offer, prompt = _outcome_wake(tmp_path, 'notice')
+    [command] = re.findall(r"`(collab remote result rq_[0-9a-f]{32})`", prompt)
+    requester = SimpleNamespace(dir=tmp_path / 'requester', session_id='s', participant_id='p_me')
+    remote.Inbox(requester.dir).remember_sent(offer)
+    events = Events(requester.dir)
+    for seq in range(1, 1001):
+        events.record(Envelope(seq=seq, kind='chat', sender='bob', sender_id='p_bob', room='general',
+                               text=f'old message {seq}'))
+    answered = _outcome(offer, 'answered', answer='All 12 tests pass.')
+    answered.seq = 1001
+    events.record(answered)
+    unread_before = events._db.execute("SELECT COUNT(*) FROM inbox WHERE read=0").fetchone()[0]
+    monkeypatch.setattr(cli, '_require_profile', lambda args: requester)
+    assert cli.main(command.split()[1:]) == 0
+    assert json.loads(capsys.readouterr().out)['answer'] == 'All 12 tests pass.'
+    unread = {r[0] for r in events._db.execute("SELECT seq FROM inbox WHERE read=0")}
+    assert len(unread) == unread_before - 1 == 1000
+    assert 1001 not in unread and unread == set(range(1, 1001))
