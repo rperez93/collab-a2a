@@ -1266,7 +1266,16 @@ def test_a_flood_of_tiny_lines_costs_the_collector_little(tmp_path):
     took = time.monotonic() - began
     cpu = usage.ru_utime + usage.ru_stime
     assert os.waitstatus_to_exitcode(status) == 0
-    assert cpu < 3.0, f"{cpu:.2f} s of CPU for 2.5 million one-byte lines"
+    # A BUDGET PER INTERPRETER. 3.0 s was set against Python 3.13 and sits on
+    # the edge for 3.10, which failed the 3.10 release suite at 3.16 s with
+    # nothing regressed. Measured on one machine at load 7–11: 2.3.0 on 3.13,
+    # 2.22 and 2.27 s; 2.3.0 on 3.10.14, 2.83 and 2.93 s; v2.2.0 on 3.10.14,
+    # 3.00 and 2.85 s. Still far below what this guards: the per-line collector
+    # with no line window (a full core, the writer slowed to 0.25 MB/s) took
+    # 12.4 s on 3.12 and 16.4 s on 3.10 here, over both budgets and over the
+    # 10 s drain limit below.
+    budget = 3.0 if sys.version_info >= (3, 13) else 4.0
+    assert cpu < budget, f"{cpu:.2f} s of CPU for 2.5 million one-byte lines (budget {budget} s)"
     assert took < 10, f"{took:.1f} s to drain"
     assert "dropped here" in path.read_text()
 
