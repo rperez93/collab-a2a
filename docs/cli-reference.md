@@ -253,7 +253,7 @@ options:
 
 ```text
 usage: collab recv [-h] [--repair] [--repair-after REPAIR_AFTER] [--wait WAIT]
-                   [--limit LIMIT] [--json] [--peek] [--mine-too]
+                   [--limit LIMIT] [--json] [--peek] [--notice] [--mine-too]
                    [--session SESSION]
 
 options:
@@ -266,6 +266,8 @@ options:
   --limit LIMIT
   --json
   --peek                do not mark as read
+  --notice              read exactly the batch the last notice named (and what
+                        came after it), not the oldest unread rows
   --mine-too
   --session SESSION     act on this session id instead of the current one
 ```
