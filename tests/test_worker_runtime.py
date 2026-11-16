@@ -21,6 +21,8 @@ from collab import worker_runtime as runtime
 GOOD = {"summary": "Peer owns tests; awaiting a scope decision.",
         "replies": [{"text": "I am updating delivery.", "to": "peer", "room": ""}],
         "escalations": [{"reason": "scope", "question": "May peer change the public API?", "seq": 12}]}
+#: GOOD as a turn returns it: the older schema's escalation gains an empty subject.
+GOOD_RESULT = {**GOOD, "escalations": [{**GOOD["escalations"][0], "subject": ""}]}
 
 
 def python(code: str) -> list[str]:
@@ -28,7 +30,9 @@ def python(code: str) -> list[str]:
 
 
 def test_a_valid_turn_retains_routing_and_escalation_fields():
-    assert runtime.validate_result(GOOD) == GOOD
+    before = copy.deepcopy(GOOD)
+    assert runtime.validate_result(GOOD) == GOOD_RESULT
+    assert GOOD == before, "validation wrote into the caller's dict"
 
 
 @pytest.mark.parametrize("edit", [
@@ -61,12 +65,12 @@ async def test_custom_adapter_gets_json_stdin_and_runs_outside_the_repository(tm
     result = await runtime.run_turn("command", "cheap-model", {
         "repository": str(tmp_path), "answers": [{"text": "Main agent approves"}],
     }, tmp_path, command=command)
-    assert result == GOOD
+    assert result == GOOD_RESULT
 
 
 async def test_custom_adapter_may_own_model_selection_explicitly(tmp_path):
     assert await runtime.run_turn("command", "", {}, tmp_path,
-        command=python(f"print({json.dumps(json.dumps(GOOD))})")) == GOOD
+        command=python(f"print({json.dumps(json.dumps(GOOD))})")) == GOOD_RESULT
 
 
 @pytest.mark.parametrize("model", ["", " ", "--premium", "bad\nmodel", None])
@@ -183,7 +187,7 @@ async def test_exited_worker_cannot_leave_a_descendant_holding_the_pipes(tmp_pat
         f"open({str(marker)!r},'w').write(str(p.pid)); "
         f"print({json.dumps(json.dumps(GOOD))})")
     assert await asyncio.wait_for(runtime.run_turn("command", "cheap", {}, tmp_path,
-        command=command), 2) == GOOD
+        command=command), 2) == GOOD_RESULT
     pid = int(marker.read_text())
     for _ in range(50):
         if not alive(pid):
@@ -250,7 +254,7 @@ def test_installed_native_clis_parse_our_flags_without_a_paid_turn(tmp_path, age
         {"type": "text", "part": {"type": "text", "text": json.dumps(GOOD)}})),
 ])
 def test_native_output_envelopes_become_the_same_validated_proposals(agent, output):
-    assert runtime._decode(agent, output.encode(), None) == GOOD
+    assert runtime._decode(agent, output.encode(), None) == GOOD_RESULT
 
 
 @pytest.mark.parametrize("agent", runtime.SUPPORTED_AGENTS)
@@ -284,7 +288,7 @@ async def test_native_turns_execute_in_scratch_with_bounded_context_and_exact_mo
     monkeypatch.setenv("PATH", str(tmp_path))
     monkeypatch.setenv("CURSOR_API_KEY", "test-only")
     monkeypatch.setenv("PWD", str(tmp_path))
-    assert await runtime.run_turn(agent, "provider/cheap", {"scope": "scope-fact-unique"}, tmp_path) == GOOD
+    assert await runtime.run_turn(agent, "provider/cheap", {"scope": "scope-fact-unique"}, tmp_path) == GOOD_RESULT
 
 
 def test_cursor_requires_isolated_auth_and_opencode_requires_provider_model(tmp_path):
@@ -303,7 +307,7 @@ def test_codex_result_file_is_read_with_a_hard_limit(tmp_path):
 
 def test_claude_stream_diagnostics_do_not_discard_valid_actions():
     result = json.dumps({'type': 'result', 'result': json.dumps(GOOD)}).encode()
-    assert runtime._decode('claude', b'Warning: optional config missing\n' + result, None) == GOOD
+    assert runtime._decode('claude', b'Warning: optional config missing\n' + result, None) == GOOD_RESULT
     with pytest.raises(runtime.WorkerRuntimeError):
         runtime._decode('claude', result + b'\n{"type":"result","type":"result"}', None)
 

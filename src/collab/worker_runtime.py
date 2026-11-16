@@ -181,9 +181,12 @@ def validate_result(value: object) -> dict:
         string(reply["text"], MAX_TEXT, True)
         string(reply["to"], 200, True)
         string(reply["room"], 200)
+    # NORMALISED INTO THE RETURN VALUE, never into the caller's dicts: a
+    # validator that writes to its input changes what the caller holds.
+    escalations = []
     for escalation in value["escalations"]:
-        if set(escalation) == {"reason", "question", "seq"}:
-            escalation["subject"] = ""  # an older provider schema: no subject, no dedupe
+        if isinstance(escalation, dict) and set(escalation) == {"reason", "question", "seq"}:
+            escalation = {**escalation, "subject": ""}  # an older provider schema: no dedupe
         keys(escalation, {"reason", "question", "seq", "subject"})
         string(escalation["subject"], MAX_SUBJECT)
         if escalation["reason"] not in ("blocker", "decision", "conflict", "scope"):
@@ -191,7 +194,8 @@ def validate_result(value: object) -> dict:
         string(escalation["question"], MAX_TEXT, True)
         if type(escalation["seq"]) is not int or escalation["seq"] < 0:
             raise WorkerRuntimeError("Worker returned an invalid message sequence")
-    return value
+        escalations.append(escalation)
+    return {**value, "escalations": escalations}
 
 
 # A reply that defers to the main agent ("hold tight", "I'll get back to you")
