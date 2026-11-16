@@ -1490,13 +1490,13 @@ DEFAULT_REMIND_HOST = """You are the host. At your next safe task boundary, revi
   collab who · collab activity · collab batch status — ownership and validated progress
   collab stats --json · collab check — freshness, quota and listener health
   collab worker pending — decisions waiting for main-agent context, if a worker is enabled
-Without a worker, read collab recv. Keep the board accurate and validate the
+Without a worker, read collab recv --notice. Keep the board accurate and validate the
 acceptance criteria. These reminders do not authorize new scope or more agents."""
 
 DEFAULT_REMIND_GUEST = """At your next safe task boundary, check the assigned outcome:
   collab working "<what>" · collab idle — accurate current activity
   collab worker pending — decisions awaiting your input, if a worker is enabled
-Without a worker, read collab recv. Report a blocker with its dependency, or a
+Without a worker, read collab recv --notice. Report a blocker with its dependency, or a
 completed task with validation evidence. Stay on the objective you were given.
 Use collab task complete only after its acceptance checks pass."""
 

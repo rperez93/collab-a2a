@@ -17,6 +17,22 @@ from typing import Any
 
 from ..protocol import Envelope
 
+#: How many unread rows an agent keeps before old room chatter is aged out.
+#: A notice-mode monitor and a worker-driven agent never mark rows read, so
+#: without a bound the unread backlog grows for the whole session (2,879 rows
+#: in one live run), and every count and drain over it grows with it. 500 is
+#: far beyond any batch a notice names (at most 40 seqs) and any page `recv`
+#: returns (100 by default), so nothing an agent was just told about is near
+#: the edge.
+UNREAD_KEEP = 500
+
+#: Kinds that carry no business of their own: an arrival, a presence change, a
+#: status line. They may be aged once a notice or the worker has covered them.
+_AGEABLE_KINDS = ("activity", "presence", "hello")
+
+#: Hub events for the main agent itself, never aged before it reads them.
+_FOR_MAIN = ("approval-security", "remote-outcome")
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS inbox (
     seq     INTEGER PRIMARY KEY,
@@ -461,6 +477,73 @@ class Inbox:
                     return 0
                 time.sleep(0.1)
         return 0
+
+    def notice_batch(self, seqs: list[int], *, limit: int = 100) -> list[Envelope]:
+        """`collab recv --notice`: exactly the events the last notice named,
+        plus relevant unread events that arrived after it, oldest first and
+        at most `limit`; those are marked read and nothing older is touched.
+        Without a recorded notice it is the newest `limit` relevant unread."""
+        relevant = ("(kind IN ('chat','task','project','request','response') OR "
+                    "(kind='system' AND json_extract(payload, '$.body.event') IN "
+                    "('approval-security','remote-outcome')))")
+        clean = sorted({int(s) for s in seqs if isinstance(s, int) and s > 0})
+        with self._lock:
+            if clean:
+                rows = self._db.execute(
+                    f"SELECT seq, payload FROM inbox WHERE read=0 AND (seq IN ({','.join('?' * len(clean))}) "
+                    f"OR (seq > ? AND {relevant})) ORDER BY seq LIMIT ?",
+                    (*clean, clean[-1], limit)).fetchall()
+            else:
+                rows = list(reversed(self._db.execute(
+                    f"SELECT seq, payload FROM inbox WHERE read=0 AND {relevant} "
+                    "ORDER BY seq DESC LIMIT ?", (limit,)).fetchall()))
+            if rows:
+                self._mark_read([r["seq"] for r in rows])
+        return [Envelope.from_dict(json.loads(r["payload"])) for r in rows]
+
+    def aged_count(self) -> int:
+        with self._lock:
+            row = self._db.execute("SELECT value FROM meta WHERE key='aged'").fetchone()
+        return int(row["value"]) if row else 0
+
+    def age(self, *, notice_seq: int = 0, worker_cursor: int = 0,
+            self_id: str = "", self_name: str = "") -> int:
+        """Bound the unread backlog: mark read what nobody will ever read, and
+        count it. Says how many rows were aged.
+
+        Only rows older than the UNREAD_KEEP-th newest unread row, and only
+        rows already covered: by a delivered notice (`notice_seq`) or by the
+        worker's cursor. Freely aged: activity, presence, hello, and room chat
+        that names neither this participant's id nor its name. Anything
+        addressed to it (a direct message, a task, a question naming it) is
+        aged only once the worker's cursor shows the worker handled it. The
+        hub's alarm and remote outcomes are never aged unread."""
+        with self._lock:
+            edge = self._db.execute("SELECT seq FROM inbox WHERE read=0 ORDER BY seq DESC LIMIT 1 OFFSET ?",
+                                    (UNREAD_KEEP - 1,)).fetchone()
+            covered = max(int(notice_seq or 0), int(worker_cursor or 0))
+            if edge is None or covered <= 0:
+                return 0
+            below = min(int(edge["seq"]) - 1, covered)
+            names = [n.lower() for n in (self_id, self_name) if n]
+            mention = " OR ".join("instr(lower(coalesce(json_extract(payload, '$.text'), '')), ?) > 0"
+                                  for _ in names) or "0"
+            not_main = ("NOT (kind='system' AND json_extract(payload, '$.body.event') IN "
+                        f"({','.join('?' * len(_FOR_MAIN))}))")
+            free = (f"(kind IN ({','.join('?' * len(_AGEABLE_KINDS))}) OR "
+                    "(kind='chat' AND coalesce(json_extract(payload, '$.toId'), '') = '' "
+                    "AND coalesce(json_extract(payload, '$.to'), '') = '' "
+                    f"AND NOT ({mention})))")
+            cur = self._db.execute(
+                f"UPDATE inbox SET read=1 WHERE read=0 AND seq <= ? AND {not_main} AND "
+                f"(({free} AND seq <= ?) OR seq <= ?)",
+                (below, *_FOR_MAIN, *_AGEABLE_KINDS, *names, covered, int(worker_cursor or 0)))
+            aged = int(cur.rowcount or 0)
+            if aged:
+                self._db.execute("INSERT INTO meta (key, value) VALUES ('aged', ?) ON CONFLICT(key) "
+                                 "DO UPDATE SET value = CAST(value AS INTEGER) + ?", (str(aged), aged))
+            self._db.commit()
+        return aged
 
     def _mark_read(self, seqs: list[int]) -> int:
         """Under the lock. `take_unread` already holds it; `mark_read` takes it."""

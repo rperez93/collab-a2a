@@ -376,7 +376,7 @@ def _monitor_hint(profile: SessionProfile, status: dict[str, Any]) -> None:
     # the hours between them, which is where a message actually goes unread.
     print(f"  {c('cannot hold one?', '36')} {exe} wake agents  "
           + dim("— then `wake set --agent <you>`, from in here"))
-    print(dim("  The monitor sends compact inbox notices; `recv` reads the"
+    print(dim("  The monitor sends compact inbox notices; `recv --notice` reads the"
               " conversation."))
     print(dim("  but nothing re-arms a watcher you lost: if yours stops, arm it"
               " again."))
@@ -2207,6 +2207,23 @@ def cmd_recv(args: argparse.Namespace) -> int:
     # polling is the documented fallback, and it used to leave `collab status`
     # telling an agent that nobody was listening while it listened.
     polled(profile)
+    if getattr(args, "notice", False):
+        # THE BATCH THE NOTICE NAMED, not the oldest unread rows: an agent
+        # that only follows the session never marks rows read, so plain recv
+        # handed it the oldest hundred of thousands instead of the news.
+        seqs: list[int] = []
+        with contextlib.suppress(OSError, ValueError, TypeError):
+            drop = json.loads((DaemonPaths(profile.dir).root / "attention.json").read_text())
+            seqs = [int(s) for s in (drop.get("seqs") or [drop.get("seq")]) if s]
+        for env in inbox.notice_batch(seqs, limit=args.limit):
+            print(_format(env, args.json))
+        return 0
+    backlog = inbox.unread_count()
+    if backlog > args.limit:
+        hint = (f"{backlog - args.limit} more unread than this page; `collab recv --notice`"
+                " reads the latest batch")
+        print(json.dumps({"kind": "recv-backlog", "local": True, "text": hint})
+              if args.json else dim(hint))
     deadline = time.time() + args.wait
     while True:
         events = inbox.take_unread(limit=args.limit, mark=not args.peek)
@@ -5466,7 +5483,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         "monitor_ws": (f"ws://127.0.0.1:{status['bridge_port']}/events"
                        if status.get("bridge_port") else None),
         **{k: status.get(k) for k in
-           ("others_connected", "others_total", "unread", "last_seq")},
+           ("others_connected", "others_total", "unread", "aged", "last_seq")},
     }
     # WHAT IT IS DOING, NOT WHAT IT LAST WROTE DOWN. `status.json` is the
     # daemon's own account of itself and a killed daemon never gets to correct
@@ -5617,6 +5634,9 @@ def cmd_status(args: argparse.Namespace) -> int:
         if payload.get(key) is None:
             continue
         value = payload[key]
+        if key == "unread" and payload.get("aged"):
+            aged_note = f"· {payload['aged']} aged out (room chatter a notice or the worker covered)"
+            value = f"{value} {dim(aged_note)}"
         if key == "others_connected" and not payload["figures_current"]:
             #  and  are counted here and stay true; this one
             # came from the hub, and we are not talking to the hub.
@@ -8914,6 +8934,9 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--limit", type=int, default=100)
     r.add_argument("--json", action="store_true")
     r.add_argument("--peek", action="store_true", help="do not mark as read")
+    r.add_argument("--notice", action="store_true",
+                   help="read exactly the batch the last notice named (and what came after it),"
+                        " not the oldest unread rows")
     r.add_argument("--mine-too", action="store_true", default=False)
     add_session_flag(r)
     r.set_defaults(func=cmd_recv)

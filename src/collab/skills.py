@@ -495,7 +495,7 @@ Keep one compact notice route (`listen --follow` with a persistent watcher or
 `wake set --agent NAME` when supported). Let a scoped worker handle routine
 conversation; supply facts with `worker context` and resolve `worker pending`
 with `worker reply` at useful boundaries. Context is not a send guarantee.
-Without a worker, read `recv` at those boundaries. Updates need no acknowledgements.
+Without a worker, read `recv --notice` at those boundaries. Updates need no acknowledgements.
 
 Use the task board for ownership and acceptance evidence; complete only after
 validation. Up to two native teammates is the default when independent work
