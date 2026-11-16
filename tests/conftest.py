@@ -24,6 +24,8 @@ from suite_lock import pytest_collection_finish, pytest_unconfigure  # noqa: E40
 # state that test owned. Checked after every fixture has been torn down, by
 # thread object, not name, so a thread of the same name from earlier is not
 # mistaken for this test's.
+# NOT SEEN: threads that are not collab's own by name or target, such as a
+# `ThreadPoolExecutor-*` worker or an `asyncio_*` loop thread.
 LEFT_THREAD_DEADLINE = 2.0   # one deadline for the whole test, not one per thread
 
 
@@ -56,7 +58,13 @@ def pytest_runtest_setup(item):
 def pytest_runtest_teardown(item, nextitem):
     result = yield
     before = item.stash.get(_THREADS_BEFORE, None)
-    if before is None or item.get_closest_marker("leaves_collab_thread"):
+    marker = item.get_closest_marker("leaves_collab_thread")
+    if marker is not None:
+        reason = marker.args[0] if marker.args else marker.kwargs.get("reason", "")
+        if not (isinstance(reason, str) and reason.strip()):
+            pytest.fail("leaves_collab_thread needs a reason", pytrace=False)
+        return result
+    if before is None:
         return result
     left = _collab_threads_since(before)
     if left:

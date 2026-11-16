@@ -290,9 +290,9 @@ def test_a_slow_command_does_not_pile_up_behind_itself():
     pile of shells the moment it was slower than its own interval."""
     segment = sb.CommandSegment()
     now = time.time()
-    assert segment.poll("sleep 1", 1, now=now)
-    assert not segment.poll("sleep 1", 1, now=now + 10)
-    assert not segment.poll("sleep 1", 1, now=now + 20)
+    assert segment.poll("sleep 0.5", 1, now=now)
+    assert not segment.poll("sleep 0.5", 1, now=now + 10)
+    assert not segment.poll("sleep 0.5", 1, now=now + 20)
 
 
 def test_taking_the_command_away_takes_its_text_off_the_row():
