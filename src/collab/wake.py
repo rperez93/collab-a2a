@@ -814,6 +814,15 @@ class Batch:
         return out
 
 
+def _outcome_marker(body: dict) -> dict:
+    """The typed slot attention.for_main requires, carrying only the request
+    id a wake may name (`collab remote result <id>`), and only in its exact
+    minted shape. The answer itself stays in the event's text."""
+    found = body.get("remote_outcome")
+    offer = found.get("offer_id") if isinstance(found, dict) else None
+    return {"offer_id": offer} if isinstance(offer, str) and attention.OFFER_ID.fullmatch(offer) else {}
+
+
 def _for_main_line(line: str) -> bool:
     try:
         event = json.loads(line)
@@ -927,7 +936,8 @@ class Waker:
             # A remote outcome keeps an empty typed slot: attention.for_main
             # requires it, and the answer itself is in `text`.
             **({"body": {"event": env.body.get("event"),
-                         **({"remote_outcome": {}} if env.body.get("event") == "remote-outcome" else {})}}
+                         **({"remote_outcome": _outcome_marker(env.body)}
+                            if env.body.get("event") == "remote-outcome" else {})}}
                if env.kind == "system" else {}),
             "from": env.sender,
             # WHOLE. This cut each message at two thousand characters with
@@ -1509,9 +1519,21 @@ class Waker:
             events = [e for e in batch.events()
                       if attention.relevant(e.get("kind"), e.get("body"))
                       and not attention.was_read(self.root, e.get("seq") or 0)]
-            return attention.notice(self.session_id, len(events),
+            outcomes = attention.outcome_ids(events)
+            # ONLY OUTCOMES: name the request and `collab remote result`, and
+            # nothing that drains the inbox. The ordinary notice said `collab
+            # recv`, and recv returns every unread row — thousands, for an
+            # agent whose session is followed by a worker that never marks
+            # rows read.
+            if outcomes and all(attention.remote_outcome(e.get("kind"), e.get("body")) for e in events):
+                return attention.outcome_notice(outcomes)
+            text = attention.notice(self.session_id, len(events),
                                     max((e.get("seq") or 0 for e in events), default=0))
+            return text + (" " + attention.outcome_line(outcomes) if outcomes else "")
         head = WAKE_PROMPT.format(session=self.session_id, file=batch.name)
+        outcomes = attention.outcome_ids(batch.events())
+        if outcomes:
+            head = attention.outcome_line(outcomes) + "\n\n" + head
         body = batch.read()
         room = MAX_PROMPT_BYTES - len(head.encode()) - 200
         if len(body.encode()) > room:

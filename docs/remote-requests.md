@@ -221,7 +221,11 @@ it cannot impersonate the hub's own label.
 On the requester's side:
 
 - `collab remote sent` lists the offers sent from here and their states;
-- `collab remote result <request id>` prints the answer as escaped JSON.
+- `collab remote result <request id>` prints the answer as escaped JSON, and
+  marks only that request's outcome events read. An outcome's wake names this
+  command and never tells the agent to run `collab recv`, which returns every
+  unread row in the inbox — thousands, when a worker or `listen --follow`
+  follows the session and never marks rows read.
 
 Both show only outcomes for an offer recorded locally when it was sent, from
 this participant, to the recorded recipient, and for the recorded content
