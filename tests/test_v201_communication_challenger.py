@@ -247,7 +247,9 @@ async def test_maximum_escaped_guidance_still_allows_queued_main_input_to_progre
 
 @pytest.mark.asyncio
 async def test_delivery_does_not_buffer_a_flooding_acknowledgement(tmp_path, record_property):
-    """A hub's unsolicited body must cost neither unbounded RAM nor drain CPU."""
+    """A hub's unsolicited body is never read: the read count (flood.read == 0,
+    and the stream closed) enforces that, and CPU stays bounded. 'held' below
+    is only the memory httpx and collab's client code retain after the turn."""
     class Flood(httpx.AsyncByteStream):
         read = 0
         closed = False

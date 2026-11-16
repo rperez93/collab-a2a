@@ -682,14 +682,15 @@ async def test_an_endless_upload_answer_is_read_only_to_its_cap_and_counts_as_de
 
 @pytest.mark.asyncio
 async def test_one_huge_upload_answer_chunk_is_never_copied_whole(conversation, tmp_path, monkeypatch):
-    """The cap is per byte, not per chunk: an answer arriving as ONE 64 MiB
-    chunk keeps at most cap + 1 bytes in the answer buffer."""
+    """The cap is per byte, not per chunk: an answer arriving as ONE chunk far
+    past the cap (1 MiB; any chunk over cap + 1 proves it) keeps at most
+    cap + 1 bytes in the answer buffer."""
     configure(conversation, tmp_path)
     store = worker.Store(conversation.root)
     path = tmp_path / "evidence.zip"
     path.write_text("data")
     store.queue_file(path, to="bob", to_id="p_b", keep=True)
-    huge = b"a" * (64 * 1024 * 1024)
+    huge = b"a" * (1024 * 1024)
     kept = []
     real = bytearray.__iadd__
 
