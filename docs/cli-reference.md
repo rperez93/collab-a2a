@@ -391,7 +391,8 @@ options:
   -h, --help            show this help message and exit
   --to TO               with offer: recipient name or participant id
   --clear               with goal: stop offering a connection goal
-  --text TEXT           with offer: prompt or goal for the human to review
+  --text TEXT           with offer: prompt or goal for the human to review;
+                        with reply: the answer (same as the positional answer)
   --kind {prompt,goal}
   --target TARGET       with bind: the receiver's local coding session id
   --session SESSION     act on this session id instead of the current one

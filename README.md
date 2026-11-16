@@ -125,6 +125,15 @@ What 2.3.0 adds since 2.2.0.
   look and its own title bar. It shows the requester, the subject and what
   is granted, row by row, with the prompt first. Enter, Esc and closing all
   decline, and no key approves. The passkey page has the same look (#216).
+- **Approved prompts reach the agent directly.** `collab wake set --agent
+  claude` now delivers an approved remote prompt to the agent's own listen
+  stream, printed once on its monitor, and never types it into a terminal.
+  `--agent claude-exec` keeps the old `claude -p` run. A wake you already
+  saved keeps its command (#220).
+- **Review follow-ups.** No answer is accepted before the delivery report;
+  the security alarm keeps a reserve in the hub's outbox; `collab remote
+  reply` takes `--text`; and the passkey page reads a refused request's
+  body before answering, which ends an ECONNRESET under load (#219).
 - **Strong approval off Windows.** `collab consent enrol` enrols a passkey
   from the terminal on Linux and macOS, and the hub advertises passkey beside
   Windows Hello (#185).
