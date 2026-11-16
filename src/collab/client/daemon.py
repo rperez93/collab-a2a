@@ -485,6 +485,8 @@ class Daemon:
             # The name is still passed, for rows an older hub never stamped.
             "unread": self.inbox.unread_count(
                 exclude_sender=self.profile.name, exclude_sender_id=me),
+            # Rows Inbox.age marked read because nothing would ever read them.
+            "aged": self.inbox.aged_count(),
             # The same count, narrowed to things somebody said. `unread` above
             # includes arrivals and file notices, which are events rather than
             # anything to answer — fine for a badge, misleading as evidence
@@ -2573,6 +2575,30 @@ class Daemon:
                 _log_crash(name, exc)
         self._refresh_tasks[name] = asyncio.create_task(guarded())
 
+    def _age_unread(self) -> None:
+        """Keep the unread backlog bounded (Inbox.age), once a minute: rows a
+        delivered notice or the worker already covered, never the main
+        agent's own business before it reads it."""
+        now = time.monotonic()
+        if now - getattr(self, "_aged_at", 0.0) < 60.0:
+            return
+        self._aged_at = now
+        try:
+            notice = 0
+            with contextlib.suppress(OSError, ValueError, TypeError):
+                drop = json.loads((self.paths.root / "attention.json").read_text())
+                if not drop.get("expires_at"):          # committed, not a lease
+                    notice = int(drop.get("seq") or 0)
+            cursor = 0
+            from .. import worker_notices
+            if worker_notices.enabled(self.profile.dir):
+                from ..worker import Store
+                cursor = int(Store(self.profile.dir).status().get("cursor") or 0)
+            self.inbox.age(notice_seq=notice, worker_cursor=cursor,
+                           self_id=self.profile.participant_id or "", self_name=self.profile.name or "")
+        except Exception as exc:                        # bookkeeping must never stop the beat
+            logger.warning("unread aging failed (%s)", type(exc).__name__)
+
     async def _housekeeping_once(self):
         # The monitor first: it is the route that costs the agent
         # nothing, and asking it here is what keeps the two routes
@@ -2585,6 +2611,7 @@ class Daemon:
         # compaction on the way in — see `_compact_before_the_turn`
         # — and this is what notices the edge for everything else.
         self._watch_for_a_boundary()
+        self._age_unread()
         await self._maybe_wake()
         # AFTER THE WAKE, because a turn that was about to start is
         # more urgent than a window that is nearly full, and
