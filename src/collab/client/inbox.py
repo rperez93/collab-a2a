@@ -524,7 +524,9 @@ class Inbox:
             covered = max(int(notice_seq or 0), int(worker_cursor or 0))
             if edge is None or covered <= 0:
                 return 0
-            below = min(int(edge["seq"]) - 1, covered)
+            # Coverage is enforced per clause below (seq <= covered, or <= the
+            # worker cursor), so the edge alone bounds the range here.
+            below = int(edge["seq"]) - 1
             names = [n.lower() for n in (self_id, self_name) if n]
             mention = " OR ".join("instr(lower(coalesce(json_extract(payload, '$.text'), '')), ?) > 0"
                                   for _ in names) or "0"
