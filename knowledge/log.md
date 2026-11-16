@@ -1,7 +1,7 @@
 # Bundle Update Log
 
 ## 2026-11-16 (2.3.1: notices read what they announced)
-* **Update (later than the pin)**: Recorded in [wake](collaboration/wake.md) that a notice is read with `collab recv --notice`, which returns the batch it named rather than the oldest unread rows, and that the daemon ages old room chatter past 500 unread rows once a notice or the worker covered it, never anything addressed to the participant (#223). The pin and verification stamps are unchanged.
+* **Update (later than the pin)**: Recorded in [wake](collaboration/wake.md) that a notice is read with `collab recv --notice`, which returns the batch it named rather than the oldest unread rows, and that 500 unread rows is the threshold at which the daemon starts aging, not a cap on the inbox: past it, old room chatter, activity, presence and hello that a notice or the worker covered are marked read, anything addressed to the participant only after the worker handled it, and a reply in a thread it posted in, a file, the security alarm and remote outcomes never (#223). The pin and verification stamps are unchanged.
 
 ## 2026-11-15 (passkey approval enabled)
 * **Update (later than the pin)**: Recorded in [the command surface](operating/cli-surface.md) that, after 2.2.0, `collab consent enrol` off Windows enrols a passkey through the local browser page and the hub advertises `passkey` as well as `hello`; Windows and WSL always use Hello. The pin and verification stamps are unchanged.
