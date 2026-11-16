@@ -532,7 +532,8 @@ class Inbox:
         worker's cursor. Freely aged: activity, presence, hello, and room chat
         that names neither this participant's id nor its name. Anything
         addressed to it (a direct message, a task, a question naming it) is
-        aged only once the worker's cursor shows the worker handled it. The
+        aged only once the worker's cursor shows the worker handled it, and a
+        reply in any thread this participant has posted in is never aged. The
         hub's alarm and remote outcomes are never aged unread. Neither is a
         row awaiting repair, nor one in `protected` (rows the worker escalated
         or was told were repaired behind its cursor): a cursor past a row is
@@ -552,10 +553,10 @@ class Inbox:
                                   for _ in names) or "0"
             not_main = ("NOT (kind='system' AND json_extract(payload, '$.body.event') IN "
                         f"({','.join('?' * len(_FOR_MAIN))}))")
-            # A thread this participant started: its first message is ours.
-            own_threads = ("(SELECT t FROM (SELECT json_extract(payload, '$.thread') AS t, sender_id, MIN(seq) "
-                           "FROM inbox WHERE json_extract(payload, '$.thread') IS NOT NULL GROUP BY t) "
-                           "WHERE sender_id = ?)")
+            # ANY thread this participant has posted in. Thread ids are
+            # free-form, so «whoever posted first» could be a peer's choice.
+            own_threads = ("(SELECT DISTINCT json_extract(payload, '$.thread') FROM inbox "
+                           "WHERE sender_id = ? AND json_extract(payload, '$.thread') IS NOT NULL)")
             free = (f"(kind IN ({','.join('?' * len(_AGEABLE_KINDS))}) OR "
                     "(kind='chat' AND coalesce(json_extract(payload, '$.toId'), '') = '' "
                     "AND coalesce(json_extract(payload, '$.to'), '') = '' "
