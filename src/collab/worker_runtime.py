@@ -181,8 +181,8 @@ def validate_result(value: object) -> dict:
         string(reply["text"], MAX_TEXT, True)
         string(reply["to"], 200, True)
         string(reply["room"], 200)
-    # NORMALISED INTO THE RETURN VALUE, never into the caller's dicts: a
-    # validator that writes to its input changes what the caller holds.
+    # VALIDATION ITSELF WRITES NOTHING INTO ITS INPUT: an older-schema
+    # escalation gets its empty subject on a copy, in the returned value.
     escalations = []
     for escalation in value["escalations"]:
         if isinstance(escalation, dict) and set(escalation) == {"reason", "question", "seq"}:

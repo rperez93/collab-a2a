@@ -35,6 +35,15 @@ def test_a_valid_turn_retains_routing_and_escalation_fields():
     assert GOOD == before, "validation wrote into the caller's dict"
 
 
+def test_a_supplied_subject_comes_back_unchanged():
+    """Only a missing subject is filled in; one the worker gave is kept as is."""
+    value = copy.deepcopy(GOOD)
+    value["escalations"][0]["subject"] = "public-api"
+    before = copy.deepcopy(value)
+    assert runtime.validate_result(value)["escalations"][0]["subject"] == "public-api"
+    assert value == before
+
+
 @pytest.mark.parametrize("edit", [
     lambda v: v.update(extra="untrusted"),
     lambda v: v.update(summary="x" * 4001),
