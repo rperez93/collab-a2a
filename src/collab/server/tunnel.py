@@ -8,6 +8,7 @@ just reachable on this machine and LAN only.
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import re
 import shutil
@@ -136,32 +137,38 @@ class Tunnel:
 
 
 def api_ports() -> tuple[int, ...]:
-    """The local ngrok API ports to probe: `NGROK_API_PORTS`, or the
-    `COLLAB_NGROK_API_PORTS` override when it is set.
+    """The local ngrok API ports to look for a tunnel to REUSE on:
+    `NGROK_API_PORTS`, or the `COLLAB_NGROK_API_PORTS` override when it is set.
 
-    FAILS CLOSED. An override that is empty, malformed, out of range or too
-    long probes nothing; it never falls back to the defaults, or a typo in a
-    variable set to keep the machine's agent out would let it straight in.
+    Empty means none, so a test hub never adopts the machine's own agent. A
+    malformed, out-of-range or too-long value warns and keeps the defaults.
+    Only the reuse lookup reads it: `Tunnel.alive` always asks the default
+    ports, or an override would declare our own running tunnel dead.
     """
     raw = os.environ.get(API_PORTS_ENV)
     if raw is None:
         return tuple(NGROK_API_PORTS)
-    parts = [part.strip() for part in raw.split(",")] if raw.strip() else []
-    if len(parts) > _API_PORTS_MAX or not all(part.isdigit() for part in parts):
+    if not raw.strip():
         return ()
-    ports = tuple(int(part) for part in parts)
-    return ports if all(1 <= port <= 65535 for port in ports) else ()
+    parts = [part.strip() for part in raw.split(",")]
+    if (len(parts) <= _API_PORTS_MAX and all(part.isdigit() for part in parts)
+            and all(1 <= int(part) <= 65535 for part in parts)):
+        return tuple(int(part) for part in parts)
+    logging.getLogger(__name__).warning(
+        "%s=%r is not a comma-separated list of at most %d ports; using %d-%d",
+        API_PORTS_ENV, raw, _API_PORTS_MAX, NGROK_API_PORTS.start, NGROK_API_PORTS.stop - 1)
+    return tuple(NGROK_API_PORTS)
 
 
-def _all_tunnels() -> list[dict]:
-    """Every tunnel from every ngrok agent running on this machine."""
+def _all_tunnels(ports=NGROK_API_PORTS) -> list[dict]:
+    """Every tunnel from the ngrok agents answering on `ports`."""
     # Imported where it is used: cli.py imports this module for `free_port`
     # and `local_ip`, and the only thing here that speaks HTTP is this probe
     # of ngrok's local API. See update.check for the cost being avoided.
     import httpx
 
     found: list[dict] = []
-    for api_port in api_ports():
+    for api_port in ports:
         try:
             r = httpx.get(f"http://127.0.0.1:{api_port}/api/tunnels", timeout=1.0)
             if r.status_code == 200:
@@ -177,7 +184,7 @@ def _tunnel_urls() -> set[str]:
 
 def _existing_tunnel(port: int) -> str | None:
     """Reuse a tunnel any local ngrok agent already has for this port."""
-    for t in _all_tunnels():
+    for t in _all_tunnels(api_ports()):
         addr = t.get("config", {}).get("addr", "")
         if addr.endswith(f":{port}") and t.get("public_url", "").startswith("https://"):
             return str(t["public_url"])

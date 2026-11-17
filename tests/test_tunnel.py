@@ -460,20 +460,47 @@ def test_a_failed_write_leaves_no_scratch_file_behind(tmp_path, monkeypatch):
     ("   ", ()),
     ("4050", (4050,)),
     (" 4050 , 4051 ", (4050, 4051)),
-    ("4050,abc", ()),
-    ("0", ()),
-    ("70000", ()),
-    ("4050,", ()),
-    (",".join(["4050"] * 17), ()),
+    (",".join(["4050"] * 16), (4050,) * 16),
 ])
-def test_the_api_port_override_fails_closed(monkeypatch, raw, ports):
-    """Unset keeps the defaults; anything set but not a short list of valid
-    ports probes nothing rather than falling back to them."""
+def test_the_api_port_override_reads_a_list_and_empty_means_none(monkeypatch, raw, ports):
+    """Unset keeps the defaults, empty probes nothing, a list is taken as given."""
     if raw is None:
         monkeypatch.delenv(t.API_PORTS_ENV, raising=False)
     else:
         monkeypatch.setenv(t.API_PORTS_ENV, raw)
     assert t.api_ports() == ports
+
+
+@pytest.mark.parametrize("raw", ["4050,abc", "0", "70000", "4050,", "4040-4045",
+                                 ",".join(["4050"] * 17)])
+def test_a_malformed_override_warns_and_keeps_the_defaults(monkeypatch, caplog, raw):
+    import logging
+    monkeypatch.setenv(t.API_PORTS_ENV, raw)
+    with caplog.at_level(logging.WARNING, logger=t.__name__):
+        assert t.api_ports() == tuple(range(4040, 4046))
+    assert any(t.API_PORTS_ENV in r.getMessage() for r in caplog.records)
+
+
+def test_the_override_never_hides_our_own_tunnel_from_alive(monkeypatch):
+    """alive() asks the default ports whatever the override says: with it
+    empty, a running tunnel must not be taken for a dead one."""
+    asked = []
+
+    def fake_get(url, **kw):
+        asked.append(url)
+
+        class R:
+            status_code = 200
+
+            def json(self):
+                return {"tunnels": [{"public_url": "https://ours.ngrok-free.app"}]}
+        return R()
+
+    import httpx
+    monkeypatch.setattr(httpx, "get", fake_get)
+    monkeypatch.setenv(t.API_PORTS_ENV, "")
+    assert t.Tunnel("https://ours.ngrok-free.app").alive()
+    assert asked and all(":404" in url for url in asked)
 
 
 def test_an_empty_override_never_reaches_the_machines_agent(monkeypatch):
